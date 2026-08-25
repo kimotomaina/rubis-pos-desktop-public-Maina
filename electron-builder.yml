@@ -1,0 +1,39 @@
+appId: com.volcha.rubispos
+productName: RUBIS POS
+copyright: Copyright © 2026 Volcha Enterprises
+
+directories:
+  output: release
+
+files:
+  - out/**/*
+  - package.json
+  - node_modules/**/*
+
+asarUnpack:
+  - '**/*.node'
+  - node_modules/keytar/**/*
+
+extraResources:
+  - from: .env
+    to: .env
+  - from: resources/icons/icon.ico
+    to: icons/icon.ico
+
+win:
+  target:
+    - nsis
+    - portable
+  icon: resources/icons/icon.ico
+  signtoolOptions:
+    publisherName: Volcha Enterprises
+
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+
+publish:
+  provider: github
+  owner: Volcha-Enterprises
+  repo: rubis-pos-desktop
