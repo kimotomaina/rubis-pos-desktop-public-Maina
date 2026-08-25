@@ -25,7 +25,13 @@ import rubisLogo from './assets/logo-rubis.png'
 /** A pending manager-gated action awaiting PIN authorization. */
 interface PinGateRequest {
   title: string
-  onAuthorized: () => void
+  /**
+   * Receives the authorizing admin's id and PIN (Phase 14) so callers
+   * that hit a privileged IPC channel (`createStaff`, `resetStaffPin`,
+   * `setIntegrationConfig`) can forward them for the main process's
+   * independent `requireAdminPin` re-check.
+   */
+  onAuthorized: (managerId: number, managerPin: string) => void
 }
 
 /** Transient banner shown after a barcode scan attempt. */
@@ -91,8 +97,10 @@ export default function App() {
   const setCartDiscount = useCartStore((state) => state.setCartDiscount)
 
   const [pinGate, setPinGate] = useState<PinGateRequest | null>(null)
-  const requestManagerPin = (title: string, onAuthorized: () => void) =>
-    setPinGate({ title, onAuthorized })
+  const requestManagerPin = (
+    title: string,
+    onAuthorized: (managerId: number, managerPin: string) => void
+  ) => setPinGate({ title, onAuthorized })
 
   const [showCartDiscountEditor, setShowCartDiscountEditor] = useState(false)
   const [cartDiscountType, setCartDiscountType] = useState<Discount['type']>('percent')
@@ -231,12 +239,24 @@ export default function App() {
 
   const filteredProducts = filterProducts(products, searchQuery)
 
+  const demoModeBanner = import.meta.env.VITE_DEMO_MODE === 'true' && (
+    <div className="bg-amber-500 py-2 text-center text-sm font-bold uppercase tracking-wide text-white">
+      ⚠️ Demo Mode Active — Sales are local only and will not sync to Shopify ⚠️
+    </div>
+  )
+
   if (!currentStaff) {
-    return <LoginScreen />
+    return (
+      <>
+        {demoModeBanner}
+        <LoginScreen />
+      </>
+    )
   }
 
   return (
     <div className="flex h-screen flex-col bg-slate-50 text-slate-900">
+      {demoModeBanner}
       {/* Header */}
       <header className="flex h-16 items-center justify-between border-b border-slate-200 bg-white px-6 shadow-sm">
         <div className="flex items-center gap-6">
@@ -339,7 +359,7 @@ export default function App() {
             </div>
 
             {status === 'loading' && (
-              <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
+              <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4">
                 {Array.from({ length: 8 }).map((_, i) => (
                   <div
                     key={i}
@@ -374,7 +394,7 @@ export default function App() {
             )}
 
             {status === 'ready' && filteredProducts.length > 0 && (
-              <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
+              <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4">
                 {filteredProducts.map((product) => (
                   <ProductCard
                     key={product.id}
@@ -388,7 +408,7 @@ export default function App() {
           </section>
 
           {/* Cart sidebar */}
-          <aside className="flex w-80 flex-shrink-0 flex-col border-l border-slate-200 bg-white">
+          <aside className="flex w-md shrink-0 flex-col border-l border-slate-200 bg-white">
             <div className="border-b border-slate-200 p-4">
               <h2 className="text-lg font-semibold text-slate-700">
                 Cart ({cartCount} items)
@@ -527,7 +547,7 @@ export default function App() {
       ) : (
         <main className="flex-1 overflow-y-auto p-6">
           <h2 className="mb-4 text-lg font-semibold text-slate-700">Admin</h2>
-          <AdminScreen />
+          <AdminScreen requestManagerPin={requestManagerPin} />
         </main>
       )}
 
@@ -561,8 +581,8 @@ export default function App() {
       {pinGate && (
         <ManagerPinModal
           title={pinGate.title}
-          onAuthorized={() => {
-            pinGate.onAuthorized()
+          onAuthorized={(managerId, managerPin) => {
+            pinGate.onAuthorized(managerId, managerPin)
             setPinGate(null)
           }}
           onCancel={() => setPinGate(null)}

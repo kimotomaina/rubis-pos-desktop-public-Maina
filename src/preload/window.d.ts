@@ -72,10 +72,21 @@ export interface PosApi {
   logout: (staffId: number) => Promise<ServiceResult<void>>
   /** Prints (or, in mock mode, logs) a shift's Z-report. */
   printZReport: (shiftId: number) => Promise<ServiceResult<ReceiptPrintResult>>
-  /** Creates a new staff account. */
-  createStaff: (name: string, pin: string, role: StaffRole) => Promise<ServiceResult<StaffSummary>>
-  /** Resets a staff member's PIN. */
-  resetStaffPin: (staffId: number, pin: string) => Promise<ServiceResult<void>>
+  /** Creates a new staff account. Requires a re-verified admin Manager PIN (Phase 14). */
+  createStaff: (
+    name: string,
+    pin: string,
+    role: StaffRole,
+    managerId: number,
+    managerPin: string
+  ) => Promise<ServiceResult<StaffSummary>>
+  /** Resets a staff member's PIN. Requires a re-verified admin Manager PIN (Phase 14). */
+  resetStaffPin: (
+    staffId: number,
+    pin: string,
+    managerId: number,
+    managerPin: string
+  ) => Promise<ServiceResult<void>>
   /** Reads the currently open till shift, if any. */
   getCurrentShift: () => Promise<ServiceResult<ShiftRow | null>>
   /** Opens a new store-wide till shift with a starting cash float. */
@@ -105,10 +116,12 @@ export interface PosApi {
   getIntegrationConfig: (
     provider: IntegrationProviderName
   ) => Promise<ServiceResult<Record<string, unknown>>>
-  /** Saves a provider's integration config. */
+  /** Saves a provider's integration config. Requires a re-verified admin Manager PIN (Phase 14). */
   setIntegrationConfig: (
     provider: IntegrationProviderName,
-    config: Record<string, unknown>
+    config: Record<string, unknown>,
+    managerId: number,
+    managerPin: string
   ) => Promise<ServiceResult<void>>
   /** Voids a local `pending_sync` order. */
   voidOrder: (localId: number) => Promise<ServiceResult<{ localId: number; voidedAt: string }>>

@@ -210,3 +210,27 @@ A: This error means the preload loaded in a non-Isolated context. Ensure `contex
 **Q: Tailwind classes not applied**
 A: Confirm `@import "tailwindcss"` is in `src/renderer/src/index.css` and that the `@tailwindcss/vite` plugin is registered in `electron.vite.config.ts`.
 
+## Phase 5.1 Hardening Addendum
+
+A branch audit of Phases 1–5 (see `docs/phase-10.md`-era hardening
+work) found that this phase's `BrowserWindow` hardening
+(`contextIsolation`, `sandbox`, `webSecurity`, `nodeIntegration: false`
+— all in `window-factory.ts`) had no accompanying Content-Security-Policy
+header, leaving script/style/connect origins unrestricted at the HTTP
+response level.
+
+- **`buildCspHeaders()`** (`src/main/window-factory.ts`) — a pure,
+  unit-testable function returning the header map for
+  `CONTENT_SECURITY_POLICY`:
+  `default-src 'self'; script-src 'self'; connect-src 'self' https://*.myshopify.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:;`
+- **Wiring** (`src/main/index.ts`) — applied session-wide via
+  `session.defaultSession.webRequest.onHeadersReceived`, registered at
+  the top of the `app.whenReady()` handler before `createWindow()` so
+  every response (not just the initial document load) carries the
+  header.
+- **Tests** — `tests/security.test.ts` asserts the policy string's
+  directives and `buildCspHeaders()`'s output shape.
+
+This is additive — no existing IPC channel, preload API, or renderer
+behavior changed.
+

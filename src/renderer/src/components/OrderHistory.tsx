@@ -8,7 +8,10 @@ interface OrderHistoryProps {
   onRetry: (localId: number) => void
   onPrint: (localId: number) => void
   /** Opens the Manager PIN gate; calls `onAuthorized` once verified (Phase 10). */
-  requestManagerPin: (title: string, onAuthorized: () => void) => void
+  requestManagerPin: (
+    title: string,
+    onAuthorized: (managerId: number, managerPin: string) => void
+  ) => void
 }
 
 /**

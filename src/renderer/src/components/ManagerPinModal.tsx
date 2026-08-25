@@ -4,8 +4,14 @@ import { useAuthStore } from '../stores/authStore'
 interface ManagerPinModalProps {
   /** Shown as the modal's heading — describes what's being authorized. */
   title: string
-  /** Called once a valid admin PIN has been entered. */
-  onAuthorized: () => void
+  /**
+   * Called once a valid admin PIN has been entered, with the
+   * authorizing admin's id and PIN (Phase 14) — forwarded on to any
+   * privileged IPC call the caller makes next, so the main process can
+   * independently re-verify it via `requireAdminPin` rather than
+   * trusting this modal alone.
+   */
+  onAuthorized: (managerId: number, managerPin: string) => void
   /** Called when the cashier cancels the authorization. */
   onCancel: () => void
 }
@@ -50,10 +56,11 @@ export default function ManagerPinModal({ title, onAuthorized, onCancel }: Manag
     }
     setVerifying(true)
     setError(null)
+    const trimmedPin = pin.trim()
     try {
-      const result = await window.api.login(selectedAdminId, pin.trim())
+      const result = await window.api.login(selectedAdminId, trimmedPin)
       if (result.success) {
-        onAuthorized()
+        onAuthorized(selectedAdminId, trimmedPin)
         return
       }
       setError(result.error ?? 'Incorrect PIN')

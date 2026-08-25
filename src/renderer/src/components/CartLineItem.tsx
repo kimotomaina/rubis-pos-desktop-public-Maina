@@ -14,7 +14,10 @@ interface CartLineItemProps {
   onSetPrice: (id: string, price: number) => void
   onSetDiscount: (id: string, discount: Discount | null) => void
   /** Opens the Manager PIN gate; calls `onAuthorized` once verified. */
-  requestManagerPin: (title: string, onAuthorized: () => void) => void
+  requestManagerPin: (
+    title: string,
+    onAuthorized: (managerId: number, managerPin: string) => void
+  ) => void
   /** Shows a transient toast (e.g. a rejected price override — Phase 11). */
   showToast: (toast: { kind: 'success' | 'error'; message: string }) => void
 }

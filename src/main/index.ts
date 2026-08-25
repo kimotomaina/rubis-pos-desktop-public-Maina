@@ -1,4 +1,4 @@
-import { app, BrowserWindow, shell, ipcMain, net, powerMonitor, dialog } from 'electron'
+import { app, BrowserWindow, shell, ipcMain, net, powerMonitor, dialog, session } from 'electron'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 import { randomUUID } from 'node:crypto'
@@ -28,7 +28,9 @@ const { autoUpdater } = electronUpdater
 import { electronApp, optimizer } from '@electron-toolkit/utils'
 import {
   createBrowserWindowConfig,
-  resolveLoadTarget
+  resolveLoadTarget,
+  buildCspHeaders,
+  buildDevContentSecurityPolicy
 } from './window-factory.js'
 import { initAutoUpdater, checkForUpdates } from './services/updater.js'
 import type { UpdateStatus } from './services/updater.js'
@@ -56,10 +58,19 @@ import type {
 import { MockFiscalizationProvider } from './services/integrations/etims.js'
 import type { FiscalizationProvider } from './services/integrations/etims.js'
 import { voidLocalOrder } from './services/voids.js'
-import { validate, checkoutRequestSchema, voidOrderSchema, loginRequestSchema } from './lib/ipcValidator.js'
+import {
+  validate,
+  checkoutRequestSchema,
+  voidOrderSchema,
+  loginRequestSchema,
+  staffCreateSchema,
+  staffResetPinSchema,
+  integrationsSetConfigSchema
+} from './lib/ipcValidator.js'
+import { requireAdminPin } from './lib/requireAdminPin.js'
 import { restrictToOwnerOnly } from './lib/fileSecurity.js'
 import {
-  loadKeytar,
+  loadSecretVault,
   resolveShopifyToken,
   setSecret,
   getSecret,
@@ -180,6 +191,31 @@ app.whenReady().then(async () => {
   electronApp.setAppUserModelId('com.volcha.rubispos')
 
   /**
+   * Strict Content-Security-Policy (Phase 5.1 hardening): enforced at the
+   * session level so it applies to every response the app loads, not just
+   * the initial document — belt-and-braces alongside the BrowserWindow's
+   * `webSecurity`/`sandbox` config in `window-factory.ts`.
+   *
+   * In dev (`electron-vite dev`, unpackaged, `ELECTRON_RENDERER_URL` set),
+   * the relaxed {@link buildDevContentSecurityPolicy} is used instead —
+   * required for `@vitejs/plugin-react`'s inline Fast Refresh preamble
+   * script and the dev server's own origin/WS socket (Phase 14 fix; see
+   * docs/phase-14.md). A packaged build never sets `ELECTRON_RENDERER_URL`,
+   * so this always resolves to the strict policy in production.
+   */
+  const devServerUrl = process.env['ELECTRON_RENDERER_URL']
+  const cspPolicy =
+    !app.isPackaged && devServerUrl ? buildDevContentSecurityPolicy(devServerUrl) : undefined
+  session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
+    callback({
+      responseHeaders: {
+        ...details.responseHeaders,
+        ...buildCspHeaders(cspPolicy)
+      }
+    })
+  })
+
+  /**
    * F12/reload shortcuts are dev-only — a packaged build never binds
    * them, closing off another route to devtools on the store floor.
    */
@@ -242,17 +278,17 @@ app.whenReady().then(async () => {
   }
 
   /**
-   * Secure secret storage (Phase 12, Task 1): the Shopify Admin API
-   * token is resolved from the OS credential vault (Windows Credential
-   * Manager via `keytar`), never read from `process.env` directly once
-   * resolved. In dev, a missing vault entry falls back to `.env` once
-   * and is persisted into the vault so every later launch is
-   * vault-only — see `secretStore.ts`'s `resolveShopifyToken` (Q1
-   * default). Cached in a mutable binding so
-   * `secrets:set-shopify-token` (below) can update it mid-session
-   * without a restart.
+   * Secure secret storage (Phase 12, Task 1; vault backend replaced by
+   * Electron's `safeStorage` in Phase 14 — see `secretStore.ts`): the
+   * Shopify Admin API token is resolved from the OS-encrypted vault,
+   * never read from `process.env` directly once resolved. In dev, a
+   * missing vault entry falls back to `.env` once and is persisted
+   * into the vault so every later launch is vault-only — see
+   * `secretStore.ts`'s `resolveShopifyToken` (Q1 default). Cached in a
+   * mutable binding so `secrets:set-shopify-token` (below) can update
+   * it mid-session without a restart.
    */
-  const keytar = await loadKeytar()
+  const keytar = await loadSecretVault()
   let shopifyToken = (
     await resolveShopifyToken({
       keytar,
@@ -594,16 +630,24 @@ app.whenReady().then(async () => {
 
   /**
    * IPC handler that saves a provider's integration config (Paybill/
-   * Till numbers, middleware URLs) from the Admin screen.
+   * Till numbers, middleware URLs) from the Admin screen. Requires a
+   * re-verified admin Manager PIN (Phase 14) — routing Paybill/Till
+   * numbers is exactly the kind of change a compromised renderer
+   * calling this channel directly must not be able to make unchecked.
    */
   ipcMain.handle(
     'integrations:set-config',
-    (
-      _event,
-      request: { provider: IntegrationProviderName; config: Record<string, unknown> }
-    ): ServiceResult<void> => {
+    (_event, request: unknown): ServiceResult<void> => {
+      const validation = validate(integrationsSetConfigSchema, request)
+      if (!validation.success) {
+        return { success: false, error: validation.error }
+      }
+      const authz = requireAdminPin(db, validation.data.managerId, validation.data.managerPin)
+      if (!authz.success) {
+        return authz
+      }
       try {
-        db.setIntegrationConfig(request.provider, request.config)
+        db.setIntegrationConfig(validation.data.provider, validation.data.config)
         return { success: true }
       } catch (err) {
         return {
@@ -843,23 +887,32 @@ app.whenReady().then(async () => {
 
   /**
    * IPC handler that creates a new staff account (Admin screen).
+   * Requires a re-verified admin Manager PIN (Phase 14) — creating an
+   * account (including an `admin` one) is a privilege-escalation path
+   * a compromised renderer calling this channel directly must not be
+   * able to take unchecked.
    */
   ipcMain.handle(
     'staff:create',
-    (
-      _event,
-      request: { name: string; pin: string; role: 'admin' | 'cashier' }
-    ): ServiceResult<StaffSummary> => {
+    (_event, request: unknown): ServiceResult<StaffSummary> => {
+      const validation = validate(staffCreateSchema, request)
+      if (!validation.success) {
+        return { success: false, error: validation.error }
+      }
+      const authz = requireAdminPin(db, validation.data.managerId, validation.data.managerPin)
+      if (!authz.success) {
+        return { success: false, error: authz.error }
+      }
       try {
-        if (!request?.name?.trim() || !request?.pin) {
-          return { success: false, error: 'Name and PIN are required' }
-        }
         const { staffId } = db.createStaff({
-          name: request.name.trim(),
-          pinHash: hashPin(request.pin),
-          role: request.role
+          name: validation.data.name.trim(),
+          pinHash: hashPin(validation.data.pin),
+          role: validation.data.role
         })
-        return { success: true, data: { id: staffId, name: request.name.trim(), role: request.role } }
+        return {
+          success: true,
+          data: { id: staffId, name: validation.data.name.trim(), role: validation.data.role }
+        }
       } catch (err) {
         return {
           success: false,
@@ -871,15 +924,22 @@ app.whenReady().then(async () => {
 
   /**
    * IPC handler that resets a staff member's PIN (Admin screen).
+   * Requires a re-verified admin Manager PIN (Phase 14) — resetting
+   * another account's PIN is equivalent to taking it over.
    */
   ipcMain.handle(
     'staff:resetPin',
-    (_event, request: { staffId: number; pin: string }): ServiceResult<void> => {
+    (_event, request: unknown): ServiceResult<void> => {
+      const validation = validate(staffResetPinSchema, request)
+      if (!validation.success) {
+        return { success: false, error: validation.error }
+      }
+      const authz = requireAdminPin(db, validation.data.managerId, validation.data.managerPin)
+      if (!authz.success) {
+        return authz
+      }
       try {
-        if (!request?.pin) {
-          return { success: false, error: 'A new PIN is required' }
-        }
-        db.resetStaffPin(request.staffId, hashPin(request.pin))
+        db.resetStaffPin(validation.data.staffId, hashPin(validation.data.pin))
         return { success: true }
       } catch (err) {
         return {

@@ -115,3 +115,55 @@ export function resolveLoadTarget(options: CreateWindowOptions): LoadTarget {
 export function resolveMainWindowPath(...segments: string[]): string {
   return join(__dirname, ...segments)
 }
+
+/**
+ * Strict Content-Security-Policy applied to every response the app's
+ * session serves in a packaged build (Phase 5.1 hardening). Restricts
+ * script/style/connect origins to the app itself plus the Shopify
+ * Admin API domain the renderer talks to indirectly via IPC-triggered
+ * fetches.
+ */
+export const CONTENT_SECURITY_POLICY =
+  "default-src 'self'; script-src 'self'; connect-src 'self' https://*.myshopify.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:;"
+
+/**
+ * Relaxed Content-Security-Policy used only while the window loads
+ * from `electron-vite dev`'s dev server (Phase 14 fix — never applied
+ * to a packaged build). `@vitejs/plugin-react` injects an inline
+ * `<script type="module">` "preamble" into the dev HTML to wire up
+ * React Fast Refresh; {@link CONTENT_SECURITY_POLICY}'s `script-src
+ * 'self'` blocks all inline scripts regardless of origin, which made
+ * that preamble silently fail and every component throw "can't detect
+ * preamble" on first render — a blank window with no visible error
+ * outside DevTools. This widens `script-src` to allow inline execution
+ * and both policies' relevant directives to include the dev server's
+ * own origin (HTTP for module/asset requests, WS for its HMR socket).
+ *
+ * @param {string} devServerUrl — e.g. `http://localhost:5173`
+ * @returns {string}
+ */
+export function buildDevContentSecurityPolicy(devServerUrl: string): string {
+  const wsUrl = devServerUrl.replace(/^http/, 'ws')
+  return (
+    `default-src 'self' ${devServerUrl}; ` +
+    `script-src 'self' 'unsafe-inline' ${devServerUrl}; ` +
+    `connect-src 'self' ${devServerUrl} ${wsUrl} https://*.myshopify.com; ` +
+    `style-src 'self' 'unsafe-inline' ${devServerUrl}; ` +
+    `img-src 'self' data: https: ${devServerUrl};`
+  )
+}
+
+/**
+ * Builds the header map to merge into `onHeadersReceived` responses so
+ * every navigation and resource load in the app's session is subject
+ * to the given policy. Extracted as a pure function so the policy
+ * string is unit-testable without booting Electron's `session`.
+ *
+ * @param {string} [policy] — defaults to the strict production
+ *   {@link CONTENT_SECURITY_POLICY}; pass {@link buildDevContentSecurityPolicy}'s
+ *   result in dev instead
+ * @returns {Record<string, string[]>} header name to value-list map
+ */
+export function buildCspHeaders(policy: string = CONTENT_SECURITY_POLICY): Record<string, string[]> {
+  return { 'Content-Security-Policy': [policy] }
+}

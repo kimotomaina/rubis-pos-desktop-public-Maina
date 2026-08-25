@@ -12,7 +12,10 @@ import {
   validate,
   checkoutRequestSchema,
   voidOrderSchema,
-  loginRequestSchema
+  loginRequestSchema,
+  staffCreateSchema,
+  staffResetPinSchema,
+  integrationsSetConfigSchema
 } from '../src/main/lib/ipcValidator.js'
 
 const validItem = {
@@ -141,6 +144,106 @@ describe('loginRequestSchema', () => {
   it('rejects a missing or invalid staffId', () => {
     expect(validate(loginRequestSchema, { pin: '1234' }).success).toBe(false)
     expect(validate(loginRequestSchema, { staffId: -1, pin: '1234' }).success).toBe(false)
+  })
+})
+
+describe('staffCreateSchema (Phase 14)', () => {
+  const validRequest = {
+    name: 'New Cashier',
+    pin: '1234',
+    role: 'cashier',
+    managerId: 1,
+    managerPin: '9999'
+  }
+
+  it('accepts a well-formed request', () => {
+    expect(validate(staffCreateSchema, validRequest).success).toBe(true)
+  })
+
+  it('rejects an invalid role', () => {
+    expect(
+      validate(staffCreateSchema, { ...validRequest, role: 'superadmin' }).success
+    ).toBe(false)
+  })
+
+  it('rejects a missing name or pin', () => {
+    const { name: _name, ...withoutName } = validRequest
+    expect(validate(staffCreateSchema, withoutName).success).toBe(false)
+    expect(validate(staffCreateSchema, { ...validRequest, pin: '' }).success).toBe(false)
+  })
+
+  it('rejects a missing or non-positive managerId', () => {
+    const { managerId: _managerId, ...withoutManagerId } = validRequest
+    expect(validate(staffCreateSchema, withoutManagerId).success).toBe(false)
+    expect(validate(staffCreateSchema, { ...validRequest, managerId: 0 }).success).toBe(false)
+    expect(validate(staffCreateSchema, { ...validRequest, managerId: -1 }).success).toBe(false)
+  })
+
+  it('rejects a missing or empty managerPin', () => {
+    const { managerPin: _managerPin, ...withoutManagerPin } = validRequest
+    expect(validate(staffCreateSchema, withoutManagerPin).success).toBe(false)
+    expect(validate(staffCreateSchema, { ...validRequest, managerPin: '' }).success).toBe(false)
+  })
+})
+
+describe('staffResetPinSchema (Phase 14)', () => {
+  const validRequest = { staffId: 3, pin: '4321', managerId: 1, managerPin: '9999' }
+
+  it('accepts a well-formed request', () => {
+    expect(validate(staffResetPinSchema, validRequest).success).toBe(true)
+  })
+
+  it('rejects a missing or non-positive staffId', () => {
+    expect(validate(staffResetPinSchema, { ...validRequest, staffId: 0 }).success).toBe(false)
+    expect(validate(staffResetPinSchema, { ...validRequest, staffId: -1 }).success).toBe(false)
+  })
+
+  it('rejects a missing or empty pin', () => {
+    expect(validate(staffResetPinSchema, { ...validRequest, pin: '' }).success).toBe(false)
+  })
+
+  it('rejects a missing manager authorization', () => {
+    expect(
+      validate(staffResetPinSchema, { ...validRequest, managerId: undefined }).success
+    ).toBe(false)
+    expect(validate(staffResetPinSchema, { ...validRequest, managerPin: '' }).success).toBe(false)
+  })
+})
+
+describe('integrationsSetConfigSchema (Phase 14)', () => {
+  const validRequest = {
+    provider: 'mpesa',
+    config: { paybill: '123456', till: '654321' },
+    managerId: 1,
+    managerPin: '9999'
+  }
+
+  it('accepts a well-formed request', () => {
+    expect(validate(integrationsSetConfigSchema, validRequest).success).toBe(true)
+  })
+
+  it('accepts the etims provider with a different config shape', () => {
+    expect(
+      validate(integrationsSetConfigSchema, {
+        ...validRequest,
+        provider: 'etims',
+        config: { middlewareUrl: 'http://localhost:9000' }
+      }).success
+    ).toBe(true)
+  })
+
+  it('rejects an unknown provider', () => {
+    expect(
+      validate(integrationsSetConfigSchema, { ...validRequest, provider: 'paypal' }).success
+    ).toBe(false)
+  })
+
+  it('rejects a missing manager authorization', () => {
+    const { managerId: _managerId, ...withoutManagerId } = validRequest
+    expect(validate(integrationsSetConfigSchema, withoutManagerId).success).toBe(false)
+    expect(
+      validate(integrationsSetConfigSchema, { ...validRequest, managerPin: '' }).success
+    ).toBe(false)
   })
 })
 

@@ -74,11 +74,22 @@ export interface ThermalPrinterLike {
 /** Builds a {@link ThermalPrinterLike} client for a given interface address. */
 export type PrinterFactory = (interfaceName: string) => ThermalPrinterLike
 
+/**
+ * Connect/socket timeout (ms) for the TCP/IP printer transport
+ * (Phase 5.2 hardening). Bounds both `isPrinterConnected()`'s probe and
+ * `execute()`'s data transmission — see `node-thermal-printer`'s
+ * `Network` interface, which applies this same value to both. Without
+ * it, a routable-but-dead printer IP can hang checkout for 20+ seconds
+ * on the OS's default TCP timeout instead of failing fast.
+ */
+export const PRINTER_CONNECT_TIMEOUT_MS = 3000
+
 /** Default factory backed by the real ESC/POS (EPSON dialect) client. */
-const defaultPrinterFactory: PrinterFactory = (interfaceName) =>
+export const defaultPrinterFactory: PrinterFactory = (interfaceName) =>
   new ThermalPrinter({
     type: PrinterTypes.EPSON,
-    interface: interfaceName
+    interface: interfaceName,
+    options: { timeout: PRINTER_CONNECT_TIMEOUT_MS }
   }) as unknown as ThermalPrinterLike
 
 /**
@@ -243,6 +254,9 @@ function translatePrinterError(err: unknown): string {
   const message = err instanceof Error ? err.message : String(err)
   if (/paper/i.test(message)) {
     return 'Printer error — check paper and try again'
+  }
+  if (/timeout/i.test(message)) {
+    return 'Printer connection timed out'
   }
   return `Printer error — ${message}`
 }

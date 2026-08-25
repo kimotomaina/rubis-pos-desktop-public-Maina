@@ -188,29 +188,44 @@ const api = {
     ipcRenderer.invoke('auth:logout', { staffId }),
 
   /**
-   * Creates a new staff account (Admin screen).
+   * Creates a new staff account (Admin screen). Requires a re-verified
+   * admin Manager PIN (Phase 14) — the main process independently
+   * checks `managerId`/`managerPin` before creating the account.
    *
    * @param {string} name
    * @param {string} pin
    * @param {StaffRole} role
+   * @param {number} managerId — admin staff id authorizing this action
+   * @param {string} managerPin — that admin's PIN, captured via `ManagerPinModal`
    * @returns {Promise<ServiceResult<StaffSummary>>}
    */
   createStaff: (
     name: string,
     pin: string,
-    role: StaffRole
+    role: StaffRole,
+    managerId: number,
+    managerPin: string
   ): Promise<ServiceResult<StaffSummary>> =>
-    ipcRenderer.invoke('staff:create', { name, pin, role }),
+    ipcRenderer.invoke('staff:create', { name, pin, role, managerId, managerPin }),
 
   /**
-   * Resets a staff member's PIN (Admin screen).
+   * Resets a staff member's PIN (Admin screen). Requires a re-verified
+   * admin Manager PIN (Phase 14) — the main process independently
+   * checks `managerId`/`managerPin` before resetting the target PIN.
    *
    * @param {number} staffId
    * @param {string} pin
+   * @param {number} managerId — admin staff id authorizing this action
+   * @param {string} managerPin — that admin's PIN, captured via `ManagerPinModal`
    * @returns {Promise<ServiceResult<void>>}
    */
-  resetStaffPin: (staffId: number, pin: string): Promise<ServiceResult<void>> =>
-    ipcRenderer.invoke('staff:resetPin', { staffId, pin }),
+  resetStaffPin: (
+    staffId: number,
+    pin: string,
+    managerId: number,
+    managerPin: string
+  ): Promise<ServiceResult<void>> =>
+    ipcRenderer.invoke('staff:resetPin', { staffId, pin, managerId, managerPin }),
 
   /**
    * Reads the currently open till shift, if any.
@@ -330,17 +345,24 @@ const api = {
     ipcRenderer.invoke('integrations:get-config', provider),
 
   /**
-   * Saves a provider's integration config (Admin screen).
+   * Saves a provider's integration config (Admin screen). Requires a
+   * re-verified admin Manager PIN (Phase 14) — the main process
+   * independently checks `managerId`/`managerPin` before writing the
+   * config (Paybill/Till numbers, middleware URLs).
    *
    * @param {IntegrationProviderName} provider
    * @param {Record<string, unknown>} config
+   * @param {number} managerId — admin staff id authorizing this action
+   * @param {string} managerPin — that admin's PIN, captured via `ManagerPinModal`
    * @returns {Promise<ServiceResult<void>>}
    */
   setIntegrationConfig: (
     provider: IntegrationProviderName,
-    config: Record<string, unknown>
+    config: Record<string, unknown>,
+    managerId: number,
+    managerPin: string
   ): Promise<ServiceResult<void>> =>
-    ipcRenderer.invoke('integrations:set-config', { provider, config }),
+    ipcRenderer.invoke('integrations:set-config', { provider, config, managerId, managerPin }),
 
   /**
    * Voids a local `pending_sync` order — reverses inventory and marks

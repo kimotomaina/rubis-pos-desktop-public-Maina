@@ -159,6 +159,23 @@ describe('RubisDatabase.init', () => {
     expect(fake.connection.exec).toHaveBeenCalledWith(SCHEMA.integrations)
   })
 
+  it('sets synchronous = NORMAL for faster writes without sacrificing WAL crash safety', () => {
+    db.init()
+
+    expect(fake.connection.pragma).toHaveBeenCalledWith('synchronous = NORMAL')
+    const pragmaCalls = fake.connection.pragma.mock.calls.map((call) => call[0])
+    expect(pragmaCalls.indexOf('journal_mode = WAL')).toBeLessThan(
+      pragmaCalls.indexOf('synchronous = NORMAL')
+    )
+  })
+
+  it('creates the barcode index on products for O(1) scanner lookups', () => {
+    db.init()
+
+    expect(SCHEMA.barcodeIndex).toMatch(/CREATE INDEX IF NOT EXISTS idx_products_barcode ON products \(barcode\)/)
+    expect(fake.connection.exec).toHaveBeenCalledWith(SCHEMA.barcodeIndex)
+  })
+
   it('is idempotent — a second init() reuses the connection', () => {
     db.init()
     db.init()

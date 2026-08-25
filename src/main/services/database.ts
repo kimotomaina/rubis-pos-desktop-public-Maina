@@ -202,6 +202,7 @@ export const SCHEMA = {
     next_attempt_at INTEGER NOT NULL DEFAULT 0
   )`,
   queueIndex: `CREATE INDEX IF NOT EXISTS idx_sync_queue_next_attempt ON sync_queue (next_attempt_at)`,
+  barcodeIndex: `CREATE INDEX IF NOT EXISTS idx_products_barcode ON products (barcode)`,
   settings: `CREATE TABLE IF NOT EXISTS settings (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
@@ -277,10 +278,12 @@ export class RubisDatabase {
     if (this.connection) return
     const connection = new this.factory(this.dbPath)
     connection.pragma('journal_mode = WAL')
+    connection.pragma('synchronous = NORMAL')
     connection.exec(SCHEMA.products)
     connection.exec(SCHEMA.orders)
     connection.exec(SCHEMA.syncQueue)
     connection.exec(SCHEMA.queueIndex)
+    connection.exec(SCHEMA.barcodeIndex)
     connection.exec(SCHEMA.settings)
     connection.exec(SCHEMA.staff)
     connection.exec(SCHEMA.shifts)

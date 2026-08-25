@@ -9,9 +9,12 @@
  */
 
 import { describe, it, expect, vi } from 'vitest'
+import { ThermalPrinter } from 'node-thermal-printer'
 import {
   printReceipt,
-  renderReceipt
+  renderReceipt,
+  defaultPrinterFactory,
+  PRINTER_CONNECT_TIMEOUT_MS
 } from '../src/main/services/printer.js'
 import type {
   PrinterSettings,
@@ -20,6 +23,11 @@ import type {
   ThermalPrinterLike
 } from '../src/main/services/printer.js'
 import { formatCurrency } from '../src/main/services/currency.js'
+
+vi.mock('node-thermal-printer', () => ({
+  ThermalPrinter: vi.fn(),
+  PrinterTypes: { EPSON: 'epson' }
+}))
 
 /**
  * Builds a recording fake implementing the narrow ThermalPrinterLike
@@ -194,5 +202,30 @@ describe('printReceipt', () => {
     expect(logged).toContain(`Total: ${formatCurrency(48.59)}`)
 
     logSpy.mockRestore()
+  })
+
+  it('translates a socket timeout error from execute() into a friendly message', async () => {
+    const err = new Error('Socket timeout')
+    const { client } = createFakePrinter({ connected: true, executeError: err })
+    const factory = vi.fn(() => client)
+
+    const result = await printReceipt(order, items, settings, factory)
+
+    expect(result.success).toBe(false)
+    expect(result.error).toMatch(/timed out/i)
+  })
+})
+
+describe('defaultPrinterFactory', () => {
+  it('constructs the ThermalPrinter client with a strict 3-second connect/socket timeout', () => {
+    defaultPrinterFactory('tcp://192.168.0.50:9100')
+
+    expect(PRINTER_CONNECT_TIMEOUT_MS).toBe(3000)
+    expect(ThermalPrinter).toHaveBeenCalledWith(
+      expect.objectContaining({
+        interface: 'tcp://192.168.0.50:9100',
+        options: { timeout: PRINTER_CONNECT_TIMEOUT_MS }
+      })
+    )
   })
 })

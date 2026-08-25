@@ -10,6 +10,12 @@
  * any gap larger than that resets the buffer, so a human typist's
  * naturally slower, irregular pace never accumulates enough
  * characters to be mistaken for a scan.
+ *
+ * A second guard (Phase 5.2 hardening) suppresses an accidental
+ * duplicate: the exact same barcode flushed again within
+ * `DEFAULT_DUPLICATE_SUPPRESS_MS` of the last successful scan — e.g. a
+ * cashier double-pulling the trigger — is silently dropped instead of
+ * invoking `onScan` (and adding the item) twice.
  */
 
 import { useEffect, useRef } from 'react'
@@ -19,6 +25,14 @@ export const DEFAULT_SCAN_MAX_INTERVAL_MS = 50
 
 /** Minimum buffered characters before Enter to treat input as a scan. */
 export const DEFAULT_SCAN_MIN_LENGTH = 3
+
+/**
+ * Window (ms) within which the exact same barcode is treated as an
+ * accidental duplicate — e.g. a double-pulled trigger or a scanner
+ * that fires twice on one pass — and silently ignored rather than
+ * invoked a second time.
+ */
+export const DEFAULT_DUPLICATE_SUPPRESS_MS = 1000
 
 /** Tuning knobs for {@link useBarcodeScanner}. */
 export interface UseBarcodeScannerOptions {
@@ -53,14 +67,26 @@ export function useBarcodeScanner(
 
     let buffer: string[] = []
     let lastTimestamp = 0
+    let lastScanCode: string | null = null
+    let lastScanTime = 0
 
     const handleKeyDown = (event: KeyboardEvent): void => {
       if (event.key === 'Enter') {
         const barcode = buffer.join('')
         buffer = []
-        if (barcode.length >= minLength) {
-          onScanRef.current(barcode)
+        if (barcode.length < minLength) return
+
+        const now = Date.now()
+        if (
+          barcode === lastScanCode &&
+          now - lastScanTime < DEFAULT_DUPLICATE_SUPPRESS_MS
+        ) {
+          return
         }
+
+        lastScanCode = barcode
+        lastScanTime = now
+        onScanRef.current(barcode)
         return
       }
 

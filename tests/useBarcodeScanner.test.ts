@@ -15,7 +15,8 @@ import { createRoot, type Root } from 'react-dom/client'
 import {
   useBarcodeScanner,
   DEFAULT_SCAN_MAX_INTERVAL_MS,
-  DEFAULT_SCAN_MIN_LENGTH
+  DEFAULT_SCAN_MIN_LENGTH,
+  DEFAULT_DUPLICATE_SUPPRESS_MS
 } from '../src/renderer/src/hooks/useBarcodeScanner.js'
 import type { UseBarcodeScannerOptions } from '../src/renderer/src/hooks/useBarcodeScanner.js'
 
@@ -152,5 +153,52 @@ describe('useBarcodeScanner', () => {
   it('exposes its default timing constants', () => {
     expect(DEFAULT_SCAN_MAX_INTERVAL_MS).toBe(50)
     expect(DEFAULT_SCAN_MIN_LENGTH).toBe(3)
+    expect(DEFAULT_DUPLICATE_SUPPRESS_MS).toBe(1000)
+  })
+
+  it('ignores the exact same barcode scanned twice within the suppression window', () => {
+    const onScan = vi.fn()
+    mount(onScan)
+
+    typeString('012345678905', 5)
+    pressKey('Enter')
+
+    vi.advanceTimersByTime(500)
+
+    typeString('012345678905', 5)
+    pressKey('Enter')
+
+    expect(onScan).toHaveBeenCalledTimes(1)
+    expect(onScan).toHaveBeenCalledWith('012345678905')
+  })
+
+  it('accepts the same barcode again once the suppression window has elapsed', () => {
+    const onScan = vi.fn()
+    mount(onScan)
+
+    typeString('012345678905', 5)
+    pressKey('Enter')
+
+    vi.advanceTimersByTime(DEFAULT_DUPLICATE_SUPPRESS_MS)
+
+    typeString('012345678905', 5)
+    pressKey('Enter')
+
+    expect(onScan).toHaveBeenCalledTimes(2)
+  })
+
+  it('does not suppress a different barcode scanned right after another', () => {
+    const onScan = vi.fn()
+    mount(onScan)
+
+    typeString('012345678905', 5)
+    pressKey('Enter')
+
+    typeString('111222333444', 5)
+    pressKey('Enter')
+
+    expect(onScan).toHaveBeenCalledTimes(2)
+    expect(onScan).toHaveBeenNthCalledWith(1, '012345678905')
+    expect(onScan).toHaveBeenNthCalledWith(2, '111222333444')
   })
 })

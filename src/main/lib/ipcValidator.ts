@@ -55,6 +55,35 @@ export const loginRequestSchema = z.object({
   pin: z.string().min(1, 'PIN is required')
 })
 
+/**
+ * Shared re-authorization fields on every privileged Admin-screen
+ * payload (Phase 14) — the manager id/PIN `requireAdminPin` re-checks
+ * server-side before the request's own action is allowed to proceed.
+ */
+const managerAuthzSchema = z.object({
+  managerId: z.number().int().positive(),
+  managerPin: z.string().min(1, 'Manager PIN is required')
+})
+
+/** `staff:create` request payload (Phase 14 — adds manager re-authorization). */
+export const staffCreateSchema = managerAuthzSchema.extend({
+  name: z.string().min(1, 'Name is required'),
+  pin: z.string().min(1, 'PIN is required'),
+  role: z.enum(['admin', 'cashier'])
+})
+
+/** `staff:resetPin` request payload (Phase 14 — adds manager re-authorization). */
+export const staffResetPinSchema = managerAuthzSchema.extend({
+  staffId: z.number().int().positive(),
+  pin: z.string().min(1, 'A new PIN is required')
+})
+
+/** `integrations:set-config` request payload (Phase 14 — adds manager re-authorization). */
+export const integrationsSetConfigSchema = managerAuthzSchema.extend({
+  provider: z.enum(['mpesa', 'etims']),
+  config: z.record(z.string(), z.unknown())
+})
+
 /** Result of {@link validate} — mirrors {@link ServiceResult}'s discriminated shape. */
 export type ValidationResult<T> = { success: true; data: T } | { success: false; error: string }
 

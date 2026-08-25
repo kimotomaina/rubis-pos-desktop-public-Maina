@@ -259,6 +259,36 @@ runtime dependencies from the main bundle, so the native `.node`
 binding loads from `node_modules` unchanged — no bundler config change
 was required.
 
+## Phase 5.1 Hardening Addendum
+
+A branch audit of Phases 1–5 found two SQLite-level gaps against this
+phase's own design intent:
+
+- **`idx_products_barcode`** — `products.barcode` had no index, so a
+  scanner lookup (`WHERE barcode = ?`) fell back to a full table scan
+  instead of the O(1) lookup the flattened-variant schema was chosen
+  to enable (`variant_id`, the primary key, was already indexed;
+  `barcode` was not). Added to `SCHEMA` in `database.ts` and created in
+  `RubisDatabase.init()` alongside the existing `idx_sync_queue_next_attempt`
+  index.
+- **`PRAGMA synchronous = NORMAL`** — WAL mode was enabled at init, but
+  `synchronous` was left at SQLite's default (`FULL`), which fsyncs on
+  every transaction commit. `NORMAL` is the standard WAL pairing: it
+  still fsyncs at WAL checkpoints, so a crash cannot corrupt the
+  database, but a transaction commit no longer blocks on an
+  individual fsync — the durability tradeoff (a very small
+  most-recent-commit window is only durable to the OS page cache, not
+  disk, until the next checkpoint) is well within what a single-till
+  local POS can accept, matching this phase's transaction-per-write
+  design (`queueOrder`, `voidOrder`, `closeShift`, etc. already run
+  inside `conn.transaction(...)`, unchanged by this addendum).
+
+Both changes are additive to `RubisDatabase.init()` — no schema column,
+IPC channel, or query shape changed. Covered by two new assertions in
+`tests/database.test.ts`: pragma-ordering (`journal_mode` before
+`synchronous`) and the `idx_products_barcode` index statement being
+executed.
+
 ---
 
 *Phase 3 status: implementation complete — see the completion report in

@@ -33,7 +33,7 @@
     "predist:dir": "npm run check-node-version",
     "dist:dir": "npm run build && electron-builder --win --dir",
     "preinstall": "node scripts/check-node-version.cjs",
-    "postinstall": "electron-rebuild -f -w better-sqlite3 && electron-rebuild -f -w keytar",
+    "postinstall": "electron-rebuild -f -w better-sqlite3",
     "audit": "npm audit --audit-level=high"
   },
   "dependencies": {
@@ -43,7 +43,6 @@
     "better-sqlite3": "^13.0.3",
     "dotenv": "^17.4.2",
     "electron-updater": "^6.3.9",
-    "keytar": "^7.9.0",
     "node-thermal-printer": "^4.6.1",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",

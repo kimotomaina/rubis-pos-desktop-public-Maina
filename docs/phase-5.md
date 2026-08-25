@@ -189,6 +189,46 @@ npm run typecheck  # tsc --noEmit (node + web) — clean
   Catalog view; scanning while on Order History does nothing (by
   design — there's nothing to add to a cart there).
 
+## Phase 5.2 Hardening Addendum
+
+A branch audit of Phases 1–5 identified two hardware-resilience gaps
+against this phase's own scanner/printer design.
+
+- **Barcode double-scan suppression** — `useBarcodeScanner.ts` already
+  distinguished a scan from human typing via keystroke timing
+  (`maxIntervalMs`), but had no guard against the *same* physical
+  barcode firing twice in quick succession (a double-pulled trigger,
+  or a scanner that double-fires on one pass). Added a second guard:
+  the exact same assembled barcode flushed again within
+  `DEFAULT_DUPLICATE_SUPPRESS_MS` (1000ms, exported) of the last
+  accepted scan is silently dropped — `onScan` simply isn't invoked a
+  second time, so nothing reaches the cart. A different barcode, or
+  the same barcode after the window elapses, is unaffected.
+- **Printer TCP timeout** — `defaultPrinterFactory` now passes
+  `options: { timeout: PRINTER_CONNECT_TIMEOUT_MS }` (3000ms, exported)
+  to the `ThermalPrinter` constructor. `node-thermal-printer`'s
+  `Network` transport applies this same value to both the
+  `isPrinterConnected()` probe and `execute()`'s data transmission, so
+  a routable-but-dead printer IP now fails within 3 seconds instead of
+  hanging on the OS's default TCP timeout (20+ seconds) and blocking
+  checkout. `translatePrinterError` also now recognizes the resulting
+  `"Socket timeout"` message and returns "Printer connection timed
+  out" instead of a raw error string.
+
+Both changes are additive — `printReceipt`/`printZReport`'s
+`ServiceResult` return shape, the `receipt:print` IPC contract, and the
+`useBarcodeScanner` hook's public signature are unchanged. New
+coverage: `tests/useBarcodeScanner.test.ts` gained 3 tests (duplicate
+suppressed within the window, accepted again after it elapses, a
+different barcode never suppressed); `tests/printer.test.ts` gained 2
+tests (the default factory's constructor call carries the timeout
+option, and the socket-timeout error translation).
+
+```bash
+npm test           # vitest run — 31 files / 307 tests
+npm run typecheck  # tsc --noEmit (node + web) — clean
+```
+
 ---
 
 *Phase 5 status: implementation complete — `npm test` (121/121) and

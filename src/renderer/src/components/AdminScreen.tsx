@@ -6,6 +6,22 @@ import ZReportModal from './ZReportModal'
 import type { DailySummary, ZReport } from '../../../main/services/reports.js'
 import type { ShiftRow, StaffRole, StaffSummary } from '../../../main/services/database.js'
 
+interface AdminScreenProps {
+  /**
+   * Opens the Manager PIN gate; calls `onAuthorized` with the
+   * authorizing admin's id and PIN once verified (Phase 14). Staff
+   * creation, PIN resets, and integration config changes all route
+   * through this so the credentials can be forwarded to the main
+   * process's `requireAdminPin` re-check — the renderer's own
+   * `currentStaff.role === 'admin'` gate below is UI-only and not a
+   * substitute for it.
+   */
+  requestManagerPin: (
+    title: string,
+    onAuthorized: (managerId: number, managerPin: string) => void
+  ) => void
+}
+
 /**
  * Back-office screen for managers/admins: today's sales, staff
  * management, and till-shift controls (open/close with cash
@@ -13,11 +29,15 @@ import type { ShiftRow, StaffRole, StaffSummary } from '../../../main/services/d
  *
  * Access is gated on `currentStaff.role === 'admin'` — enforced both
  * by `App.tsx` (no nav entry for non-admins) and here (defense in
- * depth, in case navigation state outlives a role switch).
+ * depth, in case navigation state outlives a role switch). Privileged
+ * writes (staff create/PIN reset, integration config) additionally
+ * re-verify a Manager PIN server-side via `requireAdminPin` (Phase
+ * 14) rather than trusting this screen-level gate alone.
  *
+ * @param {AdminScreenProps} props
  * @returns {JSX.Element}
  */
-export default function AdminScreen() {
+export default function AdminScreen({ requestManagerPin }: AdminScreenProps) {
   const currentStaff = useAuthStore((state) => state.currentStaff)
 
   const [dailySummary, setDailySummary] = useState<DailySummary | null>(null)
@@ -101,17 +121,29 @@ export default function AdminScreen() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTab])
 
-  const handleSaveIntegrationsConfig = async () => {
+  /**
+   * Routes through `ManagerPinModal` (Phase 14) so both provider
+   * `setIntegrationConfig` calls can forward a re-verifiable
+   * `managerId`/`managerPin` to the main process.
+   */
+  const handleSaveIntegrationsConfig = () => {
     setIntegrationsMessage(null)
-    const [mpesaResult, etimsResult] = await Promise.all([
-      window.api.setIntegrationConfig('mpesa', { paybill: mpesaPaybill.trim(), till: mpesaTill.trim() }),
-      window.api.setIntegrationConfig('etims', { middlewareUrl: etimsMiddlewareUrl.trim() })
-    ])
-    setIntegrationsMessage(
-      mpesaResult.success && etimsResult.success
-        ? 'Integration settings saved.'
-        : (mpesaResult.error ?? etimsResult.error ?? 'Failed to save integration settings')
-    )
+    const paybill = mpesaPaybill.trim()
+    const till = mpesaTill.trim()
+    const middlewareUrl = etimsMiddlewareUrl.trim()
+    requestManagerPin('Save integration settings', (managerId, managerPin) => {
+      void (async () => {
+        const [mpesaResult, etimsResult] = await Promise.all([
+          window.api.setIntegrationConfig('mpesa', { paybill, till }, managerId, managerPin),
+          window.api.setIntegrationConfig('etims', { middlewareUrl }, managerId, managerPin)
+        ])
+        setIntegrationsMessage(
+          mpesaResult.success && etimsResult.success
+            ? 'Integration settings saved.'
+            : (mpesaResult.error ?? etimsResult.error ?? 'Failed to save integration settings')
+        )
+      })()
+    })
   }
 
   const refresh = async () => {
@@ -181,37 +213,60 @@ export default function AdminScreen() {
     await refresh()
   }
 
-  const handleAddStaff = async () => {
+  /**
+   * Validates the new-staff form, then routes through `ManagerPinModal`
+   * (Phase 14) so `createStaff` can forward a re-verifiable
+   * `managerId`/`managerPin` to the main process.
+   */
+  const handleAddStaff = () => {
     setStaffActionError(null)
     if (!newStaffName.trim() || !newStaffPin.trim()) {
       setStaffActionError('Name and PIN are required')
       return
     }
-    const result = await window.api.createStaff(newStaffName.trim(), newStaffPin.trim(), newStaffRole)
-    if (!result.success) {
-      setStaffActionError(result.error ?? 'Failed to create staff account')
-      return
-    }
-    setNewStaffName('')
-    setNewStaffPin('')
-    setNewStaffRole('cashier')
-    setShowAddStaffForm(false)
-    await refresh()
+    const name = newStaffName.trim()
+    const pin = newStaffPin.trim()
+    requestManagerPin('Create staff account', (managerId, managerPin) => {
+      void (async () => {
+        const result = await window.api.createStaff(name, pin, newStaffRole, managerId, managerPin)
+        if (!result.success) {
+          setStaffActionError(result.error ?? 'Failed to create staff account')
+          return
+        }
+        setNewStaffName('')
+        setNewStaffPin('')
+        setNewStaffRole('cashier')
+        setShowAddStaffForm(false)
+        await refresh()
+      })()
+    })
   }
 
-  const handleResetPin = async (staffId: number) => {
+  /**
+   * Validates the reset-PIN form, then routes through `ManagerPinModal`
+   * (Phase 14) so `resetStaffPin` can forward a re-verifiable
+   * `managerId`/`managerPin` to the main process.
+   *
+   * @param {number} staffId
+   */
+  const handleResetPin = (staffId: number) => {
     setStaffActionError(null)
     if (!resetPinValue.trim()) {
       setStaffActionError('Enter a new PIN')
       return
     }
-    const result = await window.api.resetStaffPin(staffId, resetPinValue.trim())
-    if (!result.success) {
-      setStaffActionError(result.error ?? 'Failed to reset PIN')
-      return
-    }
-    setResetPinTargetId(null)
-    setResetPinValue('')
+    const newPin = resetPinValue.trim()
+    requestManagerPin('Reset staff PIN', (managerId, managerPin) => {
+      void (async () => {
+        const result = await window.api.resetStaffPin(staffId, newPin, managerId, managerPin)
+        if (!result.success) {
+          setStaffActionError(result.error ?? 'Failed to reset PIN')
+          return
+        }
+        setResetPinTargetId(null)
+        setResetPinValue('')
+      })()
+    })
   }
 
   const handleCheckForUpdates = async () => {
@@ -324,7 +379,7 @@ export default function AdminScreen() {
         <section className="rounded-xl border border-slate-200 bg-white p-4">
           <h3 className="mb-1 text-base font-semibold text-slate-800">Shopify Admin API Token</h3>
           <p className="mb-4 text-sm text-slate-500">
-            Stored in the Windows Credential Manager, never in a plaintext file (Phase 12). This
+            Stored encrypted on disk via Windows DPAPI, never in a plaintext file (Phase 12/14). This
             field is write-only — the current value is never sent back here, only whether one is
             configured.
           </p>
