@@ -1,5 +1,6 @@
 /**
- * Thermal receipt printer service (Phase 5 — Hardware Integration).
+ * Thermal receipt printer service (Phase 5 — Hardware Integration;
+ * Phase 15 adds multi-printer routing).
  *
  * Wraps `node-thermal-printer` behind a narrow, injectable interface
  * ({@link ThermalPrinterLike}) so unit tests can assert the exact
@@ -11,11 +12,18 @@
  * than a named Windows printer share — the latter requires the
  * `printer` native driver module, which would add a second fragile
  * native build to the project alongside `better-sqlite3`.
+ *
+ * Phase 15 adds a {@link PrinterRegistry} so a store can register a
+ * secondary kitchen/label printer alongside the original receipt
+ * printer, resolved by `PrinterType` rather than always targeting one
+ * hardcoded interface — see {@link resolvePrinterSettings} and
+ * {@link printReceiptToType}.
  */
 
 import { ThermalPrinter, PrinterTypes } from 'node-thermal-printer'
 import type { ServiceResult } from './shopify-types.js'
 import type { ZReport } from './reports.js'
+import type { PrinterConfig, PrinterType } from './database.js'
 import { formatCurrency } from './currency.js'
 
 /** Store-level configuration resolved once at startup from env vars / settings. */
@@ -91,6 +99,64 @@ export const defaultPrinterFactory: PrinterFactory = (interfaceName) =>
     interface: interfaceName,
     options: { timeout: PRINTER_CONNECT_TIMEOUT_MS }
   }) as unknown as ThermalPrinterLike
+
+/**
+ * In-memory lookup of configured printers, keyed by {@link PrinterConfig.id}
+ * (Phase 15 — Multi-Peripheral Support). Built once at startup from
+ * `RubisDatabase.getPrinters()` and rebuilt after any Admin-screen
+ * add/edit/delete, so a lookup never re-reads the database mid-print.
+ *
+ * A `Map` rather than a held-open `Map<string, ThermalPrinterLike>` of
+ * live client connections — this codebase already connects fresh per
+ * print (`sendToPrinter` below) and bounds that connection with
+ * {@link PRINTER_CONNECT_TIMEOUT_MS}; keeping a TCP socket to a thermal
+ * printer open indefinitely between prints, with no reconnect logic,
+ * would trade a solved problem (fast, bounded failure) for an
+ * unsolved one (a socket gone stale hours into a shift). The registry
+ * only needs to remember *where* each printer is, not hold a
+ * connection to it.
+ */
+export type PrinterRegistry = Map<string, PrinterConfig>
+
+/**
+ * Builds a {@link PrinterRegistry} from the rows `RubisDatabase.getPrinters()`
+ * returns.
+ *
+ * @param {PrinterConfig[]} configs
+ * @returns {PrinterRegistry}
+ */
+export function buildPrinterRegistry(configs: PrinterConfig[]): PrinterRegistry {
+  return new Map(configs.map((config) => [config.id, config]))
+}
+
+/**
+ * Resolves the {@link PrinterSettings} to print a `type` document to:
+ * the first enabled registry entry of that type, otherwise
+ * `defaultSettings` unchanged.
+ *
+ * This is the backward-compatibility seam (Phase 15) — a till with no
+ * rows in the `printers` table (i.e. every store before this phase,
+ * and any store that never opens the Peripherals tab) resolves every
+ * lookup to `defaultSettings`, the same single env-configured printer
+ * `receipt:print` always used before multi-printer support existed.
+ *
+ * @param {PrinterRegistry} registry
+ * @param {PrinterType} type
+ * @param {PrinterSettings} defaultSettings — the original single configured printer
+ * @returns {PrinterSettings}
+ */
+export function resolvePrinterSettings(
+  registry: PrinterRegistry,
+  type: PrinterType,
+  defaultSettings: PrinterSettings
+): PrinterSettings {
+  for (const config of registry.values()) {
+    if (config.type === type && config.enabled) {
+      return { ...defaultSettings, interfaceName: config.interfaceName }
+    }
+  }
+  return defaultSettings
+}
 
 /**
  * Issues the ESC/POS formatting calls for one receipt onto a
@@ -351,5 +417,65 @@ export async function printZReport(
     settings,
     factory,
     `Z-Report Shift #${report.shiftId}`
+  )
+}
+
+/**
+ * Formats and sends a receipt to whichever printer `registry` has
+ * registered for `printerType`, falling back to `defaultSettings`
+ * when none is configured (Phase 15 — see {@link resolvePrinterSettings}
+ * for the backward-compatibility rule this relies on).
+ *
+ * @param {ReceiptOrder} order
+ * @param {ReceiptLineItem[]} items
+ * @param {PrinterRegistry} registry
+ * @param {PrinterSettings} defaultSettings
+ * @param {PrinterType} [printerType] — defaults to `'receipt'`
+ * @param {PrinterFactory} [factory] — injected client factory for testing
+ * @returns {Promise<ServiceResult<ReceiptPrintResult>>}
+ */
+export async function printReceiptToType(
+  order: ReceiptOrder,
+  items: ReceiptLineItem[],
+  registry: PrinterRegistry,
+  defaultSettings: PrinterSettings,
+  printerType: PrinterType = 'receipt',
+  factory: PrinterFactory = defaultPrinterFactory
+): Promise<ServiceResult<ReceiptPrintResult>> {
+  const settings = resolvePrinterSettings(registry, printerType, defaultSettings)
+  return printReceipt(order, items, settings, factory)
+}
+
+/**
+ * Sends a short, self-describing test page to `interfaceName` —
+ * bypasses the registry entirely so the Admin screen's Peripherals
+ * tab can verify connectivity for a printer before (or instead of)
+ * saving it. Never runs in mock mode — a test page exists specifically
+ * to exercise the real hardware connection.
+ *
+ * @param {string} interfaceName — `tcp://<ip>:<port>`
+ * @param {PrinterFactory} [factory] — injected client factory for testing
+ * @returns {Promise<ServiceResult<ReceiptPrintResult>>}
+ */
+export async function printTestPage(
+  interfaceName: string,
+  factory: PrinterFactory = defaultPrinterFactory
+): Promise<ServiceResult<ReceiptPrintResult>> {
+  return sendToPrinter(
+    (client) => {
+      client.alignCenter()
+      client.bold(true)
+      client.println('RUBIS POS')
+      client.println('TEST PAGE')
+      client.bold(false)
+      client.println(new Date().toLocaleString())
+      client.drawLine()
+      client.println('If you can read this, the printer')
+      client.println('is connected and working.')
+      client.cut()
+    },
+    { interfaceName, storeName: 'RUBIS POS', taxRate: 0 },
+    factory,
+    `Test Page (${interfaceName})`
   )
 }

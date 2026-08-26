@@ -65,7 +65,10 @@ import {
   loginRequestSchema,
   staffCreateSchema,
   staffResetPinSchema,
-  integrationsSetConfigSchema
+  integrationsSetConfigSchema,
+  printerSaveSchema,
+  printerDeleteSchema,
+  printerTestSchema
 } from './lib/ipcValidator.js'
 import { requireAdminPin } from './lib/requireAdminPin.js'
 import { restrictToOwnerOnly } from './lib/fileSecurity.js'
@@ -77,12 +80,17 @@ import {
   SECRET_SERVICE_NAME,
   SHOPIFY_TOKEN_ACCOUNT
 } from './services/secretStore.js'
-import type { IntegrationProviderName } from './services/database.js'
+import type { IntegrationProviderName, PrinterConfig, PrinterType } from './services/database.js'
 import { createSyncEngine } from './services/sync-engine.js'
 import { createNetworkMonitor } from './services/network.js'
 import { pushOrderToShopify } from './services/orders.js'
-import { printReceipt, printZReport } from './services/printer.js'
-import type { PrinterSettings, ReceiptPrintResult } from './services/printer.js'
+import {
+  printReceiptToType,
+  printZReport,
+  printTestPage,
+  buildPrinterRegistry
+} from './services/printer.js'
+import type { PrinterSettings, ReceiptPrintResult, PrinterRegistry } from './services/printer.js'
 import { hashPin, authenticateStaff } from './services/auth.js'
 import { generateZReport, generateDailySummary } from './services/reports.js'
 import type { ZReport, DailySummary } from './services/reports.js'
@@ -344,6 +352,17 @@ app.whenReady().then(async () => {
     taxRate: Number(process.env.VITE_TAX_RATE) || 0,
     mock: process.env.VITE_MOCK_PRINTER === 'true'
   }
+
+  /**
+   * Multi-printer registry (Phase 15 — Multi-Peripheral Support):
+   * additional printers (e.g. a kitchen or label printer) registered
+   * from the Admin screen's Peripherals tab, keyed by id. Rebuilt after
+   * every `printers:save`/`printers:delete` so a lookup never reads a
+   * stale in-memory copy. A store with no rows in the `printers` table
+   * resolves every `printerType` lookup back to `printerSettings` above
+   * — see `printer.ts`'s `resolvePrinterSettings`.
+   */
+  let printerRegistry: PrinterRegistry = buildPrinterRegistry(db.getPrinters())
 
   /**
    * M-Pesa / eTIMS integrations (Phase 9 — placeholders). Only mock
@@ -659,6 +678,103 @@ app.whenReady().then(async () => {
   )
 
   /**
+   * IPC handler that lists every configured printer (Phase 15) for the
+   * Admin screen's Peripherals tab.
+   */
+  ipcMain.handle(
+    'printers:list',
+    (): ServiceResult<PrinterConfig[]> => {
+      try {
+        return { success: true, data: db.getPrinters() }
+      } catch (err) {
+        return {
+          success: false,
+          error: err instanceof Error ? err.message : 'Failed to load printers'
+        }
+      }
+    }
+  )
+
+  /**
+   * IPC handler that upserts a printer configuration (Phase 15).
+   * Requires a re-verified admin Manager PIN — registering a printer
+   * interface is the same class of privileged write as
+   * `integrations:set-config`.
+   */
+  ipcMain.handle(
+    'printers:save',
+    (_event, request: unknown): ServiceResult<void> => {
+      const validation = validate(printerSaveSchema, request)
+      if (!validation.success) {
+        return { success: false, error: validation.error }
+      }
+      const authz = requireAdminPin(db, validation.data.managerId, validation.data.managerPin)
+      if (!authz.success) {
+        return authz
+      }
+      try {
+        db.savePrinter({
+          id: validation.data.id,
+          type: validation.data.type,
+          interfaceName: validation.data.interfaceName,
+          enabled: validation.data.enabled
+        })
+        printerRegistry = buildPrinterRegistry(db.getPrinters())
+        return { success: true }
+      } catch (err) {
+        return {
+          success: false,
+          error: err instanceof Error ? err.message : 'Failed to save printer'
+        }
+      }
+    }
+  )
+
+  /**
+   * IPC handler that removes a printer configuration (Phase 15).
+   * Requires a re-verified admin Manager PIN, matching `printers:save`.
+   */
+  ipcMain.handle(
+    'printers:delete',
+    (_event, request: unknown): ServiceResult<void> => {
+      const validation = validate(printerDeleteSchema, request)
+      if (!validation.success) {
+        return { success: false, error: validation.error }
+      }
+      const authz = requireAdminPin(db, validation.data.managerId, validation.data.managerPin)
+      if (!authz.success) {
+        return authz
+      }
+      try {
+        db.deletePrinter(validation.data.id)
+        printerRegistry = buildPrinterRegistry(db.getPrinters())
+        return { success: true }
+      } catch (err) {
+        return {
+          success: false,
+          error: err instanceof Error ? err.message : 'Failed to delete printer'
+        }
+      }
+    }
+  )
+
+  /**
+   * IPC handler that sends a test page to a given printer interface
+   * (Phase 15) — read-only diagnostic, no manager re-authorization
+   * needed (see `printerTestSchema`).
+   */
+  ipcMain.handle(
+    'printers:test',
+    async (_event, request: unknown): Promise<ServiceResult<ReceiptPrintResult>> => {
+      const validation = validate(printerTestSchema, request)
+      if (!validation.success) {
+        return { success: false, error: validation.error }
+      }
+      return printTestPage(validation.data.interfaceName)
+    }
+  )
+
+  /**
    * IPC handler that reports whether a Shopify Admin API token is
    * currently stored in the credential vault — never the token value
    * itself (Phase 12, Task 1). Lets the Admin screen show "Configured"
@@ -782,7 +898,12 @@ app.whenReady().then(async () => {
     'receipt:print',
     async (
       _event,
-      request: { localId?: number; shiftId?: number; isZReport?: boolean }
+      request: {
+        localId?: number
+        shiftId?: number
+        isZReport?: boolean
+        printerType?: PrinterType
+      }
     ): Promise<ServiceResult<ReceiptPrintResult>> => {
       if (request?.isZReport) {
         if (!request.shiftId) {
@@ -811,7 +932,7 @@ app.whenReady().then(async () => {
 
       try {
         const payload = JSON.parse(order.payload_json) as OfflineOrderPayload
-        return await printReceipt(
+        return await printReceiptToType(
           {
             localId: order.local_id,
             createdAt: order.created_at,
@@ -827,7 +948,9 @@ app.whenReady().then(async () => {
             quantity: line.quantity,
             unitPrice: line.unitPrice
           })),
-          printerSettings
+          printerRegistry,
+          printerSettings,
+          request.printerType ?? 'receipt'
         )
       } catch (err) {
         return {

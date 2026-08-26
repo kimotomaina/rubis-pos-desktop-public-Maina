@@ -17,7 +17,10 @@ import type {
   OrderRow,
   StaffSummary,
   StaffRole,
-  ShiftRow
+  ShiftRow,
+  IntegrationProviderName,
+  PrinterConfig,
+  PrinterType
 } from '../main/services/database.js'
 import type { ReceiptPrintResult } from '../main/services/printer.js'
 import type { ZReport, DailySummary } from '../main/services/reports.js'
@@ -28,7 +31,6 @@ import type {
   ManualCodeVerification,
   ManualCodeVerificationResult
 } from '../main/services/integrations/mpesa.js'
-import type { IntegrationProviderName } from '../main/services/database.js'
 
 /** Payload of the `network:status` broadcast / `network:get-status` invoke. */
 export interface NetworkStatusPayload {
@@ -62,8 +64,11 @@ export interface PosApi {
   getLocalOrders: (limit?: number, offset?: number) => Promise<ServiceResult<OrderRow[]>>
   /** Retries syncing a failed or pending order. */
   retryOrderSync: (localId: number) => Promise<ServiceResult<{ queueId: number }>>
-  /** Prints (or, in mock mode, logs) a receipt for a local order. */
-  printReceipt: (localId: number) => Promise<ServiceResult<ReceiptPrintResult>>
+  /** Prints (or, in mock mode, logs) a receipt for a local order, optionally routed to a printer type (Phase 15). */
+  printReceipt: (
+    localId: number,
+    printerType?: PrinterType
+  ) => Promise<ServiceResult<ReceiptPrintResult>>
   /** Fetches every active staff account for the login picker. */
   getStaffList: () => Promise<ServiceResult<StaffSummary[]>>
   /** Verifies a staff PIN. */
@@ -125,6 +130,18 @@ export interface PosApi {
   ) => Promise<ServiceResult<void>>
   /** Voids a local `pending_sync` order. */
   voidOrder: (localId: number) => Promise<ServiceResult<{ localId: number; voidedAt: string }>>
+  /** Lists every configured printer (Phase 15). */
+  getPrinters: () => Promise<ServiceResult<PrinterConfig[]>>
+  /** Upserts a printer configuration. Requires a re-verified admin Manager PIN (Phase 15). */
+  savePrinter: (
+    config: PrinterConfig,
+    managerId: number,
+    managerPin: string
+  ) => Promise<ServiceResult<void>>
+  /** Removes a printer configuration. Requires a re-verified admin Manager PIN (Phase 15). */
+  deletePrinter: (id: string, managerId: number, managerPin: string) => Promise<ServiceResult<void>>
+  /** Sends a test page to a printer interface to verify connectivity (Phase 15). */
+  testPrinter: (interfaceName: string) => Promise<ServiceResult<ReceiptPrintResult>>
   /** Reports whether a Shopify Admin API token is stored in the credential vault. */
   getShopifyTokenStatus: () => Promise<ServiceResult<{ configured: boolean }>>
   /** Saves the Shopify Admin API token to the credential vault. */

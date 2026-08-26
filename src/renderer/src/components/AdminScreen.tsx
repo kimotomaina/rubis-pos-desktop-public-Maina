@@ -4,7 +4,13 @@ import { formatCurrency } from '../lib/currency'
 import EmptyState from './EmptyState'
 import ZReportModal from './ZReportModal'
 import type { DailySummary, ZReport } from '../../../main/services/reports.js'
-import type { ShiftRow, StaffRole, StaffSummary } from '../../../main/services/database.js'
+import type {
+  ShiftRow,
+  StaffRole,
+  StaffSummary,
+  PrinterConfig,
+  PrinterType
+} from '../../../main/services/database.js'
 
 interface AdminScreenProps {
   /**
@@ -63,12 +69,23 @@ export default function AdminScreen({ requestManagerPin }: AdminScreenProps) {
   const [checkingForUpdates, setCheckingForUpdates] = useState(false)
   const [updateCheckMessage, setUpdateCheckMessage] = useState<string | null>(null)
 
-  const [activeTab, setActiveTab] = useState<'overview' | 'integrations'>('overview')
+  const [activeTab, setActiveTab] = useState<'overview' | 'integrations' | 'peripherals'>(
+    'overview'
+  )
   const [mpesaPaybill, setMpesaPaybill] = useState('')
   const [mpesaTill, setMpesaTill] = useState('')
   const [etimsMiddlewareUrl, setEtimsMiddlewareUrl] = useState('')
   const [integrationsLoading, setIntegrationsLoading] = useState(false)
   const [integrationsMessage, setIntegrationsMessage] = useState<string | null>(null)
+
+  const [printers, setPrinters] = useState<PrinterConfig[]>([])
+  const [printersLoading, setPrintersLoading] = useState(false)
+  const [newPrinterId, setNewPrinterId] = useState('')
+  const [newPrinterType, setNewPrinterType] = useState<PrinterType>('receipt')
+  const [newPrinterInterface, setNewPrinterInterface] = useState('')
+  const [printerActionError, setPrinterActionError] = useState<string | null>(null)
+  const [printerTestMessages, setPrinterTestMessages] = useState<Record<string, string>>({})
+  const [testingPrinterId, setTestingPrinterId] = useState<string | null>(null)
 
   const [shopifyTokenConfigured, setShopifyTokenConfigured] = useState(false)
   const [shopifyTokenInput, setShopifyTokenInput] = useState('')
@@ -116,8 +133,17 @@ export default function AdminScreen({ requestManagerPin }: AdminScreenProps) {
     }
   }
 
+  /** Loads every configured printer (Phase 15) for the Peripherals tab. */
+  const loadPrinters = async () => {
+    setPrintersLoading(true)
+    const result = await window.api.getPrinters()
+    if (result.success && result.data) setPrinters(result.data)
+    setPrintersLoading(false)
+  }
+
   useEffect(() => {
     if (activeTab === 'integrations') void loadIntegrationsConfig()
+    if (activeTab === 'peripherals') void loadPrinters()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTab])
 
@@ -144,6 +170,81 @@ export default function AdminScreen({ requestManagerPin }: AdminScreenProps) {
         )
       })()
     })
+  }
+
+  /**
+   * Validates the new-printer form, then routes through
+   * `ManagerPinModal` (Phase 15, following the Phase 14 pattern) so
+   * `savePrinter` can forward a re-verifiable `managerId`/`managerPin`
+   * to the main process.
+   */
+  const handleAddPrinter = () => {
+    setPrinterActionError(null)
+    if (!newPrinterId.trim() || !newPrinterInterface.trim()) {
+      setPrinterActionError('Printer id and interface are required')
+      return
+    }
+    const config: PrinterConfig = {
+      id: newPrinterId.trim(),
+      type: newPrinterType,
+      interfaceName: newPrinterInterface.trim(),
+      enabled: true
+    }
+    requestManagerPin('Add printer', (managerId, managerPin) => {
+      void (async () => {
+        const result = await window.api.savePrinter(config, managerId, managerPin)
+        if (!result.success) {
+          setPrinterActionError(result.error ?? 'Failed to save printer')
+          return
+        }
+        setNewPrinterId('')
+        setNewPrinterInterface('')
+        setNewPrinterType('receipt')
+        await loadPrinters()
+      })()
+    })
+  }
+
+  /**
+   * Routes through `ManagerPinModal` so `deletePrinter` can forward a
+   * re-verifiable `managerId`/`managerPin` to the main process.
+   *
+   * @param {string} id
+   */
+  const handleDeletePrinter = (id: string) => {
+    setPrinterActionError(null)
+    requestManagerPin(`Remove printer ${id}`, (managerId, managerPin) => {
+      void (async () => {
+        const result = await window.api.deletePrinter(id, managerId, managerPin)
+        if (!result.success) {
+          setPrinterActionError(result.error ?? 'Failed to delete printer')
+          return
+        }
+        await loadPrinters()
+      })()
+    })
+  }
+
+  /**
+   * Sends a test page to `interfaceName` — no Manager PIN required,
+   * since this is a read-only connectivity check (see `printerTestSchema`).
+   *
+   * @param {string} id
+   * @param {string} interfaceName
+   */
+  const handleTestPrinter = (id: string, interfaceName: string) => {
+    setTestingPrinterId(id)
+    void (async () => {
+      try {
+        const result = await window.api.testPrinter(interfaceName)
+        setPrinterTestMessages((prev) => ({
+          ...prev,
+          [id]: result.success ? 'Test page sent successfully.' : (result.error ?? 'Test failed')
+        }))
+      } finally {
+        setTestingPrinterId(null)
+      }
+    })()
   }
 
   const refresh = async () => {
@@ -302,7 +403,149 @@ export default function AdminScreen({ requestManagerPin }: AdminScreenProps) {
         >
           Integrations
         </button>
+        <button
+          type="button"
+          onClick={() => setActiveTab('peripherals')}
+          className={`flex-1 rounded-md py-2 text-sm font-semibold transition ${
+            activeTab === 'peripherals' ? 'bg-white text-rose-700 shadow-sm' : 'text-slate-500'
+          }`}
+        >
+          Peripherals
+        </button>
       </div>
+
+      {activeTab === 'peripherals' && (
+        <section className="rounded-xl border border-slate-200 bg-white p-4">
+          <h3 className="mb-1 text-base font-semibold text-slate-800">Printers</h3>
+          <p className="mb-4 text-sm text-slate-500">
+            Register additional printers (Phase 15) — a secondary kitchen or label printer
+            alongside the main receipt printer. A store with no printers registered here keeps
+            using the single receipt printer configured via environment variables, unchanged.
+          </p>
+
+          {printerActionError && (
+            <p className="mb-3 rounded-lg bg-rose-50 px-3 py-2 text-sm font-medium text-rose-700">
+              {printerActionError}
+            </p>
+          )}
+
+          {printersLoading ? (
+            <p className="text-sm text-slate-400">Loading…</p>
+          ) : (
+            <div className="space-y-2">
+              {printers.length === 0 && (
+                <p className="text-sm text-slate-400">No printers registered yet.</p>
+              )}
+              {printers.map((printer) => (
+                <div
+                  key={printer.id}
+                  className="rounded-lg border border-slate-100 px-3 py-2"
+                >
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <span className="font-medium text-slate-800">{printer.id}</span>
+                      <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium capitalize text-slate-500">
+                        {printer.type}
+                      </span>
+                      {!printer.enabled && (
+                        <span className="rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-700">
+                          Disabled
+                        </span>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        disabled={testingPrinterId === printer.id}
+                        onClick={() => handleTestPrinter(printer.id, printer.interfaceName)}
+                        className="rounded-md border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        {testingPrinterId === printer.id ? 'Testing…' : 'Test'}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleDeletePrinter(printer.id)}
+                        className="rounded-md border border-rose-300 px-3 py-1.5 text-xs font-medium text-rose-700 hover:bg-rose-50"
+                      >
+                        Remove
+                      </button>
+                    </div>
+                  </div>
+                  <p className="mt-1 text-xs text-slate-500">{printer.interfaceName}</p>
+                  {printerTestMessages[printer.id] && (
+                    <p className="mt-1 text-xs text-slate-600">{printerTestMessages[printer.id]}</p>
+                  )}
+                </div>
+              ))}
+
+              <div className="grid grid-cols-2 gap-2 rounded-lg bg-slate-50 p-3 sm:grid-cols-4">
+                <input
+                  type="text"
+                  placeholder="Printer id (e.g. kitchen-1)"
+                  value={newPrinterId}
+                  onChange={(e) => setNewPrinterId(e.target.value)}
+                  className="rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-rose-400 focus:outline-none"
+                />
+                <select
+                  value={newPrinterType}
+                  onChange={(e) => setNewPrinterType(e.target.value as PrinterType)}
+                  className="rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-rose-400 focus:outline-none"
+                >
+                  <option value="receipt">Receipt</option>
+                  <option value="kitchen">Kitchen</option>
+                  <option value="label">Label</option>
+                </select>
+                <input
+                  type="text"
+                  placeholder="tcp://192.168.0.101:9100"
+                  value={newPrinterInterface}
+                  onChange={(e) => setNewPrinterInterface(e.target.value)}
+                  className="rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-rose-400 focus:outline-none"
+                />
+                <button
+                  type="button"
+                  onClick={() => handleAddPrinter()}
+                  className="rounded-lg bg-rose-600 px-4 py-2 text-sm font-semibold text-white hover:bg-rose-700"
+                >
+                  Add Printer
+                </button>
+              </div>
+            </div>
+          )}
+        </section>
+      )}
+
+      {activeTab === 'peripherals' && (
+        <section className="rounded-xl border border-slate-200 bg-white p-4">
+          <h3 className="mb-1 text-base font-semibold text-slate-800">Barcode Scanner Stations</h3>
+          <p className="mb-3 text-sm text-slate-500">
+            No extra software setup is needed to add a second scanner station — this app never
+            talks to scanner hardware directly (it reads keystrokes, like any keyboard). To route
+            a Datalogic QD2100's scans separately from the main till:
+          </p>
+          <ol className="list-inside list-decimal space-y-1 text-sm text-slate-600">
+            <li>
+              Open the Datalogic QD2100 programming guide and find the barcode for
+              &quot;Add Prefix&quot;.
+            </li>
+            <li>
+              Scan the &quot;Add Prefix&quot; barcode, then scan the characters for the station's
+              prefix — <code className="rounded bg-slate-100 px-1">SC1:</code> for till 1,{' '}
+              <code className="rounded bg-slate-100 px-1">SC2:</code> for till 2, or{' '}
+              <code className="rounded bg-slate-100 px-1">KITCHEN:</code> for a back-of-house unit
+              — then scan &quot;Save&quot; to commit the change.
+            </li>
+            <li>
+              Every scan from that unit now arrives prefixed automatically — no app restart or
+              configuration needed here.
+            </li>
+          </ol>
+          <p className="mt-3 text-xs text-slate-400">
+            A scanner that is never programmed keeps working exactly as before, labeled
+            &quot;UNKNOWN&quot; internally.
+          </p>
+        </section>
+      )}
 
       {activeTab === 'integrations' ? (
         <section className="rounded-xl border border-slate-200 bg-white p-4">

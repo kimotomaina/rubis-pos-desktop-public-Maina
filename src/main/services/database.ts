@@ -228,6 +228,12 @@ export const SCHEMA = {
   integrations: `CREATE TABLE IF NOT EXISTS integrations (
     provider TEXT PRIMARY KEY,
     config_json TEXT NOT NULL DEFAULT '{}'
+  )`,
+  printers: `CREATE TABLE IF NOT EXISTS printers (
+    id TEXT PRIMARY KEY,
+    type TEXT NOT NULL CHECK (type IN ('receipt', 'kitchen', 'label')),
+    interface TEXT NOT NULL,
+    enabled INTEGER NOT NULL DEFAULT 1
   )`
 } as const
 
@@ -243,6 +249,33 @@ export interface DatabaseOptions {
 
 /** Integration providers configurable via the `integrations` table. */
 export type IntegrationProviderName = 'mpesa' | 'etims'
+
+/**
+ * Printer role a configured printer serves (Phase 15 — Multi-
+ * Peripheral Support). `'receipt'` is the customer-facing till
+ * printer; `'kitchen'`/`'label'` are additional stations a store can
+ * register without any code change.
+ */
+export type PrinterType = 'receipt' | 'kitchen' | 'label'
+
+/** One configured printer, as read from / written to the `printers` table. */
+export interface PrinterConfig {
+  /** Stable identifier the Admin screen and printer registry key on. */
+  id: string
+  type: PrinterType
+  /** `tcp://<ip>:<port>` address, matching `PrinterSettings.interfaceName`. */
+  interfaceName: string
+  /** Disabled printers are skipped by registry lookups without deleting the row. */
+  enabled: boolean
+}
+
+/** Raw `printers` row shape, before {@link PrinterConfig}'s boolean/name normalization. */
+interface PrinterRow {
+  id: string
+  type: PrinterType
+  interface: string
+  enabled: number
+}
 
 /** Outcome of recording a failed sync attempt. */
 export interface SyncFailureResult {
@@ -288,6 +321,7 @@ export class RubisDatabase {
     connection.exec(SCHEMA.staff)
     connection.exec(SCHEMA.shifts)
     connection.exec(SCHEMA.integrations)
+    connection.exec(SCHEMA.printers)
     this.connection = connection
   }
 
@@ -884,6 +918,50 @@ export class RubisDatabase {
         'INSERT INTO integrations (provider, config_json) VALUES (?, ?) ON CONFLICT(provider) DO UPDATE SET config_json = excluded.config_json'
       )
       .run(provider, JSON.stringify(config))
+  }
+
+  /**
+   * Lists every configured printer (Phase 15), including disabled
+   * ones — callers building a registry filter those out themselves so
+   * the Admin screen can still show and re-enable them.
+   *
+   * @returns {PrinterConfig[]} ordered by `id`
+   */
+  getPrinters(): PrinterConfig[] {
+    const rows = this.conn
+      .prepare('SELECT id, type, interface, enabled FROM printers ORDER BY id ASC')
+      .all() as PrinterRow[]
+    return rows.map((row) => ({
+      id: row.id,
+      type: row.type,
+      interfaceName: row.interface,
+      enabled: row.enabled === 1
+    }))
+  }
+
+  /**
+   * Upserts one printer configuration by `id`.
+   *
+   * @param {PrinterConfig} config
+   */
+  savePrinter(config: PrinterConfig): void {
+    this.conn
+      .prepare(
+        'INSERT INTO printers (id, type, interface, enabled) VALUES (?, ?, ?, ?) ' +
+          'ON CONFLICT(id) DO UPDATE SET type = excluded.type, interface = excluded.interface, enabled = excluded.enabled'
+      )
+      .run(config.id, config.type, config.interfaceName, config.enabled ? 1 : 0)
+  }
+
+  /**
+   * Removes one printer configuration.
+   *
+   * @param {string} id
+   * @returns {boolean} `true` if a row was deleted
+   */
+  deletePrinter(id: string): boolean {
+    const info = this.conn.prepare('DELETE FROM printers WHERE id = ?').run(id)
+    return info.changes > 0
   }
 
   /** Closes the underlying connection. Further calls will throw. */

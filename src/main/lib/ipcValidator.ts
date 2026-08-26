@@ -84,6 +84,34 @@ export const integrationsSetConfigSchema = managerAuthzSchema.extend({
   config: z.record(z.string(), z.unknown())
 })
 
+/**
+ * `printers:save` request payload (Phase 15) — a printer configuration
+ * plus manager re-authorization, mirroring `integrationsSetConfigSchema`
+ * since registering a printer interface is the same class of
+ * privileged Admin-screen write.
+ */
+export const printerSaveSchema = managerAuthzSchema.extend({
+  id: z.string().min(1, 'Printer id is required'),
+  type: z.enum(['receipt', 'kitchen', 'label']),
+  interfaceName: z.string().min(1, 'Printer interface is required'),
+  enabled: z.boolean()
+})
+
+/** `printers:delete` request payload (Phase 15). */
+export const printerDeleteSchema = managerAuthzSchema.extend({
+  id: z.string().min(1, 'Printer id is required')
+})
+
+/**
+ * `printers:test` request payload (Phase 15) — no manager
+ * re-authorization: sending a test page reads and changes nothing, so
+ * it carries the same risk as the existing read-only `staff:list`/
+ * `integrations:get-config` channels, not a privileged write.
+ */
+export const printerTestSchema = z.object({
+  interfaceName: z.string().min(1, 'Printer interface is required')
+})
+
 /** Result of {@link validate} — mirrors {@link ServiceResult}'s discriminated shape. */
 export type ValidationResult<T> = { success: true; data: T } | { success: false; error: string }
 

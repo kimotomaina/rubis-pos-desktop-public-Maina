@@ -157,6 +157,7 @@ describe('RubisDatabase.init', () => {
     expect(fake.connection.exec).toHaveBeenCalledWith(SCHEMA.syncQueue)
     expect(fake.connection.exec).toHaveBeenCalledWith(SCHEMA.queueIndex)
     expect(fake.connection.exec).toHaveBeenCalledWith(SCHEMA.integrations)
+    expect(fake.connection.exec).toHaveBeenCalledWith(SCHEMA.printers)
   })
 
   it('sets synchronous = NORMAL for faster writes without sacrificing WAL crash safety', () => {
@@ -482,6 +483,78 @@ describe('RubisDatabase integration config (Phase 9)', () => {
     const { db } = freshDb()
 
     expect(db.getIntegrationConfig('mpesa')).toEqual({})
+  })
+})
+
+describe('RubisDatabase printers (Phase 15)', () => {
+  it('returns an empty list when no printers are configured', () => {
+    const { db } = freshDb()
+
+    expect(db.getPrinters()).toEqual([])
+  })
+
+  it('lists configured printers, normalizing enabled to a boolean', () => {
+    const { fake, db } = freshDb()
+    fake.setAllResult('FROM printers', [
+      { id: 'till-1', type: 'receipt', interface: 'tcp://192.168.0.51:9100', enabled: 1 },
+      { id: 'label-1', type: 'label', interface: 'tcp://192.168.0.53:9100', enabled: 0 }
+    ])
+
+    expect(db.getPrinters()).toEqual([
+      { id: 'till-1', type: 'receipt', interfaceName: 'tcp://192.168.0.51:9100', enabled: true },
+      { id: 'label-1', type: 'label', interfaceName: 'tcp://192.168.0.53:9100', enabled: false }
+    ])
+  })
+
+  it('upserts a printer configuration', () => {
+    const { fake, db } = freshDb()
+
+    db.savePrinter({
+      id: 'kitchen-1',
+      type: 'kitchen',
+      interfaceName: 'tcp://192.168.0.52:9100',
+      enabled: true
+    })
+
+    const upsertCalls = fake.callsFor('run', 'INSERT INTO printers')
+    expect(upsertCalls).toHaveLength(1)
+    expect(upsertCalls[0].params).toEqual(['kitchen-1', 'kitchen', 'tcp://192.168.0.52:9100', 1])
+  })
+
+  it('stores enabled: false as 0', () => {
+    const { fake, db } = freshDb()
+
+    db.savePrinter({
+      id: 'label-1',
+      type: 'label',
+      interfaceName: 'tcp://192.168.0.53:9100',
+      enabled: false
+    })
+
+    const upsertCalls = fake.callsFor('run', 'INSERT INTO printers')
+    expect(upsertCalls[0].params).toEqual(['label-1', 'label', 'tcp://192.168.0.53:9100', 0])
+  })
+
+  it('deletes a printer by id and reports true when a row was removed', () => {
+    const { fake, db } = freshDb()
+
+    expect(db.deletePrinter('till-1')).toBe(true)
+    const deleteCalls = fake.callsFor('run', 'DELETE FROM printers')
+    expect(deleteCalls).toHaveLength(1)
+    expect(deleteCalls[0].params).toEqual(['till-1'])
+  })
+
+  it('reports false when deleting an unknown printer id', () => {
+    const { fake, db } = freshDb()
+    const originalPrepare = fake.connection.prepare
+    fake.connection.prepare = vi.fn((sql: string) => {
+      if (sql.includes('DELETE FROM printers')) {
+        return { run: () => ({ changes: 0 }), get: () => undefined, all: () => [] }
+      }
+      return originalPrepare(sql)
+    }) as typeof fake.connection.prepare
+
+    expect(db.deletePrinter('unknown-id')).toBe(false)
   })
 })
 

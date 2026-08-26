@@ -1,5 +1,6 @@
 /**
- * Barcode scanner hook (Phase 5 — Hardware Integration).
+ * Barcode scanner hook (Phase 5 — Hardware Integration; Phase 15 adds
+ * multi-scanner prefix routing).
  *
  * Datalogic (and most USB-HID) barcode scanners behave like a very
  * fast keyboard: they type out the barcode's characters and finish
@@ -12,10 +13,20 @@
  * characters to be mistaken for a scan.
  *
  * A second guard (Phase 5.2 hardening) suppresses an accidental
- * duplicate: the exact same barcode flushed again within
- * `DEFAULT_DUPLICATE_SUPPRESS_MS` of the last successful scan — e.g. a
- * cashier double-pulling the trigger — is silently dropped instead of
- * invoking `onScan` (and adding the item) twice.
+ * duplicate: the exact same `(source, barcode)` pair flushed again
+ * within `DEFAULT_DUPLICATE_SUPPRESS_MS` of the last successful scan —
+ * e.g. a cashier double-pulling the trigger — is silently dropped
+ * instead of invoking `onScan` (and adding the item) twice.
+ *
+ * Phase 15 adds multi-scanner routing without any native HID module:
+ * the Datalogic QD2100 (and similar USB-HID scanners) can be
+ * programmed, by scanning a barcode out of its own manual, to prepend
+ * a fixed text prefix to every scan it sends — e.g. `SC1:` for the
+ * till-1 station or `KITCHEN:` for a back-of-house unit. This hook
+ * simply detects and strips a recognized prefix from the flushed
+ * buffer; an unprogrammed scanner (every scanner before this phase)
+ * sends no prefix at all, so its scans keep working exactly as
+ * before, just labeled `source: 'UNKNOWN'`.
  */
 
 import { useEffect, useRef } from 'react'
@@ -27,18 +38,63 @@ export const DEFAULT_SCAN_MAX_INTERVAL_MS = 50
 export const DEFAULT_SCAN_MIN_LENGTH = 3
 
 /**
- * Window (ms) within which the exact same barcode is treated as an
- * accidental duplicate — e.g. a double-pulled trigger or a scanner
- * that fires twice on one pass — and silently ignored rather than
- * invoked a second time.
+ * Window (ms) within which the exact same `(source, barcode)` pair is
+ * treated as an accidental duplicate — e.g. a double-pulled trigger or
+ * a scanner that fires twice on one pass — and silently ignored rather
+ * than invoked a second time.
  */
 export const DEFAULT_DUPLICATE_SUPPRESS_MS = 1000
+
+/**
+ * Which programmed scanner station a scan came from (Phase 15).
+ * `'UNKNOWN'` covers every scan with no recognized prefix — including
+ * every scanner that predates this phase, so existing hardware needs
+ * no reconfiguration to keep working.
+ */
+export type ScanSource = 'SC1' | 'SC2' | 'KITCHEN' | 'UNKNOWN'
+
+/** One parsed scan: its source station and the barcode data with any prefix stripped. */
+export interface ScanResult {
+  source: ScanSource
+  barcode: string
+}
+
+/**
+ * Matches an optional `SC1:`/`SC2:`/`KITCHEN:` prefix (as programmed
+ * into a Datalogic scanner) at the start of a flushed buffer, capturing
+ * the remainder as the barcode. The prefix group is optional, and
+ * `(.+)` requires at least one character, so an unprefixed buffer
+ * matches with the whole string as the barcode — this pattern can
+ * never fail to match a non-empty buffer.
+ */
+const SCAN_PREFIX_PATTERN = /^(SC1:|SC2:|KITCHEN:)?(.+)$/s
+
+/** Maps a matched prefix literal (including its trailing colon) to a {@link ScanSource}. */
+const PREFIX_SOURCES: Record<string, ScanSource> = {
+  'SC1:': 'SC1',
+  'SC2:': 'SC2',
+  'KITCHEN:': 'KITCHEN'
+}
+
+/**
+ * Parses a flushed scan buffer into its {@link ScanSource} and barcode,
+ * stripping a recognized prefix when present.
+ *
+ * @param {string} raw — the full buffer flushed on Enter
+ * @returns {ScanResult}
+ */
+function parseScan(raw: string): ScanResult {
+  const match = SCAN_PREFIX_PATTERN.exec(raw)
+  if (!match) return { source: 'UNKNOWN', barcode: raw }
+  const [, prefix, barcode] = match
+  return { source: prefix ? PREFIX_SOURCES[prefix] : 'UNKNOWN', barcode }
+}
 
 /** Tuning knobs for {@link useBarcodeScanner}. */
 export interface UseBarcodeScannerOptions {
   /** Max ms between keystrokes to remain part of the same scan. */
   maxIntervalMs?: number
-  /** Minimum barcode length to accept (rejects stray Enter presses). */
+  /** Minimum barcode length (after stripping any prefix) to accept (rejects stray Enter presses). */
   minLength?: number
   /** Set false to detach the listener without unmounting the caller. */
   enabled?: boolean
@@ -46,13 +102,14 @@ export interface UseBarcodeScannerOptions {
 
 /**
  * Listens for rapid, Enter-terminated keystroke sequences characteristic
- * of a barcode scanner and invokes `onScan` with the assembled code.
+ * of a barcode scanner and invokes `onScan` with the parsed
+ * {@link ScanResult} — its source station (Phase 15) and barcode.
  *
- * @param {(barcode: string) => void} onScan
+ * @param {(result: ScanResult) => void} onScan
  * @param {UseBarcodeScannerOptions} [options]
  */
 export function useBarcodeScanner(
-  onScan: (barcode: string) => void,
+  onScan: (result: ScanResult) => void,
   options?: UseBarcodeScannerOptions
 ): void {
   const onScanRef = useRef(onScan)
@@ -67,26 +124,27 @@ export function useBarcodeScanner(
 
     let buffer: string[] = []
     let lastTimestamp = 0
-    let lastScanCode: string | null = null
+    let lastScanKey: string | null = null
     let lastScanTime = 0
 
     const handleKeyDown = (event: KeyboardEvent): void => {
       if (event.key === 'Enter') {
-        const barcode = buffer.join('')
+        const raw = buffer.join('')
         buffer = []
-        if (barcode.length < minLength) return
+        if (!raw) return
+
+        const result = parseScan(raw)
+        if (result.barcode.length < minLength) return
 
         const now = Date.now()
-        if (
-          barcode === lastScanCode &&
-          now - lastScanTime < DEFAULT_DUPLICATE_SUPPRESS_MS
-        ) {
+        const scanKey = `${result.source}:${result.barcode}`
+        if (scanKey === lastScanKey && now - lastScanTime < DEFAULT_DUPLICATE_SUPPRESS_MS) {
           return
         }
 
-        lastScanCode = barcode
+        lastScanKey = scanKey
         lastScanTime = now
-        onScanRef.current(barcode)
+        onScanRef.current(result)
         return
       }
 

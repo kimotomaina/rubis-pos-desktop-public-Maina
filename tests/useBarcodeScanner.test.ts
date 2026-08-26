@@ -1,5 +1,6 @@
 /**
- * Barcode scanner hook tests (Phase 5).
+ * Barcode scanner hook tests (Phase 5; Phase 15 adds prefix-routing
+ * coverage).
  *
  * No @testing-library dependency is added — the hook is mounted with
  * `react-dom/client` directly and driven with real `KeyboardEvent`s
@@ -18,7 +19,10 @@ import {
   DEFAULT_SCAN_MIN_LENGTH,
   DEFAULT_DUPLICATE_SUPPRESS_MS
 } from '../src/renderer/src/hooks/useBarcodeScanner.js'
-import type { UseBarcodeScannerOptions } from '../src/renderer/src/hooks/useBarcodeScanner.js'
+import type {
+  UseBarcodeScannerOptions,
+  ScanResult
+} from '../src/renderer/src/hooks/useBarcodeScanner.js'
 
 let container: HTMLDivElement
 let root: Root
@@ -28,14 +32,14 @@ function TestHarness({
   onScan,
   options
 }: {
-  onScan: (barcode: string) => void
+  onScan: (result: ScanResult) => void
   options?: UseBarcodeScannerOptions
 }) {
   useBarcodeScanner(onScan, options)
   return null
 }
 
-function mount(onScan: (barcode: string) => void, options?: UseBarcodeScannerOptions): void {
+function mount(onScan: (result: ScanResult) => void, options?: UseBarcodeScannerOptions): void {
   act(() => {
     root.render(createElement(TestHarness, { onScan, options }))
   })
@@ -82,7 +86,7 @@ describe('useBarcodeScanner', () => {
     pressKey('Enter')
 
     expect(onScan).toHaveBeenCalledTimes(1)
-    expect(onScan).toHaveBeenCalledWith('012345678905')
+    expect(onScan).toHaveBeenCalledWith({ source: 'UNKNOWN', barcode: '012345678905' })
   })
 
   it('ignores slow, human-paced typing followed by Enter', () => {
@@ -114,7 +118,7 @@ describe('useBarcodeScanner', () => {
     pressKey('Enter')
 
     expect(onScan).toHaveBeenCalledTimes(1)
-    expect(onScan).toHaveBeenCalledWith('999888777')
+    expect(onScan).toHaveBeenCalledWith({ source: 'UNKNOWN', barcode: '999888777' })
   })
 
   it('respects a custom maxIntervalMs/minLength configuration', () => {
@@ -124,7 +128,7 @@ describe('useBarcodeScanner', () => {
     typeString('55555', 8)
     pressKey('Enter')
 
-    expect(onScan).toHaveBeenCalledWith('55555')
+    expect(onScan).toHaveBeenCalledWith({ source: 'UNKNOWN', barcode: '55555' })
   })
 
   it('does not fire onScan when disabled', () => {
@@ -169,7 +173,7 @@ describe('useBarcodeScanner', () => {
     pressKey('Enter')
 
     expect(onScan).toHaveBeenCalledTimes(1)
-    expect(onScan).toHaveBeenCalledWith('012345678905')
+    expect(onScan).toHaveBeenCalledWith({ source: 'UNKNOWN', barcode: '012345678905' })
   })
 
   it('accepts the same barcode again once the suppression window has elapsed', () => {
@@ -198,7 +202,99 @@ describe('useBarcodeScanner', () => {
     pressKey('Enter')
 
     expect(onScan).toHaveBeenCalledTimes(2)
-    expect(onScan).toHaveBeenNthCalledWith(1, '012345678905')
-    expect(onScan).toHaveBeenNthCalledWith(2, '111222333444')
+    expect(onScan).toHaveBeenNthCalledWith(1, { source: 'UNKNOWN', barcode: '012345678905' })
+    expect(onScan).toHaveBeenNthCalledWith(2, { source: 'UNKNOWN', barcode: '111222333444' })
+  })
+})
+
+describe('useBarcodeScanner scanner prefix routing (Phase 15)', () => {
+  it('parses an SC1: prefix and strips it from the barcode', () => {
+    const onScan = vi.fn()
+    mount(onScan)
+
+    typeString('SC1:12345', 5)
+    pressKey('Enter')
+
+    expect(onScan).toHaveBeenCalledWith({ source: 'SC1', barcode: '12345' })
+  })
+
+  it('parses an SC2: prefix and strips it from the barcode', () => {
+    const onScan = vi.fn()
+    mount(onScan)
+
+    typeString('SC2:67890', 5)
+    pressKey('Enter')
+
+    expect(onScan).toHaveBeenCalledWith({ source: 'SC2', barcode: '67890' })
+  })
+
+  it('parses a KITCHEN: prefix and strips it from the barcode', () => {
+    const onScan = vi.fn()
+    mount(onScan)
+
+    typeString('KITCHEN:99999', 5)
+    pressKey('Enter')
+
+    expect(onScan).toHaveBeenCalledWith({ source: 'KITCHEN', barcode: '99999' })
+  })
+
+  it('defaults an unprefixed legacy scan to source UNKNOWN', () => {
+    const onScan = vi.fn()
+    mount(onScan)
+
+    typeString('012345678905', 5)
+    pressKey('Enter')
+
+    expect(onScan).toHaveBeenCalledWith({ source: 'UNKNOWN', barcode: '012345678905' })
+  })
+
+  it('applies minLength to the barcode after stripping the prefix, not the raw buffer', () => {
+    const onScan = vi.fn()
+    mount(onScan, { minLength: 4 })
+
+    typeString('SC1:12', 5)
+    pressKey('Enter')
+
+    expect(onScan).not.toHaveBeenCalled()
+  })
+
+  it('does not suppress the same barcode scanned from two different sources', () => {
+    const onScan = vi.fn()
+    mount(onScan)
+
+    typeString('SC1:12345', 5)
+    pressKey('Enter')
+
+    typeString('SC2:12345', 5)
+    pressKey('Enter')
+
+    expect(onScan).toHaveBeenCalledTimes(2)
+    expect(onScan).toHaveBeenNthCalledWith(1, { source: 'SC1', barcode: '12345' })
+    expect(onScan).toHaveBeenNthCalledWith(2, { source: 'SC2', barcode: '12345' })
+  })
+
+  it('still suppresses the same (source, barcode) pair scanned twice within the window', () => {
+    const onScan = vi.fn()
+    mount(onScan)
+
+    typeString('SC1:12345', 5)
+    pressKey('Enter')
+
+    vi.advanceTimersByTime(500)
+
+    typeString('SC1:12345', 5)
+    pressKey('Enter')
+
+    expect(onScan).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not treat a plain colon-containing barcode with an unrecognized prefix as anything but UNKNOWN', () => {
+    const onScan = vi.fn()
+    mount(onScan)
+
+    typeString('OTHER:12345', 5)
+    pressKey('Enter')
+
+    expect(onScan).toHaveBeenCalledWith({ source: 'UNKNOWN', barcode: 'OTHER:12345' })
   })
 })

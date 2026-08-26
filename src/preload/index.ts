@@ -8,7 +8,10 @@ import type {
   OrderRow,
   StaffSummary,
   StaffRole,
-  ShiftRow
+  ShiftRow,
+  IntegrationProviderName,
+  PrinterConfig,
+  PrinterType
 } from '../main/services/database.js'
 import type { ReceiptPrintResult } from '../main/services/printer.js'
 import type { ZReport, DailySummary } from '../main/services/reports.js'
@@ -19,7 +22,6 @@ import type {
   ManualCodeVerification,
   ManualCodeVerificationResult
 } from '../main/services/integrations/mpesa.js'
-import type { IntegrationProviderName } from '../main/services/database.js'
 
 /** Status payload broadcast over the `network:status` channel. */
 export interface NetworkStatusPayload {
@@ -138,12 +140,16 @@ const api = {
    * Prints (or, in mock mode, logs) a receipt for a local order.
    *
    * @param {number} localId
+   * @param {PrinterType} [printerType] — routes to a registered printer
+   *   of this type (Phase 15); defaults to `'receipt'` when omitted,
+   *   matching every call site before multi-printer support existed.
    * @returns {Promise<ServiceResult<ReceiptPrintResult>>}
    */
   printReceipt: (
-    localId: number
+    localId: number,
+    printerType?: PrinterType
   ): Promise<ServiceResult<ReceiptPrintResult>> =>
-    ipcRenderer.invoke('receipt:print', { localId }),
+    ipcRenderer.invoke('receipt:print', { localId, printerType }),
 
   /**
    * Prints (or, in mock mode, logs) a shift's Z-report.
@@ -376,6 +382,58 @@ const api = {
     localId: number
   ): Promise<ServiceResult<{ localId: number; voidedAt: string }>> =>
     ipcRenderer.invoke('orders:void', localId),
+
+  /**
+   * Lists every configured printer (Phase 15 — Admin screen
+   * Peripherals tab).
+   *
+   * @returns {Promise<ServiceResult<PrinterConfig[]>>}
+   */
+  getPrinters: (): Promise<ServiceResult<PrinterConfig[]>> =>
+    ipcRenderer.invoke('printers:list'),
+
+  /**
+   * Upserts a printer configuration. Requires a re-verified admin
+   * Manager PIN (Phase 15) — the main process independently checks
+   * `managerId`/`managerPin` before writing the row.
+   *
+   * @param {PrinterConfig} config
+   * @param {number} managerId — admin staff id authorizing this action
+   * @param {string} managerPin — that admin's PIN, captured via `ManagerPinModal`
+   * @returns {Promise<ServiceResult<void>>}
+   */
+  savePrinter: (
+    config: PrinterConfig,
+    managerId: number,
+    managerPin: string
+  ): Promise<ServiceResult<void>> =>
+    ipcRenderer.invoke('printers:save', { ...config, managerId, managerPin }),
+
+  /**
+   * Removes a printer configuration. Requires a re-verified admin
+   * Manager PIN, matching `savePrinter`.
+   *
+   * @param {string} id
+   * @param {number} managerId — admin staff id authorizing this action
+   * @param {string} managerPin — that admin's PIN, captured via `ManagerPinModal`
+   * @returns {Promise<ServiceResult<void>>}
+   */
+  deletePrinter: (
+    id: string,
+    managerId: number,
+    managerPin: string
+  ): Promise<ServiceResult<void>> =>
+    ipcRenderer.invoke('printers:delete', { id, managerId, managerPin }),
+
+  /**
+   * Sends a test page to a printer interface to verify connectivity —
+   * no manager PIN required (read-only diagnostic).
+   *
+   * @param {string} interfaceName — `tcp://<ip>:<port>`
+   * @returns {Promise<ServiceResult<ReceiptPrintResult>>}
+   */
+  testPrinter: (interfaceName: string): Promise<ServiceResult<ReceiptPrintResult>> =>
+    ipcRenderer.invoke('printers:test', { interfaceName }),
 
   /**
    * Reports whether a Shopify Admin API token is currently stored in

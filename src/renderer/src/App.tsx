@@ -5,6 +5,7 @@ import { useNetworkStore } from './stores/networkStore'
 import { useUiStore } from './stores/uiStore'
 import { useAuthStore } from './stores/authStore'
 import { useBarcodeScanner } from './hooks/useBarcodeScanner'
+import type { ScanResult } from './hooks/useBarcodeScanner'
 import { formatCurrency } from './lib/currency'
 import { filterProducts } from './lib/productSearch'
 import type { CartItem, Discount, VariantSummary, ProductSummary } from './types/shopify'
@@ -217,7 +218,22 @@ export default function App() {
     return () => clearTimeout(id)
   }, [scanToast])
 
-  const handleScan = (barcode: string) => {
+  /**
+   * Routes a parsed scan by its {@link ScanResult.source} (Phase 15):
+   * `'UNKNOWN'` (every scanner before this phase, and any scanner never
+   * programmed with a prefix), `'SC1'`, and `'SC2'` are treated as
+   * regular till stations and add the scanned item to the cart.
+   * `'KITCHEN'` demonstrates a distinct routing action instead of a
+   * cart add — a real back-of-house integration would replace this
+   * toast with whatever the kitchen station actually needs (e.g. an
+   * IPC call to fire a kitchen ticket).
+   */
+  const handleScan = ({ source, barcode }: ScanResult) => {
+    if (source === 'KITCHEN') {
+      setScanToast({ kind: 'success', message: `Kitchen order routed: ${barcode}` })
+      return
+    }
+
     for (const product of products) {
       const variant = product.variants.find((v) => v.barcode === barcode)
       if (variant) {
