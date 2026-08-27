@@ -1,5 +1,8 @@
+import type { ReactNode } from 'react'
+import { PackageIcon } from './icons'
+
 interface EmptyStateProps {
-  icon?: string
+  icon?: ReactNode
   title: string
   subtitle?: string
 }
@@ -12,15 +15,15 @@ interface EmptyStateProps {
  * @returns {JSX.Element}
  */
 export default function EmptyState({
-  icon = '📦',
+  icon = <PackageIcon className="h-10 w-10" />,
   title,
   subtitle = ''
 }: EmptyStateProps) {
   return (
-    <div className="flex flex-col items-center justify-center gap-2 py-12 text-center text-slate-400">
-      <span className="text-4xl">{icon}</span>
-      <p className="text-sm font-medium text-slate-600">{title}</p>
-      {subtitle && <p className="text-xs text-slate-400">{subtitle}</p>}
+    <div className="flex flex-col items-center justify-center gap-3 py-12 text-center text-slate-400">
+      <span className="text-slate-300">{icon}</span>
+      <p className="text-base font-medium text-slate-600">{title}</p>
+      {subtitle && <p className="text-sm text-slate-400">{subtitle}</p>}
     </div>
   )
 }

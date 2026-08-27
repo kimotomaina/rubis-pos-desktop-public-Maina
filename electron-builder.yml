@@ -12,7 +12,6 @@ files:
 
 asarUnpack:
   - '**/*.node'
-  - node_modules/keytar/**/*
 
 extraResources:
   - from: .env
@@ -32,6 +31,7 @@ nsis:
   oneClick: false
   allowToChangeInstallationDirectory: true
   createDesktopShortcut: true
+  include: build/installer.nsh
 
 publish:
   provider: github

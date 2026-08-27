@@ -1,8 +1,7 @@
 /**
- * Order push service tests (Phase 3).
+ * Order push service tests.
  *
- * Uses the Phase 2 pattern: an injected mock axios client — no
- * module-level mocking of axios.
+ * Uses an injected mock axios client — no module-level mocking of axios.
  */
 
 import { describe, it, expect, vi } from 'vitest'

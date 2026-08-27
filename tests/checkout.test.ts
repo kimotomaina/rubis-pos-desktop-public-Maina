@@ -1,5 +1,5 @@
 /**
- * Checkout math tests (Phase 6).
+ * Checkout math tests.
  *
  * `calculateChange`/`canCompleteSale` are pure functions, tested
  * directly without mounting `CheckoutModal`.
@@ -53,7 +53,7 @@ describe('canCompleteSale', () => {
   })
 })
 
-describe('canCompleteSale — M-Pesa manual code flow (Phase 10)', () => {
+describe('canCompleteSale — M-Pesa manual code flow', () => {
   it('enables once PaymentModal hands back a verified 6-character transaction code', () => {
     expect(canCompleteSale('mpesa', 150, 150, 'QDF73H')).toBe(true)
   })

@@ -1,5 +1,5 @@
 /**
- * Manual price override sanity-check tests (Phase 11, Task 2).
+ * Manual price override sanity-check tests.
  *
  * `validatePriceOverride` is pure and tested directly; `cartStore`'s
  * `setItemPrice` is tested against the store to confirm it actually

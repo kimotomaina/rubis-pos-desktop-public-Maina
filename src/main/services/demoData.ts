@@ -1,5 +1,5 @@
 /**
- * Demo Mode dummy catalog (Phase 11, Task 3 — Q2 default).
+ * Demo Mode dummy catalog.
  *
  * When `VITE_DEMO_MODE=true`, the app seeds this hardcoded catalog
  * into the local `products` cache instead of calling the live Shopify

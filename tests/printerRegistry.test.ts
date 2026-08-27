@@ -1,5 +1,5 @@
 /**
- * Multi-printer registry tests (Phase 15 — Multi-Peripheral Support).
+ * Multi-printer registry tests — multi-peripheral support.
  *
  * `node-thermal-printer` is never touched — a recording fake
  * implementing `ThermalPrinterLike` is injected via the `PrinterFactory`

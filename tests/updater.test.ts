@@ -1,5 +1,5 @@
 /**
- * Auto-update service tests (Phase 8).
+ * Auto-update service tests.
  *
  * `electron-updater` is never touched — a recording fake implementing
  * {@link AutoUpdaterLike} is injected directly, the same dependency-

@@ -1,5 +1,6 @@
 import type { ProductSummary, VariantSummary } from '../types/shopify'
 import { formatCurrency } from '../lib/currency'
+import { CloseIcon, PackageIcon } from './icons'
 
 interface VariantModalProps {
   product: ProductSummary
@@ -40,7 +41,7 @@ export default function VariantModal({
       >
         {/* Header */}
         <div className="flex shrink-0 items-center justify-between border-b border-slate-200 p-4">
-          <h3 className="text-lg font-semibold text-slate-900">
+          <h3 className="text-xl font-semibold text-slate-900">
             Select Variant
           </h3>
           <button
@@ -49,19 +50,7 @@ export default function VariantModal({
             className="rounded-full p-2 text-slate-400 hover:bg-slate-100 hover:text-slate-600"
             aria-label="Close"
           >
-            <svg
-              className="h-5 w-5"
-              fill="none"
-              viewBox="0 0 24 24"
-              stroke="currentColor"
-            >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth={2}
-                d="M6 18L18 6M6 6l12 12"
-              />
-            </svg>
+            <CloseIcon className="h-5 w-5" />
           </button>
         </div>
 
@@ -75,17 +64,19 @@ export default function VariantModal({
                 className="h-full w-full object-cover"
                 loading="lazy"
               />
+            ) : initials ? (
+              <div className="flex h-full w-full items-center justify-center">
+                <span className="text-xl font-bold text-slate-400">{initials}</span>
+              </div>
             ) : (
               <div className="flex h-full w-full items-center justify-center">
-                <span className="text-xl font-bold text-slate-400">
-                  {initials || '📦'}
-                </span>
+                <PackageIcon className="h-8 w-8 text-slate-300" />
               </div>
             )}
           </div>
           <div>
-            <h4 className="font-medium text-slate-900">{product.title}</h4>
-            <p className="text-sm text-slate-500">
+            <h4 className="text-lg font-medium text-slate-900">{product.title}</h4>
+            <p className="text-base text-slate-500">
               {product.variants.length} variants available
             </p>
           </div>
@@ -112,16 +103,16 @@ export default function VariantModal({
                     />
                   ) : (
                     <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-slate-100">
-                      <span className="text-xs font-medium text-slate-400">
+                      <span className="text-sm font-medium text-slate-400">
                         {variant.title.slice(0, 2).toUpperCase()}
                       </span>
                     </div>
                   )}
                   <div>
-                    <p className="font-medium text-slate-900">
+                    <p className="text-lg font-medium text-slate-900">
                       {variant.title}
                     </p>
-                    <p className="text-sm text-slate-500">
+                    <p className="text-base text-slate-500">
                       {variant.availableForSale
                         ? `${variant.inventoryQuantity} in stock`
                         : 'Out of stock'}
@@ -129,11 +120,11 @@ export default function VariantModal({
                   </div>
                 </div>
                 <div className="text-right">
-                  <p className="font-semibold text-slate-900">
+                  <p className="text-lg font-semibold text-slate-900">
                     {formatCurrency(variant.price)}
                   </p>
                   {variant.availableForSale && (
-                    <p className="text-xs text-rose-600">Add to cart</p>
+                    <p className="text-sm text-rose-600">Add to cart</p>
                   )}
                 </div>
               </button>

@@ -141,8 +141,7 @@ const api = {
    *
    * @param {number} localId
    * @param {PrinterType} [printerType] — routes to a registered printer
-   *   of this type (Phase 15); defaults to `'receipt'` when omitted,
-   *   matching every call site before multi-printer support existed.
+   *   of this type; defaults to `'receipt'` when omitted.
    * @returns {Promise<ServiceResult<ReceiptPrintResult>>}
    */
   printReceipt: (
@@ -195,7 +194,7 @@ const api = {
 
   /**
    * Creates a new staff account (Admin screen). Requires a re-verified
-   * admin Manager PIN (Phase 14) — the main process independently
+   * admin Manager PIN — the main process independently
    * checks `managerId`/`managerPin` before creating the account.
    *
    * @param {string} name
@@ -216,7 +215,7 @@ const api = {
 
   /**
    * Resets a staff member's PIN (Admin screen). Requires a re-verified
-   * admin Manager PIN (Phase 14) — the main process independently
+   * admin Manager PIN — the main process independently
    * checks `managerId`/`managerPin` before resetting the target PIN.
    *
    * @param {number} staffId
@@ -316,8 +315,8 @@ const api = {
   },
 
   /**
-   * Initiates an M-Pesa STK Push prompt to the customer's phone
-   * (Phase 9 placeholder — see docs/phase-9.md §2).
+   * Initiates an M-Pesa STK Push prompt to the customer's phone. This
+   * is a placeholder pending real Daraja API integration.
    *
    * @param {StkPushRequest} request
    * @returns {Promise<ServiceResult<StkPushResult>>}
@@ -328,8 +327,8 @@ const api = {
     ipcRenderer.invoke('integrations:mpesa-stk-push', request),
 
   /**
-   * Verifies a manually entered M-Pesa transaction code (Phase 9
-   * placeholder — see docs/phase-9.md §2).
+   * Verifies a manually entered M-Pesa transaction code. This is a
+   * placeholder pending real Daraja API integration.
    *
    * @param {ManualCodeVerification} request
    * @returns {Promise<ServiceResult<ManualCodeVerificationResult>>}
@@ -352,7 +351,7 @@ const api = {
 
   /**
    * Saves a provider's integration config (Admin screen). Requires a
-   * re-verified admin Manager PIN (Phase 14) — the main process
+   * re-verified admin Manager PIN — the main process
    * independently checks `managerId`/`managerPin` before writing the
    * config (Paybill/Till numbers, middleware URLs).
    *
@@ -372,7 +371,7 @@ const api = {
 
   /**
    * Voids a local `pending_sync` order — reverses inventory and marks
-   * it `voided` (Phase 10). Manager PIN authorization happens in the
+   * it `voided`. Manager PIN authorization happens in the
    * renderer before this is called.
    *
    * @param {number} localId
@@ -384,7 +383,7 @@ const api = {
     ipcRenderer.invoke('orders:void', localId),
 
   /**
-   * Lists every configured printer (Phase 15 — Admin screen
+   * Lists every configured printer (Admin screen
    * Peripherals tab).
    *
    * @returns {Promise<ServiceResult<PrinterConfig[]>>}
@@ -394,7 +393,7 @@ const api = {
 
   /**
    * Upserts a printer configuration. Requires a re-verified admin
-   * Manager PIN (Phase 15) — the main process independently checks
+   * Manager PIN — the main process independently checks
    * `managerId`/`managerPin` before writing the row.
    *
    * @param {PrinterConfig} config
@@ -437,7 +436,7 @@ const api = {
 
   /**
    * Reports whether a Shopify Admin API token is currently stored in
-   * the credential vault — never the token value itself (Phase 12).
+   * the credential vault — never the token value itself.
    *
    * @returns {Promise<ServiceResult<{ configured: boolean }>>}
    */
@@ -445,15 +444,135 @@ const api = {
     ipcRenderer.invoke('secrets:get-shopify-token-status'),
 
   /**
-   * Saves the Shopify Admin API token to the credential vault
-   * (Phase 12). Write-only — there is no corresponding "get the
+   * Saves the Shopify Admin API token to the credential vault.
+   * Write-only — there is no corresponding "get the
    * value" channel.
    *
    * @param {string} token
    * @returns {Promise<ServiceResult<void>>}
    */
   setShopifyToken: (token: string): Promise<ServiceResult<void>> =>
-    ipcRenderer.invoke('secrets:set-shopify-token', token)
+    ipcRenderer.invoke('secrets:set-shopify-token', token),
+
+  /**
+   * Reads the currently resolved Shopify store URL — not a
+   * secret, so unlike the token this returns the actual value.
+   *
+   * @returns {Promise<ServiceResult<{ storeUrl: string | null }>>}
+   */
+  getShopifyStoreUrl: (): Promise<ServiceResult<{ storeUrl: string | null }>> =>
+    ipcRenderer.invoke('shopify:get-store-url'),
+
+  /**
+   * Saves the Shopify store URL to the local settings table — lets
+   * an install be configured without a `.env` file.
+   * Requires a re-verified admin Manager PIN.
+   *
+   * @param {string} storeUrl
+   * @param {number} managerId — admin staff id authorizing this action
+   * @param {string} managerPin — that admin's PIN, captured via `ManagerPinModal`
+   * @returns {Promise<ServiceResult<void>>}
+   */
+  setShopifyStoreUrl: (
+    storeUrl: string,
+    managerId: number,
+    managerPin: string
+  ): Promise<ServiceResult<void>> =>
+    ipcRenderer.invoke('shopify:set-store-url', { storeUrl, managerId, managerPin }),
+
+  /**
+   * Reports whether this till already has a working Shopify connection
+   * and whether its location has been explicitly admin-confirmed —
+   * `App.tsx` calls this on mount (and after location confirmation)
+   * to decide between `OnboardingScreen`, the normal Login screen,
+   * the location-confirmation gate, and the main POS shell.
+   *
+   * @returns {Promise<ServiceResult<{ hasConfig: boolean; locationConfirmed: boolean; config?: { storeUrl: string; locationId: string | null; locationName: string | null } }>>}
+   */
+  getConfigStatus: (): Promise<
+    ServiceResult<{
+      hasConfig: boolean
+      locationConfirmed: boolean
+      config?: { storeUrl: string; locationId: string | null; locationName: string | null }
+    }>
+  > => ipcRenderer.invoke('config:get-status'),
+
+  /**
+   * Onboarding wizard's "Connect & Verify" step — verifies
+   * a store URL/token pair against the live Shopify API and returns
+   * the shop name plus its locations. Saves nothing.
+   *
+   * @param {string} storeUrl
+   * @param {string} token
+   * @returns {Promise<ServiceResult<{ shopName: string; locations: { id: string; name: string }[] }>>}
+   */
+  validateShopifyConfig: (
+    storeUrl: string,
+    token: string
+  ): Promise<ServiceResult<{ shopName: string; locations: { id: string; name: string }[] }>> =>
+    ipcRenderer.invoke('config:validate', { storeUrl, token }),
+
+  /**
+   * Fetches this till's already-resolved Shopify store URL/token
+   * (nothing re-entered) and returns its available locations, for
+   * the post-login location-confirmation gate and the Admin screen's
+   * "Change Location" control.
+   *
+   * @returns {Promise<ServiceResult<{ shopName: string; locations: { id: string; name: string }[] }>>}
+   */
+  listLocations: (): Promise<
+    ServiceResult<{ shopName: string; locations: { id: string; name: string }[] }>
+  > => ipcRenderer.invoke('location:list'),
+
+  /**
+   * Persists the admin-confirmed location for this till. Requires a
+   * re-verified admin Manager PIN.
+   *
+   * @param {string} locationId
+   * @param {string} locationName
+   * @param {number} managerId
+   * @param {string} managerPin
+   * @returns {Promise<ServiceResult<void>>}
+   */
+  setLocation: (
+    locationId: string,
+    locationName: string,
+    managerId: number,
+    managerPin: string
+  ): Promise<ServiceResult<void>> =>
+    ipcRenderer.invoke('location:set', { locationId, locationName, managerId, managerPin }),
+
+  /**
+   * Persists the onboarding wizard's verified store URL, token, and
+   * selected location. No manager PIN — this runs before
+   * any staff has signed in.
+   *
+   * @param {string} storeUrl
+   * @param {string} token
+   * @param {string} locationId
+   * @param {string} locationName
+   * @returns {Promise<ServiceResult<void>>}
+   */
+  saveConfig: (
+    storeUrl: string,
+    token: string,
+    locationId: string,
+    locationName: string
+  ): Promise<ServiceResult<void>> =>
+    ipcRenderer.invoke('config:save', { storeUrl, token, locationId, locationName }),
+
+  /**
+   * Admin screen's "Reset Configuration" action —
+   * clears the store URL, vault token, and confirmed location,
+   * returning the till to the first-run onboarding state. Requires a
+   * re-verified admin Manager PIN.
+   *
+   * @param {number} managerId
+   * @param {string} managerPin
+   * @returns {Promise<ServiceResult<void>>}
+   */
+  clearConfig: (managerId: number, managerPin: string): Promise<ServiceResult<void>> =>
+    ipcRenderer.invoke('config:clear', { managerId, managerPin })
 }
 
 if (process.contextIsolated) {

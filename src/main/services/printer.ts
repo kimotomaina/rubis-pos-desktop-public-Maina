@@ -1,6 +1,5 @@
 /**
- * Thermal receipt printer service (Phase 5 — Hardware Integration;
- * Phase 15 adds multi-printer routing).
+ * Thermal receipt printer service with multi-printer routing.
  *
  * Wraps `node-thermal-printer` behind a narrow, injectable interface
  * ({@link ThermalPrinterLike}) so unit tests can assert the exact
@@ -13,10 +12,10 @@
  * `printer` native driver module, which would add a second fragile
  * native build to the project alongside `better-sqlite3`.
  *
- * Phase 15 adds a {@link PrinterRegistry} so a store can register a
- * secondary kitchen/label printer alongside the original receipt
- * printer, resolved by `PrinterType` rather than always targeting one
- * hardcoded interface — see {@link resolvePrinterSettings} and
+ * A {@link PrinterRegistry} lets a store register a secondary
+ * kitchen/label printer alongside the original receipt printer,
+ * resolved by `PrinterType` rather than always targeting one hardcoded
+ * interface — see {@link resolvePrinterSettings} and
  * {@link printReceiptToType}.
  */
 
@@ -83,8 +82,8 @@ export interface ThermalPrinterLike {
 export type PrinterFactory = (interfaceName: string) => ThermalPrinterLike
 
 /**
- * Connect/socket timeout (ms) for the TCP/IP printer transport
- * (Phase 5.2 hardening). Bounds both `isPrinterConnected()`'s probe and
+ * Connect/socket timeout (ms) for the TCP/IP printer transport.
+ * Bounds both `isPrinterConnected()`'s probe and
  * `execute()`'s data transmission — see `node-thermal-printer`'s
  * `Network` interface, which applies this same value to both. Without
  * it, a routable-but-dead printer IP can hang checkout for 20+ seconds
@@ -101,8 +100,8 @@ export const defaultPrinterFactory: PrinterFactory = (interfaceName) =>
   }) as unknown as ThermalPrinterLike
 
 /**
- * In-memory lookup of configured printers, keyed by {@link PrinterConfig.id}
- * (Phase 15 — Multi-Peripheral Support). Built once at startup from
+ * In-memory lookup of configured printers, keyed by {@link PrinterConfig.id}.
+ * Built once at startup from
  * `RubisDatabase.getPrinters()` and rebuilt after any Admin-screen
  * add/edit/delete, so a lookup never re-reads the database mid-print.
  *
@@ -134,9 +133,9 @@ export function buildPrinterRegistry(configs: PrinterConfig[]): PrinterRegistry 
  * the first enabled registry entry of that type, otherwise
  * `defaultSettings` unchanged.
  *
- * This is the backward-compatibility seam (Phase 15) — a till with no
- * rows in the `printers` table (i.e. every store before this phase,
- * and any store that never opens the Peripherals tab) resolves every
+ * This is the backward-compatibility seam — a till with no
+ * rows in the `printers` table (i.e. any store that never opens the
+ * Peripherals tab) resolves every
  * lookup to `defaultSettings`, the same single env-configured printer
  * `receipt:print` always used before multi-printer support existed.
  *
@@ -423,7 +422,7 @@ export async function printZReport(
 /**
  * Formats and sends a receipt to whichever printer `registry` has
  * registered for `printerType`, falling back to `defaultSettings`
- * when none is configured (Phase 15 — see {@link resolvePrinterSettings}
+ * when none is configured (see {@link resolvePrinterSettings}
  * for the backward-compatibility rule this relies on).
  *
  * @param {ReceiptOrder} order

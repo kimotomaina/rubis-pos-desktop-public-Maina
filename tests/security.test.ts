@@ -1,6 +1,6 @@
 /**
- * Security hardening tests (Phase 5.1; Phase 14 adds
- * `buildDevContentSecurityPolicy` coverage).
+ * Security hardening tests, including `buildDevContentSecurityPolicy`
+ * coverage.
  *
  * Verifies the Content-Security-Policy header builders in isolation —
  * the actual `session.defaultSession.webRequest.onHeadersReceived`
@@ -47,7 +47,7 @@ describe('Content-Security-Policy', () => {
   })
 })
 
-describe('buildDevContentSecurityPolicy (Phase 14)', () => {
+describe('buildDevContentSecurityPolicy', () => {
   const devPolicy = buildDevContentSecurityPolicy('http://localhost:5173')
 
   it('allows inline scripts — required for @vitejs/plugin-react\'s Fast Refresh preamble', () => {
@@ -80,7 +80,7 @@ describe('buildDevContentSecurityPolicy (Phase 14)', () => {
   })
 })
 
-describe('buildCspHeaders() with an explicit policy (Phase 14)', () => {
+describe('buildCspHeaders() with an explicit policy', () => {
   it('defaults to the strict production policy when no argument is given', () => {
     expect(buildCspHeaders()['Content-Security-Policy']).toEqual([CONTENT_SECURITY_POLICY])
   })

@@ -13,12 +13,18 @@ export interface ShopifyImage {
   altText: string | null
 }
 
-/** A Shopify product variant (the actual sellable unit). */
+/**
+ * A Shopify product variant (the actual sellable unit). Deliberately
+ * has no `inventoryQuantity` field — that's Shopify's cross-location
+ * aggregate, which this app never queries; stock is always resolved
+ * from the location-scoped `inventoryLevels` query instead (see
+ * `fetchInventoryLevels`), so it never shows a total across every
+ * location as if it were the confirmed location's stock.
+ */
 export interface ShopifyVariant {
   id: string
   title: string
   availableForSale: boolean
-  inventoryQuantity: number
   /** Decimal string in the shop's default currency (API 2026-07 scalar, not MoneyV2). */
   price: string
   image: ShopifyImage | null
@@ -60,9 +66,13 @@ export interface ShopifyGraphQLResponse {
   }>
 }
 
-/** Inventory level at a specific location. */
+/**
+ * Inventory level at a specific location. `quantity` is not a bare
+ * scalar on this API version — it's `quantities(names:)`, an array of
+ * named buckets (this app only ever requests `"available"`).
+ */
 export interface ShopifyInventoryLevel {
-  quantity: number
+  quantities: Array<{ name: string; quantity: number }>
   item: {
     variant: {
       id: string
@@ -76,10 +86,16 @@ export interface ShopifyInventoryLevelsConnection {
   nodes: ShopifyInventoryLevel[]
 }
 
-/** Top-level GraphQL response envelope for the inventory levels query. */
+/**
+ * Top-level GraphQL response envelope for the inventory levels query
+ * — `inventoryLevels` is a connection on `Location`, not a top-level
+ * QueryRoot field.
+ */
 export interface ShopifyInventoryLevelsResponse {
   data?: {
-    inventoryLevels?: ShopifyInventoryLevelsConnection
+    location?: {
+      inventoryLevels?: ShopifyInventoryLevelsConnection
+    }
   }
   errors?: Array<{
     message: string
@@ -107,6 +123,23 @@ export interface ShopifyLocationsResponse {
 }
 
 /**
+ * Top-level GraphQL response envelope for the combined shop+locations
+ * validation query used by the onboarding wizard's "Connect & Verify" step.
+ */
+export interface ShopifyValidateStoreResponse {
+  data?: {
+    shop?: { name: string }
+    locations?: {
+      nodes: ShopifyLocation[]
+    }
+  }
+  errors?: Array<{
+    message: string
+    extensions?: Record<string, unknown>
+  }>
+}
+
+/**
  * Standardized service result returned by
  * {@link fetchProductsAndInventory}.
  *
@@ -120,7 +153,7 @@ export interface ServiceResult<T> {
 }
 
 /**
- * A discount applied at either the line-item or cart level (Phase 10).
+ * A discount applied at either the line-item or cart level.
  * `percent` is a fraction of the base amount (10 = 10%); `fixed` is a
  * flat currency amount subtracted from the base amount.
  */
@@ -136,7 +169,7 @@ export interface OfflineOrderLine {
   variantTitle: string
   quantity: number
   unitPrice: number
-  /** Line-level discount/manual markdown, if applied (Phase 10). */
+  /** Line-level discount/manual markdown, if applied. */
   discount?: Discount
 }
 
@@ -157,6 +190,6 @@ export interface OfflineOrderPayload {
   tenderedAmount: number
   changeDue: number
   referenceNumber?: string
-  /** Cart-level discount applied on top of the line-item subtotal (Phase 10). */
+  /** Cart-level discount applied on top of the line-item subtotal. */
   cartDiscount?: Discount
 }

@@ -55,7 +55,7 @@ export type LoadTarget = { type: 'url'; url: string } | { type: 'file'; path: st
  *  • `allowRunningInsecureContent: false` — belt-and-braces alongside
  *    `webSecurity`; blocks active mixed content (e.g. an `http://`
  *    script) even if some future code path relaxed `webSecurity`
- *    without touching this line (Phase 12, Task 3).
+ *    without touching this line.
  *
  * Extracting this function keeps the security policy unit-testable without
  * booting the real Electron runtime.
@@ -118,7 +118,7 @@ export function resolveMainWindowPath(...segments: string[]): string {
 
 /**
  * Strict Content-Security-Policy applied to every response the app's
- * session serves in a packaged build (Phase 5.1 hardening). Restricts
+ * session serves in a packaged build. Restricts
  * script/style/connect origins to the app itself plus the Shopify
  * Admin API domain the renderer talks to indirectly via IPC-triggered
  * fetches.
@@ -128,8 +128,8 @@ export const CONTENT_SECURITY_POLICY =
 
 /**
  * Relaxed Content-Security-Policy used only while the window loads
- * from `electron-vite dev`'s dev server (Phase 14 fix — never applied
- * to a packaged build). `@vitejs/plugin-react` injects an inline
+ * from `electron-vite dev`'s dev server — never applied
+ * to a packaged build. `@vitejs/plugin-react` injects an inline
  * `<script type="module">` "preamble" into the dev HTML to wire up
  * React Fast Refresh; {@link CONTENT_SECURITY_POLICY}'s `script-src
  * 'self'` blocks all inline scripts regardless of origin, which made

@@ -1,5 +1,5 @@
 /**
- * Zustand store for main-process connectivity state (Phase 3).
+ * Zustand store for main-process connectivity state.
  *
  * `init()` reads the initial status over IPC and then subscribes to the
  * broadcasted transitions guarded so multiple component mounts never

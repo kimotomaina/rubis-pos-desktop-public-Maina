@@ -1,5 +1,5 @@
 /**
- * Global crash safety net for RUBIS POS (Phase 8).
+ * Global crash safety net for RUBIS POS.
  *
  * Catches process-level and renderer-level failures that would otherwise
  * show a white screen or silently kill the app, logs them to a local file,

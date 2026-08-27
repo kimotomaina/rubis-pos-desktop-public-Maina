@@ -1,5 +1,5 @@
 /**
- * Zustand store for the logged-in staff session (Phase 6).
+ * Zustand store for the logged-in staff session.
  *
  * Deliberately **not** persisted — every app launch requires PIN
  * re-entry, matching typical till/POS security practice (whoever is

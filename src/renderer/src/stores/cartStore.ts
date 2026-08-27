@@ -1,7 +1,7 @@
 /**
- * Zustand cart store (Phase 3 — Offline Mode).
+ * Zustand cart store with offline support.
  *
- * Phase 2's in-memory cart, upgraded with:
+ * The in-memory cart, upgraded with:
  *   - `persist` middleware: items survive renderer restarts via
  *     localStorage (key: `rubis-pos-cart`).
  *   - `checkout()`: submits the cart through the IPC bridge.  The main
@@ -33,7 +33,7 @@ export interface CheckoutParams {
   tenderedAmount: number
   changeDue: number
   referenceNumber?: string
-  /** Cart-level discount to persist with the order (Phase 10). */
+  /** Cart-level discount to persist with the order. */
   cartDiscount?: Discount
 }
 

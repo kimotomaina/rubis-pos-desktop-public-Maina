@@ -1,5 +1,5 @@
 /**
- * Staff authentication service (Phase 6 — Staff Auth & Checkout).
+ * Staff authentication service.
  *
  * PIN hashing uses Node's native `crypto.pbkdf2Sync` rather than a
  * third-party library like `bcrypt` — zero extra native-module

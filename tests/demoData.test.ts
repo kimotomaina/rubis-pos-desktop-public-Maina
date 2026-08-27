@@ -1,5 +1,5 @@
 /**
- * Demo Mode dummy catalog tests (Phase 11, Task 3).
+ * Demo Mode dummy catalog tests.
  *
  * Validates the shape of `DEMO_PRODUCTS` itself, then confirms it
  * round-trips correctly through the real `RubisDatabase` seeding path

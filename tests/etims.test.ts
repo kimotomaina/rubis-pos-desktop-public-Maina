@@ -1,5 +1,5 @@
 /**
- * eTIMS fiscalization placeholder tests (Phase 9).
+ * eTIMS fiscalization placeholder tests.
  *
  * Exercises {@link MockFiscalizationProvider} directly — no real KRA
  * middleware exists yet; these tests pin down the

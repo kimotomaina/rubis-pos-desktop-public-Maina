@@ -1,5 +1,5 @@
 /**
- * Cart checkout flow tests (Phase 3).
+ * Cart checkout flow tests.
  *
  * `window.api.checkout` is stubbed per-test; the real SQLite layer is
  * never touched.
@@ -40,7 +40,7 @@ const itemInput = (overrides: Partial<CartItem> = {}) => {
   }
 }
 
-describe('cart store checkout (Phase 3)', () => {
+describe('cart store checkout', () => {
   beforeEach(() => {
     localStorage.clear()
     useCartStore.setState({
@@ -85,7 +85,7 @@ describe('cart store checkout (Phase 3)', () => {
     expect(request.total).toBe(12.5)
   })
 
-  it('submits an M-Pesa manual-code checkout with the verified reference number (Phase 10)', async () => {
+  it('submits an M-Pesa manual-code checkout with the verified reference number', async () => {
     const checkout = window.api.checkout as unknown as ReturnType<typeof vi.fn>
     checkout.mockResolvedValue({
       success: true,
@@ -106,7 +106,7 @@ describe('cart store checkout (Phase 3)', () => {
     expect(request.referenceNumber).toBe('QDF73H')
   })
 
-  it('includes the cart-level discount set via setCartDiscount in the checkout request (Phase 10)', async () => {
+  it('includes the cart-level discount set via setCartDiscount in the checkout request', async () => {
     const checkout = window.api.checkout as unknown as ReturnType<typeof vi.fn>
     checkout.mockResolvedValue({
       success: true,

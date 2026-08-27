@@ -1,1 +1,10 @@
 @import "tailwindcss";
+
+/**
+ * 16px is the floor for on-screen text on the 15" touchscreen till; every
+ * component-level text size in this app builds up from this baseline
+ * rather than down from it.
+ */
+html {
+  font-size: 16px;
+}

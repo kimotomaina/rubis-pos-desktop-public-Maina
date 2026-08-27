@@ -1,6 +1,5 @@
 /**
- * Barcode scanner hook tests (Phase 5; Phase 15 adds prefix-routing
- * coverage).
+ * Barcode scanner hook tests, including prefix-routing coverage.
  *
  * No @testing-library dependency is added — the hook is mounted with
  * `react-dom/client` directly and driven with real `KeyboardEvent`s
@@ -207,7 +206,7 @@ describe('useBarcodeScanner', () => {
   })
 })
 
-describe('useBarcodeScanner scanner prefix routing (Phase 15)', () => {
+describe('useBarcodeScanner scanner prefix routing', () => {
   it('parses an SC1: prefix and strips it from the barcode', () => {
     const onScan = vi.fn()
     mount(onScan)

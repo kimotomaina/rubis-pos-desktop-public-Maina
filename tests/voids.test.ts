@@ -1,5 +1,5 @@
 /**
- * Order void tests (Phase 10).
+ * Order void tests.
  *
  * `RubisDatabase.voidOrder` is tested against a recording fake
  * `better-sqlite3` connection (same pattern as `shifts.test.ts` /
@@ -193,7 +193,7 @@ describe('voidLocalOrder', () => {
     expect(db.voidOrder).not.toHaveBeenCalled()
   })
 
-  it('rejects a synced order with a Phase-11 explanation, without calling voidOrder', () => {
+  it('rejects a synced order with an already-synced explanation, without calling voidOrder', () => {
     const db = fakeDb({ getOrder: vi.fn(() => pendingOrderRow({ status: 'synced' })) })
 
     const result = voidLocalOrder(db, 7)

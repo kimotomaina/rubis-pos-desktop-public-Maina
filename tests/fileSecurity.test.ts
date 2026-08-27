@@ -1,5 +1,5 @@
 /**
- * Database file permission hardening tests (Phase 12, Task 4).
+ * Database file permission hardening tests.
  *
  * `node:fs`'s `chmodSync` is injected as a recording fake — never
  * touches the real filesystem.

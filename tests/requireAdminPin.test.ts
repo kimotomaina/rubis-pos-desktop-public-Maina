@@ -1,6 +1,5 @@
 /**
- * Server-side admin re-authorization tests (Phase 14 — Pre-Deployment
- * Security Patch).
+ * Server-side admin re-authorization tests.
  *
  * `requireAdminPin` is tested against a lightweight fake implementing
  * only the `RubisDatabase` method `authenticateStaff` uses — same

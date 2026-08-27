@@ -1,5 +1,5 @@
 /**
- * M-Pesa integration placeholder tests (Phase 9).
+ * M-Pesa integration placeholder tests.
  *
  * Exercises {@link MockMpesaProvider} directly — no real Daraja API
  * call exists yet, so there is nothing external to mock; these tests
@@ -90,7 +90,7 @@ describe('MockMpesaProvider.verifyTransactionCode', () => {
   })
 })
 
-describe('MockMpesaProvider random failure rate (Phase 10, Q3)', () => {
+describe('MockMpesaProvider random failure rate', () => {
   it('fails a well-formed code when the random roll lands under the failure rate', async () => {
     const provider = new MockMpesaProvider(5, { failureRate: 0.1, randomFn: () => 0 })
     const result = await provider.verifyTransactionCode({

@@ -1,5 +1,5 @@
 /**
- * Global error-handler service tests (Phase 8).
+ * Global error-handler service tests.
  *
  * `node:fs`, `process`, `electron.app`, and `electron.dialog` are never
  * touched — recording fakes are injected directly, matching this

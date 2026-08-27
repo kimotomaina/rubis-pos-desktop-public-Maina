@@ -1,5 +1,5 @@
 /**
- * Auto-update wiring for RUBIS POS (Phase 8).
+ * Auto-update wiring for RUBIS POS.
  *
  * `electron-updater`'s `autoUpdater` singleton is never imported directly
  * by the functions below — the real singleton is injected by the caller

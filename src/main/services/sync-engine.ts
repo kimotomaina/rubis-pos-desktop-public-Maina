@@ -1,9 +1,8 @@
 /**
- * Sync engine (Phase 3 — Offline Mode).
+ * Sync engine.
  *
  * Background worker that drains the SQLite `sync_queue` by pushing
- * queued offline orders to Shopify.  Exactly three triggers exist
- * (per the Phase 3 plan, decision Q2):
+ * queued offline orders to Shopify.  Exactly three triggers exist:
  *
  *   (a) immediately after a checkout,
  *   (b) every `intervalMs` (default 30 s),

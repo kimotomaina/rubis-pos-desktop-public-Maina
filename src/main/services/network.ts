@@ -1,5 +1,5 @@
 /**
- * Main-process network connectivity monitor (Phase 3 — Offline Mode).
+ * Main-process network connectivity monitor.
  *
  * Polls an injected `isOnline` probe (Electron's `net.isOnline()`) and
  * notifies listeners only when the connectivity state *changes*.

@@ -1,5 +1,5 @@
 /**
- * Local SQLite database service (Phase 3 — Offline Mode).
+ * Local SQLite database service.
  *
  * Owns the three persistence concerns of the POS:
  *   1. `products`    — last-good product catalog cache (offline browsing)
@@ -106,7 +106,7 @@ export interface QueueOrderInput {
   changeDue: number
   referenceNumber?: string
   shiftId?: number
-  /** Cart-level discount, applied on top of the line-item subtotal (Phase 10). */
+  /** Cart-level discount, applied on top of the line-item subtotal. */
   cartDiscount?: Discount
 }
 
@@ -162,7 +162,7 @@ export function computeBackoffMs(attemptNumber: number): number {
 }
 
 /**
- * DDL for all Phase 3 tables.  Kept as named constants so tests can
+ * DDL for all database tables.  Kept as named constants so tests can
  * assert the exact schema statements executed at startup.
  */
 export const SCHEMA = {
@@ -251,8 +251,7 @@ export interface DatabaseOptions {
 export type IntegrationProviderName = 'mpesa' | 'etims'
 
 /**
- * Printer role a configured printer serves (Phase 15 — Multi-
- * Peripheral Support). `'receipt'` is the customer-facing till
+ * Printer role a configured printer serves. `'receipt'` is the customer-facing till
  * printer; `'kitchen'`/`'label'` are additional stations a store can
  * register without any code change.
  */
@@ -362,6 +361,16 @@ export class RubisDatabase {
       }
     })
     replace(products)
+  }
+
+  /**
+   * Empties the cached product catalog — called whenever this till's
+   * confirmed location changes, since a cache built for the previous
+   * location's assortment/inventory would otherwise be served as the
+   * offline fallback until the next successful live fetch.
+   */
+  clearProductCache(): void {
+    this.conn.prepare('DELETE FROM products').run()
   }
 
   /**
@@ -835,9 +844,9 @@ export class RubisDatabase {
   /**
    * Closes the open shift, computing expected cash (starting cash +
    * total cash-order revenue for the shift, excluding any order later
-   * voided — Phase 11 fix for a shift-close bug where a voided cash
-   * sale still counted toward the drawer's expected total) and the
-   * discrepancy against the counted ending cash.
+   * voided — fix for a shift-close bug where a voided cash sale still
+   * counted toward the drawer's expected total) and the discrepancy
+   * against the counted ending cash.
    *
    * @param {number} shiftId
    * @param {number} endingCash
@@ -921,9 +930,9 @@ export class RubisDatabase {
   }
 
   /**
-   * Lists every configured printer (Phase 15), including disabled
-   * ones — callers building a registry filter those out themselves so
-   * the Admin screen can still show and re-enable them.
+   * Lists every configured printer, including disabled ones — callers
+   * building a registry filter those out themselves so the Admin
+   * screen can still show and re-enable them.
    *
    * @returns {PrinterConfig[]} ordered by `id`
    */

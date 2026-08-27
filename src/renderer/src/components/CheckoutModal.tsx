@@ -5,9 +5,8 @@ import { calculateChange, canCompleteSale } from '../lib/checkoutMath'
 import { formatCurrency } from '../lib/currency'
 import PaymentModal from './PaymentModal'
 import type { PaymentMethod } from '../../../main/services/database.js'
-
-/** Numpad keys for entering the cash amount tendered. */
-const AMOUNT_KEYS = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '.', '0', '⌫']
+import { CloseIcon } from './icons'
+import VirtualNumpad from './VirtualNumpad'
 
 const PAYMENT_LABELS: Record<PaymentMethod, string> = {
   cash: 'Cash',
@@ -123,31 +122,31 @@ export default function CheckoutModal({ onClose }: CheckoutModalProps) {
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex shrink-0 items-center justify-between border-b border-slate-200 p-4">
-          <h3 className="text-lg font-semibold text-slate-900">Checkout</h3>
+          <h3 className="text-xl font-semibold text-slate-900">Checkout</h3>
           <button
             type="button"
             onClick={onClose}
             className="rounded-full p-2 text-slate-400 hover:bg-slate-100 hover:text-slate-600"
             aria-label="Close"
           >
-            ✕
+            <CloseIcon className="h-5 w-5" />
           </button>
         </div>
 
         <div className="flex-1 overflow-y-auto p-4">
-          <div className="mb-4 flex justify-between text-2xl font-bold text-slate-900">
+          <div className="mb-4 flex justify-between text-3xl font-bold text-slate-900">
             <span>Total</span>
             <span>{formatCurrency(cartTotal)}</span>
           </div>
 
           {method === null && (
-            <div className="grid grid-cols-3 gap-2">
+            <div className="grid grid-cols-3 gap-4">
               {(['cash', 'mpesa', 'card'] as PaymentMethod[]).map((m) => (
                 <button
                   key={m}
                   type="button"
                   onClick={() => setMethod(m)}
-                  className="rounded-xl border border-slate-200 py-6 text-center font-semibold text-slate-700 transition active:scale-95 hover:border-rose-300 hover:bg-rose-50"
+                  className="h-14 rounded-xl border border-slate-200 text-center text-lg font-semibold text-slate-700 transition active:scale-95 hover:border-rose-300 hover:bg-rose-50"
                 >
                   {PAYMENT_LABELS[m]}
                 </button>
@@ -160,19 +159,19 @@ export default function CheckoutModal({ onClose }: CheckoutModalProps) {
               <button
                 type="button"
                 onClick={() => setMethod(null)}
-                className="mb-3 text-sm text-slate-500 hover:text-slate-700"
+                className="mb-3 text-base text-slate-500 hover:text-slate-700"
               >
                 ← Change payment method
               </button>
 
-              <p className="mb-1 text-sm font-medium text-slate-600">
+              <p className="mb-1 text-base font-medium text-slate-600">
                 Amount Tendered
               </p>
-              <p className="mb-3 rounded-lg bg-slate-100 px-4 py-3 text-right text-2xl font-mono">
+              <p className="mb-3 rounded-lg bg-slate-100 px-4 py-3 text-right text-3xl font-mono">
                 Ksh {tenderedInput || '0'}
               </p>
 
-              <div className="mb-3 flex justify-between text-sm font-medium">
+              <div className="mb-3 flex justify-between text-base font-medium">
                 <span className="text-slate-600">Change Due</span>
                 <span className={changeDue > 0 ? 'text-emerald-600' : 'text-slate-400'}>
                   {formatCurrency(changeDue)}
@@ -180,23 +179,12 @@ export default function CheckoutModal({ onClose }: CheckoutModalProps) {
               </div>
 
               {tenderedAmount > 0 && tenderedAmount < cartTotal && (
-                <p className="mb-3 text-sm font-medium text-rose-600">
+                <p className="mb-3 text-base font-medium text-rose-600">
                   Insufficient amount
                 </p>
               )}
 
-              <div className="grid grid-cols-3 gap-2">
-                {AMOUNT_KEYS.map((key) => (
-                  <button
-                    key={key}
-                    type="button"
-                    onClick={() => handleAmountKey(key)}
-                    className="rounded-xl bg-slate-100 py-3 text-lg font-semibold text-slate-800 transition active:scale-95 hover:bg-slate-200"
-                  >
-                    {key}
-                  </button>
-                ))}
-              </div>
+              <VirtualNumpad value={tenderedInput} onChange={setTenderedInput} />
             </div>
           )}
 
@@ -213,12 +201,12 @@ export default function CheckoutModal({ onClose }: CheckoutModalProps) {
               <button
                 type="button"
                 onClick={() => setMethod(null)}
-                className="mb-3 text-sm text-slate-500 hover:text-slate-700"
+                className="mb-3 text-base text-slate-500 hover:text-slate-700"
               >
                 ← Change payment method
               </button>
 
-              <label className="mb-1 block text-sm font-medium text-slate-600">
+              <label className="mb-1 block text-base font-medium text-slate-600">
                 Reference Number
               </label>
               <input
@@ -226,13 +214,13 @@ export default function CheckoutModal({ onClose }: CheckoutModalProps) {
                 value={referenceNumber}
                 onChange={(e) => setReferenceNumber(e.target.value)}
                 placeholder="Transaction reference"
-                className="w-full rounded-lg border border-slate-300 px-3 py-3 text-lg focus:border-rose-400 focus:outline-none"
+                className="h-14 w-full rounded-lg border border-slate-300 px-3 text-xl focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-100"
               />
             </div>
           )}
 
           {checkoutStatus === 'error' && (
-            <p className="mt-3 rounded-lg bg-rose-50 px-3 py-2 text-sm font-medium text-rose-700">
+            <p className="mt-3 rounded-lg bg-rose-50 px-3 py-2 text-base font-medium text-rose-700">
               {checkoutError ?? 'Checkout failed'}
             </p>
           )}
@@ -242,7 +230,7 @@ export default function CheckoutModal({ onClose }: CheckoutModalProps) {
               type="button"
               disabled={!canSubmit || checkoutStatus === 'submitting'}
               onClick={handleSubmit}
-              className="mt-4 w-full rounded-xl bg-rose-600 py-4 text-lg font-semibold text-white transition active:scale-95 disabled:cursor-not-allowed disabled:opacity-50"
+              className="mt-4 h-16 w-full rounded-xl bg-rose-600 text-xl font-bold text-white transition active:scale-95 disabled:cursor-not-allowed disabled:opacity-50"
             >
               {checkoutStatus === 'submitting' ? 'Processing…' : 'Complete Sale'}
             </button>

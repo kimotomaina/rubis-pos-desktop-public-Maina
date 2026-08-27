@@ -16,18 +16,22 @@ import EmptyState from './components/EmptyState'
 import VariantModal from './components/VariantModal'
 import OrderHistory from './components/OrderHistory'
 import LoginScreen from './components/LoginScreen'
+import OnboardingScreen from './components/OnboardingScreen'
+import LocationConfirmScreen from './components/LocationConfirmScreen'
+import LocationPendingScreen from './components/LocationPendingScreen'
 import CheckoutModal from './components/CheckoutModal'
 import AdminScreen from './components/AdminScreen'
 import UpdateToast from './components/UpdateToast'
 import ManagerPinModal from './components/ManagerPinModal'
 import { requiresManagerPinForDiscount } from './lib/checkoutMath'
+import { WarningIcon, InboxIcon, SearchIcon, CartIcon, CheckIcon } from './components/icons'
 import rubisLogo from './assets/logo-rubis.png'
 
 /** A pending manager-gated action awaiting PIN authorization. */
 interface PinGateRequest {
   title: string
   /**
-   * Receives the authorizing admin's id and PIN (Phase 14) so callers
+   * Receives the authorizing admin's id and PIN so callers
    * that hit a privileged IPC channel (`createStaff`, `resetStaffPin`,
    * `setIntegrationConfig`) can forward them for the main process's
    * independent `requireAdminPin` re-check.
@@ -84,6 +88,37 @@ export default function App() {
     })
   )
   const [scanToast, setScanToast] = useState<ScanToast | null>(null)
+
+  const demoMode = import.meta.env.VITE_DEMO_MODE === 'true'
+  /**
+   * Whether this till has a working Shopify connection yet.
+   * Demo Mode skips the check entirely — it never talks to
+   * Shopify, so onboarding would be a pointless gate in front of a
+   * trial install that's deliberately configured to run without
+   * credentials.
+   */
+  const [configStatus, setConfigStatus] = useState<'loading' | 'unconfigured' | 'ready'>(
+    demoMode ? 'ready' : 'loading'
+  )
+  /**
+   * Whether an admin has explicitly confirmed this till's Shopify
+   * location. Demo Mode bypasses this the same way it bypasses
+   * `configStatus`.
+   */
+  const [locationConfirmed, setLocationConfirmed] = useState(demoMode)
+  const [confirmedLocationId, setConfirmedLocationId] = useState<string | null>(null)
+
+  const refreshConfigStatus = () =>
+    window.api.getConfigStatus().then((result) => {
+      setConfigStatus(result.success && result.data?.hasConfig ? 'ready' : 'unconfigured')
+      setLocationConfirmed(!!result.data?.locationConfirmed)
+      setConfirmedLocationId(result.data?.config?.locationId ?? null)
+    })
+
+  useEffect(() => {
+    if (demoMode) return
+    void refreshConfigStatus()
+  }, [demoMode])
 
   const cartItems = useCartStore((state) => state.items)
   const cartTotal = useCartStore((state) => state.getTotal())
@@ -219,8 +254,8 @@ export default function App() {
   }, [scanToast])
 
   /**
-   * Routes a parsed scan by its {@link ScanResult.source} (Phase 15):
-   * `'UNKNOWN'` (every scanner before this phase, and any scanner never
+   * Routes a parsed scan by its {@link ScanResult.source}:
+   * `'UNKNOWN'` (an unprogrammed scanner, or any scanner never
    * programmed with a prefix), `'SC1'`, and `'SC2'` are treated as
    * regular till stations and add the scanned item to the cart.
    * `'KITCHEN'` demonstrates a distinct routing action instead of a
@@ -255,11 +290,21 @@ export default function App() {
 
   const filteredProducts = filterProducts(products, searchQuery)
 
-  const demoModeBanner = import.meta.env.VITE_DEMO_MODE === 'true' && (
-    <div className="bg-amber-500 py-2 text-center text-sm font-bold uppercase tracking-wide text-white">
-      ⚠️ Demo Mode Active — Sales are local only and will not sync to Shopify ⚠️
+  const demoModeBanner = demoMode && (
+    <div className="flex items-center justify-center gap-2 bg-amber-500 py-2.5 text-center text-base font-bold uppercase tracking-wide text-white">
+      <WarningIcon className="h-5 w-5" />
+      Demo Mode Active — Sales are local only and will not sync to Shopify
+      <WarningIcon className="h-5 w-5" />
     </div>
   )
+
+  if (configStatus === 'loading') {
+    return <div className="h-screen bg-slate-900" />
+  }
+
+  if (configStatus === 'unconfigured') {
+    return <OnboardingScreen />
+  }
 
   if (!currentStaff) {
     return (
@@ -270,18 +315,43 @@ export default function App() {
     )
   }
 
+  if (!demoMode && !locationConfirmed) {
+    if (currentStaff.role === 'admin') {
+      return (
+        <>
+          <LocationConfirmScreen
+            currentLocationId={confirmedLocationId}
+            requestManagerPin={requestManagerPin}
+            onConfirmed={() => void refreshConfigStatus()}
+          />
+          {pinGate && (
+            <ManagerPinModal
+              title={pinGate.title}
+              onAuthorized={(managerId, managerPin) => {
+                pinGate.onAuthorized(managerId, managerPin)
+                setPinGate(null)
+              }}
+              onCancel={() => setPinGate(null)}
+            />
+          )}
+        </>
+      )
+    }
+    return <LocationPendingScreen onLogout={() => void logout()} />
+  }
+
   return (
     <div className="flex h-screen flex-col bg-slate-50 text-slate-900">
       {demoModeBanner}
       {/* Header */}
-      <header className="flex h-16 items-center justify-between border-b border-slate-200 bg-white px-6 shadow-sm">
+      <header className="flex h-20 items-center justify-between border-b border-slate-200 bg-white px-6 shadow-sm">
         <div className="flex items-center gap-6">
           <img src={rubisLogo} alt="RUBIS Energie" className="h-9 w-auto" />
-          <nav className="flex gap-1">
+          <nav className="flex gap-2">
             <button
               type="button"
               onClick={() => setActiveView('catalog')}
-              className={`rounded-lg px-4 py-2 text-sm font-medium transition-colors ${
+              className={`flex h-14 items-center rounded-lg px-6 text-lg font-medium transition-colors ${
                 activeView === 'catalog'
                   ? 'bg-rose-100 text-rose-700'
                   : 'text-slate-600 hover:bg-slate-100'
@@ -292,7 +362,7 @@ export default function App() {
             <button
               type="button"
               onClick={() => setActiveView('orders')}
-              className={`rounded-lg px-4 py-2 text-sm font-medium transition-colors ${
+              className={`flex h-14 items-center rounded-lg px-6 text-lg font-medium transition-colors ${
                 activeView === 'orders'
                   ? 'bg-rose-100 text-rose-700'
                   : 'text-slate-600 hover:bg-slate-100'
@@ -304,7 +374,7 @@ export default function App() {
               <button
                 type="button"
                 onClick={() => setActiveView('admin')}
-                className={`rounded-lg px-4 py-2 text-sm font-medium transition-colors ${
+                className={`flex h-14 items-center rounded-lg px-6 text-lg font-medium transition-colors ${
                   activeView === 'admin'
                     ? 'bg-rose-100 text-rose-700'
                     : 'text-slate-600 hover:bg-slate-100'
@@ -315,18 +385,18 @@ export default function App() {
             )}
           </nav>
         </div>
-        <div className="flex items-center gap-4 text-sm text-slate-600">
+        <div className="flex items-center gap-4 text-base text-slate-600">
           <div className="flex items-center gap-2">
             <span className="font-medium text-slate-700">
               {currentStaff.name}
             </span>
-            <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium capitalize text-slate-500">
+            <span className="rounded-full bg-slate-100 px-2.5 py-1 text-sm font-medium capitalize text-slate-500">
               {currentStaff.role}
             </span>
             <button
               type="button"
               onClick={() => void logout()}
-              className="text-xs font-medium text-rose-600 hover:text-rose-700"
+              className="text-sm font-medium text-rose-600 hover:text-rose-700"
             >
               Log Out
             </button>
@@ -360,9 +430,9 @@ export default function App() {
           {/* Product grid */}
           <section className="flex-1 overflow-y-auto p-6">
             <div className="mb-4 flex items-center gap-3">
-              <h2 className="text-lg font-semibold text-slate-700">Products</h2>
+              <h2 className="text-xl font-semibold text-slate-700">Products</h2>
               {cached && (
-                <span className="rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-700">
+                <span className="rounded-full bg-amber-100 px-2.5 py-1 text-sm font-medium text-amber-700">
                   Cached catalog (offline)
                 </span>
               )}
@@ -375,7 +445,7 @@ export default function App() {
             </div>
 
             {status === 'loading' && (
-              <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4">
+              <div className="grid grid-cols-3 gap-6">
                 {Array.from({ length: 8 }).map((_, i) => (
                   <div
                     key={i}
@@ -386,16 +456,25 @@ export default function App() {
             )}
 
             {status === 'error' && (
-              <EmptyState
-                icon="⚠️"
-                title={error ?? 'Failed to load products'}
-                subtitle="Check your .env credentials and restart the app."
-              />
+              <div className="flex flex-col items-center">
+                <EmptyState
+                  icon={<WarningIcon className="h-10 w-10" />}
+                  title={error ?? 'Failed to load products'}
+                  subtitle="Check your network connection, or the Store URL/Admin API Token in Admin > Integrations."
+                />
+                <button
+                  type="button"
+                  onClick={() => void fetchProducts()}
+                  className="mt-2 h-12 rounded-lg border border-slate-300 px-6 text-lg font-medium text-slate-700 hover:bg-slate-50"
+                >
+                  Try again
+                </button>
+              </div>
             )}
 
             {status === 'ready' && products.length === 0 && (
               <EmptyState
-                icon="📭"
+                icon={<InboxIcon className="h-10 w-10" />}
                 title="No products found"
                 subtitle="Your Shopify store has no active products."
               />
@@ -403,14 +482,14 @@ export default function App() {
 
             {status === 'ready' && products.length > 0 && filteredProducts.length === 0 && (
               <EmptyState
-                icon="🔍"
+                icon={<SearchIcon className="h-10 w-10" />}
                 title="No matches"
                 subtitle={`Nothing found for "${searchQuery.trim()}".`}
               />
             )}
 
             {status === 'ready' && filteredProducts.length > 0 && (
-              <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4">
+              <div className="grid grid-cols-3 gap-6">
                 {filteredProducts.map((product) => (
                   <ProductCard
                     key={product.id}
@@ -424,16 +503,16 @@ export default function App() {
           </section>
 
           {/* Cart sidebar */}
-          <aside className="flex w-md shrink-0 flex-col border-l border-slate-200 bg-white">
-            <div className="border-b border-slate-200 p-4">
-              <h2 className="text-lg font-semibold text-slate-700">
+          <aside className="flex w-120 shrink-0 flex-col border-l border-slate-200 bg-white">
+            <div className="border-b border-slate-200 p-5">
+              <h2 className="text-xl font-bold text-slate-700">
                 Cart ({cartCount} items)
               </h2>
             </div>
 
             <div className="flex-1 overflow-y-auto p-4">
               {cartItems.length === 0 ? (
-                <EmptyState icon="🛒" title="Cart is empty" />
+                <EmptyState icon={<CartIcon className="h-10 w-10" />} title="Cart is empty" />
               ) : (
                 cartItems.map((item) => (
                   <CartLineItem
@@ -450,8 +529,8 @@ export default function App() {
               )}
             </div>
 
-            <div className="border-t border-slate-200 p-4">
-              <div className="mb-2 flex items-center justify-between">
+            <div className="border-t border-slate-200 p-5">
+              <div className="mb-3 flex items-center justify-between">
                 <button
                   type="button"
                   onClick={() => {
@@ -459,12 +538,12 @@ export default function App() {
                     setCartDiscountType(cartDiscount?.type ?? 'percent')
                     setShowCartDiscountEditor((prev) => !prev)
                   }}
-                  className="text-xs font-medium text-slate-500 hover:text-rose-600"
+                  className="text-sm font-medium text-slate-500 hover:text-rose-600"
                 >
                   {cartDiscount ? 'Edit Discount' : '+ Discount'}
                 </button>
                 {cartDiscount && (
-                  <span className="text-xs font-medium text-emerald-600">
+                  <span className="text-sm font-medium text-emerald-600">
                     {cartDiscount.type === 'percent'
                       ? `${cartDiscount.value}% off`
                       : `${formatCurrency(cartDiscount.value)} off`}
@@ -477,7 +556,7 @@ export default function App() {
                   <select
                     value={cartDiscountType}
                     onChange={(e) => setCartDiscountType(e.target.value as Discount['type'])}
-                    className="rounded-md border border-slate-300 px-2 py-1 text-sm focus:border-rose-400 focus:outline-none"
+                    className="h-11 rounded-md border border-slate-300 px-2 text-lg focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-100"
                   >
                     <option value="percent">%</option>
                     <option value="fixed">Ksh</option>
@@ -489,19 +568,19 @@ export default function App() {
                     value={cartDiscountValue}
                     onChange={(e) => setCartDiscountValue(e.target.value)}
                     autoFocus
-                    className="w-20 rounded-md border border-slate-300 px-2 py-1 text-sm focus:border-rose-400 focus:outline-none"
+                    className="h-11 w-24 rounded-md border border-slate-300 px-2 text-lg focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-100"
                   />
                   <button
                     type="button"
                     onClick={applyCartDiscount}
-                    className="text-xs font-medium text-rose-600 hover:text-rose-700"
+                    className="text-sm font-medium text-rose-600 hover:text-rose-700"
                   >
                     Apply
                   </button>
                   <button
                     type="button"
                     onClick={() => setShowCartDiscountEditor(false)}
-                    className="text-xs text-slate-500 hover:text-slate-700"
+                    className="text-sm text-slate-500 hover:text-slate-700"
                   >
                     Cancel
                   </button>
@@ -509,31 +588,32 @@ export default function App() {
               )}
 
               {cartDiscount && (
-                <div className="mb-1 flex justify-between text-sm text-slate-500">
+                <div className="mb-1 flex justify-between text-base text-slate-500">
                   <span>Subtotal</span>
                   <span>{formatCurrency(cartSubtotal)}</span>
                 </div>
               )}
 
-              <div className="mb-3 flex justify-between text-lg font-semibold">
+              <div className="mb-3 flex justify-between text-2xl font-bold">
                 <span>Total</span>
                 <span>{formatCurrency(cartTotal)}</span>
               </div>
 
               {checkoutStatus === 'synced' && (
-                <p className="mb-3 rounded-lg bg-emerald-50 px-3 py-2 text-sm font-medium text-emerald-700">
-                  ✓ Order synced to Shopify
+                <p className="mb-3 flex items-center gap-2 rounded-lg bg-emerald-50 px-3 py-2 text-base font-medium text-emerald-700">
+                  <CheckIcon className="h-5 w-5" />
+                  Order synced to Shopify
                 </p>
               )}
 
               {checkoutStatus === 'queued-offline' && (
-                <p className="mb-3 rounded-lg bg-amber-50 px-3 py-2 text-sm font-medium text-amber-700">
+                <p className="mb-3 rounded-lg bg-amber-50 px-3 py-2 text-base font-medium text-amber-700">
                   Saved Offline — Will Sync
                 </p>
               )}
 
               {checkoutStatus === 'error' && (
-                <p className="mb-3 rounded-lg bg-rose-50 px-3 py-2 text-sm font-medium text-rose-700">
+                <p className="mb-3 rounded-lg bg-rose-50 px-3 py-2 text-base font-medium text-rose-700">
                   {checkoutError ?? 'Checkout failed'}
                 </p>
               )}
@@ -542,7 +622,7 @@ export default function App() {
                 type="button"
                 disabled={cartCount === 0 || checkoutStatus === 'submitting'}
                 onClick={() => setCheckoutModalOpen(true)}
-                className="w-full rounded-lg bg-rose-600 px-6 py-4 text-lg font-semibold text-white transition active:scale-95 disabled:cursor-not-allowed disabled:opacity-50"
+                className="h-16 w-full rounded-lg bg-rose-600 px-6 text-xl font-bold text-white transition active:scale-95 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 Checkout
               </button>
@@ -551,7 +631,7 @@ export default function App() {
         </main>
       ) : activeView === 'orders' ? (
         <main className="flex-1 overflow-y-auto p-6">
-          <h2 className="mb-4 text-lg font-semibold text-slate-700">
+          <h2 className="mb-4 text-xl font-semibold text-slate-700">
             Order History
           </h2>
           <OrderHistory

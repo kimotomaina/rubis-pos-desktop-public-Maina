@@ -1,5 +1,5 @@
 /**
- * Database service tests (Phase 3).
+ * Database service tests.
  *
  * `better-sqlite3` is mocked with a recording fake so we assert the
  * exact SQL and parameter traffic produced by `RubisDatabase` without
@@ -147,7 +147,7 @@ describe('RubisDatabase.init', () => {
     db = new RubisDatabase({ dbPath: '/tmp/rubis-test.db' })
   })
 
-  it('enables WAL and creates all Phase 3 tables + index', () => {
+  it('enables WAL and creates all core tables + index', () => {
     db.init()
 
     expect(MockedDatabaseCtor).toHaveBeenCalledWith('/tmp/rubis-test.db')
@@ -454,7 +454,7 @@ describe('RubisDatabase.getCachedProducts', () => {
   })
 })
 
-describe('RubisDatabase integration config (Phase 9)', () => {
+describe('RubisDatabase integration config', () => {
   it('writes config as JSON via an upsert', () => {
     const { fake, db } = freshDb()
 
@@ -486,7 +486,32 @@ describe('RubisDatabase integration config (Phase 9)', () => {
   })
 })
 
-describe('RubisDatabase printers (Phase 15)', () => {
+describe('RubisDatabase.getSetting / setSetting', () => {
+  it('upserts a key-value pair', () => {
+    const { fake, db } = freshDb()
+
+    db.setSetting('location_confirmed', '1')
+
+    const upsertCalls = fake.callsFor('run', 'INSERT OR REPLACE INTO settings')
+    expect(upsertCalls).toHaveLength(1)
+    expect(upsertCalls[0].params).toEqual(['location_confirmed', '1'])
+  })
+
+  it('reads back a stored value', () => {
+    const { fake, db } = freshDb()
+    fake.setGetResult('FROM settings WHERE key', { value: 'gid://shopify/Location/1' })
+
+    expect(db.getSetting('location_id')).toBe('gid://shopify/Location/1')
+  })
+
+  it('returns undefined for a key that was never set', () => {
+    const { db } = freshDb()
+
+    expect(db.getSetting('location_confirmed')).toBeUndefined()
+  })
+})
+
+describe('RubisDatabase printers', () => {
   it('returns an empty list when no printers are configured', () => {
     const { db } = freshDb()
 

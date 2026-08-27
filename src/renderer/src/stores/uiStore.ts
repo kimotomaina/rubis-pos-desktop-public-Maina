@@ -1,5 +1,5 @@
 /**
- * Zustand store for UI state (Phase 4).
+ * Zustand store for UI state.
  *
  * Manages the variant modal and navigation state, keeping
  * UI concerns separate from data stores.

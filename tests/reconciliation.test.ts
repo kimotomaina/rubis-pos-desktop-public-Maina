@@ -1,5 +1,5 @@
 /**
- * Shift cash-reconciliation regression tests (Phase 11, Task 1).
+ * Shift cash-reconciliation regression tests.
  *
  * Unlike the rest of this codebase's database tests, this file runs
  * against a **real** in-memory `better-sqlite3` connection
@@ -33,7 +33,7 @@ const cashItem: CartItem = {
   image: null
 }
 
-describe('closeShift cash reconciliation excludes voided orders (Phase 11)', () => {
+describe('closeShift cash reconciliation excludes voided orders', () => {
   it('does not count a voided cash order toward expected cash', () => {
     const db = freshDb()
     const { staffId } = db.createStaff({ name: 'Alex', pinHash: hashPin('1234'), role: 'cashier' })
@@ -119,7 +119,7 @@ describe('closeShift cash reconciliation excludes voided orders (Phase 11)', () 
   })
 })
 
-describe('Z-report and daily summary exclude voided orders (Phase 11)', () => {
+describe('Z-report and daily summary exclude voided orders', () => {
   it('excludes a voided order from Z-report revenue and order count', () => {
     const db = freshDb()
     const { staffId } = db.createStaff({ name: 'Alex', pinHash: hashPin('1234'), role: 'cashier' })

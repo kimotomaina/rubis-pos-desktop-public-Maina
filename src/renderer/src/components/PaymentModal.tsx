@@ -17,19 +17,19 @@ interface PaymentModalProps {
 const PHONE_PATTERN = /^254\d{9}$/
 
 /**
- * M-Pesa payment collection UI (Phase 10), wired to the Phase 9 IPC
+ * M-Pesa payment collection UI, wired to the mock Daraja IPC
  * placeholders (`initiateMpesaStkPush` / `verifyMpesaCode`).
  *
- * Two tabs mirror the hybrid flow from docs/phase-9.md §3.1:
+ * Two tabs mirror the hybrid flow:
  *   - **STK Push**: phone number → push prompt → simulated wait for the
  *     customer to approve on their phone.
  *   - **Manual Code**: the cashier reads the 6-character confirmation
  *     code off the customer's SMS and it's verified directly — the
  *     offline-capable path.
  *
- * A verification failure (including the mock's ~10% random failure —
- * see docs/phase-10.md Q3) shows a red inline error and leaves both
- * tabs available so the cashier can retry or back out to Cash.
+ * A verification failure (including the mock's ~10% random failure)
+ * shows a red inline error and leaves both tabs available so the
+ * cashier can retry or back out to Cash.
  *
  * @param {PaymentModalProps} props
  * @returns {JSX.Element}
@@ -102,7 +102,7 @@ export default function PaymentModal({ total, onPaid, onCancel }: PaymentModalPr
       <button
         type="button"
         onClick={onCancel}
-        className="mb-3 text-sm text-slate-500 hover:text-slate-700"
+        className="mb-3 text-base text-slate-500 hover:text-slate-700"
       >
         ← Change payment method
       </button>
@@ -111,7 +111,7 @@ export default function PaymentModal({ total, onPaid, onCancel }: PaymentModalPr
         <button
           type="button"
           onClick={() => setTab('stk')}
-          className={`flex-1 rounded-md py-2 text-sm font-semibold transition ${
+          className={`flex-1 rounded-md py-2 text-base font-semibold transition ${
             tab === 'stk' ? 'bg-white text-rose-700 shadow-sm' : 'text-slate-500'
           }`}
         >
@@ -120,7 +120,7 @@ export default function PaymentModal({ total, onPaid, onCancel }: PaymentModalPr
         <button
           type="button"
           onClick={() => setTab('manual')}
-          className={`flex-1 rounded-md py-2 text-sm font-semibold transition ${
+          className={`flex-1 rounded-md py-2 text-base font-semibold transition ${
             tab === 'manual' ? 'bg-white text-rose-700 shadow-sm' : 'text-slate-500'
           }`}
         >
@@ -128,24 +128,24 @@ export default function PaymentModal({ total, onPaid, onCancel }: PaymentModalPr
         </button>
       </div>
 
-      <p className="mb-4 text-sm text-slate-500">
+      <p className="mb-4 text-base text-slate-500">
         Charging <span className="font-semibold text-slate-800">{formatCurrency(total)}</span>
       </p>
 
       {tab === 'stk' && (
         <div>
-          <label className="mb-1 block text-sm font-medium text-slate-600">Phone Number</label>
+          <label className="mb-1 block text-base font-medium text-slate-600">Phone Number</label>
           <input
             type="tel"
             value={phoneNumber}
             onChange={(e) => setPhoneNumber(e.target.value.replace(/[^\d]/g, ''))}
             placeholder="254712345678"
             disabled={stkLoading}
-            className="w-full rounded-lg border border-slate-300 px-3 py-3 text-lg focus:border-rose-400 focus:outline-none disabled:bg-slate-50"
+            className="w-full rounded-lg border border-slate-300 px-3 py-3 text-xl focus:border-rose-400 focus:outline-none disabled:bg-slate-50"
           />
 
           {stkError && (
-            <p className="mt-3 rounded-lg bg-rose-50 px-3 py-2 text-sm font-medium text-rose-700">
+            <p className="mt-3 rounded-lg bg-rose-50 px-3 py-2 text-base font-medium text-rose-700">
               {stkError}
             </p>
           )}
@@ -154,7 +154,7 @@ export default function PaymentModal({ total, onPaid, onCancel }: PaymentModalPr
             type="button"
             disabled={stkLoading}
             onClick={() => void handleSendStkPush()}
-            className="mt-4 w-full rounded-xl bg-rose-600 py-4 text-lg font-semibold text-white transition active:scale-95 disabled:cursor-not-allowed disabled:opacity-50"
+            className="mt-4 w-full rounded-xl bg-rose-600 py-4 text-xl font-semibold text-white transition active:scale-95 disabled:cursor-not-allowed disabled:opacity-50"
           >
             {stkLoading ? (
               <span className="flex items-center justify-center gap-2">
@@ -170,7 +170,7 @@ export default function PaymentModal({ total, onPaid, onCancel }: PaymentModalPr
 
       {tab === 'manual' && (
         <div>
-          <label className="mb-1 block text-sm font-medium text-slate-600">
+          <label className="mb-1 block text-base font-medium text-slate-600">
             M-Pesa Transaction Code
           </label>
           <input
@@ -180,11 +180,11 @@ export default function PaymentModal({ total, onPaid, onCancel }: PaymentModalPr
             placeholder="e.g. QDF73H"
             maxLength={12}
             disabled={verifying}
-            className="w-full rounded-lg border border-slate-300 px-3 py-3 text-lg uppercase tracking-wide focus:border-rose-400 focus:outline-none disabled:bg-slate-50"
+            className="w-full rounded-lg border border-slate-300 px-3 py-3 text-xl uppercase tracking-wide focus:border-rose-400 focus:outline-none disabled:bg-slate-50"
           />
 
           {verifyError && (
-            <p className="mt-3 rounded-lg bg-rose-50 px-3 py-2 text-sm font-medium text-rose-700">
+            <p className="mt-3 rounded-lg bg-rose-50 px-3 py-2 text-base font-medium text-rose-700">
               {verifyError}
             </p>
           )}
@@ -193,7 +193,7 @@ export default function PaymentModal({ total, onPaid, onCancel }: PaymentModalPr
             type="button"
             disabled={verifying}
             onClick={() => void handleVerifyCode()}
-            className="mt-4 w-full rounded-xl bg-rose-600 py-4 text-lg font-semibold text-white transition active:scale-95 disabled:cursor-not-allowed disabled:opacity-50"
+            className="mt-4 w-full rounded-xl bg-rose-600 py-4 text-xl font-semibold text-white transition active:scale-95 disabled:cursor-not-allowed disabled:opacity-50"
           >
             {verifying ? 'Verifying…' : 'Verify & Pay'}
           </button>

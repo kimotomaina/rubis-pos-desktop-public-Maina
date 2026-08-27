@@ -1,6 +1,5 @@
 /**
- * Barcode scanner hook (Phase 5 — Hardware Integration; Phase 15 adds
- * multi-scanner prefix routing).
+ * Barcode scanner hook with multi-scanner prefix routing.
  *
  * Datalogic (and most USB-HID) barcode scanners behave like a very
  * fast keyboard: they type out the barcode's characters and finish
@@ -12,21 +11,20 @@
  * naturally slower, irregular pace never accumulates enough
  * characters to be mistaken for a scan.
  *
- * A second guard (Phase 5.2 hardening) suppresses an accidental
- * duplicate: the exact same `(source, barcode)` pair flushed again
- * within `DEFAULT_DUPLICATE_SUPPRESS_MS` of the last successful scan —
+ * A second guard suppresses an accidental duplicate: the exact same
+ * `(source, barcode)` pair flushed again within
+ * `DEFAULT_DUPLICATE_SUPPRESS_MS` of the last successful scan —
  * e.g. a cashier double-pulling the trigger — is silently dropped
  * instead of invoking `onScan` (and adding the item) twice.
  *
- * Phase 15 adds multi-scanner routing without any native HID module:
- * the Datalogic QD2100 (and similar USB-HID scanners) can be
- * programmed, by scanning a barcode out of its own manual, to prepend
- * a fixed text prefix to every scan it sends — e.g. `SC1:` for the
- * till-1 station or `KITCHEN:` for a back-of-house unit. This hook
- * simply detects and strips a recognized prefix from the flushed
- * buffer; an unprogrammed scanner (every scanner before this phase)
- * sends no prefix at all, so its scans keep working exactly as
- * before, just labeled `source: 'UNKNOWN'`.
+ * Multi-scanner routing works without any native HID module: the
+ * Datalogic QD2100 (and similar USB-HID scanners) can be programmed,
+ * by scanning a barcode out of its own manual, to prepend a fixed
+ * text prefix to every scan it sends — e.g. `SC1:` for the till-1
+ * station or `KITCHEN:` for a back-of-house unit. This hook simply
+ * detects and strips a recognized prefix from the flushed buffer; an
+ * unprogrammed scanner sends no prefix at all, so its scans keep
+ * working exactly as before, just labeled `source: 'UNKNOWN'`.
  */
 
 import { useEffect, useRef } from 'react'
@@ -46,10 +44,10 @@ export const DEFAULT_SCAN_MIN_LENGTH = 3
 export const DEFAULT_DUPLICATE_SUPPRESS_MS = 1000
 
 /**
- * Which programmed scanner station a scan came from (Phase 15).
+ * Which programmed scanner station a scan came from.
  * `'UNKNOWN'` covers every scan with no recognized prefix — including
- * every scanner that predates this phase, so existing hardware needs
- * no reconfiguration to keep working.
+ * any unprogrammed scanner, so existing hardware needs no
+ * reconfiguration to keep working.
  */
 export type ScanSource = 'SC1' | 'SC2' | 'KITCHEN' | 'UNKNOWN'
 
@@ -103,7 +101,7 @@ export interface UseBarcodeScannerOptions {
 /**
  * Listens for rapid, Enter-terminated keystroke sequences characteristic
  * of a barcode scanner and invokes `onScan` with the parsed
- * {@link ScanResult} — its source station (Phase 15) and barcode.
+ * {@link ScanResult} — its source station and barcode.
  *
  * @param {(result: ScanResult) => void} onScan
  * @param {UseBarcodeScannerOptions} [options]

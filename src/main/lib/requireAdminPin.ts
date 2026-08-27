@@ -1,6 +1,5 @@
 /**
- * Server-side admin re-authorization (Phase 14 — Pre-Deployment
- * Security Patch).
+ * Server-side admin re-authorization.
  *
  * `staff:create`, `staff:resetPin`, and `integrations:set-config`
  * previously trusted the renderer's `ManagerPinModal` gate with no

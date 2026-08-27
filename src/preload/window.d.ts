@@ -64,7 +64,7 @@ export interface PosApi {
   getLocalOrders: (limit?: number, offset?: number) => Promise<ServiceResult<OrderRow[]>>
   /** Retries syncing a failed or pending order. */
   retryOrderSync: (localId: number) => Promise<ServiceResult<{ queueId: number }>>
-  /** Prints (or, in mock mode, logs) a receipt for a local order, optionally routed to a printer type (Phase 15). */
+  /** Prints (or, in mock mode, logs) a receipt for a local order, optionally routed to a printer type. */
   printReceipt: (
     localId: number,
     printerType?: PrinterType
@@ -77,7 +77,7 @@ export interface PosApi {
   logout: (staffId: number) => Promise<ServiceResult<void>>
   /** Prints (or, in mock mode, logs) a shift's Z-report. */
   printZReport: (shiftId: number) => Promise<ServiceResult<ReceiptPrintResult>>
-  /** Creates a new staff account. Requires a re-verified admin Manager PIN (Phase 14). */
+  /** Creates a new staff account. Requires a re-verified admin Manager PIN. */
   createStaff: (
     name: string,
     pin: string,
@@ -85,7 +85,7 @@ export interface PosApi {
     managerId: number,
     managerPin: string
   ) => Promise<ServiceResult<StaffSummary>>
-  /** Resets a staff member's PIN. Requires a re-verified admin Manager PIN (Phase 14). */
+  /** Resets a staff member's PIN. Requires a re-verified admin Manager PIN. */
   resetStaffPin: (
     staffId: number,
     pin: string,
@@ -121,7 +121,7 @@ export interface PosApi {
   getIntegrationConfig: (
     provider: IntegrationProviderName
   ) => Promise<ServiceResult<Record<string, unknown>>>
-  /** Saves a provider's integration config. Requires a re-verified admin Manager PIN (Phase 14). */
+  /** Saves a provider's integration config. Requires a re-verified admin Manager PIN. */
   setIntegrationConfig: (
     provider: IntegrationProviderName,
     config: Record<string, unknown>,
@@ -130,22 +130,63 @@ export interface PosApi {
   ) => Promise<ServiceResult<void>>
   /** Voids a local `pending_sync` order. */
   voidOrder: (localId: number) => Promise<ServiceResult<{ localId: number; voidedAt: string }>>
-  /** Lists every configured printer (Phase 15). */
+  /** Lists every configured printer. */
   getPrinters: () => Promise<ServiceResult<PrinterConfig[]>>
-  /** Upserts a printer configuration. Requires a re-verified admin Manager PIN (Phase 15). */
+  /** Upserts a printer configuration. Requires a re-verified admin Manager PIN. */
   savePrinter: (
     config: PrinterConfig,
     managerId: number,
     managerPin: string
   ) => Promise<ServiceResult<void>>
-  /** Removes a printer configuration. Requires a re-verified admin Manager PIN (Phase 15). */
+  /** Removes a printer configuration. Requires a re-verified admin Manager PIN. */
   deletePrinter: (id: string, managerId: number, managerPin: string) => Promise<ServiceResult<void>>
-  /** Sends a test page to a printer interface to verify connectivity (Phase 15). */
+  /** Sends a test page to a printer interface to verify connectivity. */
   testPrinter: (interfaceName: string) => Promise<ServiceResult<ReceiptPrintResult>>
   /** Reports whether a Shopify Admin API token is stored in the credential vault. */
   getShopifyTokenStatus: () => Promise<ServiceResult<{ configured: boolean }>>
   /** Saves the Shopify Admin API token to the credential vault. */
   setShopifyToken: (token: string) => Promise<ServiceResult<void>>
+  /** Reads the currently resolved Shopify store URL (not a secret). */
+  getShopifyStoreUrl: () => Promise<ServiceResult<{ storeUrl: string | null }>>
+  /** Saves the Shopify store URL. Requires a re-verified admin Manager PIN. */
+  setShopifyStoreUrl: (
+    storeUrl: string,
+    managerId: number,
+    managerPin: string
+  ) => Promise<ServiceResult<void>>
+  /** Reports whether this till has a working Shopify connection yet and whether its location is admin-confirmed. */
+  getConfigStatus: () => Promise<
+    ServiceResult<{
+      hasConfig: boolean
+      locationConfirmed: boolean
+      config?: { storeUrl: string; locationId: string | null; locationName: string | null }
+    }>
+  >
+  /** Onboarding wizard's "Connect & Verify" step — verifies credentials and fetches locations. */
+  validateShopifyConfig: (
+    storeUrl: string,
+    token: string
+  ) => Promise<ServiceResult<{ shopName: string; locations: { id: string; name: string }[] }>>
+  /** Fetches this till's available Shopify locations using its already-resolved store URL/token. */
+  listLocations: () => Promise<
+    ServiceResult<{ shopName: string; locations: { id: string; name: string }[] }>
+  >
+  /** Persists the admin-confirmed location for this till. Requires a re-verified admin Manager PIN. */
+  setLocation: (
+    locationId: string,
+    locationName: string,
+    managerId: number,
+    managerPin: string
+  ) => Promise<ServiceResult<void>>
+  /** Persists the onboarding wizard's verified store URL, token, and selected location. */
+  saveConfig: (
+    storeUrl: string,
+    token: string,
+    locationId: string,
+    locationName: string
+  ) => Promise<ServiceResult<void>>
+  /** Admin screen's "Reset Configuration" action. Requires a re-verified admin Manager PIN. */
+  clearConfig: (managerId: number, managerPin: string) => Promise<ServiceResult<void>>
 }
 
 declare global {

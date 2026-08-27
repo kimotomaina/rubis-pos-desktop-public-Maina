@@ -7,7 +7,7 @@ type OrderStatus = 'synced' | 'pending_sync' | 'failed' | 'voided'
 interface OrderHistoryProps {
   onRetry: (localId: number) => void
   onPrint: (localId: number) => void
-  /** Opens the Manager PIN gate; calls `onAuthorized` once verified (Phase 10). */
+  /** Opens the Manager PIN gate; calls `onAuthorized` once verified. */
   requestManagerPin: (
     title: string,
     onAuthorized: (managerId: number, managerPin: string) => void
@@ -73,25 +73,25 @@ export default function OrderHistory({ onRetry, onPrint, requestManagerPin }: Or
     switch (status) {
       case 'synced':
         return (
-          <span className="inline-flex items-center rounded-full bg-emerald-100 px-2.5 py-0.5 text-xs font-medium text-emerald-800">
+          <span className="inline-flex items-center rounded-full bg-emerald-100 px-4 py-2 text-base font-medium text-emerald-800">
             Synced
           </span>
         )
       case 'pending_sync':
         return (
-          <span className="inline-flex items-center rounded-full bg-amber-100 px-2.5 py-0.5 text-xs font-medium text-amber-800">
+          <span className="inline-flex items-center rounded-full bg-amber-100 px-4 py-2 text-base font-medium text-amber-800">
             Syncing...
           </span>
         )
       case 'failed':
         return (
-          <span className="inline-flex items-center rounded-full bg-rose-100 px-2.5 py-0.5 text-xs font-medium text-rose-800">
+          <span className="inline-flex items-center rounded-full bg-rose-100 px-4 py-2 text-base font-medium text-rose-800">
             Failed
           </span>
         )
       case 'voided':
         return (
-          <span className="inline-flex items-center rounded-full bg-slate-200 px-2.5 py-0.5 text-xs font-medium text-slate-600">
+          <span className="inline-flex items-center rounded-full bg-slate-200 px-4 py-2 text-base font-medium text-slate-600">
             Voided
           </span>
         )
@@ -109,11 +109,11 @@ export default function OrderHistory({ onRetry, onPrint, requestManagerPin }: Or
   if (error) {
     return (
       <div className="rounded-lg bg-rose-50 p-4 text-center">
-        <p className="text-sm text-rose-700">{error}</p>
+        <p className="text-base text-rose-700">{error}</p>
         <button
           type="button"
           onClick={() => void fetchOrders()}
-          className="mt-2 text-sm font-medium text-rose-600 hover:text-rose-500"
+          className="mt-2 text-base font-medium text-rose-600 hover:text-rose-500"
         >
           Try again
         </button>
@@ -124,8 +124,8 @@ export default function OrderHistory({ onRetry, onPrint, requestManagerPin }: Or
   if (orders.length === 0) {
     return (
       <div className="py-12 text-center text-slate-500">
-        <p className="text-lg">No orders yet</p>
-        <p className="mt-1 text-sm">
+        <p className="text-xl">No orders yet</p>
+        <p className="mt-1 text-base">
           Orders will appear here after checkout
         </p>
       </div>
@@ -135,7 +135,7 @@ export default function OrderHistory({ onRetry, onPrint, requestManagerPin }: Or
   return (
     <div className="space-y-3">
       {voidError && (
-        <p className="rounded-lg bg-rose-50 px-3 py-2 text-sm font-medium text-rose-700">
+        <p className="rounded-lg bg-rose-50 px-3 py-2 text-base font-medium text-rose-700">
           {voidError}
         </p>
       )}
@@ -146,10 +146,10 @@ export default function OrderHistory({ onRetry, onPrint, requestManagerPin }: Or
         >
           <div className="flex items-start justify-between">
             <div>
-              <p className="font-medium text-slate-900">
+              <p className="text-lg font-semibold text-slate-900">
                 Order #{order.local_id}
               </p>
-              <p className="text-sm text-slate-500">
+              <p className="text-base text-slate-500">
                 {new Date(order.created_at).toLocaleString()}
               </p>
             </div>
@@ -158,7 +158,7 @@ export default function OrderHistory({ onRetry, onPrint, requestManagerPin }: Or
               <button
                 type="button"
                 onClick={() => onPrint(order.local_id)}
-                className="rounded-md border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50"
+                className="h-11 rounded-md border border-slate-300 px-4 text-base font-medium text-slate-700 hover:bg-slate-50"
               >
                 Print Receipt
               </button>
@@ -167,7 +167,7 @@ export default function OrderHistory({ onRetry, onPrint, requestManagerPin }: Or
                 <button
                   type="button"
                   onClick={() => onRetry(order.local_id)}
-                  className="rounded-md bg-rose-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-rose-700"
+                  className="h-11 rounded-md bg-rose-600 px-4 text-base font-medium text-white hover:bg-rose-700"
                 >
                   Retry Sync
                 </button>
@@ -177,7 +177,7 @@ export default function OrderHistory({ onRetry, onPrint, requestManagerPin }: Or
                   type="button"
                   disabled={voidingId === order.local_id}
                   onClick={() => handleVoid(order.local_id)}
-                  className="rounded-md border border-rose-300 px-3 py-1.5 text-xs font-medium text-rose-700 hover:bg-rose-50 disabled:cursor-not-allowed disabled:opacity-50"
+                  className="h-11 rounded-md border border-rose-300 px-4 text-base font-medium text-rose-700 hover:bg-rose-50 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   {voidingId === order.local_id ? 'Voiding…' : 'Void'}
                 </button>
@@ -185,11 +185,11 @@ export default function OrderHistory({ onRetry, onPrint, requestManagerPin }: Or
             </div>
           </div>
           <div className="mt-2 flex items-center justify-between border-t border-slate-100 pt-2">
-            <p className="text-sm text-slate-600">
+            <p className="text-base text-slate-600">
               Total: {formatCurrency(order.total)}
             </p>
             {order.shopify_order_id && (
-              <p className="text-xs text-slate-400">
+              <p className="text-sm text-slate-400">
                 Shopify: {order.shopify_order_id.split('/').pop()}
               </p>
             )}

@@ -1,5 +1,6 @@
 import type { ProductSummary, VariantSummary } from '../types/shopify'
 import { formatCurrency } from '../lib/currency'
+import { PackageIcon } from './icons'
 
 interface ProductCardProps {
   product: ProductSummary
@@ -45,41 +46,45 @@ export default function ProductCard({
     <button
       type="button"
       onClick={handleClick}
-      className="group flex min-h-[160px] flex-col rounded-xl border border-slate-200 bg-white p-4 text-left shadow-sm transition-transform active:scale-95"
+      className="flex h-80 flex-col rounded-lg border border-slate-200 bg-white p-5 text-left shadow-sm transition-transform active:scale-95"
     >
-      <div className="relative mb-3 aspect-square w-full overflow-hidden rounded-lg bg-slate-100">
+      <div className="relative h-44 w-full shrink-0 rounded bg-slate-50 p-3">
         {product.featuredImage ? (
           <img
             src={product.featuredImage}
             alt={product.title}
-            className="h-full w-full object-cover"
+            className="h-full w-full object-contain"
             loading="lazy"
           />
         ) : (
-          <div className="flex h-full w-full items-center justify-center ">
-            <span className="text-3xl font-bold text-slate-400">
-              {initials || '📦'}
-            </span>
+          <div className="flex h-full items-center justify-center">
+            {initials ? (
+              <span className="flex h-full items-center justify-center text-5xl font-bold text-slate-400">
+                {initials}
+              </span>
+            ) : (
+              <PackageIcon className="h-14 w-14 text-slate-300" />
+            )}
           </div>
-        )}
-        {product.variants.length > 1 && (
-          <span className="absolute bottom-2 right-2 rounded-full bg-white/90 px-2 py-1 text-xs font-medium text-slate-700 shadow-sm">
-            {product.variants.length} variants
-          </span>
         )}
       </div>
 
-      <h3 className="mb-1 text-sm font-medium text-slate-900 line-clamp-1">
-        {product.title}
-      </h3>
+      <div className="flex flex-1 flex-col justify-between pt-3">
+        <div className="flex flex-col items-start">
+          <h3 className="line-clamp-2 min-h-10 text-lg font-semibold text-slate-900">
+            {product.title}
+          </h3>
+          {product.variants.length > 1 && (
+            <span className="mt-2 self-start rounded-full bg-slate-100 px-2 py-1 text-xs text-slate-600">
+              {product.variants.length} variants
+            </span>
+          )}
+        </div>
 
-      <p className="mb-3 text-xs text-slate-500">
-        {price > 0 ? formatCurrency(price) : 'Price on request'}
-      </p>
-
-      <span className="mt-auto rounded-lg bg-rose-600 px-4 py-2 text-center text-sm font-semibold text-white opacity-0 transition-opacity group-hover:opacity-100">
-        {product.variants.length === 1 ? '+ Add to cart' : 'Select variant'}
-      </span>
+        <p className="mt-auto text-xl font-bold text-slate-900">
+          {price > 0 ? formatCurrency(price) : 'Price on request'}
+        </p>
+      </div>
     </button>
   )
 }

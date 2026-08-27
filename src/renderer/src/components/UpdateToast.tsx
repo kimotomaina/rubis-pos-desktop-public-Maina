@@ -31,7 +31,7 @@ export default function UpdateToast() {
   }
 
   return (
-    <div className="fixed bottom-4 right-4 z-50 w-72 rounded-xl bg-slate-900 p-4 text-sm text-white shadow-xl">
+    <div className="fixed bottom-4 right-4 z-50 w-72 rounded-xl bg-slate-900 p-4 text-base text-white shadow-xl">
       {status.kind === 'downloading' ? (
         <>
           <p className="font-medium">Downloading update…</p>
@@ -49,7 +49,7 @@ export default function UpdateToast() {
             type="button"
             disabled={installing}
             onClick={() => void handleInstall()}
-            className="mt-2 w-full rounded-lg bg-emerald-600 py-2 text-sm font-semibold text-white transition active:scale-95 disabled:cursor-not-allowed disabled:opacity-50"
+            className="mt-2 w-full rounded-lg bg-emerald-600 py-2 text-base font-semibold text-white transition active:scale-95 disabled:cursor-not-allowed disabled:opacity-50"
           >
             {installing ? 'Restarting…' : 'Restart & Install'}
           </button>

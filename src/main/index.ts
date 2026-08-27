@@ -37,8 +37,9 @@ import type { UpdateStatus } from './services/updater.js'
 import { createFileErrorLogger, installGlobalErrorHandlers } from './services/errorHandler.js'
 import {
   fetchAllProducts,
-  fetchFirstLocation,
-  createShopifyClient
+  createShopifyClient,
+  resolveShopifyStoreUrl,
+  validateAndFetchLocations
 } from './services/shopify.js'
 import { createDatabase } from './services/database.js'
 import { DEMO_PRODUCTS } from './services/demoData.js'
@@ -68,7 +69,12 @@ import {
   integrationsSetConfigSchema,
   printerSaveSchema,
   printerDeleteSchema,
-  printerTestSchema
+  printerTestSchema,
+  shopifySetStoreUrlSchema,
+  configValidateSchema,
+  configSaveSchema,
+  configClearSchema,
+  locationSetSchema
 } from './lib/ipcValidator.js'
 import { requireAdminPin } from './lib/requireAdminPin.js'
 import { restrictToOwnerOnly } from './lib/fileSecurity.js'
@@ -77,6 +83,7 @@ import {
   resolveShopifyToken,
   setSecret,
   getSecret,
+  deleteSecret,
   SECRET_SERVICE_NAME,
   SHOPIFY_TOKEN_ACCOUNT
 } from './services/secretStore.js'
@@ -199,7 +206,7 @@ app.whenReady().then(async () => {
   electronApp.setAppUserModelId('com.volcha.rubispos')
 
   /**
-   * Strict Content-Security-Policy (Phase 5.1 hardening): enforced at the
+   * Strict Content-Security-Policy: enforced at the
    * session level so it applies to every response the app loads, not just
    * the initial document — belt-and-braces alongside the BrowserWindow's
    * `webSecurity`/`sandbox` config in `window-factory.ts`.
@@ -207,9 +214,9 @@ app.whenReady().then(async () => {
    * In dev (`electron-vite dev`, unpackaged, `ELECTRON_RENDERER_URL` set),
    * the relaxed {@link buildDevContentSecurityPolicy} is used instead —
    * required for `@vitejs/plugin-react`'s inline Fast Refresh preamble
-   * script and the dev server's own origin/WS socket (Phase 14 fix; see
-   * docs/phase-14.md). A packaged build never sets `ELECTRON_RENDERER_URL`,
-   * so this always resolves to the strict policy in production.
+   * script and the dev server's own origin/WS socket. A packaged build
+   * never sets `ELECTRON_RENDERER_URL`, so this always resolves to the
+   * strict policy in production.
    */
   const devServerUrl = process.env['ELECTRON_RENDERER_URL']
   const cspPolicy =
@@ -232,7 +239,7 @@ app.whenReady().then(async () => {
   })
 
   /**
-   * Global crash safety net (Phase 8): logs uncaught errors, unhandled
+   * Global crash safety net: logs uncaught errors, unhandled
    * rejections, and renderer crashes to `userData/error.log`, then shows
    * a friendly restart prompt instead of a white screen or silent death.
    */
@@ -245,14 +252,14 @@ app.whenReady().then(async () => {
     showFatalDialog: (message) => dialog.showErrorBox('RUBIS POS', message)
   })
 
-  /* ── Phase 3 services: SQLite, sync engine, connectivity ───── */
+  /* ── Core services: SQLite, sync engine, connectivity ───── */
 
   const dbPath = join(app.getPath('userData'), 'rubis-pos.db')
   const db = createDatabase({ dbPath })
   db.init()
 
   /**
-   * Restricts the SQLite file to owner-only access (Phase 12, Task 4).
+   * Restricts the SQLite file to owner-only access.
    * `userData` is already scoped to the current Windows user profile;
    * this is a second, explicit layer on top of that. Non-fatal on
    * failure (see `fileSecurity.ts`) — a permissions quirk must never
@@ -272,7 +279,7 @@ app.whenReady().then(async () => {
   }
 
   /**
-   * Demo Mode (Phase 11, Task 3): when `VITE_DEMO_MODE=true`, the
+   * Demo Mode: when `VITE_DEMO_MODE=true`, the
    * local catalog is seeded from a hardcoded dummy product list
    * instead of the live Shopify API — so a trial terminal looks fully
    * populated and is scannable even with no internet or Shopify
@@ -286,60 +293,93 @@ app.whenReady().then(async () => {
   }
 
   /**
-   * Secure secret storage (Phase 12, Task 1; vault backend replaced by
-   * Electron's `safeStorage` in Phase 14 — see `secretStore.ts`): the
+   * Secure secret storage (see `secretStore.ts`): the
    * Shopify Admin API token is resolved from the OS-encrypted vault,
-   * never read from `process.env` directly once resolved. In dev, a
-   * missing vault entry falls back to `.env` once and is persisted
-   * into the vault so every later launch is vault-only — see
-   * `secretStore.ts`'s `resolveShopifyToken` (Q1 default). Cached in a
-   * mutable binding so `secrets:set-shopify-token` (below) can update
-   * it mid-session without a restart.
+   * never read from `process.env` directly once resolved. A missing
+   * vault entry falls back to `.env` once — packaged or not — and is
+   * persisted into the vault so every later launch is vault-only.
+   * Cached in a mutable binding so `secrets:set-shopify-token` and the
+   * onboarding wizard's `config:save` (below) can update it
+   * mid-session without a restart.
    */
   const keytar = await loadSecretVault()
   let shopifyToken = (
     await resolveShopifyToken({
       keytar,
-      isDev: !app.isPackaged,
       envToken: process.env.VITE_SHOPIFY_ADMIN_API_TOKEN
     })
   ).token
 
+  /** `settings` table key the Shopify store URL is persisted under. */
+  const SHOPIFY_STORE_URL_SETTING_KEY = 'shopify_store_url'
+
+  /**
+   * Store URL, not a secret (a public shop domain) so it lives in the
+   * plain `settings` table rather than the encrypted vault — resolved
+   * `.env` first, then whatever was last saved from the Admin screen
+   * (`resolveShopifyStoreUrl`), so a fresh install never
+   * *requires* a `.env` file to be configured. Cached in a mutable
+   * binding so `shopify:set-store-url` (below) can update it
+   * mid-session without a restart, matching `shopifyToken` above.
+   */
+  let shopifyStoreUrl = resolveShopifyStoreUrl(
+    process.env.VITE_SHOPIFY_STORE_URL,
+    db.getSetting(SHOPIFY_STORE_URL_SETTING_KEY)
+  )
+
   /**
    * Builds a Shopify client from the resolved store URL + vault-backed
-   * token; returns null when either is missing. The store URL is not
-   * a secret (a public shop domain) so it's read from `.env` directly.
+   * token; returns null when either is missing.
    */
   const shopifyEnv = () => {
-    const storeUrl = process.env.VITE_SHOPIFY_STORE_URL
+    const storeUrl = shopifyStoreUrl
     const token = shopifyToken
     return storeUrl && token ? { storeUrl, token } : null
   }
 
   /**
-   * Resolves the Shopify location ID for inventory scoping.
-   * Priority: env var → settings table → auto-detect from Shopify.
+   * Resolves the Shopify location ID for inventory scoping, and
+   * whether an admin has explicitly confirmed it. Priority: env var
+   * (an explicit deployment-time choice, always confirmed) → settings
+   * table (confirmed only if `location_confirmed` was set by an
+   * admin via `location:set`/`config:save` — a bare `location_id`
+   * from a stale install is NOT treated as confirmed). Never
+   * auto-detects or silently persists a location at boot — that used
+   * to happen here and let a till start selling against whichever
+   * location Shopify returned first with no admin ever confirming
+   * it; candidate locations are now only fetched on demand via the
+   * `location:list` IPC channel for the renderer's confirmation gate.
    */
   let locationId = process.env.VITE_SHOPIFY_LOCATION_ID
-  if (!locationId) {
-    locationId = db.getSetting('location_id') ?? undefined
-  }
-  if (!locationId) {
+  let locationConfirmed = false
+  let locationName: string | undefined
+  if (locationId) {
+    locationConfirmed = true
+    // The env var only gives us an id, not a display name. Resolve one
+    // in the background purely for the Admin/gate screens to show —
+    // this never affects `locationConfirmed`, which is already true
+    // because of the explicit env var override.
     const env = shopifyEnv()
     if (env) {
-      const client = createShopifyClient(env.storeUrl, env.token)
-      fetchFirstLocation(client).then((loc) => {
-        if (loc) {
-          locationId = loc.id
-          db.setSetting('location_id', loc.id)
-          console.warn(
-            `[rubis-pos] No VITE_SHOPIFY_LOCATION_ID set; using first location: ${loc.name} (${loc.id})`
-          )
-        }
-      }).catch(() => {
-        console.warn('[rubis-pos] Could not auto-detect location')
-      })
+      const boundLocationId = locationId
+      validateAndFetchLocations(env.storeUrl, env.token)
+        .then((result) => {
+          if (result.success && result.data) {
+            const match = result.data.locations.find((l) => l.id === boundLocationId)
+            if (match) {
+              locationName = match.name
+              db.setSetting('location_name', match.name)
+            }
+          }
+        })
+        .catch(() => {
+          console.warn('[rubis-pos] Could not resolve a display name for VITE_SHOPIFY_LOCATION_ID')
+        })
     }
+  } else {
+    locationId = db.getSetting('location_id') ?? undefined
+    locationConfirmed = db.getSetting('location_confirmed') === '1'
+    locationName = db.getSetting('location_name') ?? undefined
   }
 
   /**
@@ -354,7 +394,7 @@ app.whenReady().then(async () => {
   }
 
   /**
-   * Multi-printer registry (Phase 15 — Multi-Peripheral Support):
+   * Multi-printer registry:
    * additional printers (e.g. a kitchen or label printer) registered
    * from the Admin screen's Peripherals tab, keyed by id. Rebuilt after
    * every `printers:save`/`printers:delete` so a lookup never reads a
@@ -365,11 +405,11 @@ app.whenReady().then(async () => {
   let printerRegistry: PrinterRegistry = buildPrinterRegistry(db.getPrinters())
 
   /**
-   * M-Pesa / eTIMS integrations (Phase 9 — placeholders). Only mock
+   * M-Pesa / eTIMS integrations. Only mock
    * implementations exist so far, so `VITE_USE_MOCK_INTEGRATIONS`
    * currently gates whether checkout calls them at all rather than
    * choosing between a mock and a real backend — that branch point is
-   * ready for Phase 10 to add a `DarajaMpesaProvider` /
+   * ready for a `DarajaMpesaProvider` /
    * `EtimsMiddlewareProvider` alongside the mocks without touching this
    * wiring.
    */
@@ -443,13 +483,17 @@ app.whenReady().then(async () => {
         return {
           success: false,
           error:
-            'Shopify credentials missing — add VITE_SHOPIFY_STORE_URL and VITE_SHOPIFY_ADMIN_API_TOKEN to your .env file'
+            'Shopify credentials missing — set the Store URL and Admin API Token in Admin > Integrations, or add VITE_SHOPIFY_STORE_URL/VITE_SHOPIFY_ADMIN_API_TOKEN to a .env file'
         }
       }
 
       const result = await fetchAllProducts(env.storeUrl, env.token, {
         locationId
       })
+
+      if (!result.success) {
+        console.warn('[rubis-pos] products:fetch failed, falling back to cache:', result.error)
+      }
 
       if (result.success && result.data && result.data.length > 0) {
         try {
@@ -485,7 +529,7 @@ app.whenReady().then(async () => {
   )
 
   /**
-   * Checkout entry point (Phase 3).
+   * Checkout entry point.
    *
    * Always persists the sale locally (`orders` + `sync_queue`), then —
    * if currently online — attempts an immediate sync before answering,
@@ -557,7 +601,7 @@ app.whenReady().then(async () => {
          * omitted from the receipt rather than blocking the sale — the
          * cash/stock side of the transaction is already committed, and a
          * real middleware would store-and-forward this invoice for retry
-         * (see docs/phase-9.md §2) rather than fail the till.
+         * rather than fail the till.
          */
         let fiscal: CheckoutReceipt['fiscal']
         if (integrationsEnabled) {
@@ -602,7 +646,7 @@ app.whenReady().then(async () => {
 
   /**
    * IPC handler that initiates an M-Pesa STK Push prompt (the "online"
-   * half of the hybrid flow in docs/phase-9.md §2). Standalone from
+   * half of the hybrid flow). Standalone from
    * `orders:checkout` so the renderer can show the modal, wait for the
    * customer to complete/cancel the prompt, and only then check out.
    */
@@ -630,8 +674,7 @@ app.whenReady().then(async () => {
 
   /**
    * IPC handler that reads a provider's stored integration config
-   * (Phase 9's `integrations` table) for the Admin screen's
-   * Integrations panel.
+   * for the Admin screen's Integrations panel.
    */
   ipcMain.handle(
     'integrations:get-config',
@@ -650,7 +693,7 @@ app.whenReady().then(async () => {
   /**
    * IPC handler that saves a provider's integration config (Paybill/
    * Till numbers, middleware URLs) from the Admin screen. Requires a
-   * re-verified admin Manager PIN (Phase 14) — routing Paybill/Till
+   * re-verified admin Manager PIN — routing Paybill/Till
    * numbers is exactly the kind of change a compromised renderer
    * calling this channel directly must not be able to make unchecked.
    */
@@ -678,7 +721,7 @@ app.whenReady().then(async () => {
   )
 
   /**
-   * IPC handler that lists every configured printer (Phase 15) for the
+   * IPC handler that lists every configured printer for the
    * Admin screen's Peripherals tab.
    */
   ipcMain.handle(
@@ -696,7 +739,7 @@ app.whenReady().then(async () => {
   )
 
   /**
-   * IPC handler that upserts a printer configuration (Phase 15).
+   * IPC handler that upserts a printer configuration.
    * Requires a re-verified admin Manager PIN — registering a printer
    * interface is the same class of privileged write as
    * `integrations:set-config`.
@@ -731,7 +774,7 @@ app.whenReady().then(async () => {
   )
 
   /**
-   * IPC handler that removes a printer configuration (Phase 15).
+   * IPC handler that removes a printer configuration.
    * Requires a re-verified admin Manager PIN, matching `printers:save`.
    */
   ipcMain.handle(
@@ -760,7 +803,7 @@ app.whenReady().then(async () => {
 
   /**
    * IPC handler that sends a test page to a given printer interface
-   * (Phase 15) — read-only diagnostic, no manager re-authorization
+   * — read-only diagnostic, no manager re-authorization
    * needed (see `printerTestSchema`).
    */
   ipcMain.handle(
@@ -777,7 +820,7 @@ app.whenReady().then(async () => {
   /**
    * IPC handler that reports whether a Shopify Admin API token is
    * currently stored in the credential vault — never the token value
-   * itself (Phase 12, Task 1). Lets the Admin screen show "Configured"
+   * itself. Lets the Admin screen show "Configured"
    * / "Not configured" without ever sending the secret to the renderer.
    */
   ipcMain.handle(
@@ -818,7 +861,255 @@ app.whenReady().then(async () => {
   )
 
   /**
-   * IPC handler that voids a local `pending_sync` order (Phase 10) —
+   * IPC handler that reports the currently resolved Shopify store URL
+   * — not a secret, so (unlike the token) the value itself
+   * is safe to send to the renderer for the Admin screen's field.
+   */
+  ipcMain.handle(
+    'shopify:get-store-url',
+    (): ServiceResult<{ storeUrl: string | null }> => ({
+      success: true,
+      data: { storeUrl: shopifyStoreUrl }
+    })
+  )
+
+  /**
+   * IPC handler that saves the Shopify store URL to the local
+   * `settings` table — the "no `.env` required on every
+   * install" path: an admin sets it once from the Integrations panel,
+   * exactly like `secrets:set-shopify-token` already does for the API
+   * token. Requires a re-verified admin Manager PIN, matching
+   * `integrations:set-config` and `printers:save` — pointing the till
+   * at a different store is a consequential write even though the URL
+   * itself isn't a secret. Updates the in-memory `shopifyStoreUrl`
+   * immediately so sync/fetch work without a restart.
+   */
+  ipcMain.handle(
+    'shopify:set-store-url',
+    (_event, request: unknown): ServiceResult<void> => {
+      const validation = validate(shopifySetStoreUrlSchema, request)
+      if (!validation.success) {
+        return { success: false, error: validation.error }
+      }
+      const authz = requireAdminPin(db, validation.data.managerId, validation.data.managerPin)
+      if (!authz.success) {
+        return authz
+      }
+      try {
+        db.setSetting(SHOPIFY_STORE_URL_SETTING_KEY, validation.data.storeUrl)
+        shopifyStoreUrl = validation.data.storeUrl
+        return { success: true }
+      } catch (err) {
+        return {
+          success: false,
+          error: err instanceof Error ? err.message : 'Failed to save store URL'
+        }
+      }
+    }
+  )
+
+  /**
+   * IPC handler backing the first-run onboarding wizard:
+   * reports whether this till already has a working Shopify connection
+   * (store URL + token both resolved, from `.env` or a prior
+   * onboarding/Admin-screen save) and, if so, the non-secret parts of
+   * that config. `App.tsx` calls this on mount to decide whether to
+   * show `OnboardingScreen` or the normal Login screen.
+   */
+  ipcMain.handle(
+    'config:get-status',
+    (): ServiceResult<{
+      hasConfig: boolean
+      locationConfirmed: boolean
+      config?: { storeUrl: string; locationId: string | null; locationName: string | null }
+    }> => {
+      const hasConfig = !!(shopifyStoreUrl && shopifyToken)
+      return {
+        success: true,
+        data: {
+          hasConfig,
+          locationConfirmed,
+          config: shopifyStoreUrl
+            ? {
+                storeUrl: shopifyStoreUrl,
+                locationId: locationId ?? null,
+                locationName: locationName ?? null
+              }
+            : undefined
+        }
+      }
+    }
+  )
+
+  /**
+   * Fetches this till's already-resolved Shopify store URL/token
+   * (nothing re-entered) and returns its available locations for the
+   * location-confirmation screen (both first-run onboarding and the
+   * post-login gate). Read-only — no manager PIN required, mirrors
+   * `config:validate`'s risk class.
+   */
+  ipcMain.handle(
+    'location:list',
+    async (): Promise<
+      ServiceResult<{ shopName: string; locations: { id: string; name: string }[] }>
+    > => {
+      const env = shopifyEnv()
+      if (!env) {
+        return { success: false, error: 'Shopify is not configured yet' }
+      }
+      return validateAndFetchLocations(env.storeUrl, env.token)
+    }
+  )
+
+  /**
+   * Persists the admin-confirmed location for this till. Manager PIN
+   * required — this is the one true "confirmation" write, replacing
+   * the old silent Phase-4 auto-detect-and-persist logic.
+   */
+  ipcMain.handle(
+    'location:set',
+    (_event, request: unknown): ServiceResult<void> => {
+      const validation = validate(locationSetSchema, request)
+      if (!validation.success) {
+        return { success: false, error: validation.error }
+      }
+      const authz = requireAdminPin(db, validation.data.managerId, validation.data.managerPin)
+      if (!authz.success) {
+        return authz
+      }
+      try {
+        const locationChanged = locationId !== validation.data.locationId
+        db.setSetting('location_id', validation.data.locationId)
+        db.setSetting('location_name', validation.data.locationName)
+        db.setSetting('location_confirmed', '1')
+        locationId = validation.data.locationId
+        locationName = validation.data.locationName
+        locationConfirmed = true
+        // The cached catalog was scoped to whatever location was
+        // previously confirmed (or none) — serving it as the offline
+        // fallback for a different location would show the wrong
+        // assortment/stock, so it's dropped rather than carried over.
+        if (locationChanged) {
+          db.clearProductCache()
+        }
+        return { success: true }
+      } catch (err) {
+        return {
+          success: false,
+          error: err instanceof Error ? err.message : 'Failed to save location'
+        }
+      }
+    }
+  )
+
+  /**
+   * IPC handler for the onboarding wizard's "Connect & Verify" step
+   * — makes a single read-only Shopify API call to confirm
+   * the store URL/token pair actually works and to fetch the location
+   * list the next step picks from. Saves nothing; `config:save` does
+   * that once the operator has chosen a location.
+   */
+  ipcMain.handle(
+    'config:validate',
+    async (
+      _event,
+      request: unknown
+    ): Promise<ServiceResult<{ shopName: string; locations: { id: string; name: string }[] }>> => {
+      const validation = validate(configValidateSchema, request)
+      if (!validation.success) {
+        return { success: false, error: validation.error }
+      }
+      return validateAndFetchLocations(validation.data.storeUrl, validation.data.token)
+    }
+  )
+
+  /**
+   * IPC handler that persists the onboarding wizard's result:
+   * the store URL to the `settings` table (same as
+   * `shopify:set-store-url`), the token to the credential vault (same
+   * as `secrets:set-shopify-token`), and the single selected location
+   * id to `settings`. Updates all three in-memory bindings immediately
+   * so the app can proceed straight to the Login screen without a
+   * restart. No manager PIN — see `configSaveSchema`'s doc comment.
+   */
+  ipcMain.handle(
+    'config:save',
+    async (_event, request: unknown): Promise<ServiceResult<void>> => {
+      const validation = validate(configSaveSchema, request)
+      if (!validation.success) {
+        return { success: false, error: validation.error }
+      }
+      const {
+        storeUrl,
+        token,
+        locationId: selectedLocationId,
+        locationName: selectedLocationName
+      } = validation.data
+      const savedToken = await setSecret(keytar, SECRET_SERVICE_NAME, SHOPIFY_TOKEN_ACCOUNT, token)
+      if (!savedToken) {
+        return { success: false, error: 'Failed to save the Admin API token to the credential vault' }
+      }
+      try {
+        db.setSetting(SHOPIFY_STORE_URL_SETTING_KEY, storeUrl)
+        db.setSetting('location_id', selectedLocationId)
+        db.setSetting('location_name', selectedLocationName)
+        db.setSetting('location_confirmed', '1')
+        shopifyStoreUrl = storeUrl
+        shopifyToken = token
+        locationId = selectedLocationId
+        locationName = selectedLocationName
+        locationConfirmed = true
+        return { success: true }
+      } catch (err) {
+        return {
+          success: false,
+          error: err instanceof Error ? err.message : 'Failed to save configuration'
+        }
+      }
+    }
+  )
+
+  /**
+   * IPC handler for the Admin screen's "Reset Configuration" action
+   * — clears the store URL, vault token, and location
+   * id so the till returns to the first-run onboarding state on next
+   * launch (or immediately, once the renderer reloads). Manager PIN
+   * required: this is a destructive action with no undo.
+   */
+  ipcMain.handle(
+    'config:clear',
+    async (_event, request: unknown): Promise<ServiceResult<void>> => {
+      const validation = validate(configClearSchema, request)
+      if (!validation.success) {
+        return { success: false, error: validation.error }
+      }
+      const authz = requireAdminPin(db, validation.data.managerId, validation.data.managerPin)
+      if (!authz.success) {
+        return authz
+      }
+      try {
+        db.setSetting(SHOPIFY_STORE_URL_SETTING_KEY, '')
+        db.setSetting('location_id', '')
+        db.setSetting('location_name', '')
+        db.setSetting('location_confirmed', '')
+        await deleteSecret(keytar, SECRET_SERVICE_NAME, SHOPIFY_TOKEN_ACCOUNT)
+        shopifyStoreUrl = null
+        shopifyToken = null
+        locationId = undefined
+        locationName = undefined
+        locationConfirmed = false
+        return { success: true }
+      } catch (err) {
+        return {
+          success: false,
+          error: err instanceof Error ? err.message : 'Failed to reset configuration'
+        }
+      }
+    }
+  )
+
+  /**
+   * IPC handler that voids a local `pending_sync` order —
    * reverses inventory, marks the order `voided`, and drops it from
    * the sync queue. Manager PIN authorization is enforced in the
    * renderer before this channel is invoked (see PaymentModal/
@@ -1010,7 +1301,7 @@ app.whenReady().then(async () => {
 
   /**
    * IPC handler that creates a new staff account (Admin screen).
-   * Requires a re-verified admin Manager PIN (Phase 14) — creating an
+   * Requires a re-verified admin Manager PIN — creating an
    * account (including an `admin` one) is a privilege-escalation path
    * a compromised renderer calling this channel directly must not be
    * able to take unchecked.
@@ -1047,7 +1338,7 @@ app.whenReady().then(async () => {
 
   /**
    * IPC handler that resets a staff member's PIN (Admin screen).
-   * Requires a re-verified admin Manager PIN (Phase 14) — resetting
+   * Requires a re-verified admin Manager PIN — resetting
    * another account's PIN is equivalent to taking it over.
    */
   ipcMain.handle(
@@ -1092,8 +1383,8 @@ app.whenReady().then(async () => {
 
   /**
    * IPC handler that opens a new store-wide till shift with a
-   * starting cash float. Fails if a shift is already open (one shift
-   * at a time — see Q3 in phase-7.md).
+   * starting cash float. Fails if a shift is already open — only one
+   * shift may be open at a time.
    */
   ipcMain.handle(
     'shifts:open',
@@ -1176,7 +1467,7 @@ app.whenReady().then(async () => {
   ipcMain.handle('app:get-version', () => app.getVersion())
 
   /**
-   * Auto-update wiring (Phase 8): pushes each status change to every
+   * Auto-update wiring: pushes each status change to every
    * open window as `updater:status`, driving the renderer's toast.
    */
   initAutoUpdater(autoUpdater, (status: UpdateStatus) => broadcast('updater:status', status))

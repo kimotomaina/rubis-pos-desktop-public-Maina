@@ -1,5 +1,5 @@
 /**
- * Discount math tests (Phase 10).
+ * Discount math tests.
  *
  * Pure functions in `checkoutMath.ts`, tested directly — no store or
  * IPC involved. Covers line-level discounts, cart-level discounts

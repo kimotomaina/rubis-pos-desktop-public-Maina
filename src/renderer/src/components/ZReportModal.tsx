@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import type { ZReport } from '../../../main/services/reports.js'
 import { formatCurrency } from '../lib/currency'
+import { CloseIcon } from './icons'
 
 interface ZReportModalProps {
   report: ZReport
@@ -63,18 +64,18 @@ export default function ZReportModal({ report, onClose }: ZReportModalProps) {
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex shrink-0 items-center justify-between border-b border-slate-200 p-4">
-          <h3 className="text-lg font-semibold text-slate-900">Z-Report</h3>
+          <h3 className="text-xl font-semibold text-slate-900">Z-Report</h3>
           <button
             type="button"
             onClick={onClose}
             className="rounded-full p-2 text-slate-400 hover:bg-slate-100 hover:text-slate-600"
             aria-label="Close"
           >
-            ✕
+            <CloseIcon className="h-5 w-5" />
           </button>
         </div>
 
-        <div className="flex-1 overflow-y-auto p-4 text-sm">
+        <div className="flex-1 overflow-y-auto p-4 text-base">
           <div className="mb-4 space-y-1 text-slate-600">
             <p>Shift #{report.shiftId}</p>
             <p>Opened: {new Date(report.openedAt).toLocaleString()}</p>
@@ -109,7 +110,7 @@ export default function ZReportModal({ report, onClose }: ZReportModalProps) {
           </div>
 
           <div className="mb-4 space-y-2 rounded-lg bg-slate-50 p-3">
-            <div className="flex justify-between text-base font-semibold">
+            <div className="flex justify-between text-lg font-semibold">
               <span>Total Revenue</span>
               <span>{formatCurrency(report.totalRevenue)}</span>
             </div>
@@ -130,7 +131,7 @@ export default function ZReportModal({ report, onClose }: ZReportModalProps) {
                 {report.endingCash !== null ? formatCurrency(report.endingCash) : 'Pending'}
               </span>
             </div>
-            <div className="flex justify-between border-t border-slate-200 pt-2 text-base font-semibold">
+            <div className="flex justify-between border-t border-slate-200 pt-2 text-lg font-semibold">
               <span>Discrepancy</span>
               <span className={discrepancyColor}>
                 {report.discrepancy !== null ? formatCurrency(report.discrepancy) : 'Pending'}
@@ -140,7 +141,7 @@ export default function ZReportModal({ report, onClose }: ZReportModalProps) {
 
           {printStatus && (
             <p
-              className={`mb-3 rounded-lg px-3 py-2 text-sm font-medium ${
+              className={`mb-3 rounded-lg px-3 py-2 text-base font-medium ${
                 printStatus.kind === 'success'
                   ? 'bg-emerald-50 text-emerald-700'
                   : 'bg-rose-50 text-rose-700'
@@ -154,7 +155,7 @@ export default function ZReportModal({ report, onClose }: ZReportModalProps) {
             type="button"
             disabled={printing}
             onClick={() => void handlePrint()}
-            className="w-full rounded-xl bg-rose-600 py-3 text-base font-semibold text-white transition active:scale-95 disabled:cursor-not-allowed disabled:opacity-50"
+            className="w-full rounded-xl bg-rose-600 py-3 text-lg font-semibold text-white transition active:scale-95 disabled:cursor-not-allowed disabled:opacity-50"
           >
             {printing ? 'Printing…' : 'Print Z-Report'}
           </button>

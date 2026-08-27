@@ -2,8 +2,8 @@
  * Vitest global setup file.
  *
  * Declares the jsdom environment as React-act-aware so hooks mounted
- * directly via `react-dom/client` (Phase 5's `useBarcodeScanner`
- * tests) don't log the "not configured to support act()" warning.
+ * directly via `react-dom/client` (the `useBarcodeScanner` tests)
+ * don't log the "not configured to support act()" warning.
  */
 declare global {
   // eslint-disable-next-line no-var

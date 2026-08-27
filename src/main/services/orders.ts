@@ -1,12 +1,12 @@
 /**
- * Shopify order push service (Phase 3 — Offline Mode).
+ * Shopify order push service.
  *
  * Converts a locally queued offline order into an `orderCreate`
  * GraphQL mutation so sales completed without internet reach the
  * merchant's Shopify admin once connectivity returns.
  *
- * Follows the Phase 2 pattern: the axios client is injectable and the
- * function never throws — it always resolves a {@link ServiceResult}.
+ * The axios client is injectable and the function never throws — it
+ * always resolves a {@link ServiceResult}.
  */
 
 import { AxiosError, type AxiosInstance, type AxiosResponse } from 'axios'

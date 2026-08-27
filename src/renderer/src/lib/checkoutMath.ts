@@ -1,21 +1,21 @@
 /**
- * Pure checkout math (Phase 6 — Staff Auth & Checkout Flow).
+ * Pure checkout math for staff auth and the checkout flow.
  *
  * Kept dependency-free and directly testable, independent of
- * `CheckoutModal`'s React state, mirroring how Phase 5's barcode
- * timing logic and Phase 3's `computeBackoffMs` are pure exported
- * functions elsewhere in this codebase.
+ * `CheckoutModal`'s React state, mirroring how the barcode timing
+ * logic and `computeBackoffMs` are pure exported functions elsewhere
+ * in this codebase.
  */
 
 import type { PaymentMethod } from '../../../main/services/database.js'
 import type { CartItem, Discount } from '../types/shopify.js'
 
-/** Discount percentage above which applying it requires Manager PIN authorization (Phase 10). */
+/** Discount percentage above which applying it requires Manager PIN authorization. */
 export const MANAGER_PIN_DISCOUNT_THRESHOLD_PERCENT = 10
 
 /**
  * Maximum percentage a manual price override may exceed a line's
- * original catalog price by (Phase 11, Task 2) — guards against a
+ * original catalog price by — guards against a
  * cashier typo like `10000` instead of `1000` slipping past the
  * Manager PIN gate, which only authorizes *that* an override happens,
  * not that its magnitude is sane.
@@ -159,7 +159,7 @@ export function requiresManagerPinForDiscount(discount: Discount, baseAmount: nu
 
 /**
  * Validates a manual price override against the line's original
- * catalog price (Phase 11, Task 2 — Q1 default):
+ * catalog price:
  *   - `0` or negative is rejected outright (a "free item" should go
  *     through a 100% discount instead, which is already Manager
  *     PIN-gated — see `requiresManagerPinForDiscount`).

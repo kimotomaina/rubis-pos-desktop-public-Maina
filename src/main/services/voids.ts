@@ -1,13 +1,13 @@
 /**
- * Order void service (Phase 10 — POC Critical Operational Features).
+ * Order void service.
  *
- * Restricted to locally `pending_sync` orders for this phase — voiding
- * an order already synced to Shopify would need a Shopify refund/cancel
- * mutation, which is out of scope for the 1-week PoC (see docs/phase-10.md
- * Q1). The actual reversal (inventory + order status + sync-queue
- * cleanup) lives on `RubisDatabase.voidOrder`, matching how `auth.ts`
- * wraps `db.getStaffById`/`verifyPin` with business-rule validation and
- * a {@link ServiceResult}, rather than duplicating the transaction here.
+ * Restricted to locally `pending_sync` orders — voiding an order
+ * already synced to Shopify would need a Shopify refund/cancel
+ * mutation, which is not currently supported. The actual reversal
+ * (inventory + order status + sync-queue cleanup) lives on
+ * `RubisDatabase.voidOrder`, matching how `auth.ts` wraps
+ * `db.getStaffById`/`verifyPin` with business-rule validation and a
+ * {@link ServiceResult}, rather than duplicating the transaction here.
  */
 
 import type { RubisDatabase } from './database.js'
@@ -26,7 +26,8 @@ export interface VoidResult {
  * Only `pending_sync` orders may be voided:
  *   - `synced` — already pushed to Shopify; reversing it here would
  *     silently desync the POS ledger from the merchant's actual
- *     Shopify order/inventory state. Phase 11 scope (Shopify Refund API).
+ *     Shopify order/inventory state (refunds for synced orders are
+ *     not currently supported).
  *   - `failed` / `voided` — already in a terminal state.
  *
  * @param {RubisDatabase} db
@@ -43,7 +44,7 @@ export function voidLocalOrder(db: RubisDatabase, localId: number): ServiceResul
     return {
       success: false,
       error:
-        'This order has already synced to Shopify and cannot be voided here — Shopify refund integration is Phase 11 scope'
+        'This order has already synced to Shopify and cannot be voided here — refunds for synced orders are not currently supported'
     }
   }
   if (order.status !== 'pending_sync') {

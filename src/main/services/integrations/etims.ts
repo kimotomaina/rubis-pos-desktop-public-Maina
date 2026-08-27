@@ -1,5 +1,5 @@
 /**
- * eTIMS (KRA) fiscalization integration (Phase 9 — Plug-and-Play Placeholder).
+ * eTIMS (KRA) fiscalization integration.
  *
  * KRA's eTIMS requires every invoice to be fiscalized (assigned a KRA
  * invoice number and QR code) — but a store-floor till cannot block a
@@ -9,8 +9,7 @@
  * pattern in `database.ts`) and generates a provisional local invoice
  * immediately. {@link MockFiscalizationProvider} stands in for that
  * middleware here — a real `EtimsMiddlewareProvider` implementing the
- * same {@link FiscalizationProvider} interface is Phase 10+ scope (see
- * docs/phase-9.md §2).
+ * same {@link FiscalizationProvider} interface is planned.
  */
 
 import type { ServiceResult } from '../shopify-types.js'
@@ -47,7 +46,7 @@ export interface FiscalInvoiceResult {
   /**
    * Base64-encoded placeholder for the KRA-mandated QR code. Real QR
    * generation (the `qrcode` package, encoding the KRA verification
-   * URL) is Phase 10 scope — see docs/phase-9.md Q1.
+   * URL) is planned for the production integration.
    */
   qrCode: string
   fiscalizedAt: string

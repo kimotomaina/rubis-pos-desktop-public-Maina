@@ -1,5 +1,5 @@
 /**
- * Order history + retry-sync tests (Phase 4).
+ * Order history + retry-sync tests.
  *
  * `better-sqlite3` is mocked with a recording fake so we assert the
  * exact SQL and parameter traffic produced by `RubisDatabase` without

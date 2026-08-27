@@ -1,5 +1,5 @@
 /**
- * Till/register shift tests (Phase 7).
+ * Till/register shift tests.
  *
  * `better-sqlite3` is mocked with a recording fake so we assert the
  * exact SQL and parameter traffic produced by `RubisDatabase` without

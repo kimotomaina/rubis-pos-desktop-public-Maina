@@ -1,5 +1,5 @@
 /**
- * M-Pesa payment integration (Phase 9 — Plug-and-Play Placeholder).
+ * M-Pesa payment integration.
  *
  * Scopes the hybrid flow required for a low-network Kenyan retail
  * environment: an STK Push (Daraja API) when the till is online, and a
@@ -8,7 +8,7 @@
  * Safaricom's latency and response shape so the checkout flow, IPC
  * wiring, and UI can be built against a stable contract now. A real
  * `DarajaMpesaProvider` implementing the same {@link MpesaProvider}
- * interface is Phase 10 scope (see docs/phase-9.md §2).
+ * interface is planned for the production integration.
  */
 
 import type { ServiceResult } from '../shopify-types.js'
@@ -85,8 +85,8 @@ export interface MockMpesaProviderOptions {
   /**
    * Probability (0–1) that a well-formed manual code verification
    * randomly fails, simulating a real Safaricom-side transient
-   * rejection rather than cashier error. Defaults to 0.1 (10%) — see
-   * docs/phase-10.md Q3. Set to 0 for deterministic tests.
+   * rejection rather than cashier error. Defaults to 0.1 (10%). Set
+   * to 0 for deterministic tests.
    */
   failureRate?: number
   /** Injectable random source for the failure roll — defaults to `Math.random`. */
@@ -103,7 +103,7 @@ export interface MockMpesaProviderOptions {
  * `phoneNumber` ending in `0000` fails STK Push, `transactionCode`
  * `'INVALID'` fails manual verification — plus a configurable random
  * failure rate on `verifyTransactionCode` (default 10%) standing in
- * for a real M-Pesa transient rejection, so the Phase 10 payment UI
+ * for a real M-Pesa transient rejection, so the payment UI
  * has a realistic retry path to exercise even for a well-formed code.
  */
 export class MockMpesaProvider implements MpesaProvider {

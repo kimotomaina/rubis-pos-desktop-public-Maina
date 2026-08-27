@@ -1,11 +1,12 @@
 import { useState } from 'react'
-import type { CartItem, Discount } from '../types/shopify'
-import { formatCurrency } from '../lib/currency'
+import type { CartItem, Discount } from '../types/shopify.js'
+import { formatCurrency } from '../lib/currency.js'
 import {
   calculateLineTotal,
   requiresManagerPinForDiscount,
   validatePriceOverride
-} from '../lib/checkoutMath'
+} from '../lib/checkoutMath.js'
+import { TrashIcon } from './icons.js'
 
 interface CartLineItemProps {
   item: CartItem
@@ -18,7 +19,7 @@ interface CartLineItemProps {
     title: string,
     onAuthorized: (managerId: number, managerPin: string) => void
   ) => void
-  /** Shows a transient toast (e.g. a rejected price override — Phase 11). */
+  /** Shows a transient toast (e.g. a rejected price override). */
   showToast: (toast: { kind: 'success' | 'error'; message: string }) => void
 }
 
@@ -30,10 +31,10 @@ type EditorState = 'none' | 'price' | 'discount'
  * variant label, per-unit price, a `− / +` quantity control, the
  * (possibly discounted) line subtotal, and a remove affordance.
  *
- * Phase 10 adds two manager-gated editors: "Edit Price" (a raw
- * per-unit price override, always PIN-gated) and "Discount" (a
- * percent/fixed markdown, PIN-gated only above the 10% threshold —
- * see {@link requiresManagerPinForDiscount}).
+ * Includes two manager-gated editors: "Edit Price" (a raw per-unit
+ * price override, always PIN-gated) and "Discount" (a percent/fixed
+ * markdown, PIN-gated only above the 10% threshold — see
+ * {@link requiresManagerPinForDiscount}).
  *
  * @param {CartLineItemProps} props
  * @returns {JSX.Element}
@@ -98,94 +99,93 @@ export default function CartLineItem({
   }
 
   return (
-    <div className="pb-3 last:border-0 last:pb-0">
-      <div className="flex items-center gap-3">
-        <div className="h-16 w-16 flex-shrink-0 overflow-hidden rounded-lg bg-slate-100">
+    <div className="flex flex-col border-b border-slate-100 py-3 last:border-0">
+      <div className="flex">
+        <div className="h-16 w-16 shrink-0 overflow-hidden rounded bg-slate-50">
           {item.image ? (
             <img
               src={item.image}
               alt={item.variantTitle}
-              className="h-full w-full object-cover"
+              className="h-full w-full object-contain"
               loading="lazy"
             />
           ) : (
             <div className="flex h-full w-full items-center justify-center bg-slate-200">
-              <span className="text-sm font-bold text-slate-500">
+              <span className="text-base font-bold text-slate-500">
                 {item.variantTitle.slice(0, 2).toUpperCase()}
               </span>
             </div>
           )}
         </div>
 
-        <div className="flex-1">
-          <p className="text-sm font-medium text-slate-900 line-clamp-1">
+        <div className="ml-3 flex min-w-0 flex-1 flex-col">
+          <p className="line-clamp-2 text-base font-semibold text-slate-900">
             {item.title}
           </p>
-          <p className="text-xs text-slate-500">{item.variantTitle}</p>
-          <div className="mt-1 flex gap-2">
+          <p className="mt-0.5 text-sm text-slate-600">{item.variantTitle}</p>
+          <p className="mt-0.5 text-sm text-slate-500">{formatCurrency(item.price)} each</p>
+          <div className="mt-2 flex gap-2">
             <button
               type="button"
               onClick={openPriceEditor}
-              className="text-xs font-medium text-slate-400 hover:text-rose-600"
+              className="rounded-full bg-slate-100 px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-200"
             >
               Edit Price
             </button>
             <button
               type="button"
               onClick={openDiscountEditor}
-              className="text-xs font-medium text-slate-400 hover:text-rose-600"
+              className="rounded-full bg-slate-100 px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-200"
             >
               Discount
             </button>
           </div>
         </div>
+      </div>
 
-        <div className="flex flex-col items-end gap-1">
-          <span className="text-xs text-slate-500">
-            {formatCurrency(item.price)} × {item.quantity}
-          </span>
+      <div className="mt-3 flex items-center">
+        <div className="flex flex-1 flex-col">
           <span
-            className={`text-sm font-semibold ${discounted ? 'text-emerald-600' : 'text-slate-900'}`}
+            className={`text-lg font-bold ${discounted ? 'text-emerald-600' : 'text-slate-900'}`}
           >
             {formatCurrency(lineTotal)}
           </span>
           {discounted && (
-            <span className="text-[10px] text-slate-400 line-through">
+            <span className="text-xs text-slate-400 line-through">
               {formatCurrency(lineBase)}
             </span>
           )}
         </div>
 
-        <div className="flex flex-col items-center">
+        <div className="flex items-center gap-2">
           <button
             type="button"
             onClick={() => onUpdateQuantity(item.id, item.quantity - 1)}
-            className="rounded-t-lg border border-slate-200 px-2 py-1 text-sm font-semibold text-slate-700 hover:bg-slate-100 active:scale-90"
+            className="flex h-10 w-10 items-center justify-center rounded-full bg-slate-100 text-xl font-bold text-slate-700 hover:bg-slate-200 active:scale-90"
             aria-label={`Decrease ${item.variantTitle} quantity`}
           >
             −
           </button>
-          <span className="px-2 text-sm font-medium text-slate-900">
+          <span className="w-8 text-center text-lg font-bold text-slate-900">
             {item.quantity}
           </span>
           <button
             type="button"
             onClick={() => onUpdateQuantity(item.id, item.quantity + 1)}
-            className="rounded-b-lg border border-t-0 border-slate-200 px-2 py-1 text-sm font-semibold text-slate-700 hover:bg-slate-100 active:scale-90"
+            className="flex h-10 w-10 items-center justify-center rounded-full bg-slate-100 text-xl font-bold text-slate-700 hover:bg-slate-200 active:scale-90"
             aria-label={`Increase ${item.variantTitle} quantity`}
           >
             +
           </button>
+          <button
+            type="button"
+            onClick={() => onRemove(item.id)}
+            className="ml-2 flex h-10 w-10 items-center justify-center rounded-full bg-red-100 hover:bg-red-200"
+            aria-label={`Remove ${item.variantTitle}`}
+          >
+            <TrashIcon className="h-5 w-5 text-red-600" />
+          </button>
         </div>
-
-        <button
-          type="button"
-          onClick={() => onRemove(item.id)}
-          className="text-xs text-slate-400 hover:text-rose-600"
-          aria-label={`Remove ${item.variantTitle}`}
-        >
-          ✕
-        </button>
       </div>
 
       {editor === 'price' && (
@@ -197,19 +197,19 @@ export default function CartLineItem({
             value={priceInput}
             onChange={(e) => setPriceInput(e.target.value)}
             autoFocus
-            className="w-24 rounded-md border border-slate-300 px-2 py-1 text-sm focus:border-rose-400 focus:outline-none"
+            className="h-11 w-28 rounded-md border border-slate-300 px-2 text-lg focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-100"
           />
           <button
             type="button"
             onClick={savePrice}
-            className="text-xs font-medium text-rose-600 hover:text-rose-700"
+            className="text-sm font-medium text-rose-600 hover:text-rose-700"
           >
             Save
           </button>
           <button
             type="button"
             onClick={() => setEditor('none')}
-            className="text-xs text-slate-500 hover:text-slate-700"
+            className="text-sm text-slate-500 hover:text-slate-700"
           >
             Cancel
           </button>
@@ -221,7 +221,7 @@ export default function CartLineItem({
           <select
             value={discountType}
             onChange={(e) => setDiscountType(e.target.value as Discount['type'])}
-            className="rounded-md border border-slate-300 px-2 py-1 text-sm focus:border-rose-400 focus:outline-none"
+            className="h-11 rounded-md border border-slate-300 px-2 text-lg focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-100"
           >
             <option value="percent">%</option>
             <option value="fixed">Ksh</option>
@@ -233,19 +233,19 @@ export default function CartLineItem({
             value={discountValue}
             onChange={(e) => setDiscountValue(e.target.value)}
             autoFocus
-            className="w-20 rounded-md border border-slate-300 px-2 py-1 text-sm focus:border-rose-400 focus:outline-none"
+            className="h-11 w-24 rounded-md border border-slate-300 px-2 text-lg focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-100"
           />
           <button
             type="button"
             onClick={applyDiscountEdit}
-            className="text-xs font-medium text-rose-600 hover:text-rose-700"
+            className="text-sm font-medium text-rose-600 hover:text-rose-700"
           >
             Apply
           </button>
           <button
             type="button"
             onClick={() => setEditor('none')}
-            className="text-xs text-slate-500 hover:text-slate-700"
+            className="text-sm text-slate-500 hover:text-slate-700"
           >
             Cancel
           </button>

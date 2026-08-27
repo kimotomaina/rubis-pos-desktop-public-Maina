@@ -1,5 +1,5 @@
 /**
- * Network monitor tests (Phase 3).
+ * Network monitor tests.
  *
  * The probe and emitter are injected fakes driven by fake timers.
  */

@@ -4,7 +4,10 @@ import {
   mapShopifyToSummary,
   createShopifyClient,
   fetchProductsAndInventory,
-  PRODUCT_LIST_QUERY
+  resolveShopifyStoreUrl,
+  validateAndFetchLocations,
+  PRODUCT_LIST_QUERY,
+  VALIDATE_STORE_QUERY
 } from '../src/main/services/shopify.js'
 import type { ShopifyProduct } from '../src/main/services/shopify-types.js'
 import type { AxiosInstance } from 'axios'
@@ -39,7 +42,6 @@ const shopifyProducts: ShopifyProduct[] = [
           id: 'gid://shopify/ProductVariant/39072856187534',
           title: 'Small / Red',
           availableForSale: true,
-          inventoryQuantity: 10,
           price: '29.99',
           image: {
             id: 'gid://shopify/Image/2',
@@ -52,7 +54,6 @@ const shopifyProducts: ShopifyProduct[] = [
           id: 'gid://shopify/ProductVariant/39072856187535',
           title: 'Large / Blue',
           availableForSale: true,
-          inventoryQuantity: 5,
           price: '39.99',
           image: null,
           barcode: null
@@ -72,7 +73,6 @@ const shopifyProducts: ShopifyProduct[] = [
           id: 'gid://shopify/ProductVariant/39072856187536',
           title: 'Default Title',
           availableForSale: true,
-          inventoryQuantity: 0,
           price: '19.99',
           image: null,
           barcode: null
@@ -128,6 +128,20 @@ describe('mapShopifyToSummary', () => {
 
   it('returns an empty array for empty input', () => {
     expect(mapShopifyToSummary([])).toEqual([])
+  })
+
+  it('defaults inventoryQuantity to 0 when no location-scoped map is given', () => {
+    const result = mapShopifyToSummary(shopifyProducts)
+    expect(result[0].variants[0].inventoryQuantity).toBe(0)
+    expect(result[0].variants[1].inventoryQuantity).toBe(0)
+  })
+
+  it('uses the location-scoped quantity when an inventoryMap is given', () => {
+    const inventoryMap = new Map([['gid://shopify/ProductVariant/39072856187534', 42]])
+    const result = mapShopifyToSummary(shopifyProducts, inventoryMap)
+    expect(result[0].variants[0].inventoryQuantity).toBe(42)
+    // No entry in the map for this variant — defaults to 0, never an aggregate.
+    expect(result[0].variants[1].inventoryQuantity).toBe(0)
   })
 })
 
@@ -226,7 +240,29 @@ describe('fetchProductsAndInventory', () => {
     )
 
     expect(result.success).toBe(false)
-    expect(result.error).toMatch(/Network error/i)
+    expect(result.error).toMatch(/Store unreachable/i)
+  })
+
+  it('maps a timeout to a message naming the store host that was unreachable', async () => {
+    const timeoutError = new AxiosError(
+      'timeout of 10000ms exceeded',
+      'ECONNABORTED',
+      { baseURL: 'https://wrong-store.myshopify.com/admin/api/2026-07/graphql.json' } as InternalAxiosRequestConfig,
+      undefined,
+      undefined
+    )
+
+    const client = makeMockClient(vi.fn().mockRejectedValue(timeoutError))
+
+    const result = await fetchProductsAndInventory(
+      'https://rubis-pos.myshopify.com',
+      'shpat_test',
+      { client }
+    )
+
+    expect(result.success).toBe(false)
+    expect(result.error).toMatch(/Request timed out/i)
+    expect(result.error).toContain('wrong-store.myshopify.com')
   })
 
   it('maps HTTP 429 to a rate-limit message', async () => {
@@ -272,6 +308,125 @@ describe('fetchProductsAndInventory', () => {
   })
 })
 
+/* ── validateAndFetchLocations ────────────── */
+
+describe('validateAndFetchLocations', () => {
+  it('returns the shop name and locations on success', async () => {
+    const client = makeMockClient(
+      vi.fn().mockResolvedValue({
+        data: {
+          data: {
+            shop: { name: 'RUBIS Test Store' },
+            locations: {
+              nodes: [
+                { id: 'gid://shopify/Location/1', name: 'Nairobi Main' },
+                { id: 'gid://shopify/Location/2', name: 'Mombasa Branch' }
+              ]
+            }
+          }
+        }
+      })
+    )
+
+    const result = await validateAndFetchLocations('https://rubis-pos.myshopify.com', 'shpat_test', {
+      client
+    })
+
+    expect(result.success).toBe(true)
+    expect(result.data?.shopName).toBe('RUBIS Test Store')
+    expect(result.data?.locations).toHaveLength(2)
+    expect(result.data?.locations[0]).toEqual({
+      id: 'gid://shopify/Location/1',
+      name: 'Nairobi Main'
+    })
+  })
+
+  it('sends the VALIDATE_STORE_QUERY', async () => {
+    const post = vi.fn().mockResolvedValue({
+      data: { data: { shop: { name: 'Shop' }, locations: { nodes: [] } } }
+    })
+    const client = makeMockClient(post)
+
+    await validateAndFetchLocations('https://rubis-pos.myshopify.com', 'shpat_test', { client })
+
+    const [, body] = post.mock.calls[0]
+    expect(body.query).toBe(VALIDATE_STORE_QUERY)
+  })
+
+  it('returns an empty locations array when the store has none', async () => {
+    const client = makeMockClient(
+      vi.fn().mockResolvedValue({
+        data: { data: { shop: { name: 'Shop' }, locations: { nodes: [] } } }
+      })
+    )
+
+    const result = await validateAndFetchLocations('https://rubis-pos.myshopify.com', 'shpat_test', {
+      client
+    })
+
+    expect(result.success).toBe(true)
+    expect(result.data?.locations).toEqual([])
+  })
+
+  it('fails when the response has no shop name (e.g. a bad token with no hard error)', async () => {
+    const client = makeMockClient(
+      vi.fn().mockResolvedValue({ data: { data: { locations: { nodes: [] } } } })
+    )
+
+    const result = await validateAndFetchLocations('https://rubis-pos.myshopify.com', 'shpat_test', {
+      client
+    })
+
+    expect(result.success).toBe(false)
+    expect(result.error).toMatch(/check the store URL and token/i)
+  })
+
+  it('returns error when GraphQL response contains errors', async () => {
+    const client = makeMockClient(
+      vi.fn().mockResolvedValue({ data: graphqlErrorResponse })
+    )
+
+    const result = await validateAndFetchLocations('https://rubis-pos.myshopify.com', 'shpat_test', {
+      client
+    })
+
+    expect(result.success).toBe(false)
+    expect(result.error).toContain('Invalid API key')
+  })
+
+  it('maps HTTP 401 to an authentication error message', async () => {
+    const axiosError = new AxiosError(
+      'Request failed with status code 401',
+      'ERR_BAD_REQUEST',
+      undefined,
+      undefined,
+      {
+        data: undefined,
+        status: 401,
+        statusText: 'Unauthorized',
+        headers: {},
+        config: {} as unknown as InternalAxiosRequestConfig
+      }
+    )
+
+    const client = makeMockClient(vi.fn().mockRejectedValue(axiosError))
+
+    const result = await validateAndFetchLocations('https://rubis-pos.myshopify.com', 'shpat_test', {
+      client
+    })
+
+    expect(result.success).toBe(false)
+    expect(result.error).toMatch(/Authentication failed/i)
+  })
+
+  it('rejects an invalid store URL before making a request', async () => {
+    const result = await validateAndFetchLocations('not-a-url', 'shpat_test')
+
+    expect(result.success).toBe(false)
+    expect(result.error).toMatch(/Invalid Shopify store URL/i)
+  })
+})
+
 /* ── createShopifyClient ───────────────────────────── */
 
 describe('createShopifyClient', () => {
@@ -302,6 +457,30 @@ describe('createShopifyClient', () => {
       'shpat_secret_token'
     )
     expect(client.defaults.headers['Content-Type']).toBe('application/json')
+  })
+})
+
+describe('resolveShopifyStoreUrl', () => {
+  it('prefers the env value over the stored one', () => {
+    expect(
+      resolveShopifyStoreUrl('https://env-store.myshopify.com', 'https://stored-store.myshopify.com')
+    ).toBe('https://env-store.myshopify.com')
+  })
+
+  it('falls back to the stored value when the env value is unset', () => {
+    expect(resolveShopifyStoreUrl(undefined, 'https://stored-store.myshopify.com')).toBe(
+      'https://stored-store.myshopify.com'
+    )
+  })
+
+  it('falls back to the stored value when the env value is an empty string', () => {
+    expect(resolveShopifyStoreUrl('', 'https://stored-store.myshopify.com')).toBe(
+      'https://stored-store.myshopify.com'
+    )
+  })
+
+  it('resolves to null when neither is set — a genuinely unconfigured install', () => {
+    expect(resolveShopifyStoreUrl(undefined, undefined)).toBeNull()
   })
 })
 

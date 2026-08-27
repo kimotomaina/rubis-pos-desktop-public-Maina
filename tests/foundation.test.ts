@@ -1,5 +1,5 @@
 /**
- * Foundation tests for Phase 1.
+ * Foundation tests for the app shell.
  *
  * These tests validate two concerns:
  *  1. Environment-variable structure — the .env example contract.

@@ -13,7 +13,7 @@ function makeMockClient(postImpl: ReturnType<typeof vi.fn>): AxiosInstance {
   return { post: postImpl } as unknown as AxiosInstance
 }
 
-function makeProduct(id: string, variantId: string, quantity = 10): ShopifyProduct {
+function makeProduct(id: string, variantId: string): ShopifyProduct {
   return {
     id: `gid://shopify/Product/${id}`,
     title: `Product ${id}`,
@@ -26,12 +26,34 @@ function makeProduct(id: string, variantId: string, quantity = 10): ShopifyProdu
           id: `gid://shopify/ProductVariant/${variantId}`,
           title: 'Default Title',
           availableForSale: true,
-          inventoryQuantity: quantity,
           price: '10.00',
           image: null,
           barcode: null
         }
       ]
+    }
+  }
+}
+
+/** Builds a mock `location.inventoryLevels` GraphQL response. */
+function inventoryLevelsResponse(
+  levels: Array<{ variantId: string; available: number }>,
+  hasNextPage = false,
+  endCursor: string | null = null
+) {
+  return {
+    data: {
+      data: {
+        location: {
+          inventoryLevels: {
+            pageInfo: { hasNextPage, endCursor },
+            nodes: levels.map((level) => ({
+              quantities: [{ name: 'available', quantity: level.available }],
+              item: { variant: { id: level.variantId } }
+            }))
+          }
+        }
+      }
     }
   }
 }
@@ -158,28 +180,16 @@ describe('fetchAllProducts', () => {
     })
 
     expect(result.success).toBe(false)
-    expect(result.error).toMatch(/Network error/i)
+    expect(result.error).toMatch(/Store unreachable/i)
   })
 
   it('merges location-scoped inventory quantities when locationId is provided', async () => {
     const post = vi
       .fn()
-      .mockResolvedValueOnce(pageResponse([makeProduct('1', '101', 10)], false, null))
-      .mockResolvedValueOnce({
-        data: {
-          data: {
-            inventoryLevels: {
-              pageInfo: { hasNextPage: false, endCursor: null },
-              nodes: [
-                {
-                  quantity: 42,
-                  item: { variant: { id: 'gid://shopify/ProductVariant/101' } }
-                }
-              ]
-            }
-          }
-        }
-      })
+      .mockResolvedValueOnce(pageResponse([makeProduct('1', '101')], false, null))
+      .mockResolvedValueOnce(
+        inventoryLevelsResponse([{ variantId: 'gid://shopify/ProductVariant/101', available: 42 }])
+      )
     const client = makeMockClient(post)
 
     const result = await fetchAllProducts('https://rubis-pos.myshopify.com', 'shpat_test', {
@@ -191,10 +201,10 @@ describe('fetchAllProducts', () => {
     expect(result.data?.[0].variants[0].inventoryQuantity).toBe(42)
   })
 
-  it('falls back to aggregate inventoryQuantity when no locationId is given', async () => {
+  it('defaults inventoryQuantity to 0 when no locationId is given — never a cross-location aggregate', async () => {
     const post = vi
       .fn()
-      .mockResolvedValueOnce(pageResponse([makeProduct('1', '101', 7)], false, null))
+      .mockResolvedValueOnce(pageResponse([makeProduct('1', '101')], false, null))
     const client = makeMockClient(post)
 
     const result = await fetchAllProducts('https://rubis-pos.myshopify.com', 'shpat_test', {
@@ -202,7 +212,46 @@ describe('fetchAllProducts', () => {
     })
 
     expect(result.success).toBe(true)
-    expect(result.data?.[0].variants[0].inventoryQuantity).toBe(7)
+    expect(result.data?.[0].variants[0].inventoryQuantity).toBe(0)
     expect(post).toHaveBeenCalledTimes(1)
+  })
+
+  it('drops a product entirely when none of its variants are stocked at the location', async () => {
+    const post = vi
+      .fn()
+      .mockResolvedValueOnce(
+        pageResponse([makeProduct('1', '101'), makeProduct('2', '102')], false, null)
+      )
+      .mockResolvedValueOnce(
+        inventoryLevelsResponse([{ variantId: 'gid://shopify/ProductVariant/101', available: 5 }])
+      )
+    const client = makeMockClient(post)
+
+    const result = await fetchAllProducts('https://rubis-pos.myshopify.com', 'shpat_test', {
+      client,
+      locationId: 'gid://shopify/Location/1'
+    })
+
+    expect(result.success).toBe(true)
+    // Product 2's only variant (102) has no inventory level at this
+    // location — the whole product is dropped, not shown at 0 stock.
+    expect(result.data).toHaveLength(1)
+    expect(result.data?.[0].id).toBe('gid://shopify/Product/1')
+  })
+
+  it('defaults a variant with no matching inventory level to 0, not an aggregate', async () => {
+    const post = vi
+      .fn()
+      .mockResolvedValueOnce(pageResponse([makeProduct('1', '101')], false, null))
+      .mockResolvedValueOnce(inventoryLevelsResponse([]))
+    const client = makeMockClient(post)
+
+    const result = await fetchAllProducts('https://rubis-pos.myshopify.com', 'shpat_test', {
+      client,
+      locationId: 'gid://shopify/Location/1'
+    })
+
+    expect(result.success).toBe(true)
+    expect(result.data?.[0].variants[0].inventoryQuantity).toBe(0)
   })
 })

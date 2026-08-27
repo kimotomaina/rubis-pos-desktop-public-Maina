@@ -1,5 +1,5 @@
 /**
- * Staff authentication tests (Phase 6).
+ * Staff authentication tests.
  *
  * `hashPin`/`verifyPin` are pure crypto functions tested directly.
  * `authenticateStaff` is tested against a lightweight fake

@@ -1,12 +1,13 @@
 import { useEffect, useState } from 'react'
 import { useAuthStore } from '../stores/authStore'
+import VirtualNumpad from './VirtualNumpad'
 
 interface ManagerPinModalProps {
   /** Shown as the modal's heading — describes what's being authorized. */
   title: string
   /**
    * Called once a valid admin PIN has been entered, with the
-   * authorizing admin's id and PIN (Phase 14) — forwarded on to any
+   * authorizing admin's id and PIN — forwarded on to any
    * privileged IPC call the caller makes next, so the main process can
    * independently re-verify it via `requireAdminPin` rather than
    * trusting this modal alone.
@@ -19,7 +20,7 @@ interface ManagerPinModalProps {
 /**
  * PIN-entry gate for manager-only actions (manual price overrides,
  * discounts over the 10% threshold in `checkoutMath.ts`, and order
- * voids — Phase 10).
+ * voids).
  *
  * Verifies the PIN via `window.api.login` directly rather than
  * `useAuthStore`'s `login` action, so authorizing a manager override
@@ -80,20 +81,20 @@ export default function ManagerPinModal({ title, onAuthorized, onCancel }: Manag
         className="w-full max-w-sm rounded-2xl bg-white p-5 shadow-xl"
         onClick={(e) => e.stopPropagation()}
       >
-        <h3 className="mb-1 text-lg font-semibold text-slate-900">Manager PIN Required</h3>
-        <p className="mb-4 text-sm text-slate-500">{title}</p>
+        <h3 className="mb-1 text-2xl font-semibold text-slate-900">Manager PIN Required</h3>
+        <p className="mb-4 text-lg text-slate-500">{title}</p>
 
         {admins.length === 0 ? (
-          <p className="rounded-lg bg-rose-50 px-3 py-2 text-sm font-medium text-rose-700">
+          <p className="rounded-lg bg-rose-50 px-3 py-2 text-lg font-medium text-rose-700">
             No admin accounts available to authorize this action.
           </p>
         ) : (
           <>
-            <label className="mb-1 block text-xs font-medium text-slate-600">Manager</label>
+            <label className="mb-1 block text-base font-medium text-slate-600">Manager</label>
             <select
               value={selectedAdminId}
               onChange={(e) => setSelectedAdminId(Number(e.target.value))}
-              className="mb-3 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-rose-400 focus:outline-none"
+              className="mb-3 h-12 w-full rounded-lg border border-slate-300 px-3 text-lg focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-100"
             >
               {admins.map((admin) => (
                 <option key={admin.id} value={admin.id}>
@@ -102,7 +103,7 @@ export default function ManagerPinModal({ title, onAuthorized, onCancel }: Manag
               ))}
             </select>
 
-            <label className="mb-1 block text-xs font-medium text-slate-600">PIN</label>
+            <label className="mb-1 block text-base font-medium text-slate-600">PIN</label>
             <input
               type="password"
               value={pin}
@@ -110,12 +111,16 @@ export default function ManagerPinModal({ title, onAuthorized, onCancel }: Manag
               onKeyDown={(e) => {
                 if (e.key === 'Enter') void handleSubmit()
               }}
-              className="mb-3 w-full rounded-lg border border-slate-300 px-3 py-3 text-lg focus:border-rose-400 focus:outline-none"
+              className="mb-3 h-14 w-full rounded-lg border border-slate-300 px-3 text-2xl tracking-widest focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-100"
               autoFocus
             />
 
+            <div className="mb-3">
+              <VirtualNumpad value={pin} onChange={setPin} allowDecimal={false} />
+            </div>
+
             {error && (
-              <p className="mb-3 rounded-lg bg-rose-50 px-3 py-2 text-sm font-medium text-rose-700">
+              <p className="mb-3 rounded-lg bg-rose-50 px-3 py-2 text-lg font-medium text-rose-700">
                 {error}
               </p>
             )}
@@ -124,7 +129,7 @@ export default function ManagerPinModal({ title, onAuthorized, onCancel }: Manag
               <button
                 type="button"
                 onClick={onCancel}
-                className="flex-1 rounded-lg border border-slate-300 py-2.5 text-sm font-medium text-slate-600 hover:bg-slate-50"
+                className="h-14 flex-1 rounded-lg border border-slate-300 text-lg font-medium text-slate-600 hover:bg-slate-50"
               >
                 Cancel
               </button>
@@ -132,7 +137,7 @@ export default function ManagerPinModal({ title, onAuthorized, onCancel }: Manag
                 type="button"
                 disabled={verifying}
                 onClick={() => void handleSubmit()}
-                className="flex-1 rounded-lg bg-rose-600 py-2.5 text-sm font-semibold text-white hover:bg-rose-700 disabled:cursor-not-allowed disabled:opacity-50"
+                className="h-14 flex-1 rounded-lg bg-rose-600 text-lg font-semibold text-white hover:bg-rose-700 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 {verifying ? 'Verifying…' : 'Authorize'}
               </button>

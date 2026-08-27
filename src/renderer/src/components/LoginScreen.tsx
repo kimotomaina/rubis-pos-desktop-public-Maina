@@ -87,7 +87,7 @@ export default function LoginScreen() {
 
       {!selectedStaff ? (
         <div className="w-full max-w-md">
-          <h2 className="mb-4 text-center text-lg font-medium text-slate-300">
+          <h2 className="mb-4 text-center text-xl font-medium text-slate-300">
             Who&apos;s working?
           </h2>
           <div className="grid grid-cols-2 gap-3">
@@ -96,14 +96,14 @@ export default function LoginScreen() {
                 key={staff.id}
                 type="button"
                 onClick={() => setSelectedStaffId(staff.id)}
-                className="rounded-xl bg-slate-800 px-4 py-6 text-center text-lg font-semibold text-white transition active:scale-95 hover:bg-slate-700"
+                className="rounded-xl bg-slate-800 px-4 py-6 text-center text-xl font-semibold text-white transition active:scale-95 hover:bg-slate-700"
               >
                 {staff.name}
               </button>
             ))}
           </div>
           {staffList.length === 0 && (
-            <p className="text-center text-sm text-slate-500">
+            <p className="text-center text-base text-slate-500">
               Loading staff…
             </p>
           )}
@@ -113,11 +113,11 @@ export default function LoginScreen() {
           <button
             type="button"
             onClick={handleBack}
-            className="mb-4 text-sm text-slate-400 hover:text-slate-200"
+            className="mb-4 text-base text-slate-400 hover:text-slate-200"
           >
             ← Back
           </button>
-          <h2 className="mb-4 text-center text-lg font-medium text-slate-300">
+          <h2 className="mb-4 text-center text-xl font-medium text-slate-300">
             {selectedStaff.name}
           </h2>
 
@@ -133,19 +133,19 @@ export default function LoginScreen() {
           </div>
 
           {loginError && (
-            <p className="mb-4 text-center text-sm font-medium text-rose-400">
+            <p className="mb-4 text-center text-lg font-medium text-rose-400">
               {loginError}
             </p>
           )}
 
-          <div className="grid grid-cols-3 gap-2">
+          <div className="grid grid-cols-3 justify-items-center gap-3">
             {PIN_KEYS.map((key, i) => (
               <button
                 key={`${key}-${i}`}
                 type="button"
                 disabled={key === ''}
                 onClick={() => handleKeyPress(key)}
-                className={`rounded-xl py-4 text-xl font-semibold transition active:scale-95 ${
+                className={`flex h-16 w-16 items-center justify-center rounded-full text-2xl font-semibold transition active:scale-95 ${
                   key === ''
                     ? 'invisible'
                     : 'bg-slate-800 text-white hover:bg-slate-700'
@@ -160,7 +160,7 @@ export default function LoginScreen() {
             type="button"
             disabled={pin.length === 0 || loggingIn}
             onClick={() => void handleSubmit()}
-            className="mt-4 w-full rounded-xl bg-rose-600 py-4 text-lg font-semibold text-white transition active:scale-95 disabled:cursor-not-allowed disabled:opacity-50"
+            className="mt-4 w-full rounded-xl bg-rose-600 py-4 text-xl font-semibold text-white transition active:scale-95 disabled:cursor-not-allowed disabled:opacity-50"
           >
             {loggingIn ? 'Verifying…' : 'Enter'}
           </button>

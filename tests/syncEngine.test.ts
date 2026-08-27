@@ -1,5 +1,5 @@
 /**
- * Sync engine tests (Phase 3).
+ * Sync engine tests.
  *
  * The engine's collaborators (database slice, connectivity probe, push
  * function) are all injected fakes; fake timers drive the interval.

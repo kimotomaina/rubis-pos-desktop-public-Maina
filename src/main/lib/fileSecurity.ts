@@ -1,5 +1,5 @@
 /**
- * Local file permission hardening (Phase 12, Task 4).
+ * Local file permission hardening.
  *
  * `rubis-pos.db` holds every local sale, staff PIN hash, and shift
  * record — it already lives in `app.getPath('userData')`, which

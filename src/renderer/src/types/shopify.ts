@@ -48,13 +48,12 @@ export interface CartItem {
   price: number
   quantity: number
   image: string | null
-  /** Line-item discount, PIN-gated above 10% (Phase 10). */
+  /** Line-item discount, PIN-gated above 10%. */
   discount?: Discount
   /**
    * Original catalog price, captured once when the item is first added
    * to the cart — the ceiling for manual price overrides is checked
-   * against this, not the (possibly already-overridden) `price`
-   * (Phase 11, Task 2).
+   * against this, not the (possibly already-overridden) `price`.
    */
   basePrice?: number
 }

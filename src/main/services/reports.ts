@@ -1,6 +1,5 @@
 /**
- * Shift Z-reports and daily sales summaries (Phase 7 — Shift
- * Management, Z-Reports & Admin Polish).
+ * Shift Z-reports and daily sales summaries.
  *
  * Both aggregations read directly from the local `orders` ledger — no
  * network access — so they work identically online or offline, and
@@ -47,8 +46,7 @@ export interface DailySummary {
 /**
  * Excludes voided orders from a revenue aggregation — a void reverses
  * the sale, so it must never count toward cash reconciliation, Z-report
- * revenue, or the daily summary (Phase 11 fix; see `database.ts`'s
- * `closeShift` for the matching cash-reconciliation fix).
+ * revenue, or the daily summary.
  *
  * @param {Array<{ status: string }>} orders
  * @returns filtered orders

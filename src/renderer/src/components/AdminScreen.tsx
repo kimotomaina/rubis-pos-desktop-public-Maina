@@ -3,6 +3,9 @@ import { useAuthStore } from '../stores/authStore'
 import { formatCurrency } from '../lib/currency'
 import EmptyState from './EmptyState'
 import ZReportModal from './ZReportModal'
+import LocationPicker, { type ShopifyLocationOption } from './LocationPicker'
+import { useProductStore } from '../stores/productStore'
+import { LockIcon } from './icons'
 import type { DailySummary, ZReport } from '../../../main/services/reports.js'
 import type {
   ShiftRow,
@@ -15,7 +18,7 @@ import type {
 interface AdminScreenProps {
   /**
    * Opens the Manager PIN gate; calls `onAuthorized` with the
-   * authorizing admin's id and PIN once verified (Phase 14). Staff
+   * authorizing admin's id and PIN once verified. Staff
    * creation, PIN resets, and integration config changes all route
    * through this so the credentials can be forwarded to the main
    * process's `requireAdminPin` re-check — the renderer's own
@@ -37,8 +40,8 @@ interface AdminScreenProps {
  * by `App.tsx` (no nav entry for non-admins) and here (defense in
  * depth, in case navigation state outlives a role switch). Privileged
  * writes (staff create/PIN reset, integration config) additionally
- * re-verify a Manager PIN server-side via `requireAdminPin` (Phase
- * 14) rather than trusting this screen-level gate alone.
+ * re-verify a Manager PIN server-side via `requireAdminPin` rather
+ * than trusting this screen-level gate alone.
  *
  * @param {AdminScreenProps} props
  * @returns {JSX.Element}
@@ -69,7 +72,10 @@ export default function AdminScreen({ requestManagerPin }: AdminScreenProps) {
   const [checkingForUpdates, setCheckingForUpdates] = useState(false)
   const [updateCheckMessage, setUpdateCheckMessage] = useState<string | null>(null)
 
-  const [activeTab, setActiveTab] = useState<'overview' | 'integrations' | 'peripherals'>(
+  const [resettingConfig, setResettingConfig] = useState(false)
+  const [resetConfigError, setResetConfigError] = useState<string | null>(null)
+
+  const [activeTab, setActiveTab] = useState<'overview' | 'integrations' | 'peripherals' | 'system'>(
     'overview'
   )
   const [mpesaPaybill, setMpesaPaybill] = useState('')
@@ -91,13 +97,29 @@ export default function AdminScreen({ requestManagerPin }: AdminScreenProps) {
   const [shopifyTokenInput, setShopifyTokenInput] = useState('')
   const [shopifyTokenMessage, setShopifyTokenMessage] = useState<string | null>(null)
 
+  const [shopifyStoreUrl, setShopifyStoreUrlInput] = useState('')
+  const [shopifyStoreUrlMessage, setShopifyStoreUrlMessage] = useState<string | null>(null)
+
+  const [currentLocationName, setCurrentLocationName] = useState<string | null>(null)
+  const [currentLocationId, setCurrentLocationId] = useState<string | null>(null)
+  const [changingLocation, setChangingLocation] = useState(false)
+  const [locationOptions, setLocationOptions] = useState<ShopifyLocationOption[]>([])
+  const [locationShopName, setLocationShopName] = useState('')
+  const [locationOptionsLoading, setLocationOptionsLoading] = useState(false)
+  const [selectedLocationId, setSelectedLocationId] = useState('')
+  const [locationSaving, setLocationSaving] = useState(false)
+  const [locationError, setLocationError] = useState<string | null>(null)
+
   const loadIntegrationsConfig = async () => {
     setIntegrationsLoading(true)
-    const [mpesaResult, etimsResult, tokenStatusResult] = await Promise.all([
-      window.api.getIntegrationConfig('mpesa'),
-      window.api.getIntegrationConfig('etims'),
-      window.api.getShopifyTokenStatus()
-    ])
+    const [mpesaResult, etimsResult, tokenStatusResult, storeUrlResult, configStatusResult] =
+      await Promise.all([
+        window.api.getIntegrationConfig('mpesa'),
+        window.api.getIntegrationConfig('etims'),
+        window.api.getShopifyTokenStatus(),
+        window.api.getShopifyStoreUrl(),
+        window.api.getConfigStatus()
+      ])
     if (mpesaResult.success && mpesaResult.data) {
       setMpesaPaybill(String(mpesaResult.data.paybill ?? ''))
       setMpesaTill(String(mpesaResult.data.till ?? ''))
@@ -108,12 +130,95 @@ export default function AdminScreen({ requestManagerPin }: AdminScreenProps) {
     if (tokenStatusResult.success && tokenStatusResult.data) {
       setShopifyTokenConfigured(tokenStatusResult.data.configured)
     }
+    if (storeUrlResult.success && storeUrlResult.data) {
+      setShopifyStoreUrlInput(storeUrlResult.data.storeUrl ?? '')
+    }
+    if (configStatusResult.success && configStatusResult.data?.config) {
+      setCurrentLocationId(configStatusResult.data.config.locationId)
+      setCurrentLocationName(configStatusResult.data.config.locationName)
+    }
     setIntegrationsLoading(false)
   }
 
+  /** Opens the inline "Change Location" picker, fetching this till's current Shopify locations. */
+  const handleOpenChangeLocation = () => {
+    setChangingLocation(true)
+    setLocationError(null)
+    setLocationOptionsLoading(true)
+    void window.api.listLocations().then((result) => {
+      setLocationOptionsLoading(false)
+      if (!result.success || !result.data) {
+        setLocationError(result.error ?? 'Could not fetch locations from Shopify')
+        return
+      }
+      setLocationShopName(result.data.shopName)
+      setLocationOptions(result.data.locations)
+      const preselect = result.data.locations.find((l) => l.id === currentLocationId)
+      setSelectedLocationId(
+        preselect?.id ?? (result.data.locations.length === 1 ? result.data.locations[0].id : '')
+      )
+    })
+  }
+
   /**
-   * Saves a new Shopify Admin API token to the OS credential vault
-   * (Phase 12, Task 1). The input is intentionally write-only — the
+   * Saves the newly picked location — routes through `ManagerPinModal`,
+   * the same pattern as every other privileged Admin-screen write.
+   */
+  const handleConfirmChangeLocation = () => {
+    const location = locationOptions.find((l) => l.id === selectedLocationId)
+    if (!location) {
+      setLocationError('Select a location')
+      return
+    }
+    requestManagerPin('Change till location', (managerId, managerPin) => {
+      setLocationSaving(true)
+      setLocationError(null)
+      void window.api
+        .setLocation(location.id, location.name, managerId, managerPin)
+        .then((result) => {
+          if (!result.success) {
+            setLocationError(result.error ?? 'Failed to save location')
+            return
+          }
+          setCurrentLocationId(location.id)
+          setCurrentLocationName(location.name)
+          setChangingLocation(false)
+          // The catalog cache was cleared server-side for the old
+          // location — re-fetch now so the Catalog tab shows the new
+          // location's live assortment/stock immediately.
+          void useProductStore.getState().fetchProducts()
+        })
+        .finally(() => setLocationSaving(false))
+    })
+  }
+
+  /**
+   * Saves the Shopify store URL to the local settings table — routes
+   * through `ManagerPinModal`, matching every other privileged
+   * Admin-screen write. Unlike the API token, the field is pre-filled
+   * with the current value on load,
+   * since the store URL isn't a secret.
+   */
+  const handleSaveShopifyStoreUrl = () => {
+    setShopifyStoreUrlMessage(null)
+    const trimmed = shopifyStoreUrl.trim()
+    if (!trimmed) {
+      setShopifyStoreUrlMessage('Enter a store URL')
+      return
+    }
+    requestManagerPin('Save Shopify store URL', (managerId, managerPin) => {
+      void (async () => {
+        const result = await window.api.setShopifyStoreUrl(trimmed, managerId, managerPin)
+        setShopifyStoreUrlMessage(
+          result.success ? 'Store URL saved.' : (result.error ?? 'Failed to save store URL')
+        )
+      })()
+    })
+  }
+
+  /**
+   * Saves a new Shopify Admin API token to the OS credential vault.
+   * The input is intentionally write-only — the
    * field is never pre-filled with the stored value, since the main
    * process never sends the secret itself back to the renderer.
    */
@@ -133,7 +238,7 @@ export default function AdminScreen({ requestManagerPin }: AdminScreenProps) {
     }
   }
 
-  /** Loads every configured printer (Phase 15) for the Peripherals tab. */
+  /** Loads every configured printer for the Peripherals tab. */
   const loadPrinters = async () => {
     setPrintersLoading(true)
     const result = await window.api.getPrinters()
@@ -148,7 +253,7 @@ export default function AdminScreen({ requestManagerPin }: AdminScreenProps) {
   }, [activeTab])
 
   /**
-   * Routes through `ManagerPinModal` (Phase 14) so both provider
+   * Routes through `ManagerPinModal` so both provider
    * `setIntegrationConfig` calls can forward a re-verifiable
    * `managerId`/`managerPin` to the main process.
    */
@@ -174,7 +279,7 @@ export default function AdminScreen({ requestManagerPin }: AdminScreenProps) {
 
   /**
    * Validates the new-printer form, then routes through
-   * `ManagerPinModal` (Phase 15, following the Phase 14 pattern) so
+   * `ManagerPinModal` (the same pattern as other privileged writes) so
    * `savePrinter` can forward a re-verifiable `managerId`/`managerPin`
    * to the main process.
    */
@@ -267,7 +372,7 @@ export default function AdminScreen({ requestManagerPin }: AdminScreenProps) {
   if (!currentStaff || currentStaff.role !== 'admin') {
     return (
       <EmptyState
-        icon="🔒"
+        icon={<LockIcon className="h-10 w-10" />}
         title="Access restricted"
         subtitle="This screen is only available to admin accounts."
       />
@@ -316,7 +421,7 @@ export default function AdminScreen({ requestManagerPin }: AdminScreenProps) {
 
   /**
    * Validates the new-staff form, then routes through `ManagerPinModal`
-   * (Phase 14) so `createStaff` can forward a re-verifiable
+   * so `createStaff` can forward a re-verifiable
    * `managerId`/`managerPin` to the main process.
    */
   const handleAddStaff = () => {
@@ -345,7 +450,7 @@ export default function AdminScreen({ requestManagerPin }: AdminScreenProps) {
 
   /**
    * Validates the reset-PIN form, then routes through `ManagerPinModal`
-   * (Phase 14) so `resetStaffPin` can forward a re-verifiable
+   * so `resetStaffPin` can forward a re-verifiable
    * `managerId`/`managerPin` to the main process.
    *
    * @param {number} staffId
@@ -382,13 +487,40 @@ export default function AdminScreen({ requestManagerPin }: AdminScreenProps) {
     setCheckingForUpdates(false)
   }
 
+  /**
+   * Clears this till's Shopify connection — the
+   * counterpart to the first-run `OnboardingScreen`. Requires a
+   * re-verified admin Manager PIN since there is no undo: reloading
+   * the window afterward brings the onboarding wizard back.
+   */
+  const handleResetConfig = () => {
+    requestManagerPin('Reset Shopify configuration', (managerId, managerPin) => {
+      void (async () => {
+        setResetConfigError(null)
+        setResettingConfig(true)
+        try {
+          const result = await window.api.clearConfig(managerId, managerPin)
+          if (!result.success) {
+            setResetConfigError(result.error ?? 'Failed to reset configuration')
+            return
+          }
+          window.location.reload()
+        } catch (err) {
+          setResetConfigError(err instanceof Error ? err.message : 'Failed to reset configuration')
+        } finally {
+          setResettingConfig(false)
+        }
+      })()
+    })
+  }
+
   return (
     <div className="mx-auto max-w-3xl space-y-6">
       <div className="flex gap-1 rounded-lg bg-slate-100 p-1">
         <button
           type="button"
           onClick={() => setActiveTab('overview')}
-          className={`flex-1 rounded-md py-2 text-sm font-semibold transition ${
+          className={`flex h-14 flex-1 items-center justify-center rounded-md px-6 text-lg font-semibold transition ${
             activeTab === 'overview' ? 'bg-white text-rose-700 shadow-sm' : 'text-slate-500'
           }`}
         >
@@ -397,7 +529,7 @@ export default function AdminScreen({ requestManagerPin }: AdminScreenProps) {
         <button
           type="button"
           onClick={() => setActiveTab('integrations')}
-          className={`flex-1 rounded-md py-2 text-sm font-semibold transition ${
+          className={`flex h-14 flex-1 items-center justify-center rounded-md px-6 text-lg font-semibold transition ${
             activeTab === 'integrations' ? 'bg-white text-rose-700 shadow-sm' : 'text-slate-500'
           }`}
         >
@@ -406,35 +538,71 @@ export default function AdminScreen({ requestManagerPin }: AdminScreenProps) {
         <button
           type="button"
           onClick={() => setActiveTab('peripherals')}
-          className={`flex-1 rounded-md py-2 text-sm font-semibold transition ${
+          className={`flex h-14 flex-1 items-center justify-center rounded-md px-6 text-lg font-semibold transition ${
             activeTab === 'peripherals' ? 'bg-white text-rose-700 shadow-sm' : 'text-slate-500'
           }`}
         >
           Peripherals
         </button>
+        <button
+          type="button"
+          onClick={() => setActiveTab('system')}
+          className={`flex h-14 flex-1 items-center justify-center rounded-md px-6 text-lg font-semibold transition ${
+            activeTab === 'system' ? 'bg-white text-rose-700 shadow-sm' : 'text-slate-500'
+          }`}
+        >
+          System
+        </button>
       </div>
+
+      {activeTab === 'system' && (
+        <section className="rounded-xl border border-slate-200 bg-white p-4">
+          <h3 className="mb-1 text-2xl font-bold text-slate-800">Reset Configuration</h3>
+          <p className="mb-4 text-base text-slate-500">
+            Clears this till's saved Shopify store URL, Admin API token, and confirmed
+            location, then returns it to first-run setup. Use this to point the till at a
+            different store — there is no undo. To just switch locations on the same store,
+            use "Change Location" above instead.
+          </p>
+
+          {resetConfigError && (
+            <p className="mb-3 rounded-lg bg-rose-50 px-3 py-2 text-base font-medium text-rose-700">
+              {resetConfigError}
+            </p>
+          )}
+
+          <button
+            type="button"
+            disabled={resettingConfig}
+            onClick={handleResetConfig}
+            className="h-12 rounded-lg border border-rose-300 px-4 text-lg font-semibold text-rose-700 hover:bg-rose-50 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {resettingConfig ? 'Resetting…' : 'Reset Configuration'}
+          </button>
+        </section>
+      )}
 
       {activeTab === 'peripherals' && (
         <section className="rounded-xl border border-slate-200 bg-white p-4">
-          <h3 className="mb-1 text-base font-semibold text-slate-800">Printers</h3>
-          <p className="mb-4 text-sm text-slate-500">
-            Register additional printers (Phase 15) — a secondary kitchen or label printer
+          <h3 className="mb-1 text-2xl font-bold text-slate-800">Printers</h3>
+          <p className="mb-4 text-base text-slate-500">
+            Register additional printers — a secondary kitchen or label printer
             alongside the main receipt printer. A store with no printers registered here keeps
             using the single receipt printer configured via environment variables, unchanged.
           </p>
 
           {printerActionError && (
-            <p className="mb-3 rounded-lg bg-rose-50 px-3 py-2 text-sm font-medium text-rose-700">
+            <p className="mb-3 rounded-lg bg-rose-50 px-3 py-2 text-base font-medium text-rose-700">
               {printerActionError}
             </p>
           )}
 
           {printersLoading ? (
-            <p className="text-sm text-slate-400">Loading…</p>
+            <p className="text-base text-slate-400">Loading…</p>
           ) : (
             <div className="space-y-2">
               {printers.length === 0 && (
-                <p className="text-sm text-slate-400">No printers registered yet.</p>
+                <p className="text-base text-slate-400">No printers registered yet.</p>
               )}
               {printers.map((printer) => (
                 <div
@@ -444,11 +612,11 @@ export default function AdminScreen({ requestManagerPin }: AdminScreenProps) {
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-2">
                       <span className="font-medium text-slate-800">{printer.id}</span>
-                      <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium capitalize text-slate-500">
+                      <span className="rounded-full bg-slate-100 px-2 py-0.5 text-sm font-medium capitalize text-slate-500">
                         {printer.type}
                       </span>
                       {!printer.enabled && (
-                        <span className="rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-700">
+                        <span className="rounded-full bg-amber-100 px-2 py-0.5 text-sm font-medium text-amber-700">
                           Disabled
                         </span>
                       )}
@@ -458,22 +626,22 @@ export default function AdminScreen({ requestManagerPin }: AdminScreenProps) {
                         type="button"
                         disabled={testingPrinterId === printer.id}
                         onClick={() => handleTestPrinter(printer.id, printer.interfaceName)}
-                        className="rounded-md border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                        className="rounded-md border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
                       >
                         {testingPrinterId === printer.id ? 'Testing…' : 'Test'}
                       </button>
                       <button
                         type="button"
                         onClick={() => handleDeletePrinter(printer.id)}
-                        className="rounded-md border border-rose-300 px-3 py-1.5 text-xs font-medium text-rose-700 hover:bg-rose-50"
+                        className="rounded-md border border-rose-300 px-3 py-1.5 text-sm font-medium text-rose-700 hover:bg-rose-50"
                       >
                         Remove
                       </button>
                     </div>
                   </div>
-                  <p className="mt-1 text-xs text-slate-500">{printer.interfaceName}</p>
+                  <p className="mt-1 text-sm text-slate-500">{printer.interfaceName}</p>
                   {printerTestMessages[printer.id] && (
-                    <p className="mt-1 text-xs text-slate-600">{printerTestMessages[printer.id]}</p>
+                    <p className="mt-1 text-sm text-slate-600">{printerTestMessages[printer.id]}</p>
                   )}
                 </div>
               ))}
@@ -484,12 +652,12 @@ export default function AdminScreen({ requestManagerPin }: AdminScreenProps) {
                   placeholder="Printer id (e.g. kitchen-1)"
                   value={newPrinterId}
                   onChange={(e) => setNewPrinterId(e.target.value)}
-                  className="rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-rose-400 focus:outline-none"
+                  className="h-12 rounded-lg border border-slate-300 px-3 text-lg focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-100"
                 />
                 <select
                   value={newPrinterType}
                   onChange={(e) => setNewPrinterType(e.target.value as PrinterType)}
-                  className="rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-rose-400 focus:outline-none"
+                  className="h-12 rounded-lg border border-slate-300 px-3 text-lg focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-100"
                 >
                   <option value="receipt">Receipt</option>
                   <option value="kitchen">Kitchen</option>
@@ -500,12 +668,12 @@ export default function AdminScreen({ requestManagerPin }: AdminScreenProps) {
                   placeholder="tcp://192.168.0.101:9100"
                   value={newPrinterInterface}
                   onChange={(e) => setNewPrinterInterface(e.target.value)}
-                  className="rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-rose-400 focus:outline-none"
+                  className="h-12 rounded-lg border border-slate-300 px-3 text-lg focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-100"
                 />
                 <button
                   type="button"
                   onClick={() => handleAddPrinter()}
-                  className="rounded-lg bg-rose-600 px-4 py-2 text-sm font-semibold text-white hover:bg-rose-700"
+                  className="rounded-lg bg-rose-600 px-4 py-2 text-base font-semibold text-white hover:bg-rose-700"
                 >
                   Add Printer
                 </button>
@@ -517,13 +685,13 @@ export default function AdminScreen({ requestManagerPin }: AdminScreenProps) {
 
       {activeTab === 'peripherals' && (
         <section className="rounded-xl border border-slate-200 bg-white p-4">
-          <h3 className="mb-1 text-base font-semibold text-slate-800">Barcode Scanner Stations</h3>
-          <p className="mb-3 text-sm text-slate-500">
+          <h3 className="mb-1 text-2xl font-bold text-slate-800">Barcode Scanner Stations</h3>
+          <p className="mb-3 text-base text-slate-500">
             No extra software setup is needed to add a second scanner station — this app never
             talks to scanner hardware directly (it reads keystrokes, like any keyboard). To route
             a Datalogic QD2100's scans separately from the main till:
           </p>
-          <ol className="list-inside list-decimal space-y-1 text-sm text-slate-600">
+          <ol className="list-inside list-decimal space-y-1 text-base text-slate-600">
             <li>
               Open the Datalogic QD2100 programming guide and find the barcode for
               &quot;Add Prefix&quot;.
@@ -540,7 +708,7 @@ export default function AdminScreen({ requestManagerPin }: AdminScreenProps) {
               configuration needed here.
             </li>
           </ol>
-          <p className="mt-3 text-xs text-slate-400">
+          <p className="mt-3 text-sm text-slate-400">
             A scanner that is never programmed keeps working exactly as before, labeled
             &quot;UNKNOWN&quot; internally.
           </p>
@@ -549,48 +717,48 @@ export default function AdminScreen({ requestManagerPin }: AdminScreenProps) {
 
       {activeTab === 'integrations' ? (
         <section className="rounded-xl border border-slate-200 bg-white p-4">
-          <h3 className="mb-1 text-base font-semibold text-slate-800">M-Pesa &amp; eTIMS</h3>
-          <p className="mb-4 text-sm text-slate-500">
-            Saved to the local `integrations` table. Only mock providers are wired up as of
-            Phase 9/10 — these values are ready for the real Daraja/eTIMS backends in a later
-            phase.
+          <h3 className="mb-1 text-2xl font-bold text-slate-800">M-Pesa &amp; eTIMS</h3>
+          <p className="mb-4 text-base text-slate-500">
+            Configure M-Pesa and eTIMS connection details for this till. Live payment and tax
+            submission integrations are not yet available — settings entered here are saved for
+            when they go live.
           </p>
 
           {integrationsLoading ? (
-            <p className="text-sm text-slate-400">Loading…</p>
+            <p className="text-base text-slate-400">Loading…</p>
           ) : (
             <div className="space-y-4">
               <div>
-                <h4 className="mb-2 text-sm font-semibold text-slate-700">M-Pesa</h4>
+                <h4 className="mb-2 text-xl font-semibold text-slate-700">M-Pesa</h4>
                 <div className="grid grid-cols-2 gap-3">
                   <div>
-                    <label className="mb-1 block text-xs font-medium text-slate-600">
+                    <label className="mb-1 block text-lg font-medium text-slate-600">
                       Paybill Number
                     </label>
                     <input
                       type="text"
                       value={mpesaPaybill}
                       onChange={(e) => setMpesaPaybill(e.target.value)}
-                      className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-rose-400 focus:outline-none"
+                      className="w-full h-12 rounded-lg border border-slate-300 px-3 text-lg focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-100"
                     />
                   </div>
                   <div>
-                    <label className="mb-1 block text-xs font-medium text-slate-600">
+                    <label className="mb-1 block text-lg font-medium text-slate-600">
                       Till Number
                     </label>
                     <input
                       type="text"
                       value={mpesaTill}
                       onChange={(e) => setMpesaTill(e.target.value)}
-                      className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-rose-400 focus:outline-none"
+                      className="w-full h-12 rounded-lg border border-slate-300 px-3 text-lg focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-100"
                     />
                   </div>
                 </div>
               </div>
 
               <div>
-                <h4 className="mb-2 text-sm font-semibold text-slate-700">eTIMS</h4>
-                <label className="mb-1 block text-xs font-medium text-slate-600">
+                <h4 className="mb-2 text-xl font-semibold text-slate-700">eTIMS</h4>
+                <label className="mb-1 block text-lg font-medium text-slate-600">
                   Middleware URL
                 </label>
                 <input
@@ -598,18 +766,18 @@ export default function AdminScreen({ requestManagerPin }: AdminScreenProps) {
                   value={etimsMiddlewareUrl}
                   onChange={(e) => setEtimsMiddlewareUrl(e.target.value)}
                   placeholder="http://localhost:9000"
-                  className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-rose-400 focus:outline-none"
+                  className="w-full h-12 rounded-lg border border-slate-300 px-3 text-lg focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-100"
                 />
               </div>
 
               {integrationsMessage && (
-                <p className="text-sm text-slate-500">{integrationsMessage}</p>
+                <p className="text-base text-slate-500">{integrationsMessage}</p>
               )}
 
               <button
                 type="button"
                 onClick={() => void handleSaveIntegrationsConfig()}
-                className="rounded-lg bg-rose-600 px-4 py-2 text-sm font-semibold text-white hover:bg-rose-700"
+                className="rounded-lg bg-rose-600 px-4 py-2 text-base font-semibold text-white hover:bg-rose-700"
               >
                 Save Integration Settings
               </button>
@@ -620,42 +788,115 @@ export default function AdminScreen({ requestManagerPin }: AdminScreenProps) {
 
       {activeTab === 'integrations' && (
         <section className="rounded-xl border border-slate-200 bg-white p-4">
-          <h3 className="mb-1 text-base font-semibold text-slate-800">Shopify Admin API Token</h3>
-          <p className="mb-4 text-sm text-slate-500">
-            Stored encrypted on disk via Windows DPAPI, never in a plaintext file (Phase 12/14). This
-            field is write-only — the current value is never sent back here, only whether one is
-            configured.
+          <h3 className="mb-1 text-2xl font-bold text-slate-800">Shopify Connection</h3>
+          <p className="mb-4 text-base text-slate-500">
+            Shopify store URL and Admin API token. These credentials are stored securely on
+            this device and only need to be entered once per till.
           </p>
 
-          <p className="mb-3 text-sm font-medium">
-            Status:{' '}
-            <span className={shopifyTokenConfigured ? 'text-emerald-600' : 'text-amber-600'}>
-              {shopifyTokenConfigured ? 'Configured' : 'Not configured'}
-            </span>
-          </p>
-
-          <label className="mb-1 block text-xs font-medium text-slate-600">
-            New Token (starts with shpat_)
-          </label>
+          <label className="mb-1 block text-lg font-medium text-slate-600">Store URL</label>
           <input
-            type="password"
-            value={shopifyTokenInput}
-            onChange={(e) => setShopifyTokenInput(e.target.value)}
-            placeholder="shpat_••••••••••••••••"
-            className="mb-3 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-rose-400 focus:outline-none"
+            type="text"
+            value={shopifyStoreUrl}
+            onChange={(e) => setShopifyStoreUrlInput(e.target.value)}
+            placeholder="https://your-store.myshopify.com"
+            className="mb-1 w-full h-12 rounded-lg border border-slate-300 px-3 text-lg focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-100"
           />
-
-          {shopifyTokenMessage && (
-            <p className="mb-3 text-sm text-slate-500">{shopifyTokenMessage}</p>
+          {shopifyStoreUrlMessage && (
+            <p className="mb-2 text-base text-slate-500">{shopifyStoreUrlMessage}</p>
           )}
-
           <button
             type="button"
-            onClick={() => void handleSaveShopifyToken()}
-            className="rounded-lg bg-rose-600 px-4 py-2 text-sm font-semibold text-white hover:bg-rose-700"
+            onClick={() => handleSaveShopifyStoreUrl()}
+            className="mb-4 rounded-lg border border-slate-300 px-4 py-2 text-base font-medium text-slate-700 hover:bg-slate-50"
           >
-            Save Token
+            Save Store URL
           </button>
+
+          <div className="border-t border-slate-100 pt-4">
+            <h4 className="mb-1 text-xl font-semibold text-slate-700">Admin API Token</h4>
+            <p className="mb-3 text-sm text-slate-500">
+              Stored securely on this device. For your protection, once saved the token
+              cannot be viewed again here — only whether one is currently configured.
+            </p>
+
+            <p className="mb-3 text-base font-medium">
+              Status:{' '}
+              <span className={shopifyTokenConfigured ? 'text-emerald-600' : 'text-amber-600'}>
+                {shopifyTokenConfigured ? 'Configured' : 'Not configured'}
+              </span>
+            </p>
+
+            <label className="mb-1 block text-lg font-medium text-slate-600">
+              New Token (starts with shpat_)
+            </label>
+            <input
+              type="password"
+              value={shopifyTokenInput}
+              onChange={(e) => setShopifyTokenInput(e.target.value)}
+              placeholder="shpat_••••••••••••••••"
+              className="mb-3 w-full h-12 rounded-lg border border-slate-300 px-3 text-lg focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-100"
+            />
+
+            {shopifyTokenMessage && (
+              <p className="mb-3 text-base text-slate-500">{shopifyTokenMessage}</p>
+            )}
+
+            <button
+              type="button"
+              onClick={() => void handleSaveShopifyToken()}
+              className="rounded-lg bg-rose-600 px-4 py-2 text-base font-semibold text-white hover:bg-rose-700"
+            >
+              Save Token
+            </button>
+          </div>
+
+          <div className="border-t border-slate-100 pt-4">
+            <h4 className="mb-1 text-xl font-semibold text-slate-700">Location</h4>
+            <p className="mb-3 text-sm text-slate-500">
+              The Shopify location this till scopes inventory and sales to.
+            </p>
+
+            {!changingLocation ? (
+              <>
+                <p className="mb-3 text-base font-medium text-slate-700">
+                  Current location:{' '}
+                  <span className="text-slate-900">{currentLocationName ?? 'Not set'}</span>
+                </p>
+                <button
+                  type="button"
+                  onClick={handleOpenChangeLocation}
+                  className="rounded-lg border border-slate-300 px-4 py-2 text-base font-medium text-slate-700 hover:bg-slate-50"
+                >
+                  Change Location
+                </button>
+              </>
+            ) : locationOptionsLoading ? (
+              <p className="text-base text-slate-400">Loading locations…</p>
+            ) : (
+              <div className="max-w-md">
+                {locationOptions.length > 0 ? (
+                  <div className="rounded-xl bg-slate-800 p-4">
+                    <LocationPicker
+                      shopName={locationShopName}
+                      locations={locationOptions}
+                      selectedLocationId={selectedLocationId}
+                      onSelect={setSelectedLocationId}
+                      onConfirm={handleConfirmChangeLocation}
+                      confirming={locationSaving}
+                      confirmError={locationError}
+                      confirmLabel={locationSaving ? 'Saving…' : 'Save Location'}
+                      onBack={() => setChangingLocation(false)}
+                    />
+                  </div>
+                ) : (
+                  <p className="rounded-lg bg-rose-50 px-3 py-2 text-base font-medium text-rose-700">
+                    {locationError ?? 'No locations returned by Shopify'}
+                  </p>
+                )}
+              </div>
+            )}
+          </div>
         </section>
       )}
 
@@ -663,30 +904,30 @@ export default function AdminScreen({ requestManagerPin }: AdminScreenProps) {
         <>
       {/* Today's Sales */}
       <section className="rounded-xl border border-slate-200 bg-white p-4">
-        <h3 className="mb-3 text-base font-semibold text-slate-800">Today&apos;s Sales</h3>
+        <h3 className="mb-3 text-2xl font-bold text-slate-800">Today&apos;s Sales</h3>
         {loading || !dailySummary ? (
-          <p className="text-sm text-slate-400">Loading…</p>
+          <p className="text-base text-slate-400">Loading…</p>
         ) : (
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
             <div className="rounded-lg bg-slate-50 p-3">
-              <p className="text-xs text-slate-500">Orders</p>
-              <p className="text-lg font-semibold text-slate-900">{dailySummary.orderCount}</p>
+              <p className="text-sm text-slate-500">Orders</p>
+              <p className="text-xl font-semibold text-slate-900">{dailySummary.orderCount}</p>
             </div>
             <div className="rounded-lg bg-slate-50 p-3">
-              <p className="text-xs text-slate-500">Revenue</p>
-              <p className="text-lg font-semibold text-slate-900">
+              <p className="text-sm text-slate-500">Revenue</p>
+              <p className="text-xl font-semibold text-slate-900">
                 {formatCurrency(dailySummary.totalRevenue)}
               </p>
             </div>
             <div className="rounded-lg bg-slate-50 p-3">
-              <p className="text-xs text-slate-500">Cash</p>
-              <p className="text-lg font-semibold text-slate-900">
+              <p className="text-sm text-slate-500">Cash</p>
+              <p className="text-xl font-semibold text-slate-900">
                 {formatCurrency(dailySummary.totalsByMethod.cash)}
               </p>
             </div>
             <div className="rounded-lg bg-slate-50 p-3">
-              <p className="text-xs text-slate-500">M-Pesa / Card</p>
-              <p className="text-lg font-semibold text-slate-900">
+              <p className="text-sm text-slate-500">M-Pesa / Card</p>
+              <p className="text-xl font-semibold text-slate-900">
                 {formatCurrency(dailySummary.totalsByMethod.mpesa + dailySummary.totalsByMethod.card)}
               </p>
             </div>
@@ -697,27 +938,27 @@ export default function AdminScreen({ requestManagerPin }: AdminScreenProps) {
       {/* Shift Controls */}
       <section className="rounded-xl border border-slate-200 bg-white p-4">
         <div className="mb-3 flex items-center justify-between">
-          <h3 className="text-base font-semibold text-slate-800">Shift Controls</h3>
+          <h3 className="text-2xl font-bold text-slate-800">Shift Controls</h3>
           {currentShift ? (
-            <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-700">
+            <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-sm font-medium text-emerald-700">
               Shift #{currentShift.id} open
             </span>
           ) : (
-            <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-500">
+            <span className="rounded-full bg-slate-100 px-2 py-0.5 text-sm font-medium text-slate-500">
               No open shift
             </span>
           )}
         </div>
 
         {currentShift && (
-          <p className="mb-3 text-sm text-slate-600">
+          <p className="mb-3 text-base text-slate-600">
             Opened {new Date(currentShift.clock_in).toLocaleString()} with{' '}
             {formatCurrency(currentShift.starting_cash)} starting cash.
           </p>
         )}
 
         {shiftActionError && (
-          <p className="mb-3 rounded-lg bg-rose-50 px-3 py-2 text-sm font-medium text-rose-700">
+          <p className="mb-3 rounded-lg bg-rose-50 px-3 py-2 text-base font-medium text-rose-700">
             {shiftActionError}
           </p>
         )}
@@ -726,7 +967,7 @@ export default function AdminScreen({ requestManagerPin }: AdminScreenProps) {
           <button
             type="button"
             onClick={() => setShowOpenForm(true)}
-            className="rounded-lg bg-rose-600 px-4 py-2 text-sm font-semibold text-white hover:bg-rose-700"
+            className="rounded-lg bg-rose-600 px-4 py-2 text-base font-semibold text-white hover:bg-rose-700"
           >
             Open Shift
           </button>
@@ -735,7 +976,7 @@ export default function AdminScreen({ requestManagerPin }: AdminScreenProps) {
         {!currentShift && showOpenForm && (
           <div className="flex items-end gap-2">
             <div>
-              <label className="mb-1 block text-xs font-medium text-slate-600">
+              <label className="mb-1 block text-lg font-medium text-slate-600">
                 Starting Cash
               </label>
               <input
@@ -744,14 +985,14 @@ export default function AdminScreen({ requestManagerPin }: AdminScreenProps) {
                 step="0.01"
                 value={startingCashInput}
                 onChange={(e) => setStartingCashInput(e.target.value)}
-                className="w-32 rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-rose-400 focus:outline-none"
+                className="w-32 h-12 rounded-lg border border-slate-300 px-3 text-xl focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-100"
                 autoFocus
               />
             </div>
             <button
               type="button"
               onClick={() => void handleOpenShift()}
-              className="rounded-lg bg-rose-600 px-4 py-2 text-sm font-semibold text-white hover:bg-rose-700"
+              className="rounded-lg bg-rose-600 px-4 py-2 text-base font-semibold text-white hover:bg-rose-700"
             >
               Confirm
             </button>
@@ -761,7 +1002,7 @@ export default function AdminScreen({ requestManagerPin }: AdminScreenProps) {
                 setShowOpenForm(false)
                 setStartingCashInput('')
               }}
-              className="rounded-lg border border-slate-300 px-4 py-2 text-sm text-slate-600 hover:bg-slate-50"
+              className="rounded-lg border border-slate-300 px-4 py-2 text-base text-slate-600 hover:bg-slate-50"
             >
               Cancel
             </button>
@@ -772,7 +1013,7 @@ export default function AdminScreen({ requestManagerPin }: AdminScreenProps) {
           <button
             type="button"
             onClick={() => setShowCloseForm(true)}
-            className="rounded-lg bg-rose-600 px-4 py-2 text-sm font-semibold text-white hover:bg-rose-700"
+            className="rounded-lg bg-rose-600 px-4 py-2 text-base font-semibold text-white hover:bg-rose-700"
           >
             Close Shift
           </button>
@@ -781,7 +1022,7 @@ export default function AdminScreen({ requestManagerPin }: AdminScreenProps) {
         {currentShift && showCloseForm && (
           <div className="flex items-end gap-2">
             <div>
-              <label className="mb-1 block text-xs font-medium text-slate-600">
+              <label className="mb-1 block text-lg font-medium text-slate-600">
                 Ending Cash (counted)
               </label>
               <input
@@ -790,14 +1031,14 @@ export default function AdminScreen({ requestManagerPin }: AdminScreenProps) {
                 step="0.01"
                 value={endingCashInput}
                 onChange={(e) => setEndingCashInput(e.target.value)}
-                className="w-32 rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-rose-400 focus:outline-none"
+                className="w-32 h-12 rounded-lg border border-slate-300 px-3 text-xl focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-100"
                 autoFocus
               />
             </div>
             <button
               type="button"
               onClick={() => void handleCloseShift()}
-              className="rounded-lg bg-rose-600 px-4 py-2 text-sm font-semibold text-white hover:bg-rose-700"
+              className="rounded-lg bg-rose-600 px-4 py-2 text-base font-semibold text-white hover:bg-rose-700"
             >
               Confirm
             </button>
@@ -807,7 +1048,7 @@ export default function AdminScreen({ requestManagerPin }: AdminScreenProps) {
                 setShowCloseForm(false)
                 setEndingCashInput('')
               }}
-              className="rounded-lg border border-slate-300 px-4 py-2 text-sm text-slate-600 hover:bg-slate-50"
+              className="rounded-lg border border-slate-300 px-4 py-2 text-base text-slate-600 hover:bg-slate-50"
             >
               Cancel
             </button>
@@ -818,18 +1059,18 @@ export default function AdminScreen({ requestManagerPin }: AdminScreenProps) {
       {/* Staff Management */}
       <section className="rounded-xl border border-slate-200 bg-white p-4">
         <div className="mb-3 flex items-center justify-between">
-          <h3 className="text-base font-semibold text-slate-800">Staff</h3>
+          <h3 className="text-2xl font-bold text-slate-800">Staff</h3>
           <button
             type="button"
             onClick={() => setShowAddStaffForm((prev) => !prev)}
-            className="text-sm font-medium text-rose-600 hover:text-rose-700"
+            className="text-base font-medium text-rose-600 hover:text-rose-700"
           >
             {showAddStaffForm ? 'Cancel' : '+ Add Staff'}
           </button>
         </div>
 
         {staffActionError && (
-          <p className="mb-3 rounded-lg bg-rose-50 px-3 py-2 text-sm font-medium text-rose-700">
+          <p className="mb-3 rounded-lg bg-rose-50 px-3 py-2 text-base font-medium text-rose-700">
             {staffActionError}
           </p>
         )}
@@ -841,19 +1082,19 @@ export default function AdminScreen({ requestManagerPin }: AdminScreenProps) {
               placeholder="Name"
               value={newStaffName}
               onChange={(e) => setNewStaffName(e.target.value)}
-              className="rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-rose-400 focus:outline-none"
+              className="h-12 rounded-lg border border-slate-300 px-3 text-lg focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-100"
             />
             <input
               type="password"
               placeholder="PIN"
               value={newStaffPin}
               onChange={(e) => setNewStaffPin(e.target.value)}
-              className="rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-rose-400 focus:outline-none"
+              className="h-12 rounded-lg border border-slate-300 px-3 text-lg focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-100"
             />
             <select
               value={newStaffRole}
               onChange={(e) => setNewStaffRole(e.target.value as StaffRole)}
-              className="rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-rose-400 focus:outline-none"
+              className="h-12 rounded-lg border border-slate-300 px-3 text-lg focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-100"
             >
               <option value="cashier">Cashier</option>
               <option value="admin">Admin</option>
@@ -861,7 +1102,7 @@ export default function AdminScreen({ requestManagerPin }: AdminScreenProps) {
             <button
               type="button"
               onClick={() => void handleAddStaff()}
-              className="rounded-lg bg-rose-600 px-4 py-2 text-sm font-semibold text-white hover:bg-rose-700"
+              className="rounded-lg bg-rose-600 px-4 py-2 text-base font-semibold text-white hover:bg-rose-700"
             >
               Create
             </button>
@@ -876,7 +1117,7 @@ export default function AdminScreen({ requestManagerPin }: AdminScreenProps) {
             >
               <div className="flex items-center gap-2">
                 <span className="font-medium text-slate-800">{staff.name}</span>
-                <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium capitalize text-slate-500">
+                <span className="rounded-full bg-slate-100 px-2 py-0.5 text-sm font-medium capitalize text-slate-500">
                   {staff.role}
                 </span>
               </div>
@@ -888,13 +1129,13 @@ export default function AdminScreen({ requestManagerPin }: AdminScreenProps) {
                     placeholder="New PIN"
                     value={resetPinValue}
                     onChange={(e) => setResetPinValue(e.target.value)}
-                    className="w-28 rounded-lg border border-slate-300 px-2 py-1 text-sm focus:border-rose-400 focus:outline-none"
+                    className="h-12 w-28 rounded-lg border border-slate-300 px-2 text-lg focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-100"
                     autoFocus
                   />
                   <button
                     type="button"
                     onClick={() => void handleResetPin(staff.id)}
-                    className="text-sm font-medium text-rose-600 hover:text-rose-700"
+                    className="text-base font-medium text-rose-600 hover:text-rose-700"
                   >
                     Save
                   </button>
@@ -904,7 +1145,7 @@ export default function AdminScreen({ requestManagerPin }: AdminScreenProps) {
                       setResetPinTargetId(null)
                       setResetPinValue('')
                     }}
-                    className="text-sm text-slate-500 hover:text-slate-700"
+                    className="text-base text-slate-500 hover:text-slate-700"
                   >
                     Cancel
                   </button>
@@ -913,7 +1154,7 @@ export default function AdminScreen({ requestManagerPin }: AdminScreenProps) {
                 <button
                   type="button"
                   onClick={() => setResetPinTargetId(staff.id)}
-                  className="text-sm font-medium text-slate-500 hover:text-slate-700"
+                  className="text-base font-medium text-slate-500 hover:text-slate-700"
                 >
                   Reset PIN
                 </button>
@@ -930,12 +1171,12 @@ export default function AdminScreen({ requestManagerPin }: AdminScreenProps) {
           type="button"
           disabled={checkingForUpdates}
           onClick={() => void handleCheckForUpdates()}
-          className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+          className="rounded-lg border border-slate-300 px-4 py-2 text-base font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
         >
           {checkingForUpdates ? 'Checking…' : 'Check for Updates'}
         </button>
         {updateCheckMessage && (
-          <p className="mt-2 text-sm text-slate-500">{updateCheckMessage}</p>
+          <p className="mt-2 text-base text-slate-500">{updateCheckMessage}</p>
         )}
       </section>
         </>

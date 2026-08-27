@@ -1,5 +1,5 @@
 /**
- * IPC payload validation (Phase 12, Task 2).
+ * IPC payload validation.
  *
  * Every value crossing the IPC boundary from the renderer is
  * attacker-influenceable in principle — a compromised or buggy
@@ -57,7 +57,7 @@ export const loginRequestSchema = z.object({
 
 /**
  * Shared re-authorization fields on every privileged Admin-screen
- * payload (Phase 14) — the manager id/PIN `requireAdminPin` re-checks
+ * payload — the manager id/PIN `requireAdminPin` re-checks
  * server-side before the request's own action is allowed to proceed.
  */
 const managerAuthzSchema = z.object({
@@ -65,27 +65,27 @@ const managerAuthzSchema = z.object({
   managerPin: z.string().min(1, 'Manager PIN is required')
 })
 
-/** `staff:create` request payload (Phase 14 — adds manager re-authorization). */
+/** `staff:create` request payload (manager re-authorization required). */
 export const staffCreateSchema = managerAuthzSchema.extend({
   name: z.string().min(1, 'Name is required'),
   pin: z.string().min(1, 'PIN is required'),
   role: z.enum(['admin', 'cashier'])
 })
 
-/** `staff:resetPin` request payload (Phase 14 — adds manager re-authorization). */
+/** `staff:resetPin` request payload (manager re-authorization required). */
 export const staffResetPinSchema = managerAuthzSchema.extend({
   staffId: z.number().int().positive(),
   pin: z.string().min(1, 'A new PIN is required')
 })
 
-/** `integrations:set-config` request payload (Phase 14 — adds manager re-authorization). */
+/** `integrations:set-config` request payload (manager re-authorization required). */
 export const integrationsSetConfigSchema = managerAuthzSchema.extend({
   provider: z.enum(['mpesa', 'etims']),
   config: z.record(z.string(), z.unknown())
 })
 
 /**
- * `printers:save` request payload (Phase 15) — a printer configuration
+ * `printers:save` request payload — a printer configuration
  * plus manager re-authorization, mirroring `integrationsSetConfigSchema`
  * since registering a printer interface is the same class of
  * privileged Admin-screen write.
@@ -97,13 +97,73 @@ export const printerSaveSchema = managerAuthzSchema.extend({
   enabled: z.boolean()
 })
 
-/** `printers:delete` request payload (Phase 15). */
+/** `printers:delete` request payload. */
 export const printerDeleteSchema = managerAuthzSchema.extend({
   id: z.string().min(1, 'Printer id is required')
 })
 
 /**
- * `printers:test` request payload (Phase 15) — no manager
+ * `shopify:set-store-url` request payload — lets an install
+ * be configured from the Admin screen instead of requiring a `.env`
+ * file on every device. Gated the same as `integrations:set-config`:
+ * pointing the till at a different store is a consequential admin
+ * write, even though the URL itself isn't a secret.
+ */
+export const shopifySetStoreUrlSchema = managerAuthzSchema.extend({
+  storeUrl: z.string().url('Enter a full URL, e.g. https://your-store.myshopify.com')
+})
+
+/**
+ * `config:validate` request payload — the onboarding wizard's
+ * "Connect & Verify" step. No manager re-authorization: this only
+ * makes a read-only Shopify API call and returns its result, changing
+ * nothing locally — the same risk class as `printers:test`.
+ */
+export const configValidateSchema = z.object({
+  storeUrl: z.string().url('Enter a full URL, e.g. https://your-store.myshopify.com'),
+  token: z.string().min(1, 'Admin API token is required')
+})
+
+/**
+ * `config:save` request payload — persists the store URL,
+ * token, and single selected location the first-run wizard just
+ * verified. No manager re-authorization: this runs before any staff
+ * has signed in (the wizard replaces the Login screen entirely until
+ * a config exists), so there is no admin session yet to re-check.
+ * Once a config exists, changing it is `config:clear`
+ * from inside the already-authenticated Admin screen, which is gated like
+ * every other privileged Admin write.
+ */
+export const configSaveSchema = z.object({
+  storeUrl: z.string().url('Enter a full URL, e.g. https://your-store.myshopify.com'),
+  token: z.string().min(1, 'Admin API token is required'),
+  locationId: z.string().min(1, 'A location must be selected'),
+  locationName: z.string().min(1, 'Location name is required')
+})
+
+/**
+ * `config:clear` request payload — the Admin screen's
+ * "Reset Configuration" action. Manager re-authorization required,
+ * same as `shopify:set-store-url`: this wipes the store connection
+ * every other screen depends on.
+ */
+export const configClearSchema = managerAuthzSchema
+
+/**
+ * `location:set` request payload — the post-login
+ * location-confirmation screen's (and Admin screen's "Change
+ * Location" control's) save action. Manager re-authorization
+ * required, same class of write as `config:save`'s location id but
+ * happens post-onboarding, so it needs the re-check
+ * `shopify:set-store-url` also uses.
+ */
+export const locationSetSchema = managerAuthzSchema.extend({
+  locationId: z.string().min(1, 'A location must be selected'),
+  locationName: z.string().min(1, 'Location name is required')
+})
+
+/**
+ * `printers:test` request payload — no manager
  * re-authorization: sending a test page reads and changes nothing, so
  * it carries the same risk as the existing read-only `staff:list`/
  * `integrations:get-config` channels, not a privileged write.

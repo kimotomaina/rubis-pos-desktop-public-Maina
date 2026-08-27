@@ -1,5 +1,5 @@
 /**
- * IPC payload validation tests (Phase 12, Task 5).
+ * IPC payload validation tests.
  *
  * Exercises the `zod` schemas and the `validate()` wrapper directly —
  * these are the same schemas `main/index.ts` runs every
@@ -15,7 +15,15 @@ import {
   loginRequestSchema,
   staffCreateSchema,
   staffResetPinSchema,
-  integrationsSetConfigSchema
+  integrationsSetConfigSchema,
+  printerSaveSchema,
+  printerDeleteSchema,
+  printerTestSchema,
+  shopifySetStoreUrlSchema,
+  configValidateSchema,
+  configSaveSchema,
+  configClearSchema,
+  locationSetSchema
 } from '../src/main/lib/ipcValidator.js'
 
 const validItem = {
@@ -147,7 +155,7 @@ describe('loginRequestSchema', () => {
   })
 })
 
-describe('staffCreateSchema (Phase 14)', () => {
+describe('staffCreateSchema', () => {
   const validRequest = {
     name: 'New Cashier',
     pin: '1234',
@@ -186,7 +194,7 @@ describe('staffCreateSchema (Phase 14)', () => {
   })
 })
 
-describe('staffResetPinSchema (Phase 14)', () => {
+describe('staffResetPinSchema', () => {
   const validRequest = { staffId: 3, pin: '4321', managerId: 1, managerPin: '9999' }
 
   it('accepts a well-formed request', () => {
@@ -210,7 +218,7 @@ describe('staffResetPinSchema (Phase 14)', () => {
   })
 })
 
-describe('integrationsSetConfigSchema (Phase 14)', () => {
+describe('integrationsSetConfigSchema', () => {
   const validRequest = {
     provider: 'mpesa',
     config: { paybill: '123456', till: '654321' },
@@ -244,6 +252,203 @@ describe('integrationsSetConfigSchema (Phase 14)', () => {
     expect(
       validate(integrationsSetConfigSchema, { ...validRequest, managerPin: '' }).success
     ).toBe(false)
+  })
+})
+
+describe('printerSaveSchema', () => {
+  const validRequest = {
+    id: 'kitchen-1',
+    type: 'kitchen',
+    interfaceName: 'tcp://192.168.0.52:9100',
+    enabled: true,
+    managerId: 1,
+    managerPin: '9999'
+  }
+
+  it('accepts a well-formed request', () => {
+    expect(validate(printerSaveSchema, validRequest).success).toBe(true)
+  })
+
+  it('rejects an invalid printer type', () => {
+    expect(validate(printerSaveSchema, { ...validRequest, type: 'fax' }).success).toBe(false)
+  })
+
+  it('rejects a missing id or interfaceName', () => {
+    expect(validate(printerSaveSchema, { ...validRequest, id: '' }).success).toBe(false)
+    expect(validate(printerSaveSchema, { ...validRequest, interfaceName: '' }).success).toBe(false)
+  })
+
+  it('rejects a non-boolean enabled', () => {
+    expect(validate(printerSaveSchema, { ...validRequest, enabled: 'true' }).success).toBe(false)
+  })
+
+  it('rejects a missing manager authorization', () => {
+    const { managerId: _managerId, ...withoutManagerId } = validRequest
+    expect(validate(printerSaveSchema, withoutManagerId).success).toBe(false)
+    expect(validate(printerSaveSchema, { ...validRequest, managerPin: '' }).success).toBe(false)
+  })
+})
+
+describe('printerDeleteSchema', () => {
+  const validRequest = { id: 'kitchen-1', managerId: 1, managerPin: '9999' }
+
+  it('accepts a well-formed request', () => {
+    expect(validate(printerDeleteSchema, validRequest).success).toBe(true)
+  })
+
+  it('rejects a missing id', () => {
+    expect(validate(printerDeleteSchema, { ...validRequest, id: '' }).success).toBe(false)
+  })
+
+  it('rejects a missing manager authorization', () => {
+    expect(validate(printerDeleteSchema, { ...validRequest, managerPin: '' }).success).toBe(false)
+  })
+})
+
+describe('printerTestSchema', () => {
+  it('accepts a well-formed request', () => {
+    expect(
+      validate(printerTestSchema, { interfaceName: 'tcp://192.168.0.52:9100' }).success
+    ).toBe(true)
+  })
+
+  it('rejects a missing interfaceName', () => {
+    expect(validate(printerTestSchema, {}).success).toBe(false)
+    expect(validate(printerTestSchema, { interfaceName: '' }).success).toBe(false)
+  })
+
+  it('requires no manager authorization fields', () => {
+    expect(
+      validate(printerTestSchema, {
+        interfaceName: 'tcp://192.168.0.52:9100',
+        managerId: 1,
+        managerPin: '9999'
+      }).success
+    ).toBe(true)
+  })
+})
+
+describe('shopifySetStoreUrlSchema', () => {
+  const validRequest = {
+    storeUrl: 'https://rubis-pos.myshopify.com',
+    managerId: 1,
+    managerPin: '9999'
+  }
+
+  it('accepts a well-formed request', () => {
+    expect(validate(shopifySetStoreUrlSchema, validRequest).success).toBe(true)
+  })
+
+  it('rejects a non-URL storeUrl', () => {
+    expect(
+      validate(shopifySetStoreUrlSchema, { ...validRequest, storeUrl: 'not-a-url' }).success
+    ).toBe(false)
+  })
+
+  it('rejects a missing manager authorization', () => {
+    const { managerId: _managerId, ...withoutManagerId } = validRequest
+    expect(validate(shopifySetStoreUrlSchema, withoutManagerId).success).toBe(false)
+    expect(
+      validate(shopifySetStoreUrlSchema, { ...validRequest, managerPin: '' }).success
+    ).toBe(false)
+  })
+})
+
+describe('configValidateSchema', () => {
+  const validRequest = {
+    storeUrl: 'https://rubis-pos.myshopify.com',
+    token: 'shpat_test'
+  }
+
+  it('accepts a well-formed request', () => {
+    expect(validate(configValidateSchema, validRequest).success).toBe(true)
+  })
+
+  it('rejects a non-URL storeUrl', () => {
+    expect(validate(configValidateSchema, { ...validRequest, storeUrl: 'not-a-url' }).success).toBe(
+      false
+    )
+  })
+
+  it('rejects an empty token', () => {
+    expect(validate(configValidateSchema, { ...validRequest, token: '' }).success).toBe(false)
+  })
+
+  it('requires no manager authorization (runs before any staff session exists)', () => {
+    expect(validate(configValidateSchema, validRequest).success).toBe(true)
+  })
+})
+
+describe('configSaveSchema', () => {
+  const validRequest = {
+    storeUrl: 'https://rubis-pos.myshopify.com',
+    token: 'shpat_test',
+    locationId: 'gid://shopify/Location/1',
+    locationName: 'Main Store'
+  }
+
+  it('accepts a well-formed request', () => {
+    expect(validate(configSaveSchema, validRequest).success).toBe(true)
+  })
+
+  it('rejects a missing locationId', () => {
+    const { locationId: _locationId, ...withoutLocation } = validRequest
+    expect(validate(configSaveSchema, withoutLocation).success).toBe(false)
+  })
+
+  it('rejects an empty locationId', () => {
+    expect(validate(configSaveSchema, { ...validRequest, locationId: '' }).success).toBe(false)
+  })
+
+  it('rejects a missing locationName', () => {
+    const { locationName: _locationName, ...withoutLocationName } = validRequest
+    expect(validate(configSaveSchema, withoutLocationName).success).toBe(false)
+  })
+
+  it('rejects a non-URL storeUrl', () => {
+    expect(validate(configSaveSchema, { ...validRequest, storeUrl: 'not-a-url' }).success).toBe(false)
+  })
+})
+
+describe('locationSetSchema', () => {
+  const validRequest = {
+    locationId: 'gid://shopify/Location/1',
+    locationName: 'Main Store',
+    managerId: 1,
+    managerPin: '1234'
+  }
+
+  it('accepts a well-formed request', () => {
+    expect(validate(locationSetSchema, validRequest).success).toBe(true)
+  })
+
+  it('rejects a missing locationId', () => {
+    const { locationId: _locationId, ...withoutLocation } = validRequest
+    expect(validate(locationSetSchema, withoutLocation).success).toBe(false)
+  })
+
+  it('rejects a missing locationName', () => {
+    const { locationName: _locationName, ...withoutLocationName } = validRequest
+    expect(validate(locationSetSchema, withoutLocationName).success).toBe(false)
+  })
+
+  it('rejects a missing manager authorization', () => {
+    const { managerPin: _managerPin, ...withoutPin } = validRequest
+    expect(validate(locationSetSchema, withoutPin).success).toBe(false)
+  })
+})
+
+describe('configClearSchema', () => {
+  const validRequest = { managerId: 1, managerPin: '9999' }
+
+  it('accepts a well-formed request', () => {
+    expect(validate(configClearSchema, validRequest).success).toBe(true)
+  })
+
+  it('rejects a missing manager authorization', () => {
+    const { managerId: _managerId, ...withoutManagerId } = validRequest
+    expect(validate(configClearSchema, withoutManagerId).success).toBe(false)
+    expect(validate(configClearSchema, { ...validRequest, managerPin: '' }).success).toBe(false)
   })
 })
 

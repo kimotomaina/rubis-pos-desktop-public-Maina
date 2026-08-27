@@ -1,5 +1,5 @@
 /**
- * Z-report and daily-summary aggregation tests (Phase 7).
+ * Z-report and daily-summary aggregation tests.
  *
  * `generateZReport`/`generateDailySummary` are tested against a
  * lightweight fake implementing only the `RubisDatabase` methods they

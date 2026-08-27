@@ -1,5 +1,5 @@
 /**
- * Thermal printer service tests (Phase 5).
+ * Thermal printer service tests.
  *
  * `node-thermal-printer` is never touched — a recording fake
  * implementing {@link ThermalPrinterLike} is injected via the
