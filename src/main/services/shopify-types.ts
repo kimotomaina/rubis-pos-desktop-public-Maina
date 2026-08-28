@@ -190,6 +190,8 @@ export interface OfflineOrderPayload {
   tenderedAmount: number
   changeDue: number
   referenceNumber?: string
+  /** Customer's KRA PIN, when captured for a B2B eTIMS invoice — omitted for a walk-in B2C sale. */
+  customerPin?: string
   /** Cart-level discount applied on top of the line-item subtotal. */
   cartDiscount?: Discount
 }

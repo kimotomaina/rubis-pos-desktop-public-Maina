@@ -306,7 +306,7 @@ describe('RubisDatabase.queueOrder', () => {
 describe('RubisDatabase.getPendingSyncQueue', () => {
   it('queries items due before `now` and parses their payload', () => {
     const { fake, db } = freshDb()
-    fake.setAllResult('FROM sync_queue WHERE next_attempt_at', [
+    fake.setAllResult('FROM sync_queue', [
       {
         id: 1,
         entity_type: 'order',
@@ -412,6 +412,138 @@ describe('RubisDatabase.recordQueueFailure', () => {
     expect(updates[0].params).toEqual(['failed', 7])
     expect(fake.callsFor('run', 'DELETE FROM sync_queue')).toHaveLength(1)
     expect(fake.callsFor('run', 'UPDATE sync_queue')).toHaveLength(0)
+  })
+})
+
+describe('RubisDatabase.queueFiscalInvoice', () => {
+  it('inserts an etims_invoice sync-queue row with the request as its payload', () => {
+    const { fake, db } = freshDb()
+    fake.queueRunResult('INSERT INTO sync_queue', 9)
+
+    const request = {
+      clientOrderUuid: 'uuid-1234',
+      items: [{ description: 'Bread', quantity: 1, unitPrice: 60, taxRate: 0.16 }],
+      total: 69.6,
+      taxAmount: 9.6
+    }
+
+    const result = db.queueFiscalInvoice(7, request)
+
+    expect(result).toEqual({ queueId: 9 })
+    const inserts = fake.callsFor('run', 'INSERT INTO sync_queue')
+    expect(inserts).toHaveLength(1)
+    const [entityType, entityId, action, payloadJson, attempts, , nextAttemptAt] =
+      inserts[0].params as [string, number, string, string, number, string, number]
+    expect(entityType).toBe('etims_invoice')
+    expect(entityId).toBe(7)
+    expect(action).toBe('fiscalizeInvoice')
+    expect(attempts).toBe(0)
+    expect(nextAttemptAt).toBe(0)
+    expect(JSON.parse(payloadJson)).toEqual(request)
+  })
+})
+
+describe('RubisDatabase.getPendingFiscalQueue', () => {
+  it('queries only etims_invoice rows due before `now` and parses their payload', () => {
+    const { fake, db } = freshDb()
+    fake.setAllResult('FROM sync_queue', [
+      {
+        id: 4,
+        entity_type: 'etims_invoice',
+        entity_id: 7,
+        action: 'fiscalizeInvoice',
+        payload_json: JSON.stringify({
+          clientOrderUuid: 'uuid-1',
+          items: [],
+          total: 10,
+          taxAmount: 1
+        }),
+        attempts: 0,
+        last_error: null,
+        created_at: '2026-08-24T10:00:00.000Z',
+        next_attempt_at: 1000
+      }
+    ])
+
+    const items = db.getPendingFiscalQueue(5000)
+
+    const [call] = fake.callsFor('all', 'FROM sync_queue')
+    expect(call.sql).toContain("entity_type = 'etims_invoice'")
+    expect(call.params).toEqual([5000])
+    expect(items).toHaveLength(1)
+    expect(items[0].payload.clientOrderUuid).toBe('uuid-1')
+    expect(items[0].entity_id).toBe(7)
+  })
+})
+
+describe('RubisDatabase.markFiscalQueueItemSynced', () => {
+  it('saves the invoice number/QR code on the order and deletes the queue row', () => {
+    const { fake, db } = freshDb()
+    fake.setGetResult('FROM sync_queue WHERE id', { entity_id: 7 })
+
+    db.markFiscalQueueItemSynced(4, 'KRA-0001', 'base64qr')
+
+    const updates = fake.callsFor('run', 'UPDATE orders SET fiscal_invoice_number')
+    expect(updates).toHaveLength(1)
+    expect(updates[0].params[0]).toBe('KRA-0001')
+    expect(updates[0].params[1]).toBe('base64qr')
+    expect(updates[0].params[3]).toBe(7)
+    expect(fake.callsFor('run', 'DELETE FROM sync_queue')[0].params).toEqual([4])
+  })
+
+  it('is a no-op when the queue row no longer exists', () => {
+    const { fake, db } = freshDb()
+
+    db.markFiscalQueueItemSynced(99, 'KRA-0001', 'base64qr')
+
+    expect(fake.callsFor('run', 'UPDATE orders')).toHaveLength(0)
+    expect(fake.callsFor('run', 'DELETE FROM sync_queue')).toHaveLength(0)
+  })
+})
+
+describe('RubisDatabase.recordFiscalQueueFailure', () => {
+  it('increments attempts, stores the error, and schedules backoff without deleting the row', () => {
+    const { fake, db } = freshDb()
+    fake.setGetResult('FROM sync_queue WHERE id', { id: 4, attempts: 2 })
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(1_000_000)
+
+    const result = db.recordFiscalQueueFailure(4, 'device unreachable')
+
+    expect(result).toEqual({ exhausted: false })
+    const updates = fake.callsFor('run', 'UPDATE sync_queue SET attempts')
+    expect(updates).toHaveLength(1)
+    expect(updates[0].params[0]).toBe(3)
+    expect(updates[0].params[1]).toBe('device unreachable')
+    expect(updates[0].params[2]).toBe(1_000_000 + SYNC_BACKOFF_BASE_MS * 4)
+    expect(updates[0].params[3]).toBe(4)
+    expect(fake.callsFor('run', 'DELETE FROM sync_queue')).toHaveLength(0)
+    nowSpy.mockRestore()
+  })
+
+  it('abandons after the max attempts but keeps the row for inspection', () => {
+    const { fake, db } = freshDb()
+    fake.setGetResult('FROM sync_queue WHERE id', {
+      id: 4,
+      attempts: SYNC_MAX_ATTEMPTS - 1
+    })
+
+    const result = db.recordFiscalQueueFailure(4, 'final failure')
+
+    expect(result.exhausted).toBe(true)
+    expect(fake.callsFor('run', 'DELETE FROM sync_queue')).toHaveLength(0)
+    const updates = fake.callsFor('run', 'UPDATE sync_queue SET attempts')
+    expect(updates).toHaveLength(1)
+    expect(updates[0].params[0]).toBe(SYNC_MAX_ATTEMPTS)
+    expect(updates[0].params[1]).toMatch(/^ABANDONED/)
+    expect(updates[0].params[2]).toBe(Number.MAX_SAFE_INTEGER)
+  })
+
+  it('treats a missing queue row as already exhausted', () => {
+    const { db } = freshDb()
+
+    const result = db.recordFiscalQueueFailure(999, 'irrelevant')
+
+    expect(result).toEqual({ exhausted: true })
   })
 })
 

@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import type { OrderRow } from '../../../main/services/database.js'
+import type { OfflineOrderLine } from '../../../main/services/shopify-types.js'
 import { formatCurrency } from '../lib/currency'
 
 type OrderStatus = 'synced' | 'pending_sync' | 'failed' | 'voided'
@@ -27,6 +28,7 @@ export default function OrderHistory({ onRetry, onPrint, requestManagerPin }: Or
   const [error, setError] = useState<string | null>(null)
   const [voidError, setVoidError] = useState<string | null>(null)
   const [voidingId, setVoidingId] = useState<number | null>(null)
+  const [expandedOrderId, setExpandedOrderId] = useState<number | null>(null)
 
   const fetchOrders = async () => {
     try {
@@ -67,6 +69,27 @@ export default function OrderHistory({ onRetry, onPrint, requestManagerPin }: Or
         }
       })()
     })
+  }
+
+  const toggleExpanded = (localId: number) => {
+    setExpandedOrderId((prev) => (prev === localId ? null : localId))
+  }
+
+  /**
+   * Parses the persisted `payload_json` blob for its line items, used
+   * to render the expanded detail view. Returns an empty list for a
+   * row whose payload is missing or malformed rather than throwing.
+   *
+   * @param {OrderRow} order
+   * @returns {OfflineOrderLine[]}
+   */
+  const getLineItems = (order: OrderRow): OfflineOrderLine[] => {
+    try {
+      const payload = JSON.parse(order.payload_json) as { lineItems?: OfflineOrderLine[] }
+      return payload.lineItems ?? []
+    } catch {
+      return []
+    }
   }
 
   const getStatusBadge = (status: OrderStatus) => {
@@ -139,63 +162,128 @@ export default function OrderHistory({ onRetry, onPrint, requestManagerPin }: Or
           {voidError}
         </p>
       )}
-      {orders.map((order) => (
-        <div
-          key={order.local_id}
-          className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm"
-        >
-          <div className="flex items-start justify-between">
-            <div>
-              <p className="text-lg font-semibold text-slate-900">
-                Order #{order.local_id}
-              </p>
-              <p className="text-base text-slate-500">
-                {new Date(order.created_at).toLocaleString()}
-              </p>
+      {orders.map((order) => {
+        const isExpanded = expandedOrderId === order.local_id
+        return (
+          <div
+            key={order.local_id}
+            onClick={() => toggleExpanded(order.local_id)}
+            className="cursor-pointer rounded-lg border border-slate-200 bg-white p-4 shadow-sm"
+          >
+            <div className="flex items-start justify-between">
+              <div>
+                <p className="text-lg font-semibold text-slate-900">
+                  Order #{order.local_id}
+                </p>
+                <p className="text-base text-slate-500">
+                  {new Date(order.created_at).toLocaleString()}
+                </p>
+              </div>
+              <div className="flex items-center gap-2">
+                {getStatusBadge(order.status)}
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    onPrint(order.local_id)
+                  }}
+                  className="h-11 rounded-md border border-slate-300 px-4 text-base font-medium text-slate-700 hover:bg-slate-50"
+                >
+                  Print Receipt
+                </button>
+                {(order.status === 'failed' ||
+                  order.status === 'pending_sync') && (
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      onRetry(order.local_id)
+                    }}
+                    className="h-11 rounded-md bg-rose-600 px-4 text-base font-medium text-white hover:bg-rose-700"
+                  >
+                    Retry Sync
+                  </button>
+                )}
+                {order.status === 'pending_sync' && (
+                  <button
+                    type="button"
+                    disabled={voidingId === order.local_id}
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      handleVoid(order.local_id)
+                    }}
+                    className="h-11 rounded-md border border-rose-300 px-4 text-base font-medium text-rose-700 hover:bg-rose-50 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {voidingId === order.local_id ? 'Voiding…' : 'Void'}
+                  </button>
+                )}
+                <span className="pl-1 text-sm text-slate-400" aria-hidden="true">
+                  {isExpanded ? '▲' : '▼'}
+                </span>
+              </div>
             </div>
-            <div className="flex items-center gap-2">
-              {getStatusBadge(order.status)}
-              <button
-                type="button"
-                onClick={() => onPrint(order.local_id)}
-                className="h-11 rounded-md border border-slate-300 px-4 text-base font-medium text-slate-700 hover:bg-slate-50"
+            <div className="mt-2 flex items-center justify-between border-t border-slate-100 pt-2">
+              <p className="text-base text-slate-600">
+                Total: {formatCurrency(order.total)}
+              </p>
+              {order.shopify_order_id && (
+                <p className="text-sm text-slate-400">
+                  Shopify: {order.shopify_order_id.split('/').pop()}
+                </p>
+              )}
+            </div>
+            {order.fiscal_invoice_number && (
+              <div
+                className="mt-2 flex items-center gap-3 border-t border-slate-100 pt-2"
+                onClick={(e) => e.stopPropagation()}
               >
-                Print Receipt
-              </button>
-              {(order.status === 'failed' ||
-                order.status === 'pending_sync') && (
-                <button
-                  type="button"
-                  onClick={() => onRetry(order.local_id)}
-                  className="h-11 rounded-md bg-rose-600 px-4 text-base font-medium text-white hover:bg-rose-700"
-                >
-                  Retry Sync
-                </button>
-              )}
-              {order.status === 'pending_sync' && (
-                <button
-                  type="button"
-                  disabled={voidingId === order.local_id}
-                  onClick={() => handleVoid(order.local_id)}
-                  className="h-11 rounded-md border border-rose-300 px-4 text-base font-medium text-rose-700 hover:bg-rose-50 disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  {voidingId === order.local_id ? 'Voiding…' : 'Void'}
-                </button>
-              )}
-            </div>
-          </div>
-          <div className="mt-2 flex items-center justify-between border-t border-slate-100 pt-2">
-            <p className="text-base text-slate-600">
-              Total: {formatCurrency(order.total)}
-            </p>
-            {order.shopify_order_id && (
-              <p className="text-sm text-slate-400">
-                Shopify: {order.shopify_order_id.split('/').pop()}
-              </p>
+                {order.fiscal_qr_code ? (
+                  <img
+                    src={`data:image/png;base64,${order.fiscal_qr_code}`}
+                    alt={`eTIMS QR code for invoice ${order.fiscal_invoice_number}`}
+                    className="h-12 w-12 rounded border border-slate-200 object-contain"
+                  />
+                ) : (
+                  <span className="inline-flex items-center rounded-full bg-emerald-100 px-3 py-1 text-sm font-medium text-emerald-800">
+                    Fiscalized
+                  </span>
+                )}
+                <details className="text-sm text-slate-600">
+                  <summary className="cursor-pointer font-medium text-slate-700">
+                    Fiscal Inv: {order.fiscal_invoice_number}
+                  </summary>
+                  <p className="mt-1 text-slate-500">
+                    Fiscalized at{' '}
+                    {order.fiscal_fiscalized_at
+                      ? new Date(order.fiscal_fiscalized_at).toLocaleString()
+                      : 'unknown time'}
+                  </p>
+                </details>
+              </div>
+            )}
+            {isExpanded && (
+              <div className="mt-2 space-y-1 border-t border-slate-100 pt-2">
+                {getLineItems(order).length === 0 ? (
+                  <p className="text-sm text-slate-400">No item details available</p>
+                ) : (
+                  getLineItems(order).map((item, index) => (
+                    <div
+                      key={index}
+                      className="flex items-center justify-between text-sm text-slate-600"
+                    >
+                      <span>
+                        {item.quantity} x {item.title}
+                        {item.variantTitle ? ` (${item.variantTitle})` : ''}
+                      </span>
+                      <span>{formatCurrency(item.unitPrice * item.quantity)}</span>
+                    </div>
+                  ))
+                )}
+              </div>
             )}
           </div>
-        </div>
-      ))}
+        )
+      })}
     </div>
   )
 }

@@ -168,7 +168,10 @@ describe('RubisDatabase.closeShift', () => {
     tendered_amount: total,
     change_due: 0,
     reference_number: null,
-    shift_id: 1
+    shift_id: 1,
+    fiscal_invoice_number: null,
+    fiscal_qr_code: null,
+    fiscal_fiscalized_at: null
   })
 
   const mpesaOrder = (total: number): OrderRow => ({

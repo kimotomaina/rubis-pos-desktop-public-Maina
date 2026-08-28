@@ -3,6 +3,7 @@ import { useCartStore } from '../stores/cartStore'
 import { useAuthStore } from '../stores/authStore'
 import { calculateChange, canCompleteSale } from '../lib/checkoutMath'
 import { formatCurrency } from '../lib/currency'
+import { isValidKraPinFormat, KRA_PIN_MAX_LENGTH } from '../lib/kraPin'
 import PaymentModal from './PaymentModal'
 import type { PaymentMethod } from '../../../main/services/database.js'
 import { CloseIcon } from './icons'
@@ -39,9 +40,15 @@ export default function CheckoutModal({ onClose }: CheckoutModalProps) {
   const [method, setMethod] = useState<PaymentMethod | null>(null)
   const [tenderedInput, setTenderedInput] = useState('')
   const [referenceNumber, setReferenceNumber] = useState('')
+  const [customerPin, setCustomerPin] = useState('')
 
   const tenderedAmount = parseFloat(tenderedInput) || 0
   const changeDue = calculateChange(cartTotal, tenderedAmount)
+  const trimmedCustomerPin = customerPin.trim()
+  const customerPinError =
+    trimmedCustomerPin.length > 0 && !isValidKraPinFormat(trimmedCustomerPin)
+      ? 'This doesn’t look like a valid KRA PIN (e.g. P051234567Z) — double-check it, or leave it blank for a walk-in receipt.'
+      : null
 
   useEffect(() => {
     if (checkoutStatus === 'synced' || checkoutStatus === 'queued-offline') {
@@ -65,7 +72,8 @@ export default function CheckoutModal({ onClose }: CheckoutModalProps) {
       paymentMethod: method,
       tenderedAmount: method === 'cash' ? tenderedAmount : cartTotal,
       changeDue: method === 'cash' ? changeDue : 0,
-      referenceNumber: method === 'cash' ? undefined : referenceNumber.trim()
+      referenceNumber: method === 'cash' ? undefined : referenceNumber.trim(),
+      customerPin: trimmedCustomerPin || undefined
     })
   }
 
@@ -83,7 +91,8 @@ export default function CheckoutModal({ onClose }: CheckoutModalProps) {
       paymentMethod: 'mpesa',
       tenderedAmount: cartTotal,
       changeDue: 0,
-      referenceNumber: mpesaReference
+      referenceNumber: mpesaReference,
+      customerPin: trimmedCustomerPin || undefined
     })
   }
 
@@ -95,6 +104,7 @@ export default function CheckoutModal({ onClose }: CheckoutModalProps) {
     if (method !== 'cash') return
 
     const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.target instanceof HTMLInputElement) return
       if (event.key === 'Enter') {
         if (canSubmit && checkoutStatus !== 'submitting') handleSubmit()
         return
@@ -137,6 +147,23 @@ export default function CheckoutModal({ onClose }: CheckoutModalProps) {
           <div className="mb-4 flex justify-between text-3xl font-bold text-slate-900">
             <span>Total</span>
             <span>{formatCurrency(cartTotal)}</span>
+          </div>
+
+          <div className="mb-4">
+            <label className="mb-1 block text-base font-medium text-slate-600">
+              Customer KRA PIN <span className="font-normal text-slate-400">(optional — for a B2B invoice)</span>
+            </label>
+            <input
+              type="text"
+              value={customerPin}
+              onChange={(e) => setCustomerPin(e.target.value.toUpperCase())}
+              maxLength={KRA_PIN_MAX_LENGTH}
+              placeholder="P051234567Z"
+              className="h-12 w-full rounded-lg border border-slate-300 px-3 text-lg uppercase focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-100"
+            />
+            {customerPinError && (
+              <p className="mt-1 text-sm font-medium text-rose-600">{customerPinError}</p>
+            )}
           </div>
 
           {method === null && (

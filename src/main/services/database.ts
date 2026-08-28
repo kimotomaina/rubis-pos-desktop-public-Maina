@@ -4,7 +4,10 @@
  * Owns the three persistence concerns of the POS:
  *   1. `products`    — last-good product catalog cache (offline browsing)
  *   2. `orders`      — ledger of every checkout made on this terminal
- *   3. `sync_queue`  — pending Shopify pushes with retry/backoff metadata
+ *   3. `sync_queue`  — pending Shopify pushes AND pending eTIMS
+ *      fiscalization retries, distinguished by `entity_type`
+ *      (`'order'` vs `'etims_invoice'`), each with its own
+ *      retry/backoff metadata
  *
  * The connection is created through an injectable factory so unit tests
  * can substitute a recording fake without touching the native module.
@@ -14,6 +17,7 @@ import BetterSqlite3 from 'better-sqlite3'
 import type { Database as SqliteConnection } from 'better-sqlite3'
 import type { Discount, OfflineOrderPayload } from './shopify-types.js'
 import type { CartItem, ProductSummary } from '../../renderer/src/types/shopify.js'
+import type { FiscalInvoiceRequest } from './integrations/etims.js'
 
 /** Lifecycle states of a local order row. */
 export type OrderStatus = 'pending_sync' | 'synced' | 'failed' | 'voided'
@@ -35,6 +39,12 @@ export interface OrderRow {
   change_due: number | null
   reference_number: string | null
   shift_id: number | null
+  /** KRA/eTIMS invoice number, set once fiscalization succeeds. */
+  fiscal_invoice_number: string | null
+  /** Base64 QR code payload returned (or generated) at fiscalization time. */
+  fiscal_qr_code: string | null
+  /** ISO timestamp of a successful fiscalization. */
+  fiscal_fiscalized_at: string | null
 }
 
 /** Role assignable to a staff account. */
@@ -94,6 +104,11 @@ export interface SyncQueueItem extends Omit<SyncQueueRow, 'payload_json'> {
   payload: OfflineOrderPayload
 }
 
+/** A `sync_queue` row of `entity_type = 'etims_invoice'`, payload parsed into a typed object. */
+export interface FiscalQueueItem extends Omit<SyncQueueRow, 'payload_json'> {
+  payload: FiscalInvoiceRequest
+}
+
 /** Shape passed into {@link RubisDatabase.queueOrder}. */
 export interface QueueOrderInput {
   items: CartItem[]
@@ -106,6 +121,8 @@ export interface QueueOrderInput {
   changeDue: number
   referenceNumber?: string
   shiftId?: number
+  /** Customer's KRA PIN, when captured for a B2B eTIMS invoice — omitted for a walk-in B2C sale. */
+  customerPin?: string
   /** Cart-level discount, applied on top of the line-item subtotal. */
   cartDiscount?: Discount
 }
@@ -135,6 +152,8 @@ export interface CheckoutRequest {
   changeDue: number
   referenceNumber?: string
   shiftId?: number
+  /** Customer's KRA PIN, when captured for a B2B eTIMS invoice — omitted for a walk-in B2C sale. */
+  customerPin?: string
   cartDiscount?: Discount
 }
 
@@ -159,6 +178,25 @@ export const SYNC_MAX_ATTEMPTS = 10
 export function computeBackoffMs(attemptNumber: number): number {
   const safe = Math.max(1, Math.floor(attemptNumber))
   return Math.min(SYNC_BACKOFF_BASE_MS * 2 ** (safe - 1), SYNC_BACKOFF_CAP_MS)
+}
+
+/**
+ * Adds the `fiscal_*` columns to a pre-existing `orders` table (added
+ * after the table was first shipped). `CREATE TABLE IF NOT EXISTS`
+ * only covers a fresh database, so an upgrade from an older install
+ * needs an explicit `ALTER TABLE`; failures are swallowed since
+ * `better-sqlite3` throws when a column already exists and there is
+ * no portable `ADD COLUMN IF NOT EXISTS` in SQLite.
+ */
+function migrateOrdersFiscalColumns(connection: SqliteConnection): void {
+  const fiscalColumns = ['fiscal_invoice_number', 'fiscal_qr_code', 'fiscal_fiscalized_at']
+  for (const column of fiscalColumns) {
+    try {
+      connection.exec(`ALTER TABLE orders ADD COLUMN ${column} TEXT`)
+    } catch {
+      // Column already exists — table was created with the current schema.
+    }
+  }
 }
 
 /**
@@ -188,7 +226,10 @@ export const SCHEMA = {
     tendered_amount REAL,
     change_due REAL,
     reference_number TEXT,
-    shift_id INTEGER
+    shift_id INTEGER,
+    fiscal_invoice_number TEXT,
+    fiscal_qr_code TEXT,
+    fiscal_fiscalized_at TEXT
   )`,
   syncQueue: `CREATE TABLE IF NOT EXISTS sync_queue (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -203,6 +244,7 @@ export const SCHEMA = {
   )`,
   queueIndex: `CREATE INDEX IF NOT EXISTS idx_sync_queue_next_attempt ON sync_queue (next_attempt_at)`,
   barcodeIndex: `CREATE INDEX IF NOT EXISTS idx_products_barcode ON products (barcode)`,
+  fiscalInvoiceIndex: `CREATE INDEX IF NOT EXISTS idx_orders_fiscal_invoice_number ON orders (fiscal_invoice_number)`,
   settings: `CREATE TABLE IF NOT EXISTS settings (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
@@ -321,6 +363,8 @@ export class RubisDatabase {
     connection.exec(SCHEMA.shifts)
     connection.exec(SCHEMA.integrations)
     connection.exec(SCHEMA.printers)
+    migrateOrdersFiscalColumns(connection)
+    connection.exec(SCHEMA.fiscalInvoiceIndex)
     this.connection = connection
   }
 
@@ -451,6 +495,7 @@ export class RubisDatabase {
       tenderedAmount: input.tenderedAmount,
       changeDue: input.changeDue,
       referenceNumber: input.referenceNumber,
+      customerPin: input.customerPin,
       cartDiscount: input.cartDiscount
     }
 
@@ -489,7 +534,10 @@ export class RubisDatabase {
   }
 
   /**
-   * Returns sync-queue items eligible for pushing (due date reached).
+   * Returns `entity_type = 'order'` sync-queue items eligible for
+   * pushing to Shopify (due date reached). Scoped to `'order'` so the
+   * Shopify sync engine never picks up `'etims_invoice'` rows sharing
+   * this table and tries to parse/push them as Shopify orders.
    *
    * @param {number} now — current timestamp in epoch milliseconds
    * @returns {SyncQueueItem[]} oldest first
@@ -497,7 +545,7 @@ export class RubisDatabase {
   getPendingSyncQueue(now: number): SyncQueueItem[] {
     const rows = this.conn
       .prepare(
-        'SELECT id, entity_type, entity_id, action, payload_json, attempts, last_error, created_at, next_attempt_at FROM sync_queue WHERE next_attempt_at <= ? ORDER BY id ASC'
+        "SELECT id, entity_type, entity_id, action, payload_json, attempts, last_error, created_at, next_attempt_at FROM sync_queue WHERE entity_type = 'order' AND next_attempt_at <= ? ORDER BY id ASC"
       )
       .all(now) as SyncQueueRow[]
 
@@ -505,6 +553,105 @@ export class RubisDatabase {
       ...row,
       payload: JSON.parse(row.payload_json) as OfflineOrderPayload
     }))
+  }
+
+  /**
+   * Queues a fiscalization retry for an order whose immediate
+   * `submitInvoice()` attempt at checkout failed — the eTIMS
+   * store-and-forward counterpart to {@link queueOrder}'s Shopify
+   * queuing. Reuses `sync_queue` rather than a parallel table: the
+   * `(entity_type, entity_id, payload_json, attempts, next_attempt_at)`
+   * shape is identical, just scoped to `entity_type = 'etims_invoice'`.
+   *
+   * @param {number} localId
+   * @param {FiscalInvoiceRequest} request — resent verbatim on every
+   *   retry, including `clientOrderUuid`, so the fiscal device can
+   *   recognize a retried request as a duplicate of one that may have
+   *   already succeeded on-device without acknowledging.
+   * @returns {{ queueId: number }}
+   */
+  queueFiscalInvoice(localId: number, request: FiscalInvoiceRequest): { queueId: number } {
+    const createdAt = new Date().toISOString()
+    const info = this.conn
+      .prepare(
+        'INSERT INTO sync_queue (entity_type, entity_id, action, payload_json, attempts, created_at, next_attempt_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
+      )
+      .run('etims_invoice', localId, 'fiscalizeInvoice', JSON.stringify(request), 0, createdAt, 0)
+    return { queueId: Number(info.lastInsertRowid) }
+  }
+
+  /**
+   * Returns `entity_type = 'etims_invoice'` sync-queue items eligible
+   * for a retried fiscalization attempt (due date reached).
+   *
+   * @param {number} now — current timestamp in epoch milliseconds
+   * @returns {FiscalQueueItem[]} oldest first
+   */
+  getPendingFiscalQueue(now: number): FiscalQueueItem[] {
+    const rows = this.conn
+      .prepare(
+        "SELECT id, entity_type, entity_id, action, payload_json, attempts, last_error, created_at, next_attempt_at FROM sync_queue WHERE entity_type = 'etims_invoice' AND next_attempt_at <= ? ORDER BY id ASC"
+      )
+      .all(now) as SyncQueueRow[]
+
+    return rows.map((row) => ({
+      ...row,
+      payload: JSON.parse(row.payload_json) as FiscalInvoiceRequest
+    }))
+  }
+
+  /**
+   * Records a successful retried fiscalization: saves the invoice
+   * number/QR code onto the order and removes the queue entry.
+   *
+   * @param {number} queueId
+   * @param {string} invoiceNumber
+   * @param {string} qrCode
+   */
+  markFiscalQueueItemSynced(queueId: number, invoiceNumber: string, qrCode: string): void {
+    const row = this.conn
+      .prepare('SELECT entity_id FROM sync_queue WHERE id = ?')
+      .get(queueId) as { entity_id: number } | undefined
+    if (!row) return
+
+    const settle = this.conn.transaction(() => {
+      this.setOrderFiscalInfo(row.entity_id, invoiceNumber, qrCode)
+      this.conn.prepare('DELETE FROM sync_queue WHERE id = ?').run(queueId)
+    })
+    settle()
+  }
+
+  /**
+   * Records a failed retried fiscalization attempt: increments the
+   * attempt counter, stores the last error, and schedules the next
+   * attempt with exponential backoff. Unlike
+   * {@link recordQueueFailure}, an exhausted row is never deleted —
+   * fiscalization is a compliance obligation, not a best-effort sync,
+   * so an abandoned invoice is left in `sync_queue` (its
+   * `last_error` prefixed `ABANDONED`, `next_attempt_at` pushed
+   * effectively to never) for IT to find and handle manually rather
+   * than silently disappearing.
+   *
+   * @param {number} queueId
+   * @param {string} error — human-readable failure reason
+   * @returns {{ exhausted: boolean }}
+   */
+  recordFiscalQueueFailure(queueId: number, error: string): { exhausted: boolean } {
+    const row = this.conn
+      .prepare('SELECT id, attempts FROM sync_queue WHERE id = ?')
+      .get(queueId) as { id: number; attempts: number } | undefined
+    if (!row) return { exhausted: true }
+
+    const attempts = row.attempts + 1
+    const exhausted = attempts >= this.maxAttempts
+    const lastError = exhausted ? `ABANDONED after ${attempts} attempts: ${error}` : error
+    const nextAttemptAt = exhausted ? Number.MAX_SAFE_INTEGER : Date.now() + computeBackoffMs(attempts)
+
+    this.conn
+      .prepare('UPDATE sync_queue SET attempts = ?, last_error = ?, next_attempt_at = ? WHERE id = ?')
+      .run(attempts, lastError, nextAttemptAt, queueId)
+
+    return { exhausted }
   }
 
   /**
@@ -516,9 +663,43 @@ export class RubisDatabase {
   getOrder(localId: number): OrderRow | undefined {
     return this.conn
       .prepare(
-        'SELECT local_id, shopify_order_id, total, status, created_at, payload_json, staff_id, payment_method, tendered_amount, change_due, reference_number, shift_id FROM orders WHERE local_id = ?'
+        'SELECT local_id, shopify_order_id, total, status, created_at, payload_json, staff_id, payment_method, tendered_amount, change_due, reference_number, shift_id, fiscal_invoice_number, fiscal_qr_code, fiscal_fiscalized_at FROM orders WHERE local_id = ?'
       )
       .get(localId) as OrderRow | undefined
+  }
+
+  /**
+   * Records a successful fiscalization against an order — the
+   * standard POS pattern of persisting the fiscal result locally so
+   * {@link getOrderByFiscalInvoiceNumber} can serve read-backs without
+   * re-querying the fiscal device's Electronic Journal.
+   *
+   * @param {number} localId
+   * @param {string} invoiceNumber
+   * @param {string} qrCode
+   */
+  setOrderFiscalInfo(localId: number, invoiceNumber: string, qrCode: string): void {
+    this.conn
+      .prepare(
+        'UPDATE orders SET fiscal_invoice_number = ?, fiscal_qr_code = ?, fiscal_fiscalized_at = ? WHERE local_id = ?'
+      )
+      .run(invoiceNumber, qrCode, new Date().toISOString(), localId)
+  }
+
+  /**
+   * Looks up an order by its previously stored eTIMS invoice number —
+   * the local-DB fallback `getInvoiceDetails` uses instead of querying
+   * the fiscal device directly.
+   *
+   * @param {string} invoiceNumber
+   * @returns the order row, or `undefined` when no order was fiscalized with that number
+   */
+  getOrderByFiscalInvoiceNumber(invoiceNumber: string): OrderRow | undefined {
+    return this.conn
+      .prepare(
+        'SELECT local_id, shopify_order_id, total, status, created_at, payload_json, staff_id, payment_method, tendered_amount, change_due, reference_number, shift_id, fiscal_invoice_number, fiscal_qr_code, fiscal_fiscalized_at FROM orders WHERE fiscal_invoice_number = ?'
+      )
+      .get(invoiceNumber) as OrderRow | undefined
   }
 
   /**
@@ -648,7 +829,7 @@ export class RubisDatabase {
   getOrders(limit = 50, offset = 0): OrderRow[] {
     return this.conn
       .prepare(
-        'SELECT local_id, shopify_order_id, total, status, created_at FROM orders ORDER BY created_at DESC LIMIT ? OFFSET ?'
+        'SELECT local_id, shopify_order_id, total, status, created_at, payload_json, fiscal_invoice_number, fiscal_qr_code, fiscal_fiscalized_at FROM orders ORDER BY created_at DESC LIMIT ? OFFSET ?'
       )
       .all(limit, offset) as OrderRow[]
   }
@@ -693,8 +874,9 @@ export class RubisDatabase {
   /**
    * Voids a local `pending_sync` order: reverses each line item's
    * quantity back into the cached `products` inventory, marks the
-   * order `voided`, and removes any outstanding `sync_queue` entry so
-   * a voided sale is never pushed to Shopify after the fact.
+   * order `voided`, and removes any outstanding `sync_queue` entries
+   * (both `'order'` and `'etims_invoice'`) so a voided sale is never
+   * pushed to Shopify or retried for fiscalization after the fact.
    *
    * Restricted to `pending_sync` orders — see `voids.ts` for the
    * caller-facing validation and {@link RubisDatabase.getOrder} for
@@ -728,6 +910,9 @@ export class RubisDatabase {
     const clearQueue = this.conn.prepare(
       "DELETE FROM sync_queue WHERE entity_type = 'order' AND entity_id = ?"
     )
+    const clearFiscalQueue = this.conn.prepare(
+      "DELETE FROM sync_queue WHERE entity_type = 'etims_invoice' AND entity_id = ?"
+    )
 
     const settle = this.conn.transaction(() => {
       for (const line of payload.lineItems) {
@@ -735,6 +920,7 @@ export class RubisDatabase {
       }
       markVoided.run('voided', localId)
       clearQueue.run(localId)
+      clearFiscalQueue.run(localId)
     })
     settle()
 

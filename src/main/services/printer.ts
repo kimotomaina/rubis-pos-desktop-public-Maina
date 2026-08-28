@@ -24,6 +24,7 @@ import type { ServiceResult } from './shopify-types.js'
 import type { ZReport } from './reports.js'
 import type { PrinterConfig, PrinterType } from './database.js'
 import { formatCurrency } from './currency.js'
+import { generatePdfReceipt } from './pdf-receipt.js'
 
 /** Store-level configuration resolved once at startup from env vars / settings. */
 export interface PrinterSettings {
@@ -46,6 +47,12 @@ export interface ReceiptOrder {
   tenderedAmount: number
   changeDue: number
   referenceNumber?: string
+  /** Customer's KRA PIN, when captured for a B2B eTIMS invoice — omitted for a walk-in B2C sale. */
+  customerPin?: string
+  /** KRA/eTIMS invoice number, when the sale was fiscalized. */
+  fiscalInvoiceNumber?: string
+  /** Base64 QR code payload returned (or generated) at fiscalization time. */
+  fiscalQrCode?: string
 }
 
 /** One printed line item. */
@@ -60,6 +67,10 @@ export interface ReceiptLineItem {
 export interface ReceiptPrintResult {
   printed: boolean
   mock: boolean
+  /** Set to `'pdf'` when the thermal printer was unreachable and a PDF receipt was saved instead. */
+  mode?: 'pdf'
+  /** Absolute path of the fallback PDF, present when `mode` is `'pdf'`. */
+  filePath?: string
 }
 
 /**
@@ -76,10 +87,19 @@ export interface ThermalPrinterLike {
   drawLine(): void
   cut(): void
   execute(): Promise<unknown>
+  /** Prints a raster image from a decoded PNG buffer. Optional — absent on the mock sink. */
+  printImageBuffer?(buffer: Buffer): Promise<unknown>
 }
 
 /** Builds a {@link ThermalPrinterLike} client for a given interface address. */
 export type PrinterFactory = (interfaceName: string) => ThermalPrinterLike
+
+/** Generates a PDF fallback receipt and returns its saved file path. */
+export type PdfReceiptGenerator = (
+  order: ReceiptOrder,
+  items: ReceiptLineItem[],
+  settings: PrinterSettings
+) => Promise<string>
 
 /**
  * Connect/socket timeout (ms) for the TCP/IP printer transport.
@@ -163,20 +183,23 @@ export function resolvePrinterSettings(
  * exact print sequence independent of hardware/mock branching.
  *
  * Layout: store name (centered, bold) → order # → date/time → cashier
- * → dashed line → items (name/variant, qty, price) → dashed line →
- * subtotal → tax → total (bold) → payment method → "Thank you!".
+ * → customer KRA PIN, for a B2B sale → dashed line → items
+ * (name/variant, qty, price) → dashed line → subtotal → tax → total
+ * (bold) → payment method → "Thank you!" → fiscal invoice number/QR
+ * code, when the sale was fiscalized.
  *
  * @param {ThermalPrinterLike} client
  * @param {ReceiptOrder} order
  * @param {ReceiptLineItem[]} items
  * @param {PrinterSettings} settings
+ * @returns {Promise<void>}
  */
-export function renderReceipt(
+export async function renderReceipt(
   client: ThermalPrinterLike,
   order: ReceiptOrder,
   items: ReceiptLineItem[],
   settings: PrinterSettings
-): void {
+): Promise<void> {
   const subtotal = items.reduce(
     (sum, item) => sum + item.unitPrice * item.quantity,
     0
@@ -191,6 +214,9 @@ export function renderReceipt(
   client.println(`Order #${order.localId}`)
   client.println(new Date(order.createdAt).toLocaleString())
   client.println(`Cashier: ${order.cashierName}`)
+  if (order.customerPin) {
+    client.println(`Customer PIN: ${order.customerPin}`)
+  }
   client.drawLine()
 
   client.alignLeft()
@@ -218,7 +244,46 @@ export function renderReceipt(
 
   client.alignCenter()
   client.println('Thank you!')
+
+  if (order.fiscalInvoiceNumber || order.fiscalQrCode) {
+    client.drawLine()
+    if (order.fiscalInvoiceNumber) {
+      client.println(`Fiscal Inv: ${order.fiscalInvoiceNumber}`)
+    }
+    if (order.fiscalQrCode) {
+      await printFiscalQrCode(client, order.fiscalQrCode, order.fiscalInvoiceNumber)
+    }
+  }
+
   client.cut()
+}
+
+/**
+ * Prints the eTIMS QR code as a raster image via
+ * {@link ThermalPrinterLike.printImageBuffer}. Falls back to a plain-text
+ * placeholder — rather than breaking the receipt layout — when the
+ * client has no image support, or the buffer isn't a decodable PNG
+ * (the fiscal device may return an opaque payload rather than image
+ * bytes; see the module doc for the QR code roadmap).
+ *
+ * @param {ThermalPrinterLike} client
+ * @param {string} qrCodeBase64
+ * @param {string} [invoiceNumber]
+ */
+async function printFiscalQrCode(
+  client: ThermalPrinterLike,
+  qrCodeBase64: string,
+  invoiceNumber?: string
+): Promise<void> {
+  if (client.printImageBuffer) {
+    try {
+      await client.printImageBuffer(Buffer.from(qrCodeBase64, 'base64'))
+      return
+    } catch {
+      // Not a decodable image — fall through to the text placeholder.
+    }
+  }
+  client.println(`[QR CODE: ${invoiceNumber ?? qrCodeBase64.slice(0, 12)}]`)
 }
 
 /**
@@ -301,6 +366,22 @@ function createMockSink(): { client: ThermalPrinterLike; lines: string[] } {
 }
 
 /**
+ * True when `err` carries one of the TCP failure codes that mean the
+ * printer itself is offline or unreachable, as opposed to a hardware
+ * fault (out of paper, etc.) on an otherwise-connected printer. Used
+ * to decide whether {@link printReceipt} should fall back to a PDF
+ * receipt.
+ *
+ * @param {unknown} err
+ * @returns {boolean}
+ */
+function isPrinterOfflineError(err: unknown): boolean {
+  if (!err || typeof err !== 'object' || !('code' in err)) return false
+  const code = (err as { code?: string }).code
+  return code === 'ECONNREFUSED' || code === 'EHOSTUNREACH' || code === 'ETIMEDOUT'
+}
+
+/**
  * Translates a printer/transport failure into a POS-safe message.
  *
  * @param {unknown} err
@@ -331,17 +412,26 @@ function translatePrinterError(err: unknown): string {
  * and Z-reports — the only difference between the two is which
  * `render*` function draws onto the client.
  *
- * @param {(client: ThermalPrinterLike) => void} render
+ * When `onOfflineFallback` is given and the printer turns out to be
+ * offline or unreachable (connection probe fails, or `execute()`
+ * throws a network error), its result is returned instead of a
+ * failure — used by {@link printReceipt} to fall back to a PDF
+ * receipt. Callers with no meaningful fallback (Z-reports, test
+ * pages) omit it and keep failing as before.
+ *
+ * @param {(client: ThermalPrinterLike) => void | Promise<void>} render
  * @param {PrinterSettings} settings
  * @param {PrinterFactory} factory
  * @param {string} mockLogLabel — identifies the document in the mock-mode console log
+ * @param {() => Promise<ServiceResult<ReceiptPrintResult>>} [onOfflineFallback]
  * @returns {Promise<ServiceResult<ReceiptPrintResult>>}
  */
 async function sendToPrinter(
-  render: (client: ThermalPrinterLike) => void,
+  render: (client: ThermalPrinterLike) => void | Promise<void>,
   settings: PrinterSettings,
   factory: PrinterFactory,
-  mockLogLabel: string
+  mockLogLabel: string,
+  onOfflineFallback?: () => Promise<ServiceResult<ReceiptPrintResult>>
 ): Promise<ServiceResult<ReceiptPrintResult>> {
   const usingMock = settings.mock === true
   const sink = usingMock ? createMockSink() : null
@@ -351,6 +441,7 @@ async function sendToPrinter(
     if (!usingMock) {
       const connected = await client.isPrinterConnected()
       if (!connected) {
+        if (onOfflineFallback) return onOfflineFallback()
         return {
           success: false,
           error: 'Printer offline or unreachable — check the connection and try again'
@@ -358,7 +449,7 @@ async function sendToPrinter(
       }
     }
 
-    render(client)
+    await render(client)
     await client.execute()
 
     if (sink) {
@@ -366,6 +457,33 @@ async function sendToPrinter(
     }
 
     return { success: true, data: { printed: true, mock: usingMock } }
+  } catch (err) {
+    if (onOfflineFallback && isPrinterOfflineError(err)) {
+      return onOfflineFallback()
+    }
+    return { success: false, error: translatePrinterError(err) }
+  }
+}
+
+/**
+ * Builds a {@link ReceiptPrintResult} for a receipt saved as a PDF
+ * fallback, or a failure result if PDF generation itself throws.
+ *
+ * @param {ReceiptOrder} order
+ * @param {ReceiptLineItem[]} items
+ * @param {PrinterSettings} settings
+ * @param {PdfReceiptGenerator} pdfGenerator
+ * @returns {Promise<ServiceResult<ReceiptPrintResult>>}
+ */
+async function fallBackToPdf(
+  order: ReceiptOrder,
+  items: ReceiptLineItem[],
+  settings: PrinterSettings,
+  pdfGenerator: PdfReceiptGenerator
+): Promise<ServiceResult<ReceiptPrintResult>> {
+  try {
+    const filePath = await pdfGenerator(order, items, settings)
+    return { success: true, data: { printed: false, mock: false, mode: 'pdf', filePath } }
   } catch (err) {
     return { success: false, error: translatePrinterError(err) }
   }
@@ -376,25 +494,30 @@ async function sendToPrinter(
  *
  * When `settings.mock` is set, no hardware is contacted — the
  * formatted receipt is logged to the console instead so a demo can
- * proceed without a physical printer.
+ * proceed without a physical printer. When the printer is offline or
+ * unreachable, a PDF receipt is generated and saved instead of
+ * failing the print outright — see {@link fallBackToPdf}.
  *
  * @param {ReceiptOrder} order
  * @param {ReceiptLineItem[]} items
  * @param {PrinterSettings} settings
  * @param {PrinterFactory} [factory] — injected client factory for testing
+ * @param {PdfReceiptGenerator} [pdfGenerator] — injected PDF fallback generator for testing
  * @returns {Promise<ServiceResult<ReceiptPrintResult>>}
  */
 export async function printReceipt(
   order: ReceiptOrder,
   items: ReceiptLineItem[],
   settings: PrinterSettings,
-  factory: PrinterFactory = defaultPrinterFactory
+  factory: PrinterFactory = defaultPrinterFactory,
+  pdfGenerator: PdfReceiptGenerator = generatePdfReceipt
 ): Promise<ServiceResult<ReceiptPrintResult>> {
   return sendToPrinter(
     (client) => renderReceipt(client, order, items, settings),
     settings,
     factory,
-    `Order #${order.localId}`
+    `Order #${order.localId}`,
+    () => fallBackToPdf(order, items, settings, pdfGenerator)
   )
 }
 
@@ -431,6 +554,7 @@ export async function printZReport(
  * @param {PrinterSettings} defaultSettings
  * @param {PrinterType} [printerType] — defaults to `'receipt'`
  * @param {PrinterFactory} [factory] — injected client factory for testing
+ * @param {PdfReceiptGenerator} [pdfGenerator] — injected PDF fallback generator for testing
  * @returns {Promise<ServiceResult<ReceiptPrintResult>>}
  */
 export async function printReceiptToType(
@@ -439,10 +563,11 @@ export async function printReceiptToType(
   registry: PrinterRegistry,
   defaultSettings: PrinterSettings,
   printerType: PrinterType = 'receipt',
-  factory: PrinterFactory = defaultPrinterFactory
+  factory: PrinterFactory = defaultPrinterFactory,
+  pdfGenerator: PdfReceiptGenerator = generatePdfReceipt
 ): Promise<ServiceResult<ReceiptPrintResult>> {
   const settings = resolvePrinterSettings(registry, printerType, defaultSettings)
-  return printReceipt(order, items, settings, factory)
+  return printReceipt(order, items, settings, factory, pdfGenerator)
 }
 
 /**

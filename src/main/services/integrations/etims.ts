@@ -24,6 +24,10 @@ export interface FiscalInvoiceLine {
   unitPrice: number
   /** Fractional tax rate applied to this line (0.16 = 16% VAT). */
   taxRate: number
+  /** Stable product identifier the fiscal device can key its PLU registry on — a variant id or generated hash. */
+  pluCode?: string
+  /** Device VAT class code (e.g. `'A'` for 16%). Providers default this when omitted. */
+  vatClass?: string
 }
 
 /** Request to fiscalize one completed sale. */
@@ -37,6 +41,14 @@ export interface FiscalInvoiceRequest {
   taxAmount: number
   /** Buyer's KRA PIN, when captured (optional for walk-in retail sales). */
   buyerPin?: string
+  /** Buyer's display name, when captured. */
+  customerName?: string
+  /** ISO 4217 currency code. Providers default this (e.g. to `'KES'`) when omitted. */
+  currency?: string
+  /** Till payment method (e.g. `'cash'`, `'mpesa'`, `'card'`). */
+  paymentMethod?: string
+  /** Amount tendered by the customer. */
+  amountTendered?: number
 }
 
 /** Result of a successful (or previously successful) fiscalization. */

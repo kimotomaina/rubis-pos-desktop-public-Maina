@@ -14,6 +14,12 @@ import type {
   PrinterConfig,
   PrinterType
 } from '../../../main/services/database.js'
+import {
+  DEFAULT_ETIMS_BASE_URL,
+  DEFAULT_ETIMS_VAT_CLASS,
+  DEFAULT_ETIMS_ENDPOINTS,
+  parseEtimsEndpointsInput
+} from '../lib/etimsConfig.js'
 
 interface AdminScreenProps {
   /**
@@ -80,7 +86,11 @@ export default function AdminScreen({ requestManagerPin }: AdminScreenProps) {
   )
   const [mpesaPaybill, setMpesaPaybill] = useState('')
   const [mpesaTill, setMpesaTill] = useState('')
-  const [etimsMiddlewareUrl, setEtimsMiddlewareUrl] = useState('')
+  const [etimsBaseUrl, setEtimsBaseUrl] = useState('')
+  const [etimsPassword, setEtimsPassword] = useState('')
+  const [etimsDefaultVatClass, setEtimsDefaultVatClass] = useState('')
+  const [etimsEndpointsText, setEtimsEndpointsText] = useState('')
+  const [etimsEndpointsError, setEtimsEndpointsError] = useState<string | null>(null)
   const [integrationsLoading, setIntegrationsLoading] = useState(false)
   const [integrationsMessage, setIntegrationsMessage] = useState<string | null>(null)
 
@@ -125,7 +135,14 @@ export default function AdminScreen({ requestManagerPin }: AdminScreenProps) {
       setMpesaTill(String(mpesaResult.data.till ?? ''))
     }
     if (etimsResult.success && etimsResult.data) {
-      setEtimsMiddlewareUrl(String(etimsResult.data.middlewareUrl ?? ''))
+      const config = etimsResult.data
+      setEtimsBaseUrl(String(config.baseUrl ?? ''))
+      setEtimsPassword(String(config.password ?? ''))
+      setEtimsDefaultVatClass(String(config.defaultVatClass ?? ''))
+      setEtimsEndpointsText(
+        config.endpoints ? JSON.stringify(config.endpoints, null, 2) : ''
+      )
+      setEtimsEndpointsError(null)
     }
     if (tokenStatusResult.success && tokenStatusResult.data) {
       setShopifyTokenConfigured(tokenStatusResult.data.configured)
@@ -259,14 +276,33 @@ export default function AdminScreen({ requestManagerPin }: AdminScreenProps) {
    */
   const handleSaveIntegrationsConfig = () => {
     setIntegrationsMessage(null)
+    setEtimsEndpointsError(null)
     const paybill = mpesaPaybill.trim()
     const till = mpesaTill.trim()
-    const middlewareUrl = etimsMiddlewareUrl.trim()
+    const baseUrl = etimsBaseUrl.trim()
+    const password = etimsPassword.trim()
+    const defaultVatClass = etimsDefaultVatClass.trim()
+    const { endpoints, error: endpointsError } = parseEtimsEndpointsInput(etimsEndpointsText)
+    if (endpointsError) {
+      setEtimsEndpointsError(endpointsError)
+      return
+    }
+
     requestManagerPin('Save integration settings', (managerId, managerPin) => {
       void (async () => {
         const [mpesaResult, etimsResult] = await Promise.all([
           window.api.setIntegrationConfig('mpesa', { paybill, till }, managerId, managerPin),
-          window.api.setIntegrationConfig('etims', { middlewareUrl }, managerId, managerPin)
+          window.api.setIntegrationConfig(
+            'etims',
+            {
+              baseUrl: baseUrl || DEFAULT_ETIMS_BASE_URL,
+              password: password || undefined,
+              defaultVatClass: defaultVatClass || DEFAULT_ETIMS_VAT_CLASS,
+              endpoints
+            },
+            managerId,
+            managerPin
+          )
         ])
         setIntegrationsMessage(
           mpesaResult.success && etimsResult.success
@@ -275,6 +311,12 @@ export default function AdminScreen({ requestManagerPin }: AdminScreenProps) {
         )
       })()
     })
+  }
+
+  /** Repopulates the endpoints textarea with the provider's default paths. */
+  const handleResetEtimsEndpoints = () => {
+    setEtimsEndpointsError(null)
+    setEtimsEndpointsText(JSON.stringify(DEFAULT_ETIMS_ENDPOINTS, null, 2))
   }
 
   /**
@@ -758,16 +800,80 @@ export default function AdminScreen({ requestManagerPin }: AdminScreenProps) {
 
               <div>
                 <h4 className="mb-2 text-xl font-semibold text-slate-700">eTIMS</h4>
-                <label className="mb-1 block text-lg font-medium text-slate-600">
-                  Middleware URL
-                </label>
-                <input
-                  type="text"
-                  value={etimsMiddlewareUrl}
-                  onChange={(e) => setEtimsMiddlewareUrl(e.target.value)}
-                  placeholder="http://localhost:9000"
-                  className="w-full h-12 rounded-lg border border-slate-300 px-3 text-lg focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-100"
-                />
+                <p className="mb-3 text-sm text-slate-500">
+                  Connection details for the local fiscal device server (ZFPLabServer).
+                </p>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="mb-1 block text-lg font-medium text-slate-600">
+                      Server URL
+                    </label>
+                    <input
+                      type="text"
+                      value={etimsBaseUrl}
+                      onChange={(e) => setEtimsBaseUrl(e.target.value)}
+                      placeholder={DEFAULT_ETIMS_BASE_URL}
+                      className="w-full h-12 rounded-lg border border-slate-300 px-3 text-lg focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-100"
+                    />
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-lg font-medium text-slate-600">
+                      Device Password
+                    </label>
+                    <input
+                      type="password"
+                      value={etimsPassword}
+                      onChange={(e) => setEtimsPassword(e.target.value)}
+                      placeholder="Optional"
+                      className="w-full h-12 rounded-lg border border-slate-300 px-3 text-lg focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-100"
+                    />
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-lg font-medium text-slate-600">
+                      Default VAT Class
+                    </label>
+                    <input
+                      type="text"
+                      value={etimsDefaultVatClass}
+                      onChange={(e) => setEtimsDefaultVatClass(e.target.value)}
+                      placeholder={DEFAULT_ETIMS_VAT_CLASS}
+                      className="w-full h-12 rounded-lg border border-slate-300 px-3 text-lg focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-100"
+                    />
+                  </div>
+                </div>
+
+                <div className="mt-3">
+                  <div className="mb-1 flex items-center justify-between">
+                    <label className="block text-lg font-medium text-slate-600">
+                      Endpoint Paths (advanced)
+                    </label>
+                    <button
+                      type="button"
+                      onClick={handleResetEtimsEndpoints}
+                      className="text-sm font-medium text-rose-600 hover:text-rose-700"
+                    >
+                      Reset to Defaults
+                    </button>
+                  </div>
+                  <p className="mb-2 text-sm text-slate-500">
+                    Override the fiscal device's endpoint paths as JSON, only if this
+                    installation's ZFPLabServer version uses different routes than the defaults.
+                  </p>
+                  <textarea
+                    value={etimsEndpointsText}
+                    onChange={(e) => {
+                      setEtimsEndpointsText(e.target.value)
+                      setEtimsEndpointsError(null)
+                    }}
+                    placeholder={JSON.stringify(DEFAULT_ETIMS_ENDPOINTS, null, 2)}
+                    rows={6}
+                    spellCheck={false}
+                    className="w-full rounded-lg border border-slate-300 px-3 py-2 font-mono text-sm focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-100"
+                  />
+                  {etimsEndpointsError && (
+                    <p className="mt-1 text-sm font-medium text-rose-700">{etimsEndpointsError}</p>
+                  )}
+                </div>
               </div>
 
               {integrationsMessage && (

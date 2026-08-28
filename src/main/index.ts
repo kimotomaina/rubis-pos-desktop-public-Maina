@@ -56,8 +56,9 @@ import type {
   ManualCodeVerification,
   ManualCodeVerificationResult
 } from './services/integrations/mpesa.js'
-import { MockFiscalizationProvider } from './services/integrations/etims.js'
 import type { FiscalizationProvider } from './services/integrations/etims.js'
+import { RealFiscalizationProvider } from './services/integrations/real-etims-provider.js'
+import type { FiscalEndpointPaths } from './services/integrations/real-etims-provider.js'
 import { voidLocalOrder } from './services/voids.js'
 import {
   validate,
@@ -89,6 +90,7 @@ import {
 } from './services/secretStore.js'
 import type { IntegrationProviderName, PrinterConfig, PrinterType } from './services/database.js'
 import { createSyncEngine } from './services/sync-engine.js'
+import { createFiscalEngine } from './services/fiscal-engine.js'
 import { createNetworkMonitor } from './services/network.js'
 import { pushOrderToShopify } from './services/orders.js'
 import {
@@ -405,17 +407,37 @@ app.whenReady().then(async () => {
   let printerRegistry: PrinterRegistry = buildPrinterRegistry(db.getPrinters())
 
   /**
-   * M-Pesa / eTIMS integrations. Only mock
-   * implementations exist so far, so `VITE_USE_MOCK_INTEGRATIONS`
-   * currently gates whether checkout calls them at all rather than
-   * choosing between a mock and a real backend — that branch point is
-   * ready for a `DarajaMpesaProvider` /
-   * `EtimsMiddlewareProvider` alongside the mocks without touching this
-   * wiring.
+   * M-Pesa / eTIMS integrations. M-Pesa still only has a mock
+   * implementation, so `VITE_USE_MOCK_INTEGRATIONS` currently gates
+   * whether checkout calls either provider at all rather than choosing
+   * between a mock and a real backend — that branch point is ready for
+   * a `DarajaMpesaProvider` alongside the mock without touching this
+   * wiring. eTIMS now talks to the local ZFPLabServer fiscal device
+   * over HTTP; its base URL comes from the `integrations` table.
    */
   const integrationsEnabled = process.env.VITE_USE_MOCK_INTEGRATIONS === 'true'
   const mpesaProvider: MpesaProvider = new MockMpesaProvider()
-  const fiscalizationProvider: FiscalizationProvider = new MockFiscalizationProvider()
+  const etimsConfig = db.getIntegrationConfig<{
+    baseUrl?: string
+    endpoints?: Partial<FiscalEndpointPaths>
+    defaultVatClass?: string
+    password?: string
+  }>('etims')
+  const fiscalizationProvider: FiscalizationProvider = new RealFiscalizationProvider({
+    baseUrl: etimsConfig.baseUrl,
+    endpoints: etimsConfig.endpoints,
+    defaultVatClass: etimsConfig.defaultVatClass,
+    password: etimsConfig.password,
+    lookupInvoice: (invoiceNumber) => {
+      const order = db.getOrderByFiscalInvoiceNumber(invoiceNumber)
+      if (!order?.fiscal_invoice_number) return undefined
+      return {
+        invoiceNumber: order.fiscal_invoice_number,
+        qrCode: order.fiscal_qr_code ?? '',
+        fiscalizedAt: order.fiscal_fiscalized_at ?? order.created_at
+      }
+    }
+  })
 
   const engine = createSyncEngine({
     db,
@@ -433,6 +455,19 @@ app.whenReady().then(async () => {
     intervalMs: 30_000
   })
 
+  /**
+   * eTIMS fiscalization store-and-forward queue — kept as its own
+   * engine/table scope rather than folded into `engine` above so the
+   * Shopify sync engine never has to know eTIMS retries exist (see
+   * `fiscal-engine.ts`'s file doc for why it doesn't gate on
+   * connectivity the way the Shopify engine does).
+   */
+  const fiscalEngine = createFiscalEngine({
+    db,
+    submitInvoice: (request) => fiscalizationProvider.submitInvoice(request),
+    intervalMs: 30_000
+  })
+
   /** Broadcasts a JSON payload to every open window. */
   const broadcast = (channel: string, payload: unknown): void => {
     for (const window of BrowserWindow.getAllWindows()) {
@@ -445,16 +480,21 @@ app.whenReady().then(async () => {
     intervalMs: 5_000,
     emit: (online) => {
       broadcast('network:status', { online })
-      if (online) engine.notifyOnline()
+      if (online) {
+        engine.notifyOnline()
+        fiscalEngine.notifyOnline()
+      }
     }
   })
 
   powerMonitor.on('resume', () => monitor.checkNow())
   monitor.start()
   engine.start()
+  fiscalEngine.start()
 
   app.on('will-quit', () => {
     engine.stop()
+    fiscalEngine.stop()
     monitor.stop()
     db.close()
   })
@@ -586,6 +626,7 @@ app.whenReady().then(async () => {
           changeDue: checkout.changeDue,
           referenceNumber: checkout.referenceNumber,
           shiftId: openShift?.id,
+          customerPin: checkout.customerPin,
           cartDiscount: checkout.cartDiscount
         })
 
@@ -597,29 +638,51 @@ app.whenReady().then(async () => {
         const synced = order?.status === 'synced'
 
         /**
-         * Fiscalization runs best-effort: a failure here logs and is
-         * omitted from the receipt rather than blocking the sale — the
-         * cash/stock side of the transaction is already committed, and a
-         * real middleware would store-and-forward this invoice for retry
-         * rather than fail the till.
+         * Fiscalization never blocks the sale — the cash/stock side of
+         * the transaction is already committed. An immediate failure
+         * (device unreachable, rejected request, or an unexpected
+         * throw) queues the same request in `sync_queue` for
+         * `fiscalEngine` to retry in the background instead of losing
+         * it, mirroring how a failed Shopify push falls back to
+         * `sync_queue` above rather than failing checkout.
          */
         let fiscal: CheckoutReceipt['fiscal']
         if (integrationsEnabled) {
-          const invoice = await fiscalizationProvider.submitInvoice({
+          const fiscalRequest = {
             clientOrderUuid,
             items: items.map((item) => ({
               description: item.title,
               quantity: item.quantity,
               unitPrice: item.price,
-              taxRate: printerSettings.taxRate
+              taxRate: printerSettings.taxRate,
+              pluCode: item.id
             })),
             total,
-            taxAmount: total * printerSettings.taxRate
-          })
-          if (invoice.success && invoice.data) {
-            fiscal = { invoiceNumber: invoice.data.invoiceNumber, qrCode: invoice.data.qrCode }
-          } else {
-            console.error('[rubis-pos] eTIMS fiscalization failed:', invoice.error)
+            taxAmount: total * printerSettings.taxRate,
+            paymentMethod: checkout.paymentMethod,
+            amountTendered: checkout.tenderedAmount,
+            buyerPin: checkout.customerPin
+          }
+          try {
+            const invoice = await fiscalizationProvider.submitInvoice(fiscalRequest)
+            if (invoice.success && invoice.data) {
+              fiscal = { invoiceNumber: invoice.data.invoiceNumber, qrCode: invoice.data.qrCode }
+              db.setOrderFiscalInfo(localId, invoice.data.invoiceNumber, invoice.data.qrCode)
+            } else {
+              console.error(
+                '[rubis-pos] eTIMS fiscalization failed, queued for retry:',
+                invoice.error
+              )
+              db.queueFiscalInvoice(localId, fiscalRequest)
+              fiscalEngine.onCheckoutMade()
+            }
+          } catch (fiscalError) {
+            console.error(
+              '[rubis-pos] eTIMS fiscalization threw, queued for retry:',
+              fiscalError
+            )
+            db.queueFiscalInvoice(localId, fiscalRequest)
+            fiscalEngine.onCheckoutMade()
           }
         }
 
@@ -1231,7 +1294,10 @@ app.whenReady().then(async () => {
             paymentMethod: payload.paymentMethod,
             tenderedAmount: payload.tenderedAmount,
             changeDue: payload.changeDue,
-            referenceNumber: payload.referenceNumber
+            referenceNumber: payload.referenceNumber,
+            customerPin: payload.customerPin,
+            fiscalInvoiceNumber: order.fiscal_invoice_number ?? undefined,
+            fiscalQrCode: order.fiscal_qr_code ?? undefined
           },
           payload.lineItems.map((line) => ({
             title: line.title,

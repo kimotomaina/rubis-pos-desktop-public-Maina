@@ -27,6 +27,9 @@ const order = (overrides: Partial<OrderRow> = {}): OrderRow => ({
   change_due: 0,
   reference_number: null,
   shift_id: 1,
+  fiscal_invoice_number: null,
+  fiscal_qr_code: null,
+  fiscal_fiscalized_at: null,
   ...overrides
 })
 

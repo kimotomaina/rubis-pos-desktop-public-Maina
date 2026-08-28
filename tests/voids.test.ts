@@ -114,6 +114,9 @@ const pendingOrderRow = (overrides: Partial<OrderRow> = {}): OrderRow => ({
   change_due: 0,
   reference_number: null,
   shift_id: 1,
+  fiscal_invoice_number: null,
+  fiscal_qr_code: null,
+  fiscal_fiscalized_at: null,
   ...overrides
 })
 
@@ -136,8 +139,11 @@ describe('RubisDatabase.voidOrder', () => {
     expect(statusUpdate[0].params).toEqual(['voided', 7])
 
     const queueClear = fake.callsFor('run', 'DELETE FROM sync_queue')
-    expect(queueClear).toHaveLength(1)
+    expect(queueClear).toHaveLength(2)
+    expect(queueClear[0].sql).toContain("entity_type = 'order'")
     expect(queueClear[0].params).toEqual([7])
+    expect(queueClear[1].sql).toContain("entity_type = 'etims_invoice'")
+    expect(queueClear[1].params).toEqual([7])
   })
 
   it('throws when the order does not exist', () => {

@@ -43,6 +43,7 @@ export const checkoutRequestSchema = z.object({
   changeDue: z.number().finite(),
   referenceNumber: z.string().optional(),
   shiftId: z.number().int().positive().optional(),
+  customerPin: z.string().optional(),
   cartDiscount: discountSchema.optional()
 })
 

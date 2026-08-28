@@ -106,7 +106,7 @@ describe('RubisDatabase.getOrders', () => {
       { local_id: 2, shopify_order_id: null, total: 10, status: 'pending_sync', created_at: '2026-08-24T10:00:00Z' },
       { local_id: 1, shopify_order_id: 'gid://shopify/Order/1', total: 5, status: 'synced', created_at: '2026-08-23T10:00:00Z' }
     ]
-    fake.setAllResult('SELECT local_id, shopify_order_id, total, status, created_at FROM orders', rows)
+    fake.setAllResult('SELECT local_id, shopify_order_id, total, status, created_at', rows)
 
     const result = db.getOrders()
 
@@ -133,6 +133,16 @@ describe('RubisDatabase.getOrders', () => {
 
     const [call] = fake.callsFor('all', 'FROM orders')
     expect(call.params).toEqual([10, 20])
+  })
+
+  it('includes payload_json in the SELECT so line items can be shown in order history', () => {
+    const { fake, db } = freshDb()
+    fake.setAllResult('FROM orders', [])
+
+    db.getOrders()
+
+    const [call] = fake.callsFor('all', 'FROM orders')
+    expect(call.sql).toContain('payload_json')
   })
 })
 

@@ -226,9 +226,12 @@ export default function App() {
         result.success
           ? {
               kind: 'success',
-              message: result.data?.mock
-                ? 'Receipt printed (mock mode)'
-                : 'Receipt sent to printer'
+              message:
+                result.data?.mode === 'pdf'
+                  ? 'Printer offline. Receipt saved to Desktop as PDF.'
+                  : result.data?.mock
+                    ? 'Receipt printed (mock mode)'
+                    : 'Receipt sent to printer'
             }
           : { kind: 'error', message: result.error ?? 'Failed to print receipt' }
       )

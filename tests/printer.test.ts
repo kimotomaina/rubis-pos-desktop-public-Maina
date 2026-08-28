@@ -33,7 +33,11 @@ vi.mock('node-thermal-printer', () => ({
  * Builds a recording fake implementing the narrow ThermalPrinterLike
  * surface, capturing the exact ESC/POS call sequence for assertions.
  */
-function createFakePrinter(options?: { connected?: boolean; executeError?: unknown }) {
+function createFakePrinter(options?: {
+  connected?: boolean
+  executeError?: unknown
+  printImageBuffer?: ReturnType<typeof vi.fn>
+}) {
   const calls: Array<{ method: string; args: unknown[] }> = []
   const client: ThermalPrinterLike = {
     isPrinterConnected: vi.fn(async () => options?.connected ?? true),
@@ -46,7 +50,8 @@ function createFakePrinter(options?: { connected?: boolean; executeError?: unkno
     execute: vi.fn(async () => {
       if (options?.executeError) throw options.executeError
       return undefined
-    })
+    }),
+    ...(options?.printImageBuffer ? { printImageBuffer: options.printImageBuffer } : {})
   }
   return { client, calls }
 }
@@ -72,10 +77,10 @@ const settings: PrinterSettings = {
 }
 
 describe('renderReceipt', () => {
-  it('issues the ESC/POS call sequence: header, items, totals, footer', () => {
+  it('issues the ESC/POS call sequence: header, items, totals, footer', async () => {
     const { client, calls } = createFakePrinter()
 
-    renderReceipt(client, order, items, settings)
+    await renderReceipt(client, order, items, settings)
 
     expect(calls[0]).toEqual({ method: 'alignCenter', args: [] })
     expect(calls[1]).toEqual({ method: 'bold', args: [true] })
@@ -102,7 +107,7 @@ describe('renderReceipt', () => {
     expect(calls[calls.length - 1]).toEqual({ method: 'cut', args: [] })
   })
 
-  it('prints a reference number instead of tendered/change for non-cash payments', () => {
+  it('prints a reference number instead of tendered/change for non-cash payments', async () => {
     const { client, calls } = createFakePrinter()
     const cardOrder: ReceiptOrder = {
       ...order,
@@ -112,7 +117,7 @@ describe('renderReceipt', () => {
       referenceNumber: 'TXN-9001'
     }
 
-    renderReceipt(client, cardOrder, items, settings)
+    await renderReceipt(client, cardOrder, items, settings)
 
     const lineTexts = calls.filter((c) => c.method === 'println').map((c) => c.args[0])
     expect(lineTexts).toContain('Payment: card')
@@ -120,9 +125,9 @@ describe('renderReceipt', () => {
     expect(lineTexts.some((t) => typeof t === 'string' && t.startsWith('Tendered:'))).toBe(false)
   })
 
-  it('bolds only the store name and the total, not the item lines', () => {
+  it('bolds only the store name and the total, not the item lines', async () => {
     const { client, calls } = createFakePrinter()
-    renderReceipt(client, order, items, settings)
+    await renderReceipt(client, order, items, settings)
 
     const boldCalls = calls.filter((c) => c.method === 'bold')
     expect(boldCalls).toEqual([
@@ -131,6 +136,72 @@ describe('renderReceipt', () => {
       { method: 'bold', args: [true] },
       { method: 'bold', args: [false] }
     ])
+  })
+
+  it('omits the fiscal footer entirely when the order was not fiscalized', async () => {
+    const { client, calls } = createFakePrinter()
+    await renderReceipt(client, order, items, settings)
+
+    const lineTexts = calls.filter((c) => c.method === 'println').map((c) => c.args[0])
+    expect(lineTexts.some((t) => typeof t === 'string' && t.startsWith('Fiscal Inv:'))).toBe(false)
+  })
+
+  it('prints the fiscal invoice number and the QR code as an image when supported', async () => {
+    const printImageBuffer = vi.fn().mockResolvedValue(undefined)
+    const { client, calls } = createFakePrinter({ printImageBuffer })
+    const fiscalOrder: ReceiptOrder = {
+      ...order,
+      fiscalInvoiceNumber: 'KRA-0001',
+      fiscalQrCode: Buffer.from('fake-png-bytes').toString('base64')
+    }
+
+    await renderReceipt(client, fiscalOrder, items, settings)
+
+    const lineTexts = calls.filter((c) => c.method === 'println').map((c) => c.args[0])
+    expect(lineTexts).toContain('Fiscal Inv: KRA-0001')
+    expect(printImageBuffer).toHaveBeenCalledTimes(1)
+    expect(printImageBuffer).toHaveBeenCalledWith(Buffer.from('fake-png-bytes'))
+    expect(lineTexts.some((t) => typeof t === 'string' && t.startsWith('[QR CODE:'))).toBe(false)
+  })
+
+  it('falls back to a text placeholder when the client has no image support', async () => {
+    const { client, calls } = createFakePrinter()
+    const fiscalOrder: ReceiptOrder = {
+      ...order,
+      fiscalInvoiceNumber: 'KRA-0002',
+      fiscalQrCode: Buffer.from('fake-png-bytes').toString('base64')
+    }
+
+    await renderReceipt(client, fiscalOrder, items, settings)
+
+    const lineTexts = calls.filter((c) => c.method === 'println').map((c) => c.args[0])
+    expect(lineTexts).toContain('[QR CODE: KRA-0002]')
+  })
+
+  it('falls back to a text placeholder when image printing throws', async () => {
+    const printImageBuffer = vi.fn().mockRejectedValue(new Error('unsupported image format'))
+    const { client, calls } = createFakePrinter({ printImageBuffer })
+    const fiscalOrder: ReceiptOrder = {
+      ...order,
+      fiscalInvoiceNumber: 'KRA-0003',
+      fiscalQrCode: 'not-a-real-png'
+    }
+
+    await renderReceipt(client, fiscalOrder, items, settings)
+
+    const lineTexts = calls.filter((c) => c.method === 'println').map((c) => c.args[0])
+    expect(lineTexts).toContain('[QR CODE: KRA-0003]')
+  })
+
+  it('prints only the invoice number line when no QR code is present', async () => {
+    const { client, calls } = createFakePrinter()
+    const fiscalOrder: ReceiptOrder = { ...order, fiscalInvoiceNumber: 'KRA-0004' }
+
+    await renderReceipt(client, fiscalOrder, items, settings)
+
+    const lineTexts = calls.filter((c) => c.method === 'println').map((c) => c.args[0])
+    expect(lineTexts).toContain('Fiscal Inv: KRA-0004')
+    expect(lineTexts.some((t) => typeof t === 'string' && t.startsWith('[QR CODE:'))).toBe(false)
   })
 })
 
@@ -147,26 +218,50 @@ describe('printReceipt', () => {
     expect(client.execute).toHaveBeenCalledTimes(1)
   })
 
-  it('fails gracefully when the printer is offline', async () => {
+  it('falls back to a PDF receipt when the printer reports offline', async () => {
     const { client } = createFakePrinter({ connected: false })
     const factory = vi.fn(() => client)
+    const pdfGenerator = vi.fn(async () => 'C:\\Users\\cashier\\Desktop\\RUBIS_Receipt_Order_7.pdf')
 
-    const result = await printReceipt(order, items, settings, factory)
+    const result = await printReceipt(order, items, settings, factory, pdfGenerator)
 
-    expect(result.success).toBe(false)
-    expect(result.error).toMatch(/offline|unreachable/i)
     expect(client.execute).not.toHaveBeenCalled()
+    expect(pdfGenerator).toHaveBeenCalledWith(order, items, settings)
+    expect(result).toEqual({
+      success: true,
+      data: {
+        printed: false,
+        mock: false,
+        mode: 'pdf',
+        filePath: 'C:\\Users\\cashier\\Desktop\\RUBIS_Receipt_Order_7.pdf'
+      }
+    })
   })
 
-  it('translates a connection-refused error from execute()', async () => {
+  it('falls back to a PDF receipt when execute() throws a connection-refused error', async () => {
     const err = Object.assign(new Error('connect failed'), { code: 'ECONNREFUSED' })
     const { client } = createFakePrinter({ connected: true, executeError: err })
     const factory = vi.fn(() => client)
+    const pdfGenerator = vi.fn(async () => 'C:\\Users\\cashier\\Desktop\\RUBIS_Receipt_Order_7.pdf')
 
-    const result = await printReceipt(order, items, settings, factory)
+    const result = await printReceipt(order, items, settings, factory, pdfGenerator)
+
+    expect(pdfGenerator).toHaveBeenCalledWith(order, items, settings)
+    expect(result.success).toBe(true)
+    expect(result.data?.mode).toBe('pdf')
+  })
+
+  it('reports a failure if the printer is offline and PDF generation itself throws', async () => {
+    const { client } = createFakePrinter({ connected: false })
+    const factory = vi.fn(() => client)
+    const pdfGenerator = vi.fn(async () => {
+      throw new Error('disk full')
+    })
+
+    const result = await printReceipt(order, items, settings, factory, pdfGenerator)
 
     expect(result.success).toBe(false)
-    expect(result.error).toMatch(/unreachable/i)
+    expect(result.error).toMatch(/disk full/i)
   })
 
   it('translates an out-of-paper style error message', async () => {

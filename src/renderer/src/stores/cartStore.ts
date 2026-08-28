@@ -33,6 +33,8 @@ export interface CheckoutParams {
   tenderedAmount: number
   changeDue: number
   referenceNumber?: string
+  /** Customer's KRA PIN, when captured for a B2B eTIMS invoice — omitted for a walk-in B2C sale. */
+  customerPin?: string
   /** Cart-level discount to persist with the order. */
   cartDiscount?: Discount
 }
