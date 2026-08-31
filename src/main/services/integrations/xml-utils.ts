@@ -73,21 +73,21 @@ function singularize(pluralTag: string): string {
 
 /**
  * Serializes `payload` to an XML document string wrapped in a
- * `<Request name="commandName">` envelope — the ZFP Lab Server
- * dispatches on this `name` attribute (rejecting a request with "E:
- * command attribute name not found" when it's absent), rather than on
- * the root element's tag name itself.
+ * `<Request Name="commandName">` envelope. The Tremol ZFP server's XML
+ * schema is case-sensitive on this attribute: neither `name` nor
+ * `command` (both tried against a live device) satisfied it, only the
+ * capitalized `Name`.
  *
  * @example
  * serializeToXml({ taxpayerPin: 'P051234567Z', currency: 'KES' }, 'OpenInvoice')
- * // '<Request name="OpenInvoice"><taxpayerPin>P051234567Z</taxpayerPin><currency>KES</currency></Request>'
+ * // '<Request Name="OpenInvoice"><taxpayerPin>P051234567Z</taxpayerPin><currency>KES</currency></Request>'
  *
  * @param {object} payload
  * @param {string} commandName
  * @returns {string}
  */
 export function serializeToXml(payload: object, commandName: string): string {
-  return `<Request name="${escapeXml(commandName)}">${serializeFields(payload as Record<string, unknown>)}</Request>`
+  return `<Request Name="${escapeXml(commandName)}">${serializeFields(payload as Record<string, unknown>)}</Request>`
 }
 
 /** Element/attribute names checked, in order, when extracting the fiscal invoice number from a parsed response. */

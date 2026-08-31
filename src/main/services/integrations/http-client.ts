@@ -60,12 +60,27 @@ export async function postXml(
   payload: object
 ): Promise<ServiceResult<Record<string, string>>> {
   try {
+    console.log(
+      `[DEBUG-HTTP] 1. Preparing XML for ${commandName} to ${client.defaults?.baseURL ?? ''}${path}`
+    )
+
     const body = serializeToXml(payload, commandName)
+    console.log(`[DEBUG-HTTP] 2. Generated XML:\n${body}`)
+
+    console.log(`[DEBUG-HTTP] 3. Sending POST request (timeout: ${ETIMS_REQUEST_TIMEOUT_MS}ms)...`)
     const response = await client.post<string>(path, body, {
-      headers: { 'Content-Type': 'text/xml' }
+      headers: { 'Content-Type': 'text/xml' },
+      timeout: ETIMS_REQUEST_TIMEOUT_MS
     })
+
+    console.log(`[DEBUG-HTTP] 4. Received response from ${commandName} (HTTP ${response.status}):\n${response.data}`)
+
     return { success: true, data: parseXmlResponse(response.data) }
   } catch (error) {
+    console.error(`[DEBUG-HTTP] 5. ERROR in postXml for ${commandName}:`, error)
+    if (axios.isAxiosError(error) && error.response) {
+      console.error(`[DEBUG-HTTP] Response data:`, error.response.data)
+    }
     return { success: false, error: describeFiscalHttpError(error, path) }
   }
 }

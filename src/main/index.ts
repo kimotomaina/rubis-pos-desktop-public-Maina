@@ -56,6 +56,7 @@ import type {
   ManualCodeVerification,
   ManualCodeVerificationResult
 } from './services/integrations/mpesa.js'
+import { MockFiscalizationProvider } from './services/integrations/etims.js'
 import type { FiscalizationProvider } from './services/integrations/etims.js'
 import { RealFiscalizationProvider } from './services/integrations/real-etims-provider.js'
 import type { FiscalEndpointPaths } from './services/integrations/real-etims-provider.js'
@@ -407,15 +408,26 @@ app.whenReady().then(async () => {
   let printerRegistry: PrinterRegistry = buildPrinterRegistry(db.getPrinters())
 
   /**
-   * M-Pesa / eTIMS integrations. M-Pesa still only has a mock
-   * implementation, so `VITE_USE_MOCK_INTEGRATIONS` currently gates
-   * whether checkout calls either provider at all rather than choosing
-   * between a mock and a real backend — that branch point is ready for
-   * a `DarajaMpesaProvider` alongside the mock without touching this
-   * wiring. eTIMS now talks to the local ZFPLabServer fiscal device
-   * over HTTP; its base URL comes from the `integrations` table.
+   * M-Pesa / eTIMS integrations. Each has its own mock/real switch —
+   * `VITE_USE_MOCK_MPESA` and `VITE_USE_MOCK_ETIMS` — rather than one
+   * blanket flag, since a till may want a real fiscal device wired up
+   * while M-Pesa is still mocked, or vice versa. Both **default to
+   * mock** when unset (only the literal string `'false'` turns mock
+   * off), so a fresh checkout — including this one — never talks to a
+   * real Shopify-adjacent integration or physical fiscal device by
+   * accident. M-Pesa has no real provider implementation yet (this
+   * branch point is ready for a `DarajaMpesaProvider` alongside the
+   * mock); `mockMpesaEnabled` currently only gates whether checkout
+   * verifies a manually-entered M-Pesa code at all, not which provider
+   * class is used. eTIMS's `mockEtimsEnabled` does select the provider
+   * class: `MockFiscalizationProvider` or a real,
+   * `RealFiscalizationProvider` talking to the local ZFPLabServer over
+   * HTTP (its base URL comes from the `integrations` table). Either
+   * way, a fiscalization failure is queued for retry rather than
+   * blocking the sale (see the `orders:checkout` handler below).
    */
-  const integrationsEnabled = process.env.VITE_USE_MOCK_INTEGRATIONS === 'true'
+  const mockMpesaEnabled = process.env.VITE_USE_MOCK_MPESA !== 'false'
+  const mockEtimsEnabled = process.env.VITE_USE_MOCK_ETIMS !== 'false'
   const mpesaProvider: MpesaProvider = new MockMpesaProvider()
   const etimsConfig = db.getIntegrationConfig<{
     baseUrl?: string
@@ -423,21 +435,31 @@ app.whenReady().then(async () => {
     defaultVatClass?: string
     password?: string
   }>('etims')
-  const fiscalizationProvider: FiscalizationProvider = new RealFiscalizationProvider({
-    baseUrl: etimsConfig.baseUrl,
-    endpoints: etimsConfig.endpoints,
-    defaultVatClass: etimsConfig.defaultVatClass,
-    password: etimsConfig.password,
-    lookupInvoice: (invoiceNumber) => {
-      const order = db.getOrderByFiscalInvoiceNumber(invoiceNumber)
-      if (!order?.fiscal_invoice_number) return undefined
-      return {
-        invoiceNumber: order.fiscal_invoice_number,
-        qrCode: order.fiscal_qr_code ?? '',
-        fiscalizedAt: order.fiscal_fiscalized_at ?? order.created_at
-      }
-    }
-  })
+  const fiscalizationProvider: FiscalizationProvider = mockEtimsEnabled
+    ? new MockFiscalizationProvider()
+    : new RealFiscalizationProvider({
+        baseUrl: etimsConfig.baseUrl,
+        endpoints: etimsConfig.endpoints,
+        defaultVatClass: etimsConfig.defaultVatClass,
+        password: etimsConfig.password,
+        lookupInvoice: (invoiceNumber) => {
+          const order = db.getOrderByFiscalInvoiceNumber(invoiceNumber)
+          if (!order?.fiscal_invoice_number) return undefined
+          return {
+            invoiceNumber: order.fiscal_invoice_number,
+            qrCode: order.fiscal_qr_code ?? '',
+            fiscalizedAt: order.fiscal_fiscalized_at ?? order.created_at
+          }
+        }
+      })
+  console.log(
+    `[DEBUG-ETIMS] Startup: mockMpesaEnabled = ${mockMpesaEnabled}, mockEtimsEnabled = ${mockEtimsEnabled}`
+  )
+  console.log(
+    mockEtimsEnabled
+      ? '[DEBUG-ETIMS] Startup: using MockFiscalizationProvider'
+      : `[DEBUG-ETIMS] Startup: using RealFiscalizationProvider, baseUrl = ${etimsConfig.baseUrl ?? '(default) http://localhost:4444'}, endpoints = ${JSON.stringify(etimsConfig.endpoints)}`
+  )
 
   const engine = createSyncEngine({
     db,
@@ -578,14 +600,27 @@ app.whenReady().then(async () => {
   ipcMain.handle(
     'orders:checkout',
     async (_event, request: unknown): Promise<ServiceResult<CheckoutReceipt>> => {
-      const validation = validate(checkoutRequestSchema, request)
-      if (!validation.success) {
-        return { success: false, error: validation.error }
-      }
-      const checkout = validation.data
-      const { items, total } = checkout
-
+      const t0 = Date.now()
+      const elapsed = (): string => `+${Date.now() - t0}ms`
       try {
+        console.log(`[DEBUG-ETIMS] ========== CHECKOUT STARTED ========== ${elapsed()}`)
+        console.log(
+          `[DEBUG-ETIMS] 1. mockMpesaEnabled = ${mockMpesaEnabled}, mockEtimsEnabled = ${mockEtimsEnabled}`
+        )
+
+        console.log('[DEBUG-ETIMS] 2. Getting eTIMS config...')
+        const etimsConfig = db.getIntegrationConfig('etims')
+        console.log('[DEBUG-ETIMS] 3. Config:', etimsConfig, elapsed())
+
+        console.log('[DEBUG-ETIMS] 4. Request payload:', JSON.stringify(request, null, 2))
+
+        const validation = validate(checkoutRequestSchema, request)
+        if (!validation.success) {
+          return { success: false, error: validation.error }
+        }
+        const checkout = validation.data
+        const { items, total } = checkout
+
         const staff = db.getStaffById(checkout.staffId)
         if (!staff) {
           return { success: false, error: 'No staff member is logged in' }
@@ -597,7 +632,7 @@ app.whenReady().then(async () => {
          * code is verified before the order is persisted — an unverified
          * code should never reach the ledger as a completed sale.
          */
-        if (integrationsEnabled && checkout.paymentMethod === 'mpesa' && checkout.referenceNumber) {
+        if (mockMpesaEnabled && checkout.paymentMethod === 'mpesa' && checkout.referenceNumber) {
           const verification = await mpesaProvider.verifyTransactionCode({
             transactionCode: checkout.referenceNumber,
             amount: total
@@ -615,6 +650,8 @@ app.whenReady().then(async () => {
 
         const openShift = db.getOpenShift()
         const clientOrderUuid = randomUUID()
+
+        console.log('[DEBUG-ETIMS] 5. About to call db.queueOrder...')
         const { localId } = db.queueOrder({
           items,
           total,
@@ -629,13 +666,25 @@ app.whenReady().then(async () => {
           customerPin: checkout.customerPin,
           cartDiscount: checkout.cartDiscount
         })
+        console.log('[DEBUG-ETIMS] 6. db.queueOrder result: SUCCESS, localId =', localId, elapsed())
 
+        console.log(
+          '[DEBUG-ETIMS] 6b. Kicking off Shopify sync tick (non-blocking). monitor.isOnline() =',
+          monitor.isOnline(),
+          elapsed()
+        )
         if (monitor.isOnline()) {
-          await engine.tick()
+          void engine
+            .tick()
+            .then(() => console.log('[DEBUG-ETIMS] 6c. Background Shopify sync tick finished', elapsed()))
+            .catch((tickError) => {
+              console.error('[DEBUG-ETIMS] Shopify sync tick failed:', tickError)
+            })
         }
 
         const order = db.getOrder(localId)
         const synced = order?.status === 'synced'
+        console.log('[DEBUG-ETIMS] 6d. db.getOrder read back, status =', order?.status, elapsed())
 
         /**
          * Fiscalization never blocks the sale — the cash/stock side of
@@ -647,8 +696,19 @@ app.whenReady().then(async () => {
          * `sync_queue` above rather than failing checkout.
          */
         let fiscal: CheckoutReceipt['fiscal']
-        if (integrationsEnabled) {
-          const fiscalRequest = {
+        console.log(`[DEBUG-ETIMS] ========== ATTEMPTING FISCALIZATION ========== ${elapsed()}`)
+        console.log(
+          '[DEBUG-ETIMS] 7. Checking fiscalizationProvider:',
+          typeof fiscalizationProvider
+        )
+        if (!fiscalizationProvider) {
+          console.error('[DEBUG-ETIMS] CRITICAL: fiscalizationProvider is UNDEFINED!')
+        }
+
+        let fiscalRequest: Parameters<typeof fiscalizationProvider.submitInvoice>[0] | undefined
+        try {
+          console.log('[DEBUG-ETIMS] 8. Building fiscalRequest...')
+          fiscalRequest = {
             clientOrderUuid,
             items: items.map((item) => ({
               description: item.title,
@@ -663,26 +723,70 @@ app.whenReady().then(async () => {
             amountTendered: checkout.tenderedAmount,
             buyerPin: checkout.customerPin
           }
-          try {
-            const invoice = await fiscalizationProvider.submitInvoice(fiscalRequest)
-            if (invoice.success && invoice.data) {
-              fiscal = { invoiceNumber: invoice.data.invoiceNumber, qrCode: invoice.data.qrCode }
-              db.setOrderFiscalInfo(localId, invoice.data.invoiceNumber, invoice.data.qrCode)
-            } else {
-              console.error(
-                '[rubis-pos] eTIMS fiscalization failed, queued for retry:',
-                invoice.error
-              )
-              db.queueFiscalInvoice(localId, fiscalRequest)
-              fiscalEngine.onCheckoutMade()
-            }
-          } catch (fiscalError) {
-            console.error(
-              '[rubis-pos] eTIMS fiscalization threw, queued for retry:',
-              fiscalError
+          console.log(
+            '[DEBUG-ETIMS] 9. fiscalRequest built successfully:',
+            JSON.stringify(fiscalRequest, null, 2)
+          )
+
+          console.log(`[DEBUG-ETIMS] 10. Attempting fiscalizationProvider.submitInvoice... ${elapsed()}`)
+          const invoice = await fiscalizationProvider.submitInvoice(fiscalRequest)
+          console.log(
+            '[DEBUG-ETIMS] 11. Fiscalization result:',
+            JSON.stringify(invoice, null, 2),
+            elapsed()
+          )
+
+          if (invoice.success && invoice.data) {
+            console.log('[DEBUG-ETIMS] 12. Saving fiscal info to DB...')
+            fiscal = { invoiceNumber: invoice.data.invoiceNumber, qrCode: invoice.data.qrCode }
+            db.setOrderFiscalInfo(localId, invoice.data.invoiceNumber, invoice.data.qrCode)
+            console.log('[DEBUG-ETIMS] 13. Fiscal info saved successfully.')
+          } else {
+            console.warn(
+              '[rubis-pos] eTIMS fiscalization failed, queued for retry:',
+              invoice.error
             )
             db.queueFiscalInvoice(localId, fiscalRequest)
             fiscalEngine.onCheckoutMade()
+          }
+        } catch (fiscalError) {
+          console.error('[DEBUG-ETIMS] CRITICAL: Fiscalization threw an unhandled exception!')
+          console.error(
+            '[DEBUG-ETIMS] Error name:',
+            fiscalError instanceof Error ? fiscalError.name : typeof fiscalError
+          )
+          console.error(
+            '[DEBUG-ETIMS] Error message:',
+            fiscalError instanceof Error ? fiscalError.message : String(fiscalError)
+          )
+          console.error(
+            '[DEBUG-ETIMS] Stack trace:',
+            fiscalError instanceof Error ? fiscalError.stack : undefined
+          )
+
+          try {
+            db.queueFiscalInvoice(
+              localId,
+              fiscalRequest ?? {
+                clientOrderUuid,
+                items: items.map((item) => ({
+                  description: item.title,
+                  quantity: item.quantity,
+                  unitPrice: item.price,
+                  taxRate: printerSettings.taxRate,
+                  pluCode: item.id
+                })),
+                total,
+                taxAmount: total * printerSettings.taxRate,
+                paymentMethod: checkout.paymentMethod,
+                amountTendered: checkout.tenderedAmount,
+                buyerPin: checkout.customerPin
+              }
+            )
+            fiscalEngine.onCheckoutMade()
+            console.log('[DEBUG-ETIMS] Fallback: Order queued for fiscalization despite error.')
+          } catch (queueError) {
+            console.error('[DEBUG-ETIMS] Fallback queue also failed:', queueError)
           }
         }
 
@@ -698,6 +802,13 @@ app.whenReady().then(async () => {
           }
         }
       } catch (err) {
+        console.error('[DEBUG-ETIMS] CRITICAL: Unhandled exception in checkout!')
+        console.error('[DEBUG-ETIMS] Error name:', err instanceof Error ? err.name : typeof err)
+        console.error(
+          '[DEBUG-ETIMS] Error message:',
+          err instanceof Error ? err.message : String(err)
+        )
+        console.error('[DEBUG-ETIMS] Stack trace:', err instanceof Error ? err.stack : undefined)
         return {
           success: false,
           error:

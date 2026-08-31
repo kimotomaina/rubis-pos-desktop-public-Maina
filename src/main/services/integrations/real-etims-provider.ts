@@ -3,6 +3,16 @@
  * server (ZFPLabServer) over HTTP, driving its stateful
  * `OpenInvoice` → `SellPLU` (per line item) → `CloseReceipt` flow.
  *
+ * A `Code 53: ClientSettingsNotInitialized`/"First use settings()
+ * command to set connection parameters" response does not mean an
+ * HTTP `settings` command exists to call — the official ZFP HTTP
+ * command list has no `settings`/`Settings`/`_Settings` endpoint
+ * (`settings`, `_Settings`, and `Settings` were each tried live and
+ * rejected). That message refers to the device IP/port/password
+ * needing to be configured in the ZFPLabServer desktop GUI itself,
+ * outside this HTTP API's reach — an operational prerequisite, not
+ * something this provider can satisfy over the wire.
+ *
  * Endpoint paths default to the ZFPLabServer SDK's method names but
  * are fully configurable, since the actual local server
  * (ZFPLabServerWindows) may expose a different RESTful surface (e.g.
@@ -155,6 +165,9 @@ export class RealFiscalizationProvider implements FiscalizationProvider {
       return { success: false, error: 'Invoice has no line items to fiscalize' }
     }
 
+    console.log(
+      `[DEBUG-ETIMS-PROVIDER] Step 1/3: OpenInvoice → ${this.resolveOpenInvoiceEndpoint(request)} (command=${this.resolveOpenInvoiceCommandName(request)})`
+    )
     const openResult = checkDeviceResponse(
       await postXml(
         this.http,
@@ -163,26 +176,34 @@ export class RealFiscalizationProvider implements FiscalizationProvider {
         this.buildOpenInvoicePayload(request)
       )
     )
+    console.log('[DEBUG-ETIMS-PROVIDER] Step 1/3: OpenInvoice result:', openResult)
     if (!openResult.success) {
       return { success: false, error: openResult.error }
     }
 
-    for (const item of request.items) {
+    for (const [index, item] of request.items.entries()) {
+      console.log(
+        `[DEBUG-ETIMS-PROVIDER] Step 2/3: SellPLU ${index + 1}/${request.items.length} → ${this.endpoints.sellPLU}`,
+        item
+      )
       const sellResult = checkDeviceResponse(
         await postXml(this.http, this.endpoints.sellPLU, 'SellPLU', this.buildSellPluPayload(item))
       )
+      console.log(`[DEBUG-ETIMS-PROVIDER] Step 2/3: SellPLU ${index + 1}/${request.items.length} result:`, sellResult)
       if (!sellResult.success) {
         await this.rollback()
         return { success: false, error: sellResult.error }
       }
     }
 
+    console.log(`[DEBUG-ETIMS-PROVIDER] Step 3/3: CloseReceipt → ${this.endpoints.closeReceipt}`)
     const closeResult = checkDeviceResponse(
       await postXml(this.http, this.endpoints.closeReceipt, 'CloseReceipt', {
         paymentMethod: this.mapPaymentMethod(request.paymentMethod),
         amountTendered: request.amountTendered ?? request.total
       })
     )
+    console.log('[DEBUG-ETIMS-PROVIDER] Step 3/3: CloseReceipt result:', closeResult)
     if (!closeResult.success) {
       await this.rollback()
       return { success: false, error: closeResult.error }
@@ -201,6 +222,7 @@ export class RealFiscalizationProvider implements FiscalizationProvider {
       }
     }
 
+    console.log('[DEBUG-ETIMS-PROVIDER] submitInvoice SUCCESS, invoiceNumber =', invoiceNumber)
     return {
       success: true,
       data: {
@@ -252,13 +274,15 @@ export class RealFiscalizationProvider implements FiscalizationProvider {
   }
 
   /**
-   * Picks the `Request` envelope's `name` attribute to match
-   * {@link resolveOpenInvoiceEndpoint}'s choice of endpoint —
-   * `OpenInvoiceWithCustomerData` for a B2B invoice, `OpenInvoice`
-   * otherwise.
+   * Picks the `Request` envelope's `Name` attribute. Per the SDK
+   * profile, `OpenInvoiceWithCustomerData` is not a valid server
+   * command — `OpenInvoiceWithFreeCustomerData` is used for both B2C
+   * and B2B, with the device deriving B2B status solely from the
+   * presence of `taxpayerPin` in the payload (see
+   * {@link buildOpenInvoicePayload}).
    */
-  private resolveOpenInvoiceCommandName(request: FiscalInvoiceRequest): string {
-    return request.buyerPin?.trim() ? 'OpenInvoiceWithCustomerData' : 'OpenInvoice'
+  private resolveOpenInvoiceCommandName(_request: FiscalInvoiceRequest): string {
+    return 'OpenInvoiceWithFreeCustomerData'
   }
 
   /**
@@ -297,6 +321,8 @@ export class RealFiscalizationProvider implements FiscalizationProvider {
 
   /** Best-effort void of an open receipt after a failed `SellPLU`/`CloseReceipt` call. */
   private async rollback(): Promise<void> {
-    await postXml(this.http, this.endpoints.cancelReceipt, 'CancelReceipt', {})
+    console.log(`[DEBUG-ETIMS-PROVIDER] Rollback: CancelReceipt → ${this.endpoints.cancelReceipt}`)
+    const result = await postXml(this.http, this.endpoints.cancelReceipt, 'CancelReceipt', {})
+    console.log('[DEBUG-ETIMS-PROVIDER] Rollback result:', result)
   }
 }

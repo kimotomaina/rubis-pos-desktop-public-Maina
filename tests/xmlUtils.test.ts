@@ -14,25 +14,25 @@ import {
 } from '../src/main/services/integrations/xml-utils.js'
 
 describe('serializeToXml', () => {
-  it('wraps a flat object in a <Request name="commandName"> envelope', () => {
+  it('wraps a flat object in a <Request Name="commandName"> envelope', () => {
     const xml = serializeToXml({ taxpayerPin: 'P051234567Z', currency: 'KES' }, 'OpenInvoice')
 
     expect(xml).toBe(
-      '<Request name="OpenInvoice"><taxpayerPin>P051234567Z</taxpayerPin><currency>KES</currency></Request>'
+      '<Request Name="OpenInvoice"><taxpayerPin>P051234567Z</taxpayerPin><currency>KES</currency></Request>'
     )
   })
 
   it('serializes nested objects as nested elements inside the envelope', () => {
     const xml = serializeToXml({ data: { item: 'value' } }, 'OpenInvoice')
 
-    expect(xml).toBe('<Request name="OpenInvoice"><data><item>value</item></data></Request>')
+    expect(xml).toBe('<Request Name="OpenInvoice"><data><item>value</item></data></Request>')
   })
 
   it('serializes arrays as one repeated singular element per entry', () => {
     const xml = serializeToXml({ items: [{ name: 'A' }, { name: 'B' }] }, 'OpenInvoice')
 
     expect(xml).toBe(
-      '<Request name="OpenInvoice"><items><item><name>A</name></item><item><name>B</name></item></items></Request>'
+      '<Request Name="OpenInvoice"><items><item><name>A</name></item><item><name>B</name></item></items></Request>'
     )
   })
 
@@ -40,28 +40,28 @@ describe('serializeToXml', () => {
     const xml = serializeToXml({ quantity: 2, unitPrice: 12.5, taxable: true }, 'SellPLU')
 
     expect(xml).toBe(
-      '<Request name="SellPLU"><quantity>2</quantity><unitPrice>12.5</unitPrice><taxable>true</taxable></Request>'
+      '<Request Name="SellPLU"><quantity>2</quantity><unitPrice>12.5</unitPrice><taxable>true</taxable></Request>'
     )
   })
 
   it('omits properties whose value is undefined', () => {
     const xml = serializeToXml({ a: 'x', b: undefined }, 'CloseReceipt')
 
-    expect(xml).toBe('<Request name="CloseReceipt"><a>x</a></Request>')
+    expect(xml).toBe('<Request Name="CloseReceipt"><a>x</a></Request>')
   })
 
   it('escapes XML special characters in text content', () => {
     const xml = serializeToXml({ description: `Fish & Chips <Large> "Combo" 'Deal'` }, 'SellPLU')
 
     expect(xml).toBe(
-      '<Request name="SellPLU"><description>Fish &amp; Chips &lt;Large&gt; &quot;Combo&quot; &apos;Deal&apos;</description></Request>'
+      '<Request Name="SellPLU"><description>Fish &amp; Chips &lt;Large&gt; &quot;Combo&quot; &apos;Deal&apos;</description></Request>'
     )
   })
 
   it('escapes special characters in the command name itself', () => {
     const xml = serializeToXml({}, 'Open&Close')
 
-    expect(xml).toBe('<Request name="Open&amp;Close"></Request>')
+    expect(xml).toBe('<Request Name="Open&amp;Close"></Request>')
   })
 })
 

@@ -35,6 +35,7 @@ export default function CheckoutModal({ onClose }: CheckoutModalProps) {
   const checkout = useCartStore((state) => state.checkout)
   const checkoutStatus = useCartStore((state) => state.checkoutStatus)
   const checkoutError = useCartStore((state) => state.checkoutError)
+  const resetCheckoutStatus = useCartStore((state) => state.resetCheckoutStatus)
   const currentStaff = useAuthStore((state) => state.currentStaff)
 
   const [method, setMethod] = useState<PaymentMethod | null>(null)
@@ -53,8 +54,9 @@ export default function CheckoutModal({ onClose }: CheckoutModalProps) {
   useEffect(() => {
     if (checkoutStatus === 'synced' || checkoutStatus === 'queued-offline') {
       onClose()
+      resetCheckoutStatus()
     }
-  }, [checkoutStatus, onClose])
+  }, [checkoutStatus, onClose, resetCheckoutStatus])
 
   const handleAmountKey = (key: string) => {
     if (key === '⌫') {

@@ -80,25 +80,25 @@ describe('RealFiscalizationProvider.submitInvoice', () => {
 
     for (const call of post.mock.calls) {
       expect(typeof call[1]).toBe('string')
-      expect(call[1]).toMatch(/^<Request name="\w+">[\s\S]*<\/Request>$/)
-      expect(call[2]).toEqual({ headers: { 'Content-Type': 'text/xml' } })
+      expect(call[1]).toMatch(/^<Request Name="\w+">[\s\S]*<\/Request>$/)
+      expect(call[2]).toEqual({ headers: { 'Content-Type': 'text/xml' }, timeout: 5000 })
     }
   })
 
-  it('serializes the OpenInvoice payload as a <Request name="OpenInvoice"> envelope', async () => {
+  it('serializes the OpenInvoice payload as a <Request Name="OpenInvoiceWithFreeCustomerData"> envelope', async () => {
     const post = vi.fn().mockResolvedValue({ data: xmlResponse({ invoiceNumber: 'KRA-0001' }) })
     const provider = new RealFiscalizationProvider({ httpClient: makeMockClient(post) })
 
     await provider.submitInvoice(SAMPLE_REQUEST)
 
     const openCall = post.mock.calls.find((call) => call[0] === DEFAULT_FISCAL_ENDPOINTS.openInvoice)
-    expect(openCall?.[1]).toContain('<Request name="OpenInvoice">')
+    expect(openCall?.[1]).toContain('<Request Name="OpenInvoiceWithFreeCustomerData">')
     expect(openCall?.[1]).toContain(
       `<clientOrderUuid>${SAMPLE_REQUEST.clientOrderUuid}</clientOrderUuid>`
     )
   })
 
-  it('serializes each SellPLU call as a <Request name="SellPLU"> envelope', async () => {
+  it('serializes each SellPLU call as a <Request Name="SellPLU"> envelope', async () => {
     const post = vi.fn().mockResolvedValue({ data: xmlResponse({ invoiceNumber: 'KRA-0001' }) })
     const provider = new RealFiscalizationProvider({ httpClient: makeMockClient(post) })
 
@@ -106,10 +106,10 @@ describe('RealFiscalizationProvider.submitInvoice', () => {
 
     const sellCalls = post.mock.calls.filter((call) => call[0] === DEFAULT_FISCAL_ENDPOINTS.sellPLU)
     expect(sellCalls[0][1]).toBe(
-      '<Request name="SellPLU"><pluCode>variant-1</pluCode><description>Bread</description><quantity>2</quantity><unitPrice>60</unitPrice><vatClass>A</vatClass></Request>'
+      '<Request Name="SellPLU"><pluCode>variant-1</pluCode><description>Bread</description><quantity>2</quantity><unitPrice>60</unitPrice><vatClass>A</vatClass></Request>'
     )
     expect(sellCalls[1][1]).toBe(
-      '<Request name="SellPLU"><pluCode>variant-2</pluCode><description>Milk</description><quantity>1</quantity><unitPrice>80</unitPrice><vatClass>A</vatClass></Request>'
+      '<Request Name="SellPLU"><pluCode>variant-2</pluCode><description>Milk</description><quantity>1</quantity><unitPrice>80</unitPrice><vatClass>A</vatClass></Request>'
     )
   })
 
@@ -149,7 +149,7 @@ describe('RealFiscalizationProvider.submitInvoice', () => {
     const openCall = post.mock.calls.find(
       (call) => call[0] === DEFAULT_FISCAL_ENDPOINTS.openInvoiceWithPin
     )
-    expect(openCall?.[1]).toContain('<Request name="OpenInvoiceWithCustomerData">')
+    expect(openCall?.[1]).toContain('<Request Name="OpenInvoiceWithFreeCustomerData">')
     expect(openCall?.[1]).toContain('<taxpayerPin>p051234567z</taxpayerPin>')
     expect(openCall?.[1]).toContain(
       `<clientOrderUuid>${SAMPLE_REQUEST.clientOrderUuid}</clientOrderUuid>`
@@ -173,7 +173,7 @@ describe('RealFiscalizationProvider.submitInvoice', () => {
     expect(calledPaths).not.toContain(DEFAULT_FISCAL_ENDPOINTS.openInvoiceWithPin)
 
     const openCall = post.mock.calls.find((call) => call[0] === DEFAULT_FISCAL_ENDPOINTS.openInvoice)
-    expect(openCall?.[1]).toContain('<Request name="OpenInvoice">')
+    expect(openCall?.[1]).toContain('<Request Name="OpenInvoiceWithFreeCustomerData">')
     expect(openCall?.[1]).toContain('<buyerPin></buyerPin>')
     expect(openCall?.[1]).not.toContain('<taxpayerPin>')
   })
@@ -222,7 +222,7 @@ describe('RealFiscalizationProvider.submitInvoice', () => {
 
     const closeCall = post.mock.calls.find((call) => call[0] === DEFAULT_FISCAL_ENDPOINTS.closeReceipt)
     expect(closeCall?.[1]).toBe(
-      '<Request name="CloseReceipt"><paymentMethod>MPESA</paymentMethod><amountTendered>219.2</amountTendered></Request>'
+      '<Request Name="CloseReceipt"><paymentMethod>MPESA</paymentMethod><amountTendered>219.2</amountTendered></Request>'
     )
   })
 
@@ -370,8 +370,8 @@ describe('RealFiscalizationProvider.cancelInvoice', () => {
     expect(result.success).toBe(true)
     expect(post).toHaveBeenCalledWith(
       DEFAULT_FISCAL_ENDPOINTS.openCreditNote,
-      '<Request name="OpenCreditNote"><referenceInvoiceNumber>KRA-0001</referenceInvoiceNumber></Request>',
-      { headers: { 'Content-Type': 'text/xml' } }
+      '<Request Name="OpenCreditNote"><referenceInvoiceNumber>KRA-0001</referenceInvoiceNumber></Request>',
+      { headers: { 'Content-Type': 'text/xml' }, timeout: 5000 }
     )
   })
 

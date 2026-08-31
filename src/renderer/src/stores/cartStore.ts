@@ -77,6 +77,8 @@ export interface CartState {
   getItemCount: () => number
   /** Submit the cart to the main process for persistence + sync. */
   checkout: (params: CheckoutParams) => Promise<void>
+  /** Clears a terminal `checkoutStatus` back to `idle` once the UI has reacted to it. */
+  resetCheckoutStatus: () => void
 }
 
 /**
@@ -189,7 +191,9 @@ export const useCartStore = create<CartState>()(
               error instanceof Error ? error.message : 'Checkout failed'
           })
         }
-      }
+      },
+
+      resetCheckoutStatus: () => set({ checkoutStatus: 'idle', checkoutError: null })
     }),
     {
       name: 'rubis-pos-cart',
