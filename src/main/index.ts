@@ -1402,6 +1402,23 @@ app.whenReady().then(async () => {
   )
 
   /**
+   * Opens a PDF receipt in the OS default viewer when printing fell
+   * back to saving one instead of reaching a physical printer — never
+   * when the physical printer actually printed.
+   *
+   * @param {ServiceResult<ReceiptPrintResult>} result
+   * @returns {ServiceResult<ReceiptPrintResult>}
+   */
+  const openPdfFallbackIfPresent = (
+    result: ServiceResult<ReceiptPrintResult>
+  ): ServiceResult<ReceiptPrintResult> => {
+    if (result.success && result.data?.mode === 'pdf' && result.data.filePath) {
+      void shell.openPath(result.data.filePath)
+    }
+    return result
+  }
+
+  /**
    * IPC handler that prints (or, in mock mode, logs) either a local
    * order's receipt or — when `isZReport` is set — a shift's Z-report.
    * Reconstructs receipt line items from the order's stored
@@ -1424,7 +1441,7 @@ app.whenReady().then(async () => {
         }
         try {
           const report = generateZReport(db, request.shiftId, printerSettings.taxRate)
-          return await printZReport(report, printerSettings)
+          return openPdfFallbackIfPresent(await printZReport(report, printerSettings))
         } catch (err) {
           return {
             success: false,
@@ -1445,28 +1462,30 @@ app.whenReady().then(async () => {
 
       try {
         const payload = JSON.parse(order.payload_json) as OfflineOrderPayload
-        return await printReceiptToType(
-          {
-            localId: order.local_id,
-            createdAt: order.created_at,
-            cashierName: payload.staffName,
-            paymentMethod: payload.paymentMethod,
-            tenderedAmount: payload.tenderedAmount,
-            changeDue: payload.changeDue,
-            referenceNumber: payload.referenceNumber,
-            customerPin: payload.customerPin,
-            fiscalInvoiceNumber: order.fiscal_invoice_number ?? undefined,
-            fiscalQrCode: order.fiscal_qr_code ?? undefined
-          },
-          payload.lineItems.map((line) => ({
-            title: line.title,
-            variantTitle: line.variantTitle ?? '',
-            quantity: line.quantity,
-            unitPrice: line.unitPrice
-          })),
-          printerRegistry,
-          printerSettings,
-          request.printerType ?? 'receipt'
+        return openPdfFallbackIfPresent(
+          await printReceiptToType(
+            {
+              localId: order.local_id,
+              createdAt: order.created_at,
+              cashierName: payload.staffName,
+              paymentMethod: payload.paymentMethod,
+              tenderedAmount: payload.tenderedAmount,
+              changeDue: payload.changeDue,
+              referenceNumber: payload.referenceNumber,
+              customerPin: payload.customerPin,
+              fiscalInvoiceNumber: order.fiscal_invoice_number ?? undefined,
+              fiscalQrCode: order.fiscal_qr_code ?? undefined
+            },
+            payload.lineItems.map((line) => ({
+              title: line.title,
+              variantTitle: line.variantTitle ?? '',
+              quantity: line.quantity,
+              unitPrice: line.unitPrice
+            })),
+            printerRegistry,
+            printerSettings,
+            request.printerType ?? 'receipt'
+          )
         )
       } catch (err) {
         return {
