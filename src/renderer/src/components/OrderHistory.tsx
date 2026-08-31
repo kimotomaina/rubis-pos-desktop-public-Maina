@@ -2,6 +2,30 @@ import { useEffect, useState } from 'react'
 import type { OrderRow } from '../../../main/services/database.js'
 import type { OfflineOrderLine } from '../../../main/services/shopify-types.js'
 import { formatCurrency } from '../lib/currency'
+import etimsLogoSrc from '../assets/logo-etims.png'
+
+/**
+ * Renders the eTIMS brand logo, falling back to a plain "eTIMS" text
+ * label if the image asset fails to load.
+ *
+ * @returns {JSX.Element}
+ */
+function EtimsLogo() {
+  const [failed, setFailed] = useState(false)
+
+  if (failed) {
+    return <span className="text-xs font-semibold text-slate-500">eTIMS</span>
+  }
+
+  return (
+    <img
+      src={etimsLogoSrc}
+      alt="eTIMS"
+      className="h-6 w-auto shrink-0 object-contain"
+      onError={() => setFailed(true)}
+    />
+  )
+}
 
 type OrderStatus = 'synced' | 'pending_sync' | 'failed' | 'voided'
 
@@ -237,7 +261,8 @@ export default function OrderHistory({ onRetry, onPrint, requestManagerPin }: Or
                 className="mt-2 flex items-center gap-3 border-t border-slate-100 pt-2"
                 onClick={(e) => e.stopPropagation()}
               >
-                {order.fiscal_qr_code ? (
+                <EtimsLogo />
+                {order.fiscal_qr_code && order.fiscal_qr_code ? (
                   <img
                     src={`data:image/png;base64,${order.fiscal_qr_code}`}
                     alt={`eTIMS QR code for invoice ${order.fiscal_invoice_number}`}

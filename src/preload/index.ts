@@ -28,6 +28,21 @@ export interface NetworkStatusPayload {
   online: boolean
 }
 
+/** Result of one reachability probe, mirroring `ConnectivityCheckResult` in the main process. */
+export interface ConnectivityCheckPayload {
+  connected: boolean
+  lastCheckedAt: string
+  latencyMs?: number
+  error?: string
+}
+
+/** Status payload broadcast over the `connectivity:status` channel. */
+export interface ConnectivityStatusPayload {
+  mpesa: ConnectivityCheckPayload
+  fiscal: ConnectivityCheckPayload
+  printer: ConnectivityCheckPayload
+}
+
 /**
  * Custom renderer-facing API surface.
  *
@@ -110,6 +125,41 @@ const api = {
     ): void => callback(status)
     ipcRenderer.on('network:status', listener)
     return () => ipcRenderer.removeListener('network:status', listener)
+  },
+
+  /**
+   * Reads the last-known M-Pesa/fiscal-device/printer reachability.
+   *
+   * @returns {Promise<ConnectivityStatusPayload>}
+   */
+  getConnectivityStatus: (): Promise<ConnectivityStatusPayload> =>
+    ipcRenderer.invoke('connectivity:get-status'),
+
+  /**
+   * Triggers an immediate reachability check across every monitored
+   * integration.
+   *
+   * @returns {Promise<ConnectivityStatusPayload>}
+   */
+  testAllConnectivity: (): Promise<ConnectivityStatusPayload> =>
+    ipcRenderer.invoke('connectivity:test-all'),
+
+  /**
+   * Subscribes to connectivity check results broadcast by the main
+   * process. Returns a cleanup function that removes the listener.
+   *
+   * @param {(status: ConnectivityStatusPayload) => void} callback
+   * @returns {() => void} unsubscribe
+   */
+  onConnectivityStatus: (
+    callback: (status: ConnectivityStatusPayload) => void
+  ): (() => void) => {
+    const listener = (
+      _event: Electron.IpcRendererEvent,
+      status: ConnectivityStatusPayload
+    ): void => callback(status)
+    ipcRenderer.on('connectivity:status', listener)
+    return () => ipcRenderer.removeListener('connectivity:status', listener)
   },
 
   /**

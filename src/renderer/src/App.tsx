@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { useCartStore } from './stores/cartStore'
 import { useProductStore } from './stores/productStore'
 import { useNetworkStore } from './stores/networkStore'
+import { useConnectivityStore } from './stores/connectivityStore'
 import { useUiStore } from './stores/uiStore'
 import { useAuthStore } from './stores/authStore'
 import { useBarcodeScanner } from './hooks/useBarcodeScanner'
@@ -23,6 +24,9 @@ import CheckoutModal from './components/CheckoutModal'
 import AdminScreen from './components/AdminScreen'
 import UpdateToast from './components/UpdateToast'
 import ManagerPinModal from './components/ManagerPinModal'
+import ConnectivityBadges, { type ConnectivityIntegration } from './components/ConnectivityBadges'
+import ConnectivityModal from './components/ConnectivityModal'
+import ConnectivityToast from './components/ConnectivityToast'
 import { requiresManagerPinForDiscount } from './lib/checkoutMath'
 import { WarningIcon, InboxIcon, SearchIcon, CartIcon, CheckIcon } from './components/icons'
 import rubisLogo from './assets/logo-rubis.png'
@@ -170,6 +174,13 @@ export default function App() {
   const online = useNetworkStore((state) => state.online)
   const initNetwork = useNetworkStore((state) => state.init)
 
+  const connectivityStatus = useConnectivityStore((state) => state.status)
+  const initConnectivity = useConnectivityStore((state) => state.init)
+  const [selectedConnectivity, setSelectedConnectivity] = useState<ConnectivityIntegration | null>(
+    null
+  )
+  const [barcodeStatus, setBarcodeStatus] = useState<'unknown' | 'connected'>('unknown')
+
   const selectedProductForModal = useUiStore((state) => state.selectedProductForModal)
   const activeView = useUiStore((state) => state.activeView)
   const setSelectedProduct = useUiStore((state) => state.setSelectedProduct)
@@ -206,6 +217,10 @@ export default function App() {
   useEffect(() => {
     void initNetwork()
   }, [initNetwork])
+
+  useEffect(() => {
+    void initConnectivity()
+  }, [initConnectivity])
 
   const handleAddToCart = (product: ProductSummary, variant: VariantSummary) => {
     addItem(buildCartItem(product, variant), 1)
@@ -393,9 +408,11 @@ export default function App() {
             <span className="font-medium text-slate-700">
               {currentStaff.name}
             </span>
-            <span className="rounded-full bg-slate-100 px-2.5 py-1 text-sm font-medium capitalize text-slate-500">
-              {currentStaff.role}
-            </span>
+            {currentStaff.role.toLowerCase() !== currentStaff.name.toLowerCase() && (
+              <span className="rounded-full bg-slate-100 px-2.5 py-1 text-sm font-medium capitalize text-slate-500">
+                {currentStaff.role}
+              </span>
+            )}
             <button
               type="button"
               onClick={() => void logout()}
@@ -421,18 +438,33 @@ export default function App() {
               Offline — sales will queue
             </span>
           )}
+          <ConnectivityBadges
+            status={connectivityStatus}
+            barcodeStatus={barcodeStatus}
+            onSelect={setSelectedConnectivity}
+          />
           <span className="font-mono tabular-nums" aria-label="clock">
             {now}
           </span>
         </div>
       </header>
 
+      {selectedConnectivity && (
+        <ConnectivityModal
+          integration={selectedConnectivity}
+          status={connectivityStatus}
+          barcodeStatus={barcodeStatus}
+          onBarcodeDetected={() => setBarcodeStatus('connected')}
+          onClose={() => setSelectedConnectivity(null)}
+        />
+      )}
+
       {/* Main: product grid + cart, or order history */}
       {activeView === 'catalog' ? (
         <main className="flex flex-1 overflow-hidden">
           {/* Product grid */}
-          <section className="flex-1 overflow-y-auto p-6">
-            <div className="mb-4 flex items-center gap-3">
+          <section className="flex-1 overflow-y-auto">
+            <div className="sticky top-0 z-10 flex items-center gap-3 border-b border-slate-200 bg-slate-50 px-6 py-4 shadow-sm">
               <h2 className="text-xl font-semibold text-slate-700">Products</h2>
               {cached && (
                 <span className="rounded-full bg-amber-100 px-2.5 py-1 text-sm font-medium text-amber-700">
@@ -447,6 +479,7 @@ export default function App() {
               />
             </div>
 
+            <div className="p-6">
             {status === 'loading' && (
               <div className="grid grid-cols-3 gap-6">
                 {Array.from({ length: 8 }).map((_, i) => (
@@ -503,6 +536,7 @@ export default function App() {
                 ))}
               </div>
             )}
+            </div>
           </section>
 
           {/* Cart sidebar */}
@@ -690,6 +724,9 @@ export default function App() {
 
       {/* Auto-update toast */}
       <UpdateToast />
+
+      {/* Connectivity change toasts */}
+      <ConnectivityToast />
     </div>
   )
 }

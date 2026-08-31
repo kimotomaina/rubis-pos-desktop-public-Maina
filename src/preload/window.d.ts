@@ -37,6 +37,21 @@ export interface NetworkStatusPayload {
   online: boolean
 }
 
+/** Result of one reachability probe, mirroring `ConnectivityCheckResult` in the main process. */
+export interface ConnectivityCheckPayload {
+  connected: boolean
+  lastCheckedAt: string
+  latencyMs?: number
+  error?: string
+}
+
+/** Payload of the `connectivity:status` broadcast / `connectivity:get-status` invoke. */
+export interface ConnectivityStatusPayload {
+  mpesa: ConnectivityCheckPayload
+  fiscal: ConnectivityCheckPayload
+  printer: ConnectivityCheckPayload
+}
+
 /**
  * Renderer-facing API surface — mirror of the `api` object
  * built in `src/preload/index.ts`.
@@ -60,6 +75,12 @@ export interface PosApi {
   getNetworkStatus: () => Promise<NetworkStatusPayload>
   /** Subscribes to connectivity transitions; returns an unsubscribe fn. */
   onNetworkStatus: (callback: (status: NetworkStatusPayload) => void) => () => void
+  /** Reads the last-known M-Pesa/fiscal-device/printer reachability. */
+  getConnectivityStatus: () => Promise<ConnectivityStatusPayload>
+  /** Triggers an immediate reachability check across every monitored integration. */
+  testAllConnectivity: () => Promise<ConnectivityStatusPayload>
+  /** Subscribes to connectivity check results; returns an unsubscribe fn. */
+  onConnectivityStatus: (callback: (status: ConnectivityStatusPayload) => void) => () => void
   /** Fetches local orders for the order history view. */
   getLocalOrders: (limit?: number, offset?: number) => Promise<ServiceResult<OrderRow[]>>
   /** Retries syncing a failed or pending order. */

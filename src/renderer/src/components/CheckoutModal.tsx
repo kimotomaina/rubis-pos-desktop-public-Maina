@@ -153,7 +153,7 @@ export default function CheckoutModal({ onClose }: CheckoutModalProps) {
 
           <div className="mb-4">
             <label className="mb-1 block text-base font-medium text-slate-600">
-              Customer KRA PIN <span className="font-normal text-slate-400">(optional — for a B2B invoice)</span>
+              Customer KRA PIN 
             </label>
             <input
               type="text"

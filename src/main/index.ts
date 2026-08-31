@@ -59,6 +59,13 @@ import type {
 import { MockFiscalizationProvider } from './services/integrations/etims.js'
 import type { FiscalizationProvider } from './services/integrations/etims.js'
 import { RealFiscalizationProvider } from './services/integrations/real-etims-provider.js'
+import {
+  createConnectivityMonitor,
+  checkHttpReachable,
+  checkTcpReachable,
+  mockConnectedResult,
+  mockDisconnectedResult
+} from './services/connectivityMonitor.js'
 import type { FiscalEndpointPaths } from './services/integrations/real-etims-provider.js'
 import { voidLocalOrder } from './services/voids.js'
 import {
@@ -514,10 +521,41 @@ app.whenReady().then(async () => {
   engine.start()
   fiscalEngine.start()
 
+  /**
+   * M-Pesa (Daraja sandbox) / fiscal device / printer reachability —
+   * a mocked integration always reports connected without any real
+   * network I/O, since there is nothing external to actually reach.
+   * M-Pesa/eTIMS mock mode is reported as disconnected — mocking means
+   * no real Daraja/fiscal connection exists, and the badge should say
+   * so rather than imply a working live integration. The mock printer
+   * (a distinct, older `VITE_MOCK_PRINTER` flag) simulates hardware
+   * that was never expected to have a real counterpart, so it's
+   * reported as connected instead.
+   */
+  const DARAJA_SANDBOX_HOST = 'https://sandbox.safaricom.co.ke'
+  const connectivityMonitor = createConnectivityMonitor({
+    checkMpesa: () =>
+      mockMpesaEnabled
+        ? Promise.resolve(mockDisconnectedResult('M-Pesa mock mode enabled'))
+        : checkHttpReachable(DARAJA_SANDBOX_HOST),
+    checkFiscal: () =>
+      mockEtimsEnabled
+        ? Promise.resolve(mockDisconnectedResult('eTIMS mock mode enabled'))
+        : checkHttpReachable(etimsConfig.baseUrl ?? 'http://localhost:4444'),
+    checkPrinter: () =>
+      printerSettings.mock
+        ? Promise.resolve(mockConnectedResult())
+        : checkTcpReachable(printerSettings.interfaceName),
+    intervalMs: 30_000,
+    emit: (status) => broadcast('connectivity:status', status)
+  })
+  connectivityMonitor.start()
+
   app.on('will-quit', () => {
     engine.stop()
     fiscalEngine.stop()
     monitor.stop()
+    connectivityMonitor.stop()
     db.close()
   })
 
@@ -1313,6 +1351,16 @@ app.whenReady().then(async () => {
   ipcMain.handle('network:get-status', () => ({
     online: monitor.isOnline()
   }))
+
+  /**
+   * Lets the renderer read the last-known connectivity status
+   * synchronously, before the first `connectivity:status` event has
+   * fired.
+   */
+  ipcMain.handle('connectivity:get-status', () => connectivityMonitor.getStatus())
+
+  /** Triggers an immediate connectivity check across every monitored integration. */
+  ipcMain.handle('connectivity:test-all', () => connectivityMonitor.checkNow())
 
   /**
    * IPC handler to fetch local orders for the order history view.
