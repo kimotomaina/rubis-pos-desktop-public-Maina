@@ -15,7 +15,7 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import type { CartItem, Discount } from '../types/shopify.js'
-import type { CheckoutReceipt, PaymentMethod } from '../../../main/services/database.js'
+import type { CheckoutReceipt, FiscalResendResult, PaymentMethod } from '../../../main/services/database.js'
 import { calculateCartTotal, calculateSubtotal, validatePriceOverride } from '../lib/checkoutMath.js'
 
 /** Lifecycle of the most recent checkout submission. */
@@ -35,6 +35,8 @@ export interface CheckoutParams {
   referenceNumber?: string
   /** Customer's KRA PIN, when captured for a B2B eTIMS invoice — omitted for a walk-in B2C sale. */
   customerPin?: string
+  /** Customer's company/trading name, when captured for a B2B eTIMS invoice. */
+  companyName?: string
   /** Cart-level discount to persist with the order. */
   cartDiscount?: Discount
 }
@@ -79,6 +81,12 @@ export interface CartState {
   checkout: (params: CheckoutParams) => Promise<void>
   /** Clears a terminal `checkoutStatus` back to `idle` once the UI has reacted to it. */
   resetCheckoutStatus: () => void
+  /**
+   * Merges a manual fiscalization resend's new outcome (phase-78,
+   * Part C) into `lastReceipt`, so `FiscalNotice` reflects it — a no-op
+   * if `lastReceipt` has since moved on to a different sale.
+   */
+  applyFiscalResendResult: (result: FiscalResendResult) => void
 }
 
 /**
@@ -193,7 +201,25 @@ export const useCartStore = create<CartState>()(
         }
       },
 
-      resetCheckoutStatus: () => set({ checkoutStatus: 'idle', checkoutError: null })
+      resetCheckoutStatus: () => set({ checkoutStatus: 'idle', checkoutError: null }),
+
+      applyFiscalResendResult: (result) => {
+        set((state) => {
+          if (!state.lastReceipt || state.lastReceipt.localId !== result.localId) {
+            return state
+          }
+          return {
+            lastReceipt: {
+              ...state.lastReceipt,
+              fiscal: result.fiscal,
+              fiscalStatus: result.fiscalStatus,
+              fiscalErrorReason: result.fiscalErrorReason,
+              fiscalErrorKind: result.fiscalErrorKind,
+              fiscalDataIssue: result.fiscalDataIssue
+            }
+          }
+        })
+      }
     }),
     {
       name: 'rubis-pos-cart',

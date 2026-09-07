@@ -1,0 +1,13 @@
+<!--
+  Canonical Code 19 (ServUndefined) shape for the Chunk 2 mock server,
+  built in the same nested-Err/Message shape as code30-socketfail.xml/
+  code63-invalidpost.xml/readstatus-code31-authfail.xml. This is
+  DISTINCT from readstatus-live-captured-code19.xml, which is the real
+  capture and has an anomalous shape (errSource attribute directly on
+  <Res>, no <Err> element at all — see docs/phase-audit.md finding 4.6).
+  That real capture is kept untouched as the source of the anomaly
+  note; this file exists so the mock server has a schema-consistent
+  Code 19 to serve without relying on the anomalous shape being
+  load-bearing. Message text is copied verbatim from the real capture.
+-->
+<Res Code="19"><Err Source="Server" Type="ServUndefined"><Message>The Fiscal Printer has open socket. FP refuses new socket connection. Internal error</Message></Err></Res>

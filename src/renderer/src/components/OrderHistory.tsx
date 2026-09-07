@@ -194,7 +194,7 @@ export default function OrderHistory({ onRetry, onPrint, requestManagerPin }: Or
             onClick={() => toggleExpanded(order.local_id)}
             className="cursor-pointer rounded-lg border border-slate-200 bg-white p-4 shadow-sm"
           >
-            <div className="flex items-start justify-between">
+            <div className="flex flex-col items-start justify-between gap-2 sm:flex-row sm:items-center">
               <div>
                 <p className="text-lg font-semibold text-slate-900">
                   Order #{order.local_id}
@@ -203,7 +203,7 @@ export default function OrderHistory({ onRetry, onPrint, requestManagerPin }: Or
                   {new Date(order.created_at).toLocaleString()}
                 </p>
               </div>
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
                 {getStatusBadge(order.status)}
                 <button
                   type="button"

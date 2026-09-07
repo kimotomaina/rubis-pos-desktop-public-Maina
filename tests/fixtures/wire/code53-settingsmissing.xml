@@ -1,0 +1,8 @@
+<!--
+  Authored per §4.3's server Res Code table (ClientSettingsNotInitialized)
+  + the nested-Message shape confirmed live by code30-socketfail.xml /
+  code63-invalidpost.xml / readstatus-code31-authfail.xml — not
+  captured live for this specific code (not reproduced against the
+  running server this project). Message text is VERIFY-ON-DEVICE.
+-->
+<Res Code="53"><Err Source="Server" Type="ClientSettingsNotInitialized"><Message>Client settings not initialized. Send settings() first.</Message></Err></Res>

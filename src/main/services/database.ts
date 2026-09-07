@@ -17,13 +17,28 @@ import BetterSqlite3 from 'better-sqlite3'
 import type { Database as SqliteConnection } from 'better-sqlite3'
 import type { Discount, OfflineOrderPayload } from './shopify-types.js'
 import type { CartItem, ProductSummary } from '../../renderer/src/types/shopify.js'
-import type { FiscalInvoiceRequest } from './integrations/etims.js'
+import type { FiscalFailureKind, FiscalInvoiceRequest } from './integrations/etims.js'
 
 /** Lifecycle states of a local order row. */
 export type OrderStatus = 'pending_sync' | 'synced' | 'failed' | 'voided'
 
 /** Accepted payment methods at checkout. */
 export type PaymentMethod = 'cash' | 'mpesa' | 'card'
+
+/**
+ * Three-state fiscalization outcome for an order — `null`/absent means
+ * "never attempted" (e.g. the mock provider, or a checkout that hasn't
+ * reached fiscalization yet):
+ *
+ *   - `'fiscalized'`   — the device accepted it; invoice number/QR/serial
+ *     are stored.
+ *   - `'waiting'`      — a transient/technical problem; `fiscal-engine.ts`
+ *     keeps retrying in the background.
+ *   - `'needs_fixing'` — the device rejected the sale's data (or an
+ *     anomaly in this build) — retrying the same data is pointless, so
+ *     it's flagged for a person instead of being queued.
+ */
+export type FiscalStatus = 'fiscalized' | 'waiting' | 'needs_fixing'
 
 /** Row shape of the `orders` table. */
 export interface OrderRow {
@@ -45,6 +60,32 @@ export interface OrderRow {
   fiscal_qr_code: string | null
   /** ISO timestamp of a successful fiscalization. */
   fiscal_fiscalized_at: string | null
+  /** See {@link FiscalStatus}. `null` = fiscalization never attempted. */
+  fiscal_status: FiscalStatus | null
+  /** Short plain-language failure reason, e.g. "Wrong client PIN". `null` once fiscalized (or never attempted). */
+  fiscal_error_reason: string | null
+  /** Classification of `fiscal_error_reason` — see {@link FiscalFailureKind}. `null` once fiscalized (or never attempted). */
+  fiscal_error_kind: FiscalFailureKind | null
+  /**
+   * A small, stable tag identifying a `needs_fixing`/`'data'` rejection
+   * that can be fixed on the spot — currently only `'wrong-pin'`
+   * (phase-88/Step 4). Persisted (unlike `CheckoutReceipt.fiscalDataIssue`,
+   * which is deliberately in-memory-only for the immediate post-checkout
+   * notice) so the back-office list can recognize a fixable rejection
+   * read back from a stored order, not just one from a live attempt.
+   * Set by {@link RubisDatabase.setOrderFiscalFailure}, cleared by
+   * {@link RubisDatabase.setOrderFiscalInfo} on success.
+   */
+  fiscal_data_issue: 'wrong-pin' | null
+  /**
+   * The last-used {@link FiscalInvoiceRequest}, JSON-serialized —
+   * written once fiscalization is first attempted, kept afterward
+   * regardless of outcome (success, queued, or `needs_fixing`) so a
+   * manual resend (phase-76) always has the sale's stored request to
+   * resubmit rather than reconstructing one. `null` until a first
+   * fiscalization attempt is made.
+   */
+  fiscal_request_json: string | null
 }
 
 /** Role assignable to a staff account. */
@@ -140,7 +181,43 @@ export interface CheckoutReceipt {
   shopifyOrderId?: string
   /** Present when eTIMS fiscalization was attempted and succeeded. */
   fiscal?: CheckoutFiscalInfo
+  /**
+   * This sale's fiscalization outcome (phase-77) — read back from the
+   * order row after `runCheckout`'s fiscalization block finishes, so it
+   * always reflects what was actually persisted. `null` only in the
+   * pathological case where even the fallback DB write failed (see
+   * `checkout.ts`'s outer fiscalization `catch`) — fiscalization was
+   * never recorded at all.
+   */
+  fiscalStatus: FiscalStatus | null
+  /** Plain-language failure reason, set when `fiscalStatus` is `'waiting'` or `'needs_fixing'`. Never a code. */
+  fiscalErrorReason: string | null
+  /** Classification of `fiscalErrorReason` — see {@link FiscalFailureKind}. */
+  fiscalErrorKind: FiscalFailureKind | null
+  /**
+   * A small, stable tag identifying a `needs_fixing`/`'data'` rejection
+   * the till can offer an on-the-spot fix for (phase-77) — sourced from
+   * THIS attempt's {@link FiscalSubmitOutcome}. Also persisted onto the
+   * order row's `fiscal_data_issue` column as of phase-88/Step 4 (see
+   * {@link OrderRow.fiscal_data_issue}), so the back-office list can
+   * recognize the same fixable rejection later, from a stored order
+   * rather than only a live attempt. `null` for every outcome except a
+   * recognized fixable rejection.
+   */
+  fiscalDataIssue: 'wrong-pin' | null
 }
+
+/**
+ * Result of a manual fiscalization resend (phase-78, Part C) — the
+ * same fiscal-outcome fields `CheckoutReceipt` carries, without the
+ * checkout-specific `mode`/`shopifyOrderId` a resend has no opinion on.
+ * The renderer merges this into its stored `lastReceipt` so the till
+ * notice reflects the sale's new outcome.
+ */
+export type FiscalResendResult = Pick<
+  CheckoutReceipt,
+  'localId' | 'fiscal' | 'fiscalStatus' | 'fiscalErrorReason' | 'fiscalErrorKind' | 'fiscalDataIssue'
+>
 
 /** Payload the renderer sends to `orders:checkout`. */
 export interface CheckoutRequest {
@@ -154,6 +231,8 @@ export interface CheckoutRequest {
   shiftId?: number
   /** Customer's KRA PIN, when captured for a B2B eTIMS invoice — omitted for a walk-in B2C sale. */
   customerPin?: string
+  /** Customer's company/trading name, when captured for a B2B eTIMS invoice. */
+  companyName?: string
   cartDiscount?: Discount
 }
 
@@ -189,7 +268,16 @@ export function computeBackoffMs(attemptNumber: number): number {
  * no portable `ADD COLUMN IF NOT EXISTS` in SQLite.
  */
 function migrateOrdersFiscalColumns(connection: SqliteConnection): void {
-  const fiscalColumns = ['fiscal_invoice_number', 'fiscal_qr_code', 'fiscal_fiscalized_at']
+  const fiscalColumns = [
+    'fiscal_invoice_number',
+    'fiscal_qr_code',
+    'fiscal_fiscalized_at',
+    'fiscal_status',
+    'fiscal_error_reason',
+    'fiscal_error_kind',
+    'fiscal_request_json',
+    'fiscal_data_issue'
+  ]
   for (const column of fiscalColumns) {
     try {
       connection.exec(`ALTER TABLE orders ADD COLUMN ${column} TEXT`)
@@ -229,7 +317,12 @@ export const SCHEMA = {
     shift_id INTEGER,
     fiscal_invoice_number TEXT,
     fiscal_qr_code TEXT,
-    fiscal_fiscalized_at TEXT
+    fiscal_fiscalized_at TEXT,
+    fiscal_status TEXT CHECK (fiscal_status IN ('fiscalized', 'waiting', 'needs_fixing')),
+    fiscal_error_reason TEXT,
+    fiscal_error_kind TEXT CHECK (fiscal_error_kind IN ('data', 'system', 'technical')),
+    fiscal_request_json TEXT,
+    fiscal_data_issue TEXT
   )`,
   syncQueue: `CREATE TABLE IF NOT EXISTS sync_queue (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -276,6 +369,27 @@ export const SCHEMA = {
     type TEXT NOT NULL CHECK (type IN ('receipt', 'kitchen', 'label')),
     interface TEXT NOT NULL,
     enabled INTEGER NOT NULL DEFAULT 1
+  )`,
+  mpesaTransactions: `CREATE TABLE IF NOT EXISTS mpesa_transactions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    order_local_id INTEGER,
+    checkout_request_id TEXT NOT NULL,
+    merchant_request_id TEXT NOT NULL,
+    phone_number TEXT NOT NULL,
+    amount INTEGER NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'success', 'failed')),
+    mpesa_receipt_number TEXT,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+  )`,
+  mpesaTransactionsCheckoutRequestIndex: `CREATE INDEX IF NOT EXISTS idx_mpesa_transactions_checkout_request_id ON mpesa_transactions (checkout_request_id)`,
+  appConfigurations: `CREATE TABLE IF NOT EXISTS app_configurations (
+    key TEXT PRIMARY KEY,
+    value TEXT,
+    encrypted INTEGER NOT NULL DEFAULT 0,
+    requires_restart INTEGER NOT NULL DEFAULT 0,
+    category TEXT NOT NULL DEFAULT 'general' CHECK (category IN ('shopify', 'mpesa', 'etims', 'printer', 'general')),
+    last_updated DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
   )`
 } as const
 
@@ -316,6 +430,95 @@ interface PrinterRow {
   type: PrinterType
   interface: string
   enabled: number
+}
+
+/** Grouping shown in the Admin screen's configuration list. */
+export type AppConfigCategory = 'shopify' | 'mpesa' | 'etims' | 'printer' | 'general'
+
+/** Row shape of the `app_configurations` table. */
+export interface AppConfigRow {
+  key: string
+  value: string | null
+  encrypted: boolean
+  requires_restart: boolean
+  category: AppConfigCategory
+  last_updated: string
+}
+
+/** Options accepted by {@link RubisDatabase.setConfig}. */
+export interface SetConfigOptions {
+  /** Marks the value as sensitive for display purposes only — the value itself is still stored as given; encrypt it before calling this for anything actually secret (see `secretStore.ts`). */
+  encrypted?: boolean
+  /** Whether picking up this value requires an app restart (surfaced by `getRestartRequiredConfigs`). */
+  requiresRestart?: boolean
+  category?: AppConfigCategory
+}
+
+/** Lifecycle status of a logged M-Pesa STK Push transaction. */
+export type MpesaTransactionStatus = 'pending' | 'success' | 'failed'
+
+/** Row shape of the `mpesa_transactions` table. */
+export interface MpesaTransactionRow {
+  id: number
+  /** Local order this payment belongs to, when known at logging time. */
+  order_local_id: number | null
+  checkout_request_id: string
+  merchant_request_id: string
+  phone_number: string
+  amount: number
+  status: MpesaTransactionStatus
+  /** M-Pesa confirmation code, set once `status` resolves to `'success'`. */
+  mpesa_receipt_number: string | null
+  created_at: string
+  updated_at: string
+}
+
+/**
+ * How long a `waiting` sale must sit unfiled before the back-office
+ * list (phase-88/Step 4) surfaces it as stuck — even though
+ * `fiscal-engine.ts` is still automatically retrying it in the
+ * background. Keyed off the sale's OWN `created_at`, not the retry
+ * queue's bookkeeping: `sync_queue`'s own abandonment signal
+ * (`attempts >= SYNC_MAX_ATTEMPTS`) can take roughly 2.5 hours to reach
+ * given the backoff curve (`computeBackoffMs`, capped at 30 minutes per
+ * attempt) — far too long a blind spot for a screen whose whole point
+ * is "don't lose sight of an unfiled sale." 15 minutes surfaces trouble
+ * well before that, at the cost of occasionally showing a sale that's
+ * still retrying normally and might resolve on its own — an
+ * acceptable trade for visibility over a multi-hour gap.
+ */
+export const STUCK_WAITING_THRESHOLD_MS = 15 * 60_000
+
+/**
+ * One row of the back-office "needs attention" list (phase-88/Step 4):
+ * every `needs_fixing` order, plus every `waiting` order that's been
+ * unfiled longer than {@link STUCK_WAITING_THRESHOLD_MS}. `fiscal_status`
+ * itself is what distinguishes the two categories — a `'waiting'` row
+ * appearing here is, by construction of the query, already past the
+ * threshold; a still-actively-retrying `waiting` order is excluded
+ * entirely, not included with a "not yet stuck" flag.
+ */
+export interface NeedsAttentionRow {
+  local_id: number
+  created_at: string
+  total: number
+  /** The staff member who rang up the sale, or `null` if the account was later removed. */
+  staff_name: string | null
+  fiscal_status: Exclude<FiscalStatus, 'fiscalized'>
+  fiscal_error_reason: string | null
+  fiscal_error_kind: FiscalFailureKind | null
+  fiscal_data_issue: 'wrong-pin' | null
+}
+
+/** Shape passed into {@link RubisDatabase.logMpesaTransaction}. */
+export interface LogMpesaTransactionInput {
+  orderLocalId?: number
+  checkoutRequestId: string
+  merchantRequestId: string
+  phoneNumber: string
+  amount: number
+  /** Initial status. Defaults to `'pending'` — pass `'failed'` when logging a rejected STK Push attempt. */
+  status?: MpesaTransactionStatus
 }
 
 /** Outcome of recording a failed sync attempt. */
@@ -363,6 +566,9 @@ export class RubisDatabase {
     connection.exec(SCHEMA.shifts)
     connection.exec(SCHEMA.integrations)
     connection.exec(SCHEMA.printers)
+    connection.exec(SCHEMA.mpesaTransactions)
+    connection.exec(SCHEMA.mpesaTransactionsCheckoutRequestIndex)
+    connection.exec(SCHEMA.appConfigurations)
     migrateOrdersFiscalColumns(connection)
     connection.exec(SCHEMA.fiscalInvoiceIndex)
     this.connection = connection
@@ -655,6 +861,24 @@ export class RubisDatabase {
   }
 
   /**
+   * Removes one `sync_queue` row without touching the order it belongs
+   * to — the counterpart to {@link recordFiscalQueueFailure} for a
+   * retry that comes back non-retryable (`data`/`system`): the order
+   * moves to `needs_fixing` via {@link setOrderFiscalFailure} and stops
+   * being retried, so its queue row is deleted outright rather than
+   * backed off again. Unlike {@link markFiscalQueueItemSynced}, this
+   * never writes `fiscal_invoice_number`/`fiscal_qr_code`/
+   * `fiscal_status` — the caller does that separately, since "why it
+   * stopped retrying" (needs_fixing) is a different write than "it
+   * succeeded" (fiscalized).
+   *
+   * @param {number} queueId
+   */
+  removeFiscalQueueItem(queueId: number): void {
+    this.conn.prepare('DELETE FROM sync_queue WHERE id = ?').run(queueId)
+  }
+
+  /**
    * Reads one order row by its local id.
    *
    * @param {number} localId
@@ -663,7 +887,7 @@ export class RubisDatabase {
   getOrder(localId: number): OrderRow | undefined {
     return this.conn
       .prepare(
-        'SELECT local_id, shopify_order_id, total, status, created_at, payload_json, staff_id, payment_method, tendered_amount, change_due, reference_number, shift_id, fiscal_invoice_number, fiscal_qr_code, fiscal_fiscalized_at FROM orders WHERE local_id = ?'
+        'SELECT local_id, shopify_order_id, total, status, created_at, payload_json, staff_id, payment_method, tendered_amount, change_due, reference_number, shift_id, fiscal_invoice_number, fiscal_qr_code, fiscal_fiscalized_at, fiscal_status, fiscal_error_reason, fiscal_error_kind, fiscal_request_json, fiscal_data_issue FROM orders WHERE local_id = ?'
       )
       .get(localId) as OrderRow | undefined
   }
@@ -672,7 +896,12 @@ export class RubisDatabase {
    * Records a successful fiscalization against an order — the
    * standard POS pattern of persisting the fiscal result locally so
    * {@link getOrderByFiscalInvoiceNumber} can serve read-backs without
-   * re-querying the fiscal device's Electronic Journal.
+   * re-querying the fiscal device's Electronic Journal. Also sets
+   * `fiscal_status = 'fiscalized'` and clears any previously stored
+   * failure reason/kind/data-issue tag — the single writer for both the
+   * immediate checkout attempt (`main/index.ts`) and a successful queued
+   * retry (see {@link markFiscalQueueItemSynced}), so both paths converge
+   * on the same status transition.
    *
    * @param {number} localId
    * @param {string} invoiceNumber
@@ -681,9 +910,69 @@ export class RubisDatabase {
   setOrderFiscalInfo(localId: number, invoiceNumber: string, qrCode: string): void {
     this.conn
       .prepare(
-        'UPDATE orders SET fiscal_invoice_number = ?, fiscal_qr_code = ?, fiscal_fiscalized_at = ? WHERE local_id = ?'
+        `UPDATE orders SET fiscal_invoice_number = ?, fiscal_qr_code = ?, fiscal_fiscalized_at = ?,
+         fiscal_status = 'fiscalized', fiscal_error_reason = NULL, fiscal_error_kind = NULL,
+         fiscal_data_issue = NULL
+         WHERE local_id = ?`
       )
       .run(invoiceNumber, qrCode, new Date().toISOString(), localId)
+  }
+
+  /**
+   * Records a failed fiscalization attempt against an order — the
+   * counterpart to {@link setOrderFiscalInfo} for the two non-success
+   * routes a checkout's `submitInvoice` call can take: a
+   * transient/technical problem (`status: 'waiting'`, kept in
+   * `sync_queue` for `fiscal-engine.ts` to retry) or a rejection of the
+   * sale's own data (`status: 'needs_fixing'`, deliberately never
+   * queued — see `main/index.ts`'s checkout handler). Never touches
+   * `fiscal_invoice_number`/`fiscal_qr_code`/`fiscal_fiscalized_at` —
+   * those stay `NULL` until (if ever) {@link setOrderFiscalInfo} runs.
+   *
+   * `dataIssue` (phase-88/Step 4) persists the same fixable-rejection tag
+   * `CheckoutReceipt.fiscalDataIssue` carries in-memory for the immediate
+   * post-checkout notice — passing it here is what lets the back-office
+   * list recognize a wrong-PIN row read back later, not just one from a
+   * live attempt. Defaults `null` (every non-wrong-PIN failure, and the
+   * thrown-exception fallback, which has no classified code to tag).
+   *
+   * @param {number} localId
+   * @param {Exclude<FiscalStatus, 'fiscalized'>} status
+   * @param {string} reason short plain-language failure reason
+   * @param {FiscalFailureKind} kind
+   * @param {'wrong-pin' | null} [dataIssue]
+   */
+  setOrderFiscalFailure(
+    localId: number,
+    status: Exclude<FiscalStatus, 'fiscalized'>,
+    reason: string,
+    kind: FiscalFailureKind,
+    dataIssue: 'wrong-pin' | null = null
+  ): void {
+    this.conn
+      .prepare(
+        'UPDATE orders SET fiscal_status = ?, fiscal_error_reason = ?, fiscal_error_kind = ?, fiscal_data_issue = ? WHERE local_id = ?'
+      )
+      .run(status, reason, kind, dataIssue, localId)
+  }
+
+  /**
+   * Stores the {@link FiscalInvoiceRequest} last used to attempt this
+   * order's fiscalization — written once, on the first attempt,
+   * regardless of outcome (phase-76). A manual resend
+   * ({@link resendFiscalization} in `fiscal-retry.ts`) reads it back so
+   * it can resubmit the sale's ORIGINAL request rather than
+   * reconstructing one from the order's `payload_json` (a different
+   * shape — cart items, not the fiscal line/customer-block shape) or
+   * from whatever the cashier's screen happens to hold at resend time.
+   *
+   * @param {number} localId
+   * @param {FiscalInvoiceRequest} request
+   */
+  setOrderFiscalRequest(localId: number, request: FiscalInvoiceRequest): void {
+    this.conn
+      .prepare('UPDATE orders SET fiscal_request_json = ? WHERE local_id = ?')
+      .run(JSON.stringify(request), localId)
   }
 
   /**
@@ -697,7 +986,7 @@ export class RubisDatabase {
   getOrderByFiscalInvoiceNumber(invoiceNumber: string): OrderRow | undefined {
     return this.conn
       .prepare(
-        'SELECT local_id, shopify_order_id, total, status, created_at, payload_json, staff_id, payment_method, tendered_amount, change_due, reference_number, shift_id, fiscal_invoice_number, fiscal_qr_code, fiscal_fiscalized_at FROM orders WHERE fiscal_invoice_number = ?'
+        'SELECT local_id, shopify_order_id, total, status, created_at, payload_json, staff_id, payment_method, tendered_amount, change_due, reference_number, shift_id, fiscal_invoice_number, fiscal_qr_code, fiscal_fiscalized_at, fiscal_status, fiscal_error_reason, fiscal_error_kind, fiscal_request_json, fiscal_data_issue FROM orders WHERE fiscal_invoice_number = ?'
       )
       .get(invoiceNumber) as OrderRow | undefined
   }
@@ -829,9 +1118,55 @@ export class RubisDatabase {
   getOrders(limit = 50, offset = 0): OrderRow[] {
     return this.conn
       .prepare(
-        'SELECT local_id, shopify_order_id, total, status, created_at, payload_json, fiscal_invoice_number, fiscal_qr_code, fiscal_fiscalized_at FROM orders ORDER BY created_at DESC LIMIT ? OFFSET ?'
+        'SELECT local_id, shopify_order_id, total, status, created_at, payload_json, fiscal_invoice_number, fiscal_qr_code, fiscal_fiscalized_at, fiscal_status, fiscal_error_reason, fiscal_error_kind, fiscal_request_json, fiscal_data_issue FROM orders ORDER BY created_at DESC LIMIT ? OFFSET ?'
       )
       .all(limit, offset) as OrderRow[]
+  }
+
+  /**
+   * The back-office "needs attention" list (phase-88/Step 4): every
+   * `needs_fixing` order, plus every `waiting` order whose OWN
+   * `created_at` is older than `now - stuckWaitingThresholdMs` — see
+   * {@link STUCK_WAITING_THRESHOLD_MS}'s doc for why this is keyed off
+   * the sale's own age rather than the retry queue's bookkeeping.
+   * Oldest first, so the sale that's waited longest surfaces first.
+   * `now`/`stuckWaitingThresholdMs` are explicit parameters (not read
+   * from `Date.now()` internally) so tests can drive the threshold
+   * deterministically, matching {@link getPendingFiscalQueue}'s own
+   * `now` convention.
+   *
+   * @param {number} now
+   * @param {number} stuckWaitingThresholdMs
+   * @returns {NeedsAttentionRow[]}
+   */
+  getOrdersNeedingAttention(now: number, stuckWaitingThresholdMs: number): NeedsAttentionRow[] {
+    const cutoff = new Date(now - stuckWaitingThresholdMs).toISOString()
+    return this.conn
+      .prepare(
+        `SELECT o.local_id, o.created_at, o.total, s.name AS staff_name,
+                o.fiscal_status, o.fiscal_error_reason, o.fiscal_error_kind, o.fiscal_data_issue
+         FROM orders o
+         LEFT JOIN staff s ON s.id = o.staff_id
+         WHERE o.fiscal_status = 'needs_fixing'
+            OR (o.fiscal_status = 'waiting' AND o.created_at <= ?)
+         ORDER BY o.created_at ASC, o.local_id ASC`
+      )
+      .all(cutoff) as NeedsAttentionRow[]
+  }
+
+  /**
+   * The Rule-3 safety-net number: every completed sale not yet filed
+   * with eTIMS, `waiting` or `needs_fixing`, regardless of how long —
+   * unlike {@link getOrdersNeedingAttention}, not gated on the stuck
+   * threshold, so this always reflects the true total.
+   *
+   * @returns {number}
+   */
+  getUnfiledOrderCount(): number {
+    const row = this.conn
+      .prepare(`SELECT COUNT(*) as count FROM orders WHERE fiscal_status IN ('waiting', 'needs_fixing')`)
+      .get() as { count: number }
+    return row.count
   }
 
   /**
@@ -1157,6 +1492,163 @@ export class RubisDatabase {
   deletePrinter(id: string): boolean {
     const info = this.conn.prepare('DELETE FROM printers WHERE id = ?').run(id)
     return info.changes > 0
+  }
+
+  /**
+   * Logs a newly initiated M-Pesa STK Push attempt as `'pending'` —
+   * {@link updateMpesaTransactionStatus} records the eventual outcome
+   * once a "Check Status" query resolves it (no callback receiver
+   * exists yet to update this automatically).
+   *
+   * @param {LogMpesaTransactionInput} data
+   * @returns {{ id: number }}
+   */
+  logMpesaTransaction(data: LogMpesaTransactionInput): { id: number } {
+    const info = this.conn
+      .prepare(
+        'INSERT INTO mpesa_transactions (order_local_id, checkout_request_id, merchant_request_id, phone_number, amount, status) VALUES (?, ?, ?, ?, ?, ?)'
+      )
+      .run(
+        data.orderLocalId ?? null,
+        data.checkoutRequestId,
+        data.merchantRequestId,
+        data.phoneNumber,
+        data.amount,
+        data.status ?? 'pending'
+      )
+    return { id: Number(info.lastInsertRowid) }
+  }
+
+  /**
+   * Returns recent M-Pesa transactions, newest first, for the M-Pesa
+   * Logs screen.
+   *
+   * @param {number} [limit=50]
+   * @returns {MpesaTransactionRow[]}
+   */
+  getMpesaTransactions(limit = 50): MpesaTransactionRow[] {
+    return this.conn
+      .prepare(
+        'SELECT id, order_local_id, checkout_request_id, merchant_request_id, phone_number, amount, status, mpesa_receipt_number, created_at, updated_at FROM mpesa_transactions ORDER BY created_at DESC LIMIT ?'
+      )
+      .all(limit) as MpesaTransactionRow[]
+  }
+
+  /**
+   * Records the outcome of an STK Push status query against its
+   * logged transaction. Safe to call repeatedly with the same
+   * `status` — each call simply overwrites the row rather than
+   * accumulating state, so re-checking an already-resolved
+   * transaction is a no-op in effect.
+   *
+   * @param {string} checkoutRequestId
+   * @param {MpesaTransactionStatus} status
+   * @param {string} [mpesaReceiptNumber]
+   * @returns {boolean} `true` if a matching transaction was updated
+   */
+  updateMpesaTransactionStatus(
+    checkoutRequestId: string,
+    status: MpesaTransactionStatus,
+    mpesaReceiptNumber?: string
+  ): boolean {
+    const info = this.conn
+      .prepare(
+        'UPDATE mpesa_transactions SET status = ?, mpesa_receipt_number = ?, updated_at = CURRENT_TIMESTAMP WHERE checkout_request_id = ?'
+      )
+      .run(status, mpesaReceiptNumber ?? null, checkoutRequestId)
+    return info.changes > 0
+  }
+
+  /**
+   * Reads one `app_configurations` value.
+   *
+   * @param {string} key
+   * @returns the stored value, or `null` when unset
+   */
+  getConfig(key: string): string | null {
+    const row = this.conn
+      .prepare('SELECT value FROM app_configurations WHERE key = ?')
+      .get(key) as { value: string | null } | undefined
+    return row ? (row.value ?? null) : null
+  }
+
+  /**
+   * Upserts one `app_configurations` value. Metadata (`encrypted`,
+   * `requiresRestart`, `category`) is only applied on first insert or
+   * when explicitly passed — omitting `options` on an update leaves
+   * the row's existing metadata untouched rather than resetting it to
+   * defaults.
+   *
+   * @param {string} key
+   * @param {string} value
+   * @param {SetConfigOptions} [options]
+   */
+  setConfig(key: string, value: string, options: SetConfigOptions = {}): void {
+    const existing = this.conn
+      .prepare('SELECT encrypted, requires_restart, category FROM app_configurations WHERE key = ?')
+      .get(key) as { encrypted: number; requires_restart: number; category: AppConfigCategory } | undefined
+
+    const encrypted = options.encrypted ?? (existing ? existing.encrypted === 1 : false)
+    const requiresRestart = options.requiresRestart ?? (existing ? existing.requires_restart === 1 : false)
+    const category = options.category ?? existing?.category ?? 'general'
+
+    this.conn
+      .prepare(
+        'INSERT INTO app_configurations (key, value, encrypted, requires_restart, category, last_updated) ' +
+          'VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP) ' +
+          'ON CONFLICT(key) DO UPDATE SET value = excluded.value, encrypted = excluded.encrypted, ' +
+          'requires_restart = excluded.requires_restart, category = excluded.category, last_updated = excluded.last_updated'
+      )
+      .run(key, value, encrypted ? 1 : 0, requiresRestart ? 1 : 0, category)
+  }
+
+  /**
+   * Returns every `app_configurations` value as a flat key/value map,
+   * optionally scoped to one category.
+   *
+   * @param {AppConfigCategory} [category]
+   * @returns {Record<string, string>}
+   */
+  getAllConfigs(category?: AppConfigCategory): Record<string, string> {
+    const rows = (
+      category
+        ? this.conn
+            .prepare('SELECT key, value FROM app_configurations WHERE category = ?')
+            .all(category)
+        : this.conn.prepare('SELECT key, value FROM app_configurations').all()
+    ) as Array<{ key: string; value: string | null }>
+    const result: Record<string, string> = {}
+    for (const row of rows) {
+      if (row.value !== null) result[row.key] = row.value
+    }
+    return result
+  }
+
+  /**
+   * Returns every `app_configurations` row flagged `requires_restart`
+   * — used to warn the Admin screen that a just-saved change won't
+   * take effect until the app relaunches.
+   *
+   * @returns {AppConfigRow[]}
+   */
+  getRestartRequiredConfigs(): AppConfigRow[] {
+    const rows = this.conn
+      .prepare(
+        'SELECT key, value, encrypted, requires_restart, category, last_updated FROM app_configurations WHERE requires_restart = 1'
+      )
+      .all() as Array<{
+      key: string
+      value: string | null
+      encrypted: number
+      requires_restart: number
+      category: AppConfigCategory
+      last_updated: string
+    }>
+    return rows.map((row) => ({
+      ...row,
+      encrypted: row.encrypted === 1,
+      requires_restart: row.requires_restart === 1
+    }))
   }
 
   /** Closes the underlying connection. Further calls will throw. */

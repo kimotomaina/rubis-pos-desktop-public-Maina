@@ -56,6 +56,16 @@ export interface ManualCodeVerificationResult {
   reason?: string
 }
 
+/** Outcome of an STK Push status query. */
+export interface StkPushStatusResult {
+  /** `'pending'` when Daraja is still processing the request (neither completed nor cancelled). */
+  status: 'success' | 'failed' | 'pending'
+  /** M-Pesa confirmation code, present once `status` is `'success'`. */
+  receiptNumber?: string
+  /** Daraja's human-readable result description, when available. */
+  resultDesc?: string
+}
+
 /**
  * Narrow surface every M-Pesa backend (mock or real Daraja) must
  * implement, so the checkout flow and IPC layer never depend on which
@@ -76,6 +86,13 @@ export interface MpesaProvider {
   verifyTransactionCode(
     input: ManualCodeVerification
   ): Promise<ServiceResult<ManualCodeVerificationResult>>
+
+  /**
+   * Queries the outcome of a previously initiated STK Push — the
+   * manual-check fallback used while no public callback URL is
+   * configured to receive Safaricom's asynchronous result.
+   */
+  queryStkPushStatus(checkoutRequestId: string): Promise<ServiceResult<StkPushStatusResult>>
 }
 
 /** Options accepted by {@link MockMpesaProvider}. */
@@ -187,6 +204,40 @@ export class MockMpesaProvider implements MpesaProvider {
         verified: true,
         transactionCode: input.transactionCode.trim(),
         amount: input.amount
+      }
+    }
+  }
+
+  /**
+   * Simulates a status query by sentinel suffix on `checkoutRequestId`
+   * — `'FAIL'` for a Daraja-cancelled transaction, `'PEND'` for one
+   * still processing, anything else resolves `'success'` with a
+   * synthetic receipt number.
+   */
+  async queryStkPushStatus(checkoutRequestId: string): Promise<ServiceResult<StkPushStatusResult>> {
+    await delay(this.delayMs)
+
+    if (!checkoutRequestId?.trim()) {
+      return { success: false, error: 'Checkout request id is required' }
+    }
+
+    if (checkoutRequestId.endsWith('FAIL')) {
+      return {
+        success: true,
+        data: { status: 'failed', resultDesc: 'Request cancelled by user (mock simulation)' }
+      }
+    }
+
+    if (checkoutRequestId.endsWith('PEND')) {
+      return { success: true, data: { status: 'pending' } }
+    }
+
+    return {
+      success: true,
+      data: {
+        status: 'success',
+        receiptNumber: `MOCK${Date.now()}`,
+        resultDesc: 'The service request is processed successfully.'
       }
     }
   }

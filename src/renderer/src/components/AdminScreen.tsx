@@ -6,6 +6,9 @@ import ZReportModal from './ZReportModal'
 import LocationPicker, { type ShopifyLocationOption } from './LocationPicker'
 import { useProductStore } from '../stores/productStore'
 import { LockIcon } from './icons'
+import MpesaLogsPage from '../pages/MpesaLogsPage'
+import NeedsAttentionPage from '../pages/NeedsAttentionPage'
+import RestartCountdownModal from './RestartCountdownModal'
 import type { DailySummary, ZReport } from '../../../main/services/reports.js'
 import type {
   ShiftRow,
@@ -16,10 +19,11 @@ import type {
 } from '../../../main/services/database.js'
 import {
   DEFAULT_ETIMS_BASE_URL,
+  DEFAULT_ETIMS_DEVICE_PORT,
   DEFAULT_ETIMS_VAT_CLASS,
-  DEFAULT_ETIMS_ENDPOINTS,
-  parseEtimsEndpointsInput
+  validateEtimsConnection
 } from '../lib/etimsConfig.js'
+import type { FiscalConnectionTestResult } from '../../../main/services/integrations/fiscal-connection-test.js'
 
 interface AdminScreenProps {
   /**
@@ -35,6 +39,15 @@ interface AdminScreenProps {
     title: string,
     onAuthorized: (managerId: number, managerPin: string) => void
   ) => void
+  /**
+   * Opens directly on a specific tab instead of Overview — used by the
+   * header's {@link UnfiledSalesBadge} so tapping it jumps straight to
+   * the list, rather than requiring an extra tap once inside Admin.
+   * Read once at mount only (this screen unmounts on every navigation
+   * away from Admin, so a fresh value here always takes effect for the
+   * next visit).
+   */
+  initialTab?: 'needsAttention'
 }
 
 /**
@@ -52,7 +65,7 @@ interface AdminScreenProps {
  * @param {AdminScreenProps} props
  * @returns {JSX.Element}
  */
-export default function AdminScreen({ requestManagerPin }: AdminScreenProps) {
+export default function AdminScreen({ requestManagerPin, initialTab }: AdminScreenProps) {
   const currentStaff = useAuthStore((state) => state.currentStaff)
 
   const [dailySummary, setDailySummary] = useState<DailySummary | null>(null)
@@ -81,16 +94,45 @@ export default function AdminScreen({ requestManagerPin }: AdminScreenProps) {
   const [resettingConfig, setResettingConfig] = useState(false)
   const [resetConfigError, setResetConfigError] = useState<string | null>(null)
 
-  const [activeTab, setActiveTab] = useState<'overview' | 'integrations' | 'peripherals' | 'system'>(
-    'overview'
-  )
-  const [mpesaPaybill, setMpesaPaybill] = useState('')
-  const [mpesaTill, setMpesaTill] = useState('')
+  const [activeTab, setActiveTab] = useState<
+    'overview' | 'integrations' | 'peripherals' | 'mpesaLogs' | 'needsAttention' | 'system'
+  >(initialTab ?? 'overview')
+  const [mpesaConsumerKey, setMpesaConsumerKey] = useState('')
+  const [mpesaShortcode, setMpesaShortcode] = useState('')
+  const [mpesaEnvironment, setMpesaEnvironment] = useState<'sandbox' | 'production'>('sandbox')
+  const [mpesaCallbackUrl, setMpesaCallbackUrl] = useState('')
+  const [mpesaConsumerSecretInput, setMpesaConsumerSecretInput] = useState('')
+  const [mpesaPasskeyInput, setMpesaPasskeyInput] = useState('')
+  const [mpesaConsumerSecretConfigured, setMpesaConsumerSecretConfigured] = useState(false)
+  const [mpesaPasskeyConfigured, setMpesaPasskeyConfigured] = useState(false)
+  const [mpesaTesting, setMpesaTesting] = useState(false)
+  const [mpesaTestMessage, setMpesaTestMessage] = useState<string | null>(null)
   const [etimsBaseUrl, setEtimsBaseUrl] = useState('')
+  const [etimsDeviceIp, setEtimsDeviceIp] = useState('')
+  const [etimsDevicePort, setEtimsDevicePort] = useState('')
+  /** Blank means "leave the stored password alone" — it is never read back from the vault. */
   const [etimsPassword, setEtimsPassword] = useState('')
+  const [etimsPasswordConfigured, setEtimsPasswordConfigured] = useState(false)
   const [etimsDefaultVatClass, setEtimsDefaultVatClass] = useState('')
-  const [etimsEndpointsText, setEtimsEndpointsText] = useState('')
-  const [etimsEndpointsError, setEtimsEndpointsError] = useState<string | null>(null)
+  /** Per-field validation messages, keyed by field, cleared on every save attempt. */
+  const [etimsFieldErrors, setEtimsFieldErrors] = useState<Record<string, string>>({})
+  const [etimsTesting, setEtimsTesting] = useState(false)
+  const [etimsTestResult, setEtimsTestResult] = useState<FiscalConnectionTestResult | null>(null)
+  const [etimsTestError, setEtimsTestError] = useState<string | null>(null)
+
+  const [storeName, setStoreName] = useState('')
+  const [storeKraPin, setStoreKraPin] = useState('')
+
+  /**
+   * Whether this till has everything it needs to file a sale. Mirrors
+   * `RealFiscalizationProvider.isConfigured` — the password comes from
+   * the vault-backed status flag, never from a form value.
+   */
+  const etimsReady =
+    Boolean(etimsBaseUrl.trim()) &&
+    Boolean(etimsDeviceIp.trim()) &&
+    Boolean(etimsDevicePort.trim()) &&
+    etimsPasswordConfigured
   const [integrationsLoading, setIntegrationsLoading] = useState(false)
   const [integrationsMessage, setIntegrationsMessage] = useState<string | null>(null)
 
@@ -120,29 +162,62 @@ export default function AdminScreen({ requestManagerPin }: AdminScreenProps) {
   const [locationSaving, setLocationSaving] = useState(false)
   const [locationError, setLocationError] = useState<string | null>(null)
 
+  const [mockMpesaFlag, setMockMpesaFlag] = useState(true)
+  /** Mirrors the main process: eTIMS defaults to REAL when no config row exists. */
+  const [mockEtimsFlag, setMockEtimsFlag] = useState(false)
+  const [startupConfigLoading, setStartupConfigLoading] = useState(false)
+  const [startupConfigSaving, setStartupConfigSaving] = useState(false)
+  const [startupConfigMessage, setStartupConfigMessage] = useState<string | null>(null)
+  const [showRestartModal, setShowRestartModal] = useState(false)
+
   const loadIntegrationsConfig = async () => {
     setIntegrationsLoading(true)
-    const [mpesaResult, etimsResult, tokenStatusResult, storeUrlResult, configStatusResult] =
-      await Promise.all([
-        window.api.getIntegrationConfig('mpesa'),
-        window.api.getIntegrationConfig('etims'),
-        window.api.getShopifyTokenStatus(),
-        window.api.getShopifyStoreUrl(),
-        window.api.getConfigStatus()
-      ])
+    const [
+      mpesaResult,
+      etimsResult,
+      tokenStatusResult,
+      storeUrlResult,
+      configStatusResult,
+      mpesaCredStatusResult,
+      etimsSecretStatusResult,
+      storeIdentityResult
+    ] = await Promise.all([
+      window.api.getIntegrationConfig('mpesa'),
+      window.api.getIntegrationConfig('etims'),
+      window.api.getShopifyTokenStatus(),
+      window.api.getShopifyStoreUrl(),
+      window.api.getConfigStatus(),
+      window.api.getMpesaCredentialStatus(),
+      window.api.getEtimsSecretStatus(),
+      window.api.getStoreIdentity()
+    ])
     if (mpesaResult.success && mpesaResult.data) {
-      setMpesaPaybill(String(mpesaResult.data.paybill ?? ''))
-      setMpesaTill(String(mpesaResult.data.till ?? ''))
+      setMpesaConsumerKey(String(mpesaResult.data.consumerKey ?? ''))
+      setMpesaShortcode(String(mpesaResult.data.shortcode ?? ''))
+      setMpesaEnvironment(mpesaResult.data.environment === 'production' ? 'production' : 'sandbox')
+      setMpesaCallbackUrl(String(mpesaResult.data.callbackUrl ?? ''))
+    }
+    if (mpesaCredStatusResult.success && mpesaCredStatusResult.data) {
+      setMpesaConsumerSecretConfigured(mpesaCredStatusResult.data.consumerSecretConfigured)
+      setMpesaPasskeyConfigured(mpesaCredStatusResult.data.passkeyConfigured)
     }
     if (etimsResult.success && etimsResult.data) {
       const config = etimsResult.data
       setEtimsBaseUrl(String(config.baseUrl ?? ''))
-      setEtimsPassword(String(config.password ?? ''))
+      setEtimsDeviceIp(String(config.deviceIp ?? ''))
+      setEtimsDevicePort(String(config.devicePort ?? ''))
       setEtimsDefaultVatClass(String(config.defaultVatClass ?? ''))
-      setEtimsEndpointsText(
-        config.endpoints ? JSON.stringify(config.endpoints, null, 2) : ''
-      )
-      setEtimsEndpointsError(null)
+      // The password is deliberately not read back — it lives in the
+      // credential vault and never crosses to the renderer. The box
+      // stays blank and only its "configured" status is shown.
+      setEtimsFieldErrors({})
+    }
+    if (etimsSecretStatusResult.success && etimsSecretStatusResult.data) {
+      setEtimsPasswordConfigured(etimsSecretStatusResult.data.passwordConfigured)
+    }
+    if (storeIdentityResult.success && storeIdentityResult.data) {
+      setStoreName(storeIdentityResult.data.storeName)
+      setStoreKraPin(storeIdentityResult.data.storeKraPin)
     }
     if (tokenStatusResult.success && tokenStatusResult.data) {
       setShopifyTokenConfigured(tokenStatusResult.data.configured)
@@ -263,11 +338,66 @@ export default function AdminScreen({ requestManagerPin }: AdminScreenProps) {
     setPrintersLoading(false)
   }
 
+  /** Loads the M-Pesa/eTIMS mock-vs-real toggles for the System tab's "Startup Configuration" panel. */
+  const loadStartupConfigs = async () => {
+    setStartupConfigLoading(true)
+    const result = await window.api.getAllConfigs()
+    if (result.success && result.data) {
+      setMockMpesaFlag(result.data.mock_mpesa_enabled !== 'false')
+      // Absent row means REAL for eTIMS, so this reads the opposite way to M-Pesa.
+      setMockEtimsFlag(result.data.mock_etims_enabled === 'true')
+    }
+    setStartupConfigLoading(false)
+  }
+
   useEffect(() => {
     if (activeTab === 'integrations') void loadIntegrationsConfig()
     if (activeTab === 'peripherals') void loadPrinters()
+    if (activeTab === 'system') void loadStartupConfigs()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTab])
+
+  /**
+   * Saves the M-Pesa/eTIMS mock-vs-real toggles to `app_configurations`
+   * and, on success, shows `RestartCountdownModal` — both providers
+   * are constructed once at startup, so the change has no effect
+   * until the app relaunches.
+   */
+  const handleSaveStartupConfigs = () => {
+    setStartupConfigMessage(null)
+    requestManagerPin('Save startup configuration', (managerId, managerPin) => {
+      void (async () => {
+        setStartupConfigSaving(true)
+        try {
+          const [mpesaResult, etimsResult] = await Promise.all([
+            window.api.setConfig(
+              'mock_mpesa_enabled',
+              String(mockMpesaFlag),
+              { requiresRestart: true, category: 'mpesa' },
+              managerId,
+              managerPin
+            ),
+            window.api.setConfig(
+              'mock_etims_enabled',
+              String(mockEtimsFlag),
+              { requiresRestart: true, category: 'etims' },
+              managerId,
+              managerPin
+            )
+          ])
+          if (!mpesaResult.success || !etimsResult.success) {
+            setStartupConfigMessage(
+              mpesaResult.error ?? etimsResult.error ?? 'Failed to save configuration'
+            )
+            return
+          }
+          setShowRestartModal(true)
+        } finally {
+          setStartupConfigSaving(false)
+        }
+      })()
+    })
+  }
 
   /**
    * Routes through `ManagerPinModal` so both provider
@@ -276,47 +406,128 @@ export default function AdminScreen({ requestManagerPin }: AdminScreenProps) {
    */
   const handleSaveIntegrationsConfig = () => {
     setIntegrationsMessage(null)
-    setEtimsEndpointsError(null)
-    const paybill = mpesaPaybill.trim()
-    const till = mpesaTill.trim()
-    const baseUrl = etimsBaseUrl.trim()
+    setEtimsTestResult(null)
+    setEtimsTestError(null)
+    const consumerKey = mpesaConsumerKey.trim()
+    const shortcode = mpesaShortcode.trim()
+    const callbackUrl = mpesaCallbackUrl.trim()
+    const consumerSecret = mpesaConsumerSecretInput.trim()
+    const passkey = mpesaPasskeyInput.trim()
+    const baseUrl = etimsBaseUrl.trim() || DEFAULT_ETIMS_BASE_URL
+    const deviceIp = etimsDeviceIp.trim()
+    const devicePort = etimsDevicePort.trim() || DEFAULT_ETIMS_DEVICE_PORT
     const password = etimsPassword.trim()
-    const defaultVatClass = etimsDefaultVatClass.trim()
-    const { endpoints, error: endpointsError } = parseEtimsEndpointsInput(etimsEndpointsText)
-    if (endpointsError) {
-      setEtimsEndpointsError(endpointsError)
+    const defaultVatClass = etimsDefaultVatClass.trim() || DEFAULT_ETIMS_VAT_CLASS
+
+    // Validate before asking for a manager PIN — no point interrupting
+    // someone for a PIN only to reject the form afterwards. Device IP has
+    // no default on purpose: silently substituting one would store a
+    // wrong address that looks configured.
+    const fieldErrors = validateEtimsConnection({ baseUrl, deviceIp, devicePort })
+    if (fieldErrors.length > 0) {
+      setEtimsFieldErrors(
+        Object.fromEntries(fieldErrors.map((error) => [error.field, error.message]))
+      )
+      setIntegrationsMessage('Check the highlighted fiscal device details above.')
       return
     }
+    setEtimsFieldErrors({})
 
     requestManagerPin('Save integration settings', (managerId, managerPin) => {
       void (async () => {
-        const [mpesaResult, etimsResult] = await Promise.all([
-          window.api.setIntegrationConfig('mpesa', { paybill, till }, managerId, managerPin),
+        const calls = [
           window.api.setIntegrationConfig(
-            'etims',
+            'mpesa',
             {
-              baseUrl: baseUrl || DEFAULT_ETIMS_BASE_URL,
-              password: password || undefined,
-              defaultVatClass: defaultVatClass || DEFAULT_ETIMS_VAT_CLASS,
-              endpoints
+              consumerKey,
+              shortcode,
+              environment: mpesaEnvironment,
+              callbackUrl: callbackUrl || undefined
             },
             managerId,
             managerPin
+          ),
+          window.api.setIntegrationConfig(
+            'etims',
+            { baseUrl, deviceIp, devicePort, defaultVatClass },
+            managerId,
+            managerPin
+          ),
+          window.api.setStoreIdentity(
+            { storeName: storeName.trim(), storeKraPin: storeKraPin.trim() },
+            managerId,
+            managerPin
           )
-        ])
+        ]
+        // A blank password box means "leave the stored one alone", so it
+        // is only sent when the manager actually typed a new one.
+        if (password) {
+          calls.push(window.api.setEtimsPassword(password, managerId, managerPin))
+        }
+        if (consumerSecret || passkey) {
+          calls.push(
+            window.api.setMpesaCredentials(
+              { consumerSecret: consumerSecret || undefined, passkey: passkey || undefined },
+              managerId,
+              managerPin
+            )
+          )
+        }
+
+        const results = await Promise.all(calls)
+        const failed = results.find((result) => !result.success)
         setIntegrationsMessage(
-          mpesaResult.success && etimsResult.success
-            ? 'Integration settings saved.'
-            : (mpesaResult.error ?? etimsResult.error ?? 'Failed to save integration settings')
+          failed ? (failed.error ?? 'Failed to save integration settings') : 'Settings saved.'
         )
+        if (!failed) {
+          setMpesaConsumerSecretInput('')
+          setMpesaPasskeyInput('')
+          setEtimsPassword('')
+          await loadIntegrationsConfig()
+        }
       })()
     })
   }
 
-  /** Repopulates the endpoints textarea with the provider's default paths. */
-  const handleResetEtimsEndpoints = () => {
-    setEtimsEndpointsError(null)
-    setEtimsEndpointsText(JSON.stringify(DEFAULT_ETIMS_ENDPOINTS, null, 2))
+  /**
+   * Runs the three-hop fiscal device check behind the "Test connection"
+   * button — the action a branch presses at go-live once the real device
+   * details are in.
+   */
+  const handleTestEtimsConnection = async () => {
+    setEtimsTestResult(null)
+    setEtimsTestError(null)
+    setEtimsTesting(true)
+    try {
+      const result = await window.api.testEtimsConnection()
+      if (result.success && result.data) {
+        setEtimsTestResult(result.data)
+      } else {
+        setEtimsTestError(result.error ?? 'Could not test the fiscal device connection.')
+      }
+    } finally {
+      setEtimsTesting(false)
+    }
+  }
+
+  /**
+   * Verifies the currently saved Daraja credentials via an OAuth2
+   * token exchange only (no STK Push, no charge) — the Integrations
+   * tab's "Test Connection" action.
+   */
+  const handleTestMpesaConnection = async () => {
+    setMpesaTestMessage(null)
+    setMpesaTesting(true)
+    try {
+      const result = await window.api.testMpesaConnection()
+      setMpesaTestMessage(
+        result.success
+          ? 'Daraja credentials verified successfully.'
+          : (result.error ?? 'Connection test failed')
+      )
+    } finally {
+      setMpesaTesting(false)
+    }
   }
 
   /**
@@ -557,12 +768,12 @@ export default function AdminScreen({ requestManagerPin }: AdminScreenProps) {
   }
 
   return (
-    <div className="mx-auto max-w-3xl space-y-6">
-      <div className="flex gap-1 rounded-lg bg-slate-100 p-1">
+    <div className="h-full min-h-full w-full space-y-6">
+      <div className="flex flex-wrap gap-2 rounded-lg bg-slate-100 p-1">
         <button
           type="button"
           onClick={() => setActiveTab('overview')}
-          className={`flex h-14 flex-1 items-center justify-center rounded-md px-6 text-lg font-semibold transition ${
+          className={`flex h-14 min-w-32 flex-1 items-center justify-center rounded-md px-6 text-lg font-semibold transition ${
             activeTab === 'overview' ? 'bg-white text-rose-700 shadow-sm' : 'text-slate-500'
           }`}
         >
@@ -571,7 +782,7 @@ export default function AdminScreen({ requestManagerPin }: AdminScreenProps) {
         <button
           type="button"
           onClick={() => setActiveTab('integrations')}
-          className={`flex h-14 flex-1 items-center justify-center rounded-md px-6 text-lg font-semibold transition ${
+          className={`flex h-14 min-w-32 flex-1 items-center justify-center rounded-md px-6 text-lg font-semibold transition ${
             activeTab === 'integrations' ? 'bg-white text-rose-700 shadow-sm' : 'text-slate-500'
           }`}
         >
@@ -580,7 +791,7 @@ export default function AdminScreen({ requestManagerPin }: AdminScreenProps) {
         <button
           type="button"
           onClick={() => setActiveTab('peripherals')}
-          className={`flex h-14 flex-1 items-center justify-center rounded-md px-6 text-lg font-semibold transition ${
+          className={`flex h-14 min-w-32 flex-1 items-center justify-center rounded-md px-6 text-lg font-semibold transition ${
             activeTab === 'peripherals' ? 'bg-white text-rose-700 shadow-sm' : 'text-slate-500'
           }`}
         >
@@ -588,14 +799,90 @@ export default function AdminScreen({ requestManagerPin }: AdminScreenProps) {
         </button>
         <button
           type="button"
+          onClick={() => setActiveTab('mpesaLogs')}
+          className={`flex h-14 min-w-32 flex-1 items-center justify-center rounded-md px-6 text-lg font-semibold transition ${
+            activeTab === 'mpesaLogs' ? 'bg-white text-rose-700 shadow-sm' : 'text-slate-500'
+          }`}
+        >
+          M-Pesa Logs
+        </button>
+        <button
+          type="button"
+          onClick={() => setActiveTab('needsAttention')}
+          className={`flex h-14 min-w-32 flex-1 items-center justify-center rounded-md px-6 text-lg font-semibold transition ${
+            activeTab === 'needsAttention' ? 'bg-white text-rose-700 shadow-sm' : 'text-slate-500'
+          }`}
+        >
+          Needs Attention
+        </button>
+        <button
+          type="button"
           onClick={() => setActiveTab('system')}
-          className={`flex h-14 flex-1 items-center justify-center rounded-md px-6 text-lg font-semibold transition ${
+          className={`flex h-14 min-w-32 flex-1 items-center justify-center rounded-md px-6 text-lg font-semibold transition ${
             activeTab === 'system' ? 'bg-white text-rose-700 shadow-sm' : 'text-slate-500'
           }`}
         >
           System
         </button>
       </div>
+
+      {activeTab === 'mpesaLogs' && <MpesaLogsPage />}
+
+      {activeTab === 'needsAttention' && <NeedsAttentionPage />}
+
+      {activeTab === 'system' && (
+        <section className="rounded-xl border border-slate-200 bg-white p-4">
+          <h3 className="mb-1 text-2xl font-bold text-slate-800">Startup Configuration</h3>
+          <p className="mb-4 text-base text-slate-500">
+            Selects which providers this till talks to. Both are constructed once at startup, so
+            a change here only takes effect after a restart.
+          </p>
+
+          {startupConfigLoading ? (
+            <p className="text-base text-slate-400">Loading…</p>
+          ) : (
+            <div className="space-y-3">
+              <label className="flex items-center justify-between rounded-lg border border-slate-100 px-3 py-3">
+                <span className="text-lg font-medium text-slate-700">Use Mock M-Pesa</span>
+                <input
+                  type="checkbox"
+                  checked={mockMpesaFlag}
+                  onChange={(e) => setMockMpesaFlag(e.target.checked)}
+                  className="h-6 w-6 accent-rose-600"
+                />
+              </label>
+              {/* Development only. A packaged build never ships the mock fiscalization
+                  provider, so this toggle would be inert — Vite drops the block at build time. */}
+              {import.meta.env.DEV && (
+                <label className="flex items-center justify-between rounded-lg border border-slate-100 px-3 py-3">
+                  <span className="text-lg font-medium text-slate-700">Use Mock eTIMS</span>
+                  <input
+                    type="checkbox"
+                    checked={mockEtimsFlag}
+                    onChange={(e) => setMockEtimsFlag(e.target.checked)}
+                    className="h-6 w-6 accent-rose-600"
+                  />
+                </label>
+              )}
+
+              {startupConfigMessage && (
+                <p className="rounded-lg bg-rose-50 px-3 py-2 text-base font-medium text-rose-700">
+                  {startupConfigMessage}
+                </p>
+              )}
+
+              <button
+                type="button"
+                disabled={startupConfigSaving}
+                onClick={handleSaveStartupConfigs}
+                className="rounded-lg bg-rose-600 px-4 py-2 text-base font-semibold text-white hover:bg-rose-700 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {startupConfigSaving ? 'Saving…' : 'Save & Restart'}
+              </button>
+            </div>
+          )}
+        </section>
+      )}
 
       {activeTab === 'system' && (
         <section className="rounded-xl border border-slate-200 bg-white p-4">
@@ -728,11 +1015,7 @@ export default function AdminScreen({ requestManagerPin }: AdminScreenProps) {
       {activeTab === 'peripherals' && (
         <section className="rounded-xl border border-slate-200 bg-white p-4">
           <h3 className="mb-1 text-2xl font-bold text-slate-800">Barcode Scanner Stations</h3>
-          <p className="mb-3 text-base text-slate-500">
-            No extra software setup is needed to add a second scanner station — this app never
-            talks to scanner hardware directly (it reads keystrokes, like any keyboard). To route
-            a Datalogic QD2100's scans separately from the main till:
-          </p>
+ 
           <ol className="list-inside list-decimal space-y-1 text-base text-slate-600">
             <li>
               Open the Datalogic QD2100 programming guide and find the barcode for
@@ -759,11 +1042,9 @@ export default function AdminScreen({ requestManagerPin }: AdminScreenProps) {
 
       {activeTab === 'integrations' ? (
         <section className="rounded-xl border border-slate-200 bg-white p-4">
-          <h3 className="mb-1 text-2xl font-bold text-slate-800">M-Pesa &amp; eTIMS</h3>
+          <h3 className="mb-1 text-2xl font-bold text-slate-800">Payments &amp; Fiscal Device</h3>
           <p className="mb-4 text-base text-slate-500">
-            Configure M-Pesa and eTIMS connection details for this till. Live payment and tax
-            submission integrations are not yet available — settings entered here are saved for
-            when they go live.
+            How this till takes M-Pesa payments and files sales with KRA.
           </p>
 
           {integrationsLoading ? (
@@ -771,42 +1052,112 @@ export default function AdminScreen({ requestManagerPin }: AdminScreenProps) {
           ) : (
             <div className="space-y-4">
               <div>
-                <h4 className="mb-2 text-xl font-semibold text-slate-700">M-Pesa</h4>
+                <h4 className="mb-2 text-xl font-semibold text-slate-700">M-Pesa (Daraja)</h4>
                 <div className="grid grid-cols-2 gap-3">
                   <div>
                     <label className="mb-1 block text-lg font-medium text-slate-600">
-                      Paybill Number
+                      Environment
+                    </label>
+                    <select
+                      value={mpesaEnvironment}
+                      onChange={(e) => setMpesaEnvironment(e.target.value as 'sandbox' | 'production')}
+                      className="w-full h-12 rounded-lg border border-slate-300 px-3 text-lg focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-100"
+                    >
+                      <option value="sandbox">Sandbox</option>
+                      <option value="production">Production</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-lg font-medium text-slate-600">
+                      Shortcode
                     </label>
                     <input
                       type="text"
-                      value={mpesaPaybill}
-                      onChange={(e) => setMpesaPaybill(e.target.value)}
+                      value={mpesaShortcode}
+                      onChange={(e) => setMpesaShortcode(e.target.value)}
+                      placeholder="174379"
                       className="w-full h-12 rounded-lg border border-slate-300 px-3 text-lg focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-100"
                     />
                   </div>
                   <div>
                     <label className="mb-1 block text-lg font-medium text-slate-600">
-                      Till Number
+                      Consumer Key
                     </label>
                     <input
                       type="text"
-                      value={mpesaTill}
-                      onChange={(e) => setMpesaTill(e.target.value)}
+                      value={mpesaConsumerKey}
+                      onChange={(e) => setMpesaConsumerKey(e.target.value)}
+                      className="w-full h-12 rounded-lg border border-slate-300 px-3 text-lg focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-100"
+                    />
+                  </div>
+                  <div>
+                    <label className="mb-1 flex items-center gap-1 text-lg font-medium text-slate-600">
+                      Consumer Secret <LockIcon className="h-4 w-4 text-slate-400" />
+                    </label>
+                    <input
+                      type="password"
+                      value={mpesaConsumerSecretInput}
+                      onChange={(e) => setMpesaConsumerSecretInput(e.target.value)}
+                      placeholder={mpesaConsumerSecretConfigured ? '•••••••• (configured)' : 'Not configured'}
+                      className="w-full h-12 rounded-lg border border-slate-300 px-3 text-lg focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-100"
+                    />
+                  </div>
+                  <div>
+                    <label className="mb-1 flex items-center gap-1 text-lg font-medium text-slate-600">
+                      Passkey <LockIcon className="h-4 w-4 text-slate-400" />
+                    </label>
+                    <input
+                      type="password"
+                      value={mpesaPasskeyInput}
+                      onChange={(e) => setMpesaPasskeyInput(e.target.value)}
+                      placeholder={mpesaPasskeyConfigured ? '•••••••• (configured)' : 'Not configured'}
+                      className="w-full h-12 rounded-lg border border-slate-300 px-3 text-lg focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-100"
+                    />
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-lg font-medium text-slate-600">
+                      Callback URL
+                    </label>
+                    <input
+                      type="text"
+                      value={mpesaCallbackUrl}
+                      onChange={(e) => setMpesaCallbackUrl(e.target.value)}
+                      placeholder="https://example.com/callback"
                       className="w-full h-12 rounded-lg border border-slate-300 px-3 text-lg focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-100"
                     />
                   </div>
                 </div>
+                <div className="mt-3 flex items-center gap-3">
+                  <button
+                    type="button"
+                    disabled={mpesaTesting}
+                    onClick={() => void handleTestMpesaConnection()}
+                    className="rounded-lg border border-slate-300 px-4 py-2 text-base font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {mpesaTesting ? 'Testing…' : 'Test Connection'}
+                  </button>
+                  {mpesaTestMessage && (
+                    <p className="text-base text-slate-500">{mpesaTestMessage}</p>
+                  )}
+                </div>
               </div>
 
               <div>
-                <h4 className="mb-2 text-xl font-semibold text-slate-700">eTIMS</h4>
-                <p className="mb-3 text-sm text-slate-500">
-                  Connection details for the local fiscal device server (ZFPLabServer).
+                <h4 className="mb-2 text-xl font-semibold text-slate-700">Fiscal Device</h4>
+                <p className="mb-1 text-sm text-slate-500">
+                  How this till reaches the KRA control unit that files your sales.
                 </p>
+                <p className="mb-3 text-base font-medium">
+                  Status:{' '}
+                  <span className={etimsReady ? 'text-emerald-600' : 'text-amber-600'}>
+                    {etimsReady ? 'Set up' : 'Not set up yet'}
+                  </span>
+                </p>
+
                 <div className="grid grid-cols-2 gap-3">
                   <div>
                     <label className="mb-1 block text-lg font-medium text-slate-600">
-                      Server URL
+                      Fiscal server address
                     </label>
                     <input
                       type="text"
@@ -815,22 +1166,79 @@ export default function AdminScreen({ requestManagerPin }: AdminScreenProps) {
                       placeholder={DEFAULT_ETIMS_BASE_URL}
                       className="w-full h-12 rounded-lg border border-slate-300 px-3 text-lg focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-100"
                     />
+                    <p className="mt-1 text-sm text-slate-500">
+                      Leave this as it is unless the fiscal server was installed on another
+                      machine.
+                    </p>
+                    {etimsFieldErrors.baseUrl && (
+                      <p className="mt-1 text-sm font-medium text-rose-700">
+                        {etimsFieldErrors.baseUrl}
+                      </p>
+                    )}
                   </div>
+
                   <div>
                     <label className="mb-1 block text-lg font-medium text-slate-600">
-                      Device Password
+                      Fiscal device IP address
+                    </label>
+                    <input
+                      type="text"
+                      value={etimsDeviceIp}
+                      onChange={(e) => setEtimsDeviceIp(e.target.value)}
+                      placeholder="192.168.1.50"
+                      className="w-full h-12 rounded-lg border border-slate-300 px-3 text-lg focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-100"
+                    />
+                    <p className="mt-1 text-sm text-slate-500">
+                      The address of the control unit on the shop network.
+                    </p>
+                    {etimsFieldErrors.deviceIp && (
+                      <p className="mt-1 text-sm font-medium text-rose-700">
+                        {etimsFieldErrors.deviceIp}
+                      </p>
+                    )}
+                  </div>
+
+                  <div>
+                    <label className="mb-1 block text-lg font-medium text-slate-600">
+                      Fiscal device port
+                    </label>
+                    <input
+                      type="text"
+                      inputMode="numeric"
+                      value={etimsDevicePort}
+                      onChange={(e) => setEtimsDevicePort(e.target.value)}
+                      placeholder={DEFAULT_ETIMS_DEVICE_PORT}
+                      className="w-full h-12 rounded-lg border border-slate-300 px-3 text-lg focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-100"
+                    />
+                    <p className="mt-1 text-sm text-slate-500">Usually 8000.</p>
+                    {etimsFieldErrors.devicePort && (
+                      <p className="mt-1 text-sm font-medium text-rose-700">
+                        {etimsFieldErrors.devicePort}
+                      </p>
+                    )}
+                  </div>
+
+                  <div>
+                    <label className="mb-1 block text-lg font-medium text-slate-600">
+                      Fiscal device password
                     </label>
                     <input
                       type="password"
                       value={etimsPassword}
                       onChange={(e) => setEtimsPassword(e.target.value)}
-                      placeholder="Optional"
+                      placeholder={etimsPasswordConfigured ? '•••••••• (saved)' : 'Required'}
                       className="w-full h-12 rounded-lg border border-slate-300 px-3 text-lg focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-100"
                     />
+                    <p className="mt-1 text-sm text-slate-500">
+                      {etimsPasswordConfigured
+                        ? 'Saved securely on this till. Leave blank to keep it, or type a new one to replace it.'
+                        : 'The password set on the control unit. It is stored securely and cannot be read back here.'}
+                    </p>
                   </div>
+
                   <div>
                     <label className="mb-1 block text-lg font-medium text-slate-600">
-                      Default VAT Class
+                      Default tax class
                     </label>
                     <input
                       type="text"
@@ -839,40 +1247,109 @@ export default function AdminScreen({ requestManagerPin }: AdminScreenProps) {
                       placeholder={DEFAULT_ETIMS_VAT_CLASS}
                       className="w-full h-12 rounded-lg border border-slate-300 px-3 text-lg focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-100"
                     />
+                    <p className="mt-1 text-sm text-slate-500">
+                      Used for items that have no tax class of their own. Normally A.
+                    </p>
                   </div>
                 </div>
 
-                <div className="mt-3">
-                  <div className="mb-1 flex items-center justify-between">
-                    <label className="block text-lg font-medium text-slate-600">
-                      Endpoint Paths (advanced)
-                    </label>
-                    <button
-                      type="button"
-                      onClick={handleResetEtimsEndpoints}
-                      className="text-sm font-medium text-rose-600 hover:text-rose-700"
-                    >
-                      Reset to Defaults
-                    </button>
-                  </div>
-                  <p className="mb-2 text-sm text-slate-500">
-                    Override the fiscal device's endpoint paths as JSON, only if this
-                    installation's ZFPLabServer version uses different routes than the defaults.
+                <div className="mt-4 flex items-center gap-3">
+                  <button
+                    type="button"
+                    disabled={etimsTesting}
+                    onClick={() => void handleTestEtimsConnection()}
+                    className="rounded-lg border border-slate-300 px-4 py-2 text-base font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {etimsTesting ? 'Testing…' : 'Test connection'}
+                  </button>
+                  <p className="text-sm text-slate-500">
+                    Save first, then test. This does not create a sale.
                   </p>
-                  <textarea
-                    value={etimsEndpointsText}
-                    onChange={(e) => {
-                      setEtimsEndpointsText(e.target.value)
-                      setEtimsEndpointsError(null)
-                    }}
-                    placeholder={JSON.stringify(DEFAULT_ETIMS_ENDPOINTS, null, 2)}
-                    rows={6}
-                    spellCheck={false}
-                    className="w-full rounded-lg border border-slate-300 px-3 py-2 font-mono text-sm focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-100"
-                  />
-                  {etimsEndpointsError && (
-                    <p className="mt-1 text-sm font-medium text-rose-700">{etimsEndpointsError}</p>
-                  )}
+                </div>
+
+                {etimsTestError && (
+                  <p className="mt-3 rounded-lg bg-rose-50 px-3 py-2 text-base font-medium text-rose-700">
+                    {etimsTestError}
+                  </p>
+                )}
+
+                {etimsTestResult && (
+                  <div
+                    className={`mt-3 rounded-lg px-3 py-3 ${
+                      etimsTestResult.ok ? 'bg-emerald-50' : 'bg-amber-50'
+                    }`}
+                  >
+                    <ul className="mb-2 space-y-1">
+                      {etimsTestResult.hops.map((hop) => (
+                        <li key={hop.hop} className="flex items-center gap-2 text-base">
+                          <span
+                            aria-hidden="true"
+                            className={
+                              hop.passed === true
+                                ? 'text-emerald-600'
+                                : hop.passed === false
+                                  ? 'text-rose-600'
+                                  : 'text-slate-400'
+                            }
+                          >
+                            {hop.passed === true ? '✓' : hop.passed === false ? '✕' : '–'}
+                          </span>
+                          <span
+                            className={
+                              hop.passed === undefined ? 'text-slate-400' : 'text-slate-700'
+                            }
+                          >
+                            {hop.label}
+                            {hop.passed === undefined && ' (not checked)'}
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                    <p
+                      className={`text-base font-medium ${
+                        etimsTestResult.ok ? 'text-emerald-800' : 'text-amber-900'
+                      }`}
+                    >
+                      {etimsTestResult.message}
+                    </p>
+                  </div>
+                )}
+              </div>
+
+              <div>
+                <h4 className="mb-2 text-xl font-semibold text-slate-700">Store Details</h4>
+                <p className="mb-3 text-sm text-slate-500">
+                  Printed at the top of every receipt this till issues.
+                </p>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="mb-1 block text-lg font-medium text-slate-600">
+                      Store name
+                    </label>
+                    <input
+                      type="text"
+                      value={storeName}
+                      onChange={(e) => setStoreName(e.target.value)}
+                      placeholder="Rubis Haile Selassie"
+                      className="w-full h-12 rounded-lg border border-slate-300 px-3 text-lg focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-100"
+                    />
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-lg font-medium text-slate-600">
+                      Store KRA PIN
+                    </label>
+                    <input
+                      type="text"
+                      value={storeKraPin}
+                      onChange={(e) => setStoreKraPin(e.target.value.toUpperCase())}
+                      placeholder="P051234567X"
+                      className="w-full h-12 rounded-lg border border-slate-300 px-3 text-lg focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-100"
+                    />
+                    <p className="mt-1 text-sm text-slate-500">
+                      Your own PIN, not the customer&apos;s. Leave blank to keep it off the
+                      receipt.
+                    </p>
+                  </div>
                 </div>
               </div>
 
@@ -1289,6 +1766,13 @@ export default function AdminScreen({ requestManagerPin }: AdminScreenProps) {
       )}
 
       {zReport && <ZReportModal report={zReport} onClose={() => setZReport(null)} />}
+
+      {showRestartModal && (
+        <RestartCountdownModal
+          onRestart={() => void window.api.restartApp()}
+          onCancel={() => setShowRestartModal(false)}
+        />
+      )}
     </div>
   )
 }

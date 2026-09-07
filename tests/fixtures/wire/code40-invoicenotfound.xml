@@ -1,0 +1,10 @@
+<!--
+  Authored per PDF §1.2.1 (STE2 command-error column: 3a = invoice
+  number not found) + fp_core.js:71-75 (Code 40 carries hex
+  STE1/STE2/FPLibErrorCode on <Err>, parsed via parseInt(x, 16)) — not
+  captured live (requires an open device session to provoke). STE1=30
+  (hex "3" "0" is not a defined STE1 value in §4.4 of the brief;
+  kept as a placeholder pending a live capture — VERIFY-ON-DEVICE).
+  FPLibErrorCode text is also VERIFY-ON-DEVICE.
+-->
+<Res Code="40"><Err Source="Device" Type="FPException" STE1="30" STE2="3a" FPLibErrorCode="00"><Message>Invoice number not found!</Message></Err></Res>

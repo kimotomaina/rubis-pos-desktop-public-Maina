@@ -180,6 +180,50 @@ describe('cart store checkout', () => {
     expect(state.items).toHaveLength(1)
   })
 
+  /**
+   * phase-78, Rule 4: a fiscal outcome that needs attention (queued or
+   * flagged) must never block the till. The cart clears and
+   * `checkoutStatus` still resolves to a startable state exactly as it
+   * does for a clean success — the sale is done, and the next one can
+   * begin immediately; the fiscal notice is a separate, non-blocking
+   * overlay (`FiscalNotice.tsx`) driven off `lastReceipt`, not off
+   * `checkoutStatus`.
+   */
+  it('clears the cart and stays startable even when the sale needs fixing (fiscal outcome never blocks the till)', async () => {
+    const checkout = window.api.checkout as unknown as ReturnType<typeof vi.fn>
+    checkout.mockResolvedValue({
+      success: true,
+      data: {
+        localId: 5,
+        mode: 'queued-offline',
+        fiscalStatus: 'needs_fixing',
+        fiscalErrorReason: 'Wrong client PIN',
+        fiscalErrorKind: 'data',
+        fiscalDataIssue: 'wrong-pin'
+      }
+    })
+    useCartStore.getState().addItem(itemInput())
+
+    await useCartStore.getState().checkout(checkoutParams)
+
+    const state = useCartStore.getState()
+    // Cart is empty and ready for the next sale...
+    expect(state.items).toHaveLength(0)
+    // ...checkoutStatus resolved to a normal terminal state, not stuck
+    // "submitting" or blocked on the fiscal outcome...
+    expect(state.checkoutStatus).toBe('queued-offline')
+    // ...and the fiscal detail is available for the (separate) notice.
+    expect(state.lastReceipt?.fiscalStatus).toBe('needs_fixing')
+
+    // A second sale can start immediately — checkout is callable again
+    // right away, with no gate on the previous sale's fiscal outcome.
+    checkout.mockResolvedValue({ success: true, data: { localId: 6, mode: 'synced' } })
+    useCartStore.getState().addItem(itemInput())
+    await useCartStore.getState().checkout(checkoutParams)
+    expect(checkout).toHaveBeenCalledTimes(2)
+    expect(useCartStore.getState().checkoutStatus).toBe('synced')
+  })
+
   it('persists items to localStorage under the rubis-pos-cart key', () => {
     useCartStore.getState().addItem(itemInput())
 
@@ -188,5 +232,73 @@ describe('cart store checkout', () => {
     ) as { state?: { items?: CartItem[] } }
     expect(stored.state?.items).toHaveLength(1)
     expect(stored.state?.items?.[0].title).toBe('RUBIS Mug')
+  })
+})
+
+describe('cart store applyFiscalResendResult (phase-78, Part C)', () => {
+  beforeEach(() => {
+    useCartStore.setState({
+      items: [],
+      cartDiscount: null,
+      checkoutStatus: 'idle',
+      lastReceipt: {
+        localId: 7,
+        mode: 'queued-offline',
+        fiscalStatus: 'needs_fixing',
+        fiscalErrorReason: 'Wrong client PIN',
+        fiscalErrorKind: 'data',
+        fiscalDataIssue: 'wrong-pin'
+      },
+      checkoutError: null
+    })
+  })
+
+  it('merges a successful resend into lastReceipt, leaving mode/localId untouched', () => {
+    useCartStore.getState().applyFiscalResendResult({
+      localId: 7,
+      fiscal: { invoiceNumber: 'KRA-FIXED', qrCode: 'base64qr' },
+      fiscalStatus: 'fiscalized',
+      fiscalErrorReason: null,
+      fiscalErrorKind: null,
+      fiscalDataIssue: null
+    })
+
+    const receipt = useCartStore.getState().lastReceipt
+    expect(receipt?.fiscalStatus).toBe('fiscalized')
+    expect(receipt?.fiscal).toEqual({ invoiceNumber: 'KRA-FIXED', qrCode: 'base64qr' })
+    expect(receipt?.fiscalErrorReason).toBeNull()
+    // Untouched by the merge:
+    expect(receipt?.localId).toBe(7)
+    expect(receipt?.mode).toBe('queued-offline')
+  })
+
+  it('is a no-op when lastReceipt has since moved on to a different sale', () => {
+    useCartStore.getState().applyFiscalResendResult({
+      localId: 999, // a different, stale sale
+      fiscal: { invoiceNumber: 'KRA-STALE', qrCode: '' },
+      fiscalStatus: 'fiscalized',
+      fiscalErrorReason: null,
+      fiscalErrorKind: null,
+      fiscalDataIssue: null
+    })
+
+    const receipt = useCartStore.getState().lastReceipt
+    expect(receipt?.localId).toBe(7)
+    expect(receipt?.fiscalStatus).toBe('needs_fixing')
+  })
+
+  it('is a no-op when there is no lastReceipt at all', () => {
+    useCartStore.setState({ lastReceipt: null })
+
+    useCartStore.getState().applyFiscalResendResult({
+      localId: 7,
+      fiscal: undefined,
+      fiscalStatus: 'fiscalized',
+      fiscalErrorReason: null,
+      fiscalErrorKind: null,
+      fiscalDataIssue: null
+    })
+
+    expect(useCartStore.getState().lastReceipt).toBeNull()
   })
 })

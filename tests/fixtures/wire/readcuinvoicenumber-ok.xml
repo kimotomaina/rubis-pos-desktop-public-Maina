@@ -1,0 +1,12 @@
+<!--
+  Authored from tremol-contract.json's ReadCUinvoiceNumber.response
+  (Option [hardcoded 'I'] + CU_InvoiceNumber) + PDF §2.4.13 — not
+  captured live. The Option field is OptionHardcoded (server-filled,
+  skipped by fp_core.js's analyzeResponse); CU_InvoiceNumber is 19
+  digits, matching the InvoiceNum this recovers on a duplicate
+  TraderSystemInvNum rejection.
+-->
+<Res Code="0">
+  <Res Name="Option" Value="I" Type="OptionHardcoded"/>
+  <Res Name="CU_InvoiceNumber" Value="0000000000000000042" Type="Text"/>
+</Res>

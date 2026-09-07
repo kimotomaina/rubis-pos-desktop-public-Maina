@@ -10,7 +10,10 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { createFiscalEngine } from '../src/main/services/fiscal-engine.js'
 import type { FiscalEngineDatabase } from '../src/main/services/fiscal-engine.js'
 import type { FiscalQueueItem } from '../src/main/services/database.js'
-import type { FiscalInvoiceRequest } from '../src/main/services/integrations/etims.js'
+import type {
+  FiscalInvoiceRequest,
+  FiscalSubmitOutcome
+} from '../src/main/services/integrations/etims.js'
 
 const makePayload = (uuid: string): FiscalInvoiceRequest => ({
   clientOrderUuid: uuid,
@@ -31,30 +34,29 @@ const makeItem = (id: number, uuid = `uuid-${id}`): FiscalQueueItem => ({
   next_attempt_at: 0
 })
 
+/** Default successful outcome: a plain, unclassified success. */
+const OK_OUTCOME: FiscalSubmitOutcome = {
+  ok: true,
+  data: { invoiceNumber: 'KRA-0001', qrCode: 'base64qr', fiscalizedAt: '2026-08-24T10:00:00.000Z' }
+}
+
 function makeEngine(overrides: {
   items?: FiscalQueueItem[]
-  submit?: (
-    request: FiscalInvoiceRequest
-  ) => Promise<{
-    success: boolean
-    data?: { invoiceNumber: string; qrCode: string; fiscalizedAt: string }
-    error?: string
-  }>
+  submit?: (request: FiscalInvoiceRequest) => Promise<FiscalSubmitOutcome>
   exhausted?: boolean
   intervalMs?: number
 }) {
   const db = {
     getPendingFiscalQueue: vi.fn(() => overrides.items ?? []),
     markFiscalQueueItemSynced: vi.fn(),
-    recordFiscalQueueFailure: vi.fn(() => ({ exhausted: overrides.exhausted ?? false }))
+    recordFiscalQueueFailure: vi.fn(() => ({ exhausted: overrides.exhausted ?? false })),
+    removeFiscalQueueItem: vi.fn(),
+    setOrderFiscalFailure: vi.fn(),
+    // Not already fiscalized by default — attemptFiscalRetry (phase-75)
+    // proceeds to resubmit, matching this suite's pre-existing behavior.
+    getOrder: vi.fn(() => undefined)
   }
-  const submitInvoice = vi.fn(
-    overrides.submit ??
-      (async () => ({
-        success: true,
-        data: { invoiceNumber: 'KRA-0001', qrCode: 'base64qr', fiscalizedAt: '2026-08-24T10:00:00.000Z' }
-      }))
-  )
+  const submitInvoice = vi.fn(overrides.submit ?? (async () => OK_OUTCOME))
 
   const engine = createFiscalEngine({
     db: db as unknown as FiscalEngineDatabase,
@@ -91,10 +93,15 @@ describe('FiscalEngine.tick', () => {
     )
   })
 
-  it('records failures with the returned error message and does not delete the row itself', async () => {
+  it('records failures with the returned reason and does not delete the row itself', async () => {
     const { db, engine } = makeEngine({
       items: [makeItem(1)],
-      submit: async () => ({ success: false, error: 'Fiscal device unreachable' })
+      submit: async () => ({
+        ok: false,
+        reason: 'Fiscal device unreachable',
+        kind: 'technical',
+        retryable: true
+      })
     })
 
     await engine.tick()
@@ -103,22 +110,11 @@ describe('FiscalEngine.tick', () => {
     expect(db.markFiscalQueueItemSynced).not.toHaveBeenCalled()
   })
 
-  it('uses a generic error when the result has no message', async () => {
-    const { db, engine } = makeEngine({
-      items: [makeItem(1)],
-      submit: async () => ({ success: false })
-    })
-
-    await engine.tick()
-
-    expect(db.recordFiscalQueueFailure).toHaveBeenCalledWith(1, 'Unknown fiscalization error')
-  })
-
   it('continues past an item whose retries are exhausted', async () => {
     const { db, submitInvoice, engine } = makeEngine({
       items: [makeItem(1), makeItem(2)],
       exhausted: true,
-      submit: async () => ({ success: false, error: 'always fails' })
+      submit: async () => ({ ok: false, reason: 'always fails', kind: 'technical', retryable: true })
     })
 
     await engine.tick()
@@ -137,6 +133,245 @@ describe('FiscalEngine.tick', () => {
   })
 })
 
+describe('FiscalEngine.tick — retry safety (phase-75, Part B)', () => {
+  it('tags every resubmission isRetry:true — every queued item is, by construction, a retry', async () => {
+    const { submitInvoice, engine } = makeEngine({ items: [makeItem(1)] })
+
+    await engine.tick()
+
+    expect(submitInvoice).toHaveBeenCalledWith(expect.objectContaining({ isRetry: true }))
+  })
+
+  it('records a still-technical retry failure with backoff — does not remove the row, does not touch fiscal_status', async () => {
+    const { db, engine } = makeEngine({
+      items: [makeItem(1)],
+      submit: async () => ({ ok: false, reason: 'device unreachable', kind: 'technical', retryable: true })
+    })
+
+    await engine.tick()
+
+    expect(db.recordFiscalQueueFailure).toHaveBeenCalledWith(1, 'device unreachable')
+    expect(db.removeFiscalQueueItem).not.toHaveBeenCalled()
+    expect(db.setOrderFiscalFailure).not.toHaveBeenCalled()
+  })
+
+  it('makes NO device call and marks the queue item synced when the order was already fiscalized (race with a resend)', async () => {
+    const db = {
+      getPendingFiscalQueue: vi.fn(() => [makeItem(1)]),
+      markFiscalQueueItemSynced: vi.fn(),
+      recordFiscalQueueFailure: vi.fn(),
+      getOrder: vi.fn(() => ({
+        fiscal_status: 'fiscalized' as const,
+        fiscal_invoice_number: 'KRA-WON-THE-RACE',
+        fiscal_qr_code: 'base64qr',
+        fiscal_fiscalized_at: '2026-01-01T00:00:00.000Z'
+      }))
+    }
+    const submitInvoice = vi.fn()
+    const engine = createFiscalEngine({
+      db: db as unknown as FiscalEngineDatabase,
+      submitInvoice: submitInvoice as never,
+      now: () => 1_700_000_000_000
+    })
+
+    await engine.tick()
+
+    expect(submitInvoice).not.toHaveBeenCalled()
+    expect(db.markFiscalQueueItemSynced).toHaveBeenCalledWith(1, 'KRA-WON-THE-RACE', 'base64qr')
+    expect(db.recordFiscalQueueFailure).not.toHaveBeenCalled()
+  })
+})
+
+describe('FiscalEngine.tick — retry reclassification (phase-76, Part C)', () => {
+  it.each([
+    ['data', 'Wrong client PIN'],
+    ['system', 'ZFPLabServer rejected the request format']
+  ] as const)(
+    'a queued (waiting) item whose retry comes back non-retryable (%s) becomes needs_fixing and is removed from the queue',
+    async (kind, reason) => {
+      const { db, submitInvoice, engine } = makeEngine({
+        items: [makeItem(1)],
+        submit: async () => ({ ok: false, reason, kind, retryable: false })
+      })
+
+      await engine.tick()
+
+      expect(db.setOrderFiscalFailure).toHaveBeenCalledWith(101, 'needs_fixing', reason, kind, null)
+      expect(db.removeFiscalQueueItem).toHaveBeenCalledWith(1)
+      // Reclassification is a removal, not a backoff — the two are mutually exclusive.
+      expect(db.recordFiscalQueueFailure).not.toHaveBeenCalled()
+      expect(submitInvoice).toHaveBeenCalledTimes(1)
+    }
+  )
+
+  it('persists the wrong-pin data-issue tag when a retry reveals it (phase-88/Step 4)', async () => {
+    const { db, engine } = makeEngine({
+      items: [makeItem(1)],
+      submit: async () => ({
+        ok: false,
+        reason: 'Wrong client PIN',
+        kind: 'data',
+        retryable: false,
+        dataIssue: 'wrong-pin'
+      })
+    })
+
+    await engine.tick()
+
+    expect(db.setOrderFiscalFailure).toHaveBeenCalledWith(
+      101,
+      'needs_fixing',
+      'Wrong client PIN',
+      'data',
+      'wrong-pin'
+    )
+  })
+})
+
+describe('FiscalEngine.tick — logging (phase-80)', () => {
+  function makeSpyLogger() {
+    return { log: vi.fn(), warn: vi.fn(), error: vi.fn() }
+  }
+
+  it('a queued retry that succeeds is quiet on warn/error, logging only an info line', async () => {
+    const logger = makeSpyLogger()
+    const db2 = {
+      getPendingFiscalQueue: vi.fn(() => [makeItem(1)]),
+      markFiscalQueueItemSynced: vi.fn(),
+      recordFiscalQueueFailure: vi.fn(),
+      removeFiscalQueueItem: vi.fn(),
+      setOrderFiscalFailure: vi.fn(),
+      getOrder: vi.fn(() => undefined)
+    }
+    const engine = createFiscalEngine({
+      db: db2 as unknown as FiscalEngineDatabase,
+      submitInvoice: (async () => OK_OUTCOME) as never,
+      now: () => 1_700_000_000_000,
+      logger
+    })
+
+    await engine.tick()
+
+    expect(logger.warn).not.toHaveBeenCalled()
+    expect(logger.error).not.toHaveBeenCalled()
+    expect(logger.log).toHaveBeenCalledWith(expect.stringContaining('Sale 101'))
+  })
+
+  it('a data-kind reclassification to needs_fixing logs a warn including the localId', async () => {
+    const logger = makeSpyLogger()
+    const db2 = {
+      getPendingFiscalQueue: vi.fn(() => [makeItem(1)]),
+      markFiscalQueueItemSynced: vi.fn(),
+      recordFiscalQueueFailure: vi.fn(),
+      removeFiscalQueueItem: vi.fn(),
+      setOrderFiscalFailure: vi.fn(),
+      getOrder: vi.fn(() => undefined)
+    }
+    const engine = createFiscalEngine({
+      db: db2 as unknown as FiscalEngineDatabase,
+      submitInvoice: (async () => ({
+        ok: false,
+        reason: 'Wrong client PIN',
+        kind: 'data',
+        retryable: false
+      })) as never,
+      now: () => 1_700_000_000_000,
+      logger
+    })
+
+    await engine.tick()
+
+    expect(logger.error).not.toHaveBeenCalled()
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('Sale 101'))
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('Wrong client PIN'))
+  })
+
+  it('a system-kind reclassification to needs_fixing logs an error including the localId', async () => {
+    const logger = makeSpyLogger()
+    const db2 = {
+      getPendingFiscalQueue: vi.fn(() => [makeItem(1)]),
+      markFiscalQueueItemSynced: vi.fn(),
+      recordFiscalQueueFailure: vi.fn(),
+      removeFiscalQueueItem: vi.fn(),
+      setOrderFiscalFailure: vi.fn(),
+      getOrder: vi.fn(() => undefined)
+    }
+    const engine = createFiscalEngine({
+      db: db2 as unknown as FiscalEngineDatabase,
+      submitInvoice: (async () => ({
+        ok: false,
+        reason: 'ZFPLabServer rejected the request format',
+        kind: 'system',
+        retryable: false
+      })) as never,
+      now: () => 1_700_000_000_000,
+      logger
+    })
+
+    await engine.tick()
+
+    expect(logger.warn).not.toHaveBeenCalled()
+    expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('Sale 101'))
+  })
+
+  it('a still-retrying (not yet exhausted) technical failure logs nothing at all', async () => {
+    const logger = makeSpyLogger()
+    const db2 = {
+      getPendingFiscalQueue: vi.fn(() => [makeItem(1)]),
+      markFiscalQueueItemSynced: vi.fn(),
+      recordFiscalQueueFailure: vi.fn(() => ({ exhausted: false })),
+      removeFiscalQueueItem: vi.fn(),
+      setOrderFiscalFailure: vi.fn(),
+      getOrder: vi.fn(() => undefined)
+    }
+    const engine = createFiscalEngine({
+      db: db2 as unknown as FiscalEngineDatabase,
+      submitInvoice: (async () => ({
+        ok: false,
+        reason: 'device unreachable',
+        kind: 'technical',
+        retryable: true
+      })) as never,
+      now: () => 1_700_000_000_000,
+      logger
+    })
+
+    await engine.tick()
+
+    expect(logger.log).not.toHaveBeenCalled()
+    expect(logger.warn).not.toHaveBeenCalled()
+    expect(logger.error).not.toHaveBeenCalled()
+  })
+
+  it('an item abandoned after repeated failures logs a warn', async () => {
+    const logger = makeSpyLogger()
+    const db2 = {
+      getPendingFiscalQueue: vi.fn(() => [makeItem(1)]),
+      markFiscalQueueItemSynced: vi.fn(),
+      recordFiscalQueueFailure: vi.fn(() => ({ exhausted: true })),
+      removeFiscalQueueItem: vi.fn(),
+      setOrderFiscalFailure: vi.fn(),
+      getOrder: vi.fn(() => undefined)
+    }
+    const engine = createFiscalEngine({
+      db: db2 as unknown as FiscalEngineDatabase,
+      submitInvoice: (async () => ({
+        ok: false,
+        reason: 'device unreachable',
+        kind: 'technical',
+        retryable: true
+      })) as never,
+      now: () => 1_700_000_000_000,
+      logger
+    })
+
+    await engine.tick()
+
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('Sale 101'))
+    expect(logger.error).not.toHaveBeenCalled()
+  })
+})
+
 describe('FiscalEngine re-entrancy', () => {
   it('coalesces concurrent ticks into a single pass', async () => {
     let release!: () => void
@@ -144,10 +379,10 @@ describe('FiscalEngine re-entrancy', () => {
       release = resolve
     })
 
-    const submitInvoice = vi.fn(async () => {
+    const submitInvoice = vi.fn(async (): Promise<FiscalSubmitOutcome> => {
       await deferred
       return {
-        success: true,
+        ok: true,
         data: { invoiceNumber: 'KRA-0001', qrCode: '', fiscalizedAt: '2026-08-24T10:00:00.000Z' }
       }
     })
@@ -156,7 +391,10 @@ describe('FiscalEngine re-entrancy', () => {
       db: {
         getPendingFiscalQueue: vi.fn(() => [makeItem(1)]),
         markFiscalQueueItemSynced: vi.fn(),
-        recordFiscalQueueFailure: vi.fn()
+        recordFiscalQueueFailure: vi.fn(),
+        removeFiscalQueueItem: vi.fn(),
+        setOrderFiscalFailure: vi.fn(),
+        getOrder: vi.fn(() => undefined)
       },
       submitInvoice: submitInvoice as never
     })

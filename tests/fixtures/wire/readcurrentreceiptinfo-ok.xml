@@ -1,0 +1,25 @@
+<!--
+  Authored from tremol-contract.json's ReadCurrentReceiptInfo.response
+  (field names/order/types) + PDF §2.6.6 (semantics) — not captured
+  live (blocked on device Code 31/19). One open class-A receipt with
+  two lines of 60.00 each, all in VAT group A (SubtotalAmountVATGA =
+  120.00). Reserved fields carry Type="OptionHardcoded" (per the
+  contract) so the parser's skip-by-Type rule is actually exercised.
+-->
+<Res Code="0">
+  <Res Name="OptionIsReceiptOpened" Value="1" Type="Option"/>
+  <Res Name="SalesNumber" Value="1" Type="Text"/>
+  <Res Name="SubtotalAmountVATGA" Value="120.00" Type="Decimal"/>
+  <Res Name="SubtotalAmountVATGB" Value="0.00" Type="Decimal"/>
+  <Res Name="SubtotalAmountVATGC" Value="0.00" Type="Decimal"/>
+  <Res Name="SubtotalAmountVATGD" Value="0.00" Type="Decimal"/>
+  <Res Name="SubtotalAmountVATGE" Value="0.00" Type="Decimal"/>
+  <Res Name="reserved" Value="0" Type="OptionHardcoded"/>
+  <Res Name="reserved" Value="0" Type="OptionHardcoded"/>
+  <Res Name="OptionReceiptFormat" Value="1" Type="Option"/>
+  <Res Name="reserved" Value="0" Type="OptionHardcoded"/>
+  <Res Name="reserved" Value="0" Type="OptionHardcoded"/>
+  <Res Name="OptionClientReceipt" Value="1" Type="Option"/>
+  <Res Name="OptionPowerDownInReceipt" Value="0" Type="Option"/>
+  <Res Name="reserved" Value="0" Type="OptionHardcoded"/>
+</Res>

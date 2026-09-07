@@ -2,6 +2,7 @@
 
 import { resolve } from 'node:path'
 import { defineConfig } from 'vite'
+import { defaultExclude } from 'vitest/config'
 import react from '@vitejs/plugin-react'
 
 /**
@@ -22,6 +23,13 @@ export default defineConfig({
     environment: 'jsdom',
     globals: true,
     setupFiles: ['./tests/setup.ts'],
-    include: ['tests/**/*.test.{ts,tsx}']
+    include: ['tests/**/*.test.{ts,tsx}'],
+    // Live-hardware smoke tests (real HTTP to a running ZFPLabServer) —
+    // excluded from the default mocked suite, on top of Vitest's usual
+    // defaults (spreading `defaultExclude` rather than replacing it, so
+    // node_modules/dist/etc. stay excluded too). Run them with
+    // `npm run test:live`, which points at `vitest.live.config.ts`
+    // instead and opts them back in explicitly.
+    exclude: [...defaultExclude, 'tests/live/**']
   }
 })

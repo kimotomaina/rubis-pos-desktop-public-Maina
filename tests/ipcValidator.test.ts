@@ -23,7 +23,13 @@ import {
   configValidateSchema,
   configSaveSchema,
   configClearSchema,
-  locationSetSchema
+  locationSetSchema,
+  etimsConfigSaveSchema,
+  etimsPasswordSetSchema,
+  etimsIntegrationConfigSchema,
+  storeIdentitySetSchema,
+  correctPinAndResendSchema,
+  resendFiscalizationSchema
 } from '../src/main/lib/ipcValidator.js'
 
 const validItem = {
@@ -136,6 +142,57 @@ describe('voidOrderSchema', () => {
   it('rejects a non-numeric payload', () => {
     expect(validate(voidOrderSchema, '7').success).toBe(false)
     expect(validate(voidOrderSchema, { localId: 7 }).success).toBe(false)
+  })
+})
+
+describe('correctPinAndResendSchema (phase-78, Part C)', () => {
+  it('accepts a positive localId with a non-blank buyerPin', () => {
+    expect(validate(correctPinAndResendSchema, { localId: 7, buyerPin: 'P051234567Z' }).success).toBe(true)
+  })
+
+  it('accepts a null buyerPin (removing the PIN)', () => {
+    expect(validate(correctPinAndResendSchema, { localId: 7, buyerPin: null }).success).toBe(true)
+  })
+
+  it('rejects a blank buyerPin string — remove it with null instead', () => {
+    const result = validate(correctPinAndResendSchema, { localId: 7, buyerPin: '' })
+    expect(result.success).toBe(false)
+  })
+
+  it('rejects a non-integer or non-positive localId', () => {
+    expect(validate(correctPinAndResendSchema, { localId: 7.5, buyerPin: null }).success).toBe(false)
+    expect(validate(correctPinAndResendSchema, { localId: 0, buyerPin: null }).success).toBe(false)
+    expect(validate(correctPinAndResendSchema, { localId: -1, buyerPin: null }).success).toBe(false)
+  })
+
+  it('rejects a missing buyerPin field (undefined is not the same as null)', () => {
+    expect(validate(correctPinAndResendSchema, { localId: 7 }).success).toBe(false)
+  })
+
+  it('rejects a completely malformed payload', () => {
+    expect(validate(correctPinAndResendSchema, 'not an object').success).toBe(false)
+    expect(validate(correctPinAndResendSchema, null).success).toBe(false)
+  })
+})
+
+describe('resendFiscalizationSchema (phase-88, Step 4)', () => {
+  it('accepts a positive localId', () => {
+    expect(validate(resendFiscalizationSchema, { localId: 7 }).success).toBe(true)
+  })
+
+  it('rejects a non-integer or non-positive localId', () => {
+    expect(validate(resendFiscalizationSchema, { localId: 7.5 }).success).toBe(false)
+    expect(validate(resendFiscalizationSchema, { localId: 0 }).success).toBe(false)
+    expect(validate(resendFiscalizationSchema, { localId: -1 }).success).toBe(false)
+  })
+
+  it('rejects a missing localId', () => {
+    expect(validate(resendFiscalizationSchema, {}).success).toBe(false)
+  })
+
+  it('rejects a completely malformed payload', () => {
+    expect(validate(resendFiscalizationSchema, 'not an object').success).toBe(false)
+    expect(validate(resendFiscalizationSchema, null).success).toBe(false)
   })
 })
 
@@ -435,6 +492,148 @@ describe('locationSetSchema', () => {
   it('rejects a missing manager authorization', () => {
     const { managerPin: _managerPin, ...withoutPin } = validRequest
     expect(validate(locationSetSchema, withoutPin).success).toBe(false)
+  })
+})
+
+describe('etimsConfigSaveSchema', () => {
+  const validRequest = {
+    baseUrl: 'http://localhost:4444/',
+    deviceIp: '154.79.253.236',
+    devicePort: '8000',
+    password: 'secret'
+  }
+
+  it('accepts a well-formed request', () => {
+    expect(validate(etimsConfigSaveSchema, validRequest).success).toBe(true)
+  })
+
+  it('rejects a missing baseUrl', () => {
+    const { baseUrl: _baseUrl, ...withoutBaseUrl } = validRequest
+    expect(validate(etimsConfigSaveSchema, withoutBaseUrl).success).toBe(false)
+  })
+
+  it('rejects an empty password', () => {
+    expect(validate(etimsConfigSaveSchema, { ...validRequest, password: '' }).success).toBe(false)
+  })
+
+  it('rejects a missing deviceIp or devicePort', () => {
+    const { deviceIp: _deviceIp, ...withoutDeviceIp } = validRequest
+    expect(validate(etimsConfigSaveSchema, withoutDeviceIp).success).toBe(false)
+    const { devicePort: _devicePort, ...withoutDevicePort } = validRequest
+    expect(validate(etimsConfigSaveSchema, withoutDevicePort).success).toBe(false)
+  })
+
+  it('rejects a malformed device IP, not just a missing one', () => {
+    expect(validate(etimsConfigSaveSchema, { ...validRequest, deviceIp: 'localhost' }).success).toBe(
+      false
+    )
+    expect(
+      validate(etimsConfigSaveSchema, { ...validRequest, deviceIp: '192.168.1.256' }).success
+    ).toBe(false)
+  })
+
+  it('rejects a non-numeric or out-of-range port', () => {
+    expect(validate(etimsConfigSaveSchema, { ...validRequest, devicePort: '80oo' }).success).toBe(
+      false
+    )
+    expect(validate(etimsConfigSaveSchema, { ...validRequest, devicePort: '0' }).success).toBe(false)
+    expect(validate(etimsConfigSaveSchema, { ...validRequest, devicePort: '65536' }).success).toBe(
+      false
+    )
+  })
+
+  it('reports failures in plain words, with no field keys or codes', () => {
+    const result = validate(etimsConfigSaveSchema, {
+      ...validRequest,
+      deviceIp: 'nope',
+      devicePort: 'x'
+    })
+    expect(result.success).toBe(false)
+    if (result.success) return
+    expect(result.error).toMatch(/does not look like an IP address/)
+    expect(result.error).toMatch(/whole number between 1 and 65535/)
+  })
+})
+
+describe('etimsPasswordSetSchema', () => {
+  const validRequest = { password: 'device-secret', managerId: 1, managerPin: '9999' }
+
+  it('accepts a well-formed request', () => {
+    expect(validate(etimsPasswordSetSchema, validRequest).success).toBe(true)
+  })
+
+  it('rejects a blank password — the form sends nothing rather than clearing the stored one', () => {
+    expect(validate(etimsPasswordSetSchema, { ...validRequest, password: '   ' }).success).toBe(
+      false
+    )
+  })
+
+  it('rejects a missing manager authorization', () => {
+    const { managerId: _managerId, ...withoutManagerId } = validRequest
+    expect(validate(etimsPasswordSetSchema, withoutManagerId).success).toBe(false)
+    expect(validate(etimsPasswordSetSchema, { ...validRequest, managerPin: '' }).success).toBe(false)
+  })
+})
+
+describe('etimsIntegrationConfigSchema', () => {
+  const validRequest = {
+    baseUrl: 'http://localhost:4444/',
+    deviceIp: '192.168.1.50',
+    devicePort: '8000',
+    defaultVatClass: 'A'
+  }
+
+  it('accepts a well-formed request', () => {
+    expect(validate(etimsIntegrationConfigSchema, validRequest).success).toBe(true)
+  })
+
+  it('accepts a request with no defaultVatClass', () => {
+    const { defaultVatClass: _vatClass, ...withoutVatClass } = validRequest
+    expect(validate(etimsIntegrationConfigSchema, withoutVatClass).success).toBe(true)
+  })
+
+  it('applies the same IP and port rules the setup gate enforces', () => {
+    expect(
+      validate(etimsIntegrationConfigSchema, { ...validRequest, deviceIp: 'device.local' }).success
+    ).toBe(false)
+    expect(
+      validate(etimsIntegrationConfigSchema, { ...validRequest, devicePort: '99999' }).success
+    ).toBe(false)
+  })
+})
+
+describe('storeIdentitySetSchema', () => {
+  const validRequest = {
+    storeName: 'Rubis Haile Selassie',
+    storeKraPin: 'P051234567X',
+    managerId: 1,
+    managerPin: '9999'
+  }
+
+  it('accepts a well-formed request', () => {
+    expect(validate(storeIdentitySetSchema, validRequest).success).toBe(true)
+  })
+
+  it('accepts a blank KRA PIN — the receipt simply omits the line', () => {
+    expect(validate(storeIdentitySetSchema, { ...validRequest, storeKraPin: '' }).success).toBe(true)
+  })
+
+  it('rejects a blank store name — every receipt has a header', () => {
+    expect(validate(storeIdentitySetSchema, { ...validRequest, storeName: '  ' }).success).toBe(
+      false
+    )
+  })
+
+  it('rejects a malformed KRA PIN with an example of a good one', () => {
+    const result = validate(storeIdentitySetSchema, { ...validRequest, storeKraPin: '12345' })
+    expect(result.success).toBe(false)
+    if (result.success) return
+    expect(result.error).toMatch(/P051234567X/)
+  })
+
+  it('rejects a missing manager authorization', () => {
+    const { managerId: _managerId, ...withoutManagerId } = validRequest
+    expect(validate(storeIdentitySetSchema, withoutManagerId).success).toBe(false)
   })
 })
 

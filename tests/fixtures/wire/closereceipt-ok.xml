@@ -1,0 +1,12 @@
+<!--
+  Authored from tremol-contract.json's CloseReceipt.response
+  (InvoiceNum, QRcode — in that order, no other fields) + PDF §2.5.7 —
+  not captured live. InvoiceNum is 19 digits (/^\d{19}$/); QRcode is
+  exactly 128 characters and deliberately visibly synthetic
+  ("MOCK-QR-" prefix + a repeating digit pattern) so it can never be
+  mistaken for a real KRA-issued code.
+-->
+<Res Code="0">
+  <Res Name="InvoiceNum" Value="0000000000000000042" Type="Text"/>
+  <Res Name="QRcode" Value="MOCK-QR-012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789" Type="Text"/>
+</Res>

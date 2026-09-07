@@ -56,4 +56,10 @@ export interface CartItem {
    * against this, not the (possibly already-overridden) `price`.
    */
   basePrice?: number
+  /** Device VAT class (A-E), read from the variant's `rubis.vat_class` metafield when present. */
+  vatClass?: string
+  /** Harmonized System code, read from the variant's `rubis.hs_code` metafield when present. */
+  hsCode?: string
+  /** Harmonized System name, read from the variant's `rubis.hs_name` metafield when present. */
+  hsName?: string
 }

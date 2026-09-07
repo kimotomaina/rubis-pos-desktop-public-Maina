@@ -32,6 +32,13 @@ export interface PrinterSettings {
   interfaceName: string
   /** Printed centered/bold at the top of every receipt. */
   storeName: string
+  /**
+   * The store's own KRA PIN, printed under the store name so a customer
+   * can identify who issued the receipt. Distinct from a sale's
+   * `customerPin`, which is the *buyer's* PIN on a B2B invoice. Omitted
+   * when the branch has not set one.
+   */
+  storeKraPin?: string
   /** Fractional tax rate applied to the subtotal (0.08 = 8%). */
   taxRate: number
   /** When true, skips hardware entirely and logs the receipt text. */
@@ -211,6 +218,9 @@ export async function renderReceipt(
   client.bold(true)
   client.println(settings.storeName)
   client.bold(false)
+  if (settings.storeKraPin) {
+    client.println(`PIN: ${settings.storeKraPin}`)
+  }
   client.println(`Order #${order.localId}`)
   client.println(new Date(order.createdAt).toLocaleString())
   client.println(`Cashier: ${order.cashierName}`)

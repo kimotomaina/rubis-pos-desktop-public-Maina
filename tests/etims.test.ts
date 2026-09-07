@@ -9,7 +9,7 @@
  */
 
 import { describe, it, expect } from 'vitest'
-import { MockFiscalizationProvider } from '../src/main/services/integrations/etims.js'
+import { MockFiscalizationProvider } from '../src/main/services/integrations/mock-etims-provider.js'
 
 const SAMPLE_REQUEST = {
   clientOrderUuid: '11111111-2222-3333-4444-555555555555',
@@ -23,26 +23,28 @@ describe('MockFiscalizationProvider.submitInvoice', () => {
     const provider = new MockFiscalizationProvider(5)
     const result = await provider.submitInvoice(SAMPLE_REQUEST)
 
-    expect(result.success).toBe(true)
-    expect(result.data?.invoiceNumber).toMatch(/^KRA-MOCK-/)
-    expect(() => Buffer.from(result.data!.qrCode, 'base64')).not.toThrow()
-    expect(Buffer.from(result.data!.qrCode, 'base64').toString('utf8')).toContain('[QR CODE]')
+    expect(result.ok).toBe(true)
+    expect(result.ok && result.data.invoiceNumber).toMatch(/^KRA-MOCK-/)
+    expect(() => Buffer.from(result.ok ? result.data.qrCode : '', 'base64')).not.toThrow()
+    expect(
+      Buffer.from(result.ok ? result.data.qrCode : '', 'base64').toString('utf8')
+    ).toContain('[QR CODE]')
   })
 
   it('rejects a request with no line items', async () => {
     const provider = new MockFiscalizationProvider(5)
     const result = await provider.submitInvoice({ ...SAMPLE_REQUEST, items: [] })
 
-    expect(result.success).toBe(false)
-    expect(result.error).toMatch(/no line items/i)
+    expect(result.ok).toBe(false)
+    expect(!result.ok && result.reason).toMatch(/no line items/i)
   })
 
   it('rejects a request missing a clientOrderUuid', async () => {
     const provider = new MockFiscalizationProvider(5)
     const result = await provider.submitInvoice({ ...SAMPLE_REQUEST, clientOrderUuid: '' })
 
-    expect(result.success).toBe(false)
-    expect(result.error).toMatch(/clientOrderUuid/i)
+    expect(result.ok).toBe(false)
+    expect(!result.ok && result.reason).toMatch(/clientOrderUuid/i)
   })
 })
 
@@ -50,7 +52,7 @@ describe('MockFiscalizationProvider.getInvoiceDetails / cancelInvoice', () => {
   it('reads back a submitted invoice by number', async () => {
     const provider = new MockFiscalizationProvider(5)
     const submitted = await provider.submitInvoice(SAMPLE_REQUEST)
-    const invoiceNumber = submitted.data!.invoiceNumber
+    const invoiceNumber = submitted.ok ? submitted.data.invoiceNumber : ''
 
     const details = await provider.getInvoiceDetails(invoiceNumber)
 
@@ -68,7 +70,7 @@ describe('MockFiscalizationProvider.getInvoiceDetails / cancelInvoice', () => {
   it('cancels a submitted invoice so it can no longer be read back', async () => {
     const provider = new MockFiscalizationProvider(5)
     const submitted = await provider.submitInvoice(SAMPLE_REQUEST)
-    const invoiceNumber = submitted.data!.invoiceNumber
+    const invoiceNumber = submitted.ok ? submitted.data.invoiceNumber : ''
 
     const cancelled = await provider.cancelInvoice(invoiceNumber)
     expect(cancelled.success).toBe(true)

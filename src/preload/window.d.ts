@@ -10,17 +10,22 @@
  */
 
 import type { ServiceResult } from '../main/services/shopify-types.js'
+import type { FiscalConnectionTestResult } from '../main/services/integrations/fiscal-connection-test.js'
 import type { ProductSummary } from '../renderer/src/types/shopify.js'
 import type {
   CheckoutReceipt,
   CheckoutRequest,
+  FiscalResendResult,
   OrderRow,
   StaffSummary,
   StaffRole,
   ShiftRow,
   IntegrationProviderName,
   PrinterConfig,
-  PrinterType
+  PrinterType,
+  MpesaTransactionRow,
+  AppConfigCategory,
+  NeedsAttentionRow
 } from '../main/services/database.js'
 import type { ReceiptPrintResult } from '../main/services/printer.js'
 import type { ZReport, DailySummary } from '../main/services/reports.js'
@@ -29,7 +34,8 @@ import type {
   StkPushRequest,
   StkPushResult,
   ManualCodeVerification,
-  ManualCodeVerificationResult
+  ManualCodeVerificationResult,
+  StkPushStatusResult
 } from '../main/services/integrations/mpesa.js'
 
 /** Payload of the `network:status` broadcast / `network:get-status` invoke. */
@@ -85,6 +91,17 @@ export interface PosApi {
   getLocalOrders: (limit?: number, offset?: number) => Promise<ServiceResult<OrderRow[]>>
   /** Retries syncing a failed or pending order. */
   retryOrderSync: (localId: number) => Promise<ServiceResult<{ queueId: number }>>
+  /** Corrects (or, passing `null`, removes) the buyer PIN on a wrong-PIN sale, then resends its fiscalization. */
+  correctPinAndResend: (
+    localId: number,
+    buyerPin: string | null
+  ) => Promise<ServiceResult<FiscalResendResult>>
+  /** Resends a sale's fiscalization as-is (no PIN change) — the back-office list's plain "Resend" action. */
+  resendFiscalization: (localId: number) => Promise<ServiceResult<FiscalResendResult>>
+  /** The back-office "needs attention" list — every needs_fixing sale plus every stuck-waiting sale. */
+  getSalesNeedingAttention: () => Promise<ServiceResult<NeedsAttentionRow[]>>
+  /** The Rule-3 safety-net count: every completed-but-unfiled sale, regardless of the stuck threshold. */
+  getUnfiledSalesCount: () => Promise<ServiceResult<number>>
   /** Prints (or, in mock mode, logs) a receipt for a local order, optionally routed to a printer type. */
   printReceipt: (
     localId: number,
@@ -138,6 +155,43 @@ export interface PosApi {
   verifyMpesaCode: (
     request: ManualCodeVerification
   ) => Promise<ServiceResult<ManualCodeVerificationResult>>
+  /** Logs a newly initiated STK Push for the M-Pesa Logs screen. */
+  logMpesaTransaction: (request: {
+    orderLocalId?: number
+    checkoutRequestId: string
+    merchantRequestId: string
+    phoneNumber: string
+    amount: number
+    status?: 'pending' | 'success' | 'failed'
+  }) => Promise<ServiceResult<{ id: number }>>
+  /** Fetches recent M-Pesa transactions for the M-Pesa Logs screen. */
+  getMpesaTransactions: (limit?: number) => Promise<ServiceResult<MpesaTransactionRow[]>>
+  /** Re-checks a pending STK Push's outcome and persists the result. */
+  queryMpesaStatus: (checkoutRequestId: string) => Promise<ServiceResult<StkPushStatusResult>>
+  /** Reports whether the M-Pesa consumer secret / passkey are stored in the credential vault. */
+  getMpesaCredentialStatus: () => Promise<
+    ServiceResult<{ consumerSecretConfigured: boolean; passkeyConfigured: boolean }>
+  >
+  /** Saves the M-Pesa consumer secret and/or passkey to the credential vault. Requires a re-verified admin Manager PIN. */
+  setMpesaCredentials: (
+    credentials: { consumerSecret?: string; passkey?: string },
+    managerId: number,
+    managerPin: string
+  ) => Promise<ServiceResult<void>>
+  /** Verifies the currently configured Daraja credentials via an OAuth2 token exchange only. */
+  testMpesaConnection: () => Promise<ServiceResult<void>>
+  /** Reads every `app_configurations` value, optionally scoped to one category. */
+  getAllConfigs: (category?: AppConfigCategory) => Promise<ServiceResult<Record<string, string>>>
+  /** Writes one `app_configurations` value. Requires a re-verified admin Manager PIN. */
+  setConfig: (
+    key: string,
+    value: string,
+    options: { requiresRestart?: boolean; category?: AppConfigCategory } | undefined,
+    managerId: number,
+    managerPin: string
+  ) => Promise<ServiceResult<void>>
+  /** Relaunches the app to apply a `requiresRestart` configuration change. */
+  restartApp: () => Promise<ServiceResult<void>>
   /** Reads a provider's stored integration config. */
   getIntegrationConfig: (
     provider: IntegrationProviderName
@@ -208,6 +262,35 @@ export interface PosApi {
   ) => Promise<ServiceResult<void>>
   /** Admin screen's "Reset Configuration" action. Requires a re-verified admin Manager PIN. */
   clearConfig: (managerId: number, managerPin: string) => Promise<ServiceResult<void>>
+  /** Reports whether this till may proceed past the mandatory eTIMS setup gate. */
+  checkEtimsCompletion: () => Promise<
+    ServiceResult<{ isComplete: boolean; missingFields: string[] }>
+  >
+  /** Saves the four required Real-eTIMS connection fields from the setup gate. No manager PIN required. */
+  saveEtimsConfig: (config: {
+    baseUrl: string
+    deviceIp: string
+    devicePort: string
+    password: string
+  }) => Promise<ServiceResult<void>>
+  /** Saves the fiscal device password to the credential vault. Requires a re-verified admin Manager PIN. */
+  setEtimsPassword: (
+    password: string,
+    managerId: number,
+    managerPin: string
+  ) => Promise<ServiceResult<void>>
+  /** Reports whether a fiscal device password is stored, never the value. */
+  getEtimsSecretStatus: () => Promise<ServiceResult<{ passwordConfigured: boolean }>>
+  /** Walks the three hops to the fiscal device and reports which one broke, in plain words. */
+  testEtimsConnection: () => Promise<ServiceResult<FiscalConnectionTestResult>>
+  /** Reads the store name and KRA PIN printed on every receipt. */
+  getStoreIdentity: () => Promise<ServiceResult<{ storeName: string; storeKraPin: string }>>
+  /** Saves the store name and KRA PIN printed on every receipt. Requires a re-verified admin Manager PIN. */
+  setStoreIdentity: (
+    identity: { storeName: string; storeKraPin: string },
+    managerId: number,
+    managerPin: string
+  ) => Promise<ServiceResult<void>>
 }
 
 declare global {

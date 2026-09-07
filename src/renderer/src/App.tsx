@@ -7,12 +7,10 @@ import { useUiStore } from './stores/uiStore'
 import { useAuthStore } from './stores/authStore'
 import { useBarcodeScanner } from './hooks/useBarcodeScanner'
 import type { ScanResult } from './hooks/useBarcodeScanner'
-import { formatCurrency } from './lib/currency'
-import { filterProducts } from './lib/productSearch'
-import type { CartItem, Discount, VariantSummary, ProductSummary } from './types/shopify'
-import ProductCard from './components/ProductCard'
-import ProductSearchBar from './components/ProductSearchBar'
-import CartLineItem from './components/CartLineItem'
+import type { CartItem, VariantSummary, ProductSummary } from './types/shopify'
+import PosSearchBar from './components/PosSearchBar'
+import PosCartTable from './components/PosCartTable'
+import PosCheckoutPanel from './components/PosCheckoutPanel'
 import EmptyState from './components/EmptyState'
 import VariantModal from './components/VariantModal'
 import OrderHistory from './components/OrderHistory'
@@ -20,15 +18,22 @@ import LoginScreen from './components/LoginScreen'
 import OnboardingScreen from './components/OnboardingScreen'
 import LocationConfirmScreen from './components/LocationConfirmScreen'
 import LocationPendingScreen from './components/LocationPendingScreen'
-import CheckoutModal from './components/CheckoutModal'
 import AdminScreen from './components/AdminScreen'
+import EtimsSetupGate from './components/EtimsSetupGate'
 import UpdateToast from './components/UpdateToast'
 import ManagerPinModal from './components/ManagerPinModal'
 import ConnectivityBadges, { type ConnectivityIntegration } from './components/ConnectivityBadges'
 import ConnectivityModal from './components/ConnectivityModal'
+import UnfiledSalesBadge from './components/UnfiledSalesBadge'
+import { useUnfiledCountStore } from './stores/unfiledCountStore'
 import ConnectivityToast from './components/ConnectivityToast'
-import { requiresManagerPinForDiscount } from './lib/checkoutMath'
-import { WarningIcon, InboxIcon, SearchIcon, CartIcon, CheckIcon } from './components/icons'
+import FiscalNotice from './components/FiscalNotice'
+import SaleCompleteToast from './components/SaleCompleteToast'
+import ToastStack from './components/ToastStack'
+import VirtualKeyboardModal from './components/VirtualKeyboardModal'
+import { useToastStore } from './stores/toastStore'
+import { SCAN_TOAST_TIMEOUT_MS } from './lib/toastTimeouts'
+import { WarningIcon } from './components/icons'
 import rubisLogo from './assets/logo-rubis.png'
 
 /** A pending manager-gated action awaiting PIN authorization. */
@@ -43,10 +48,21 @@ interface PinGateRequest {
   onAuthorized: (managerId: number, managerPin: string) => void
 }
 
-/** Transient banner shown after a barcode scan attempt. */
-interface ScanToast {
-  kind: 'success' | 'error'
-  message: string
+/**
+ * Pushes a transient toast (phase-84) into the shared stack after a
+ * barcode scan or product-search attempt — kept as a plain helper
+ * rather than its own component since it has no state of its own
+ * beyond the message itself.
+ */
+function showScanToast(kind: 'success' | 'error', message: string): void {
+  const id = 'scan'
+  useToastStore.getState().show({
+    id,
+    tone: kind,
+    message,
+    timeoutMs: SCAN_TOAST_TIMEOUT_MS,
+    onDismiss: () => useToastStore.getState().dismiss(id)
+  })
 }
 
 /**
@@ -78,8 +94,14 @@ function buildCartItem(
  *   - `useProductStore` — fetches the Shopify catalog via IPC
  *   - `useCartStore`    — manages the cashier's line items
  *
- * The layout is a touch-friendly 2-pane design: a scrollable product
- * grid on the left and a fixed-width cart sidebar on the right.
+ * The catalog view is a fast-checkout layout (Phase 44): a left zone
+ * (`PosSearchBar` + `PosCartTable`, ~65% width on a `lg:` screen and
+ * up) for scanning/searching and reviewing the ticket, and a right
+ * zone (`PosCheckoutPanel`, ~35%) that is always visible — no
+ * "Checkout" button/modal — so the total, payment method, and
+ * amount-tendered/M-Pesa flow are on screen throughout the sale.
+ * Below the `lg:` breakpoint (1024px) the zones stack vertically
+ * instead of compressing.
  *
  * @returns {JSX.Element}
  */
@@ -91,8 +113,6 @@ export default function App() {
       second: '2-digit'
     })
   )
-  const [scanToast, setScanToast] = useState<ScanToast | null>(null)
-
   const demoMode = import.meta.env.VITE_DEMO_MODE === 'true'
   /**
    * Whether this till has a working Shopify connection yet.
@@ -112,6 +132,20 @@ export default function App() {
   const [locationConfirmed, setLocationConfirmed] = useState(demoMode)
   const [confirmedLocationId, setConfirmedLocationId] = useState<string | null>(null)
 
+  /**
+   * Whether this till may proceed past the mandatory eTIMS setup gate.
+   * Demo Mode bypasses it, matching `configStatus`/`locationConfirmed`
+   * above — checkout never fiscalizes in Demo Mode either way.
+   */
+  const [etimsComplete, setEtimsComplete] = useState(demoMode)
+
+  useEffect(() => {
+    if (demoMode) return
+    window.api.checkEtimsCompletion().then((result) => {
+      setEtimsComplete(result.success ? !!result.data?.isComplete : false)
+    })
+  }, [demoMode])
+
   const refreshConfigStatus = () =>
     window.api.getConfigStatus().then((result) => {
       setConfigStatus(result.success && result.data?.hasConfig ? 'ready' : 'unconfigured')
@@ -125,16 +159,9 @@ export default function App() {
   }, [demoMode])
 
   const cartItems = useCartStore((state) => state.items)
-  const cartTotal = useCartStore((state) => state.getTotal())
-  const cartSubtotal = useCartStore((state) => state.getSubtotal())
-  const cartDiscount = useCartStore((state) => state.cartDiscount)
-  const cartCount = useCartStore((state) => state.getItemCount())
   const addItem = useCartStore((state) => state.addItem)
   const updateQuantity = useCartStore((state) => state.updateQuantity)
   const removeItem = useCartStore((state) => state.removeItem)
-  const setItemPrice = useCartStore((state) => state.setItemPrice)
-  const setItemDiscount = useCartStore((state) => state.setItemDiscount)
-  const setCartDiscount = useCartStore((state) => state.setCartDiscount)
 
   const [pinGate, setPinGate] = useState<PinGateRequest | null>(null)
   const requestManagerPin = (
@@ -142,28 +169,8 @@ export default function App() {
     onAuthorized: (managerId: number, managerPin: string) => void
   ) => setPinGate({ title, onAuthorized })
 
-  const [showCartDiscountEditor, setShowCartDiscountEditor] = useState(false)
-  const [cartDiscountType, setCartDiscountType] = useState<Discount['type']>('percent')
-  const [cartDiscountValue, setCartDiscountValue] = useState('')
-
-  const applyCartDiscount = () => {
-    const value = parseFloat(cartDiscountValue)
-    if (!Number.isFinite(value) || value <= 0) {
-      setCartDiscount(null)
-      setShowCartDiscountEditor(false)
-      return
-    }
-    const discount: Discount = { type: cartDiscountType, value }
-    const apply = () => {
-      setCartDiscount(discount)
-      setShowCartDiscountEditor(false)
-    }
-    if (requiresManagerPinForDiscount(discount, cartSubtotal)) {
-      requestManagerPin('Cart discount over 10%', apply)
-    } else {
-      apply()
-    }
-  }
+  /** Variant id most recently added via search/scan — flashes its `PosCartTable` row, then self-clears. */
+  const [flashId, setFlashId] = useState<string | null>(null)
 
   const products = useProductStore((state) => state.products)
   const status = useProductStore((state) => state.status)
@@ -181,21 +188,18 @@ export default function App() {
   )
   const [barcodeStatus, setBarcodeStatus] = useState<'unknown' | 'connected'>('unknown')
 
+  const unfiledCount = useUnfiledCountStore((state) => state.count)
+  const initUnfiledCount = useUnfiledCountStore((state) => state.init)
+  const [adminInitialTab, setAdminInitialTab] = useState<'needsAttention' | undefined>(undefined)
+
   const selectedProductForModal = useUiStore((state) => state.selectedProductForModal)
   const activeView = useUiStore((state) => state.activeView)
   const setSelectedProduct = useUiStore((state) => state.setSelectedProduct)
   const setActiveView = useUiStore((state) => state.setActiveView)
-  const checkoutModalOpen = useUiStore((state) => state.checkoutModalOpen)
-  const setCheckoutModalOpen = useUiStore((state) => state.setCheckoutModalOpen)
-  const searchQuery = useUiStore((state) => state.searchQuery)
-  const setSearchQuery = useUiStore((state) => state.setSearchQuery)
   const [searchInputFocused, setSearchInputFocused] = useState(false)
 
   const currentStaff = useAuthStore((state) => state.currentStaff)
   const logout = useAuthStore((state) => state.logout)
-
-  const checkoutStatus = useCartStore((state) => state.checkoutStatus)
-  const checkoutError = useCartStore((state) => state.checkoutError)
 
   useEffect(() => {
     const id = setInterval(() => {
@@ -222,8 +226,18 @@ export default function App() {
     void initConnectivity()
   }, [initConnectivity])
 
+  useEffect(() => {
+    void initUnfiledCount()
+  }, [initUnfiledCount])
+
+  /**
+   * Adds an item and briefly flashes its `PosCartTable` row, giving
+   * the cashier feedback that a search/scan add actually registered.
+   */
   const handleAddToCart = (product: ProductSummary, variant: VariantSummary) => {
     addItem(buildCartItem(product, variant), 1)
+    setFlashId(variant.id)
+    window.setTimeout(() => setFlashId((prev) => (prev === variant.id ? null : prev)), 700)
   }
 
   const handleRetryOrder = async (localId: number) => {
@@ -237,24 +251,20 @@ export default function App() {
   const handlePrintReceipt = async (localId: number) => {
     try {
       const result = await window.api.printReceipt(localId)
-      setScanToast(
-        result.success
-          ? {
-              kind: 'success',
-              message:
-                result.data?.mode === 'pdf'
-                  ? 'Printer offline. Receipt saved to Desktop as PDF.'
-                  : result.data?.mock
-                    ? 'Receipt printed (mock mode)'
-                    : 'Receipt sent to printer'
-            }
-          : { kind: 'error', message: result.error ?? 'Failed to print receipt' }
-      )
+      if (result.success) {
+        showScanToast(
+          'success',
+          result.data?.mode === 'pdf'
+            ? 'Printer offline. Receipt saved to Desktop as PDF.'
+            : result.data?.mock
+              ? 'Receipt printed (mock mode)'
+              : 'Receipt sent to printer'
+        )
+      } else {
+        showScanToast('error', result.error ?? 'Failed to print receipt')
+      }
     } catch (err) {
-      setScanToast({
-        kind: 'error',
-        message: err instanceof Error ? err.message : 'Failed to print receipt'
-      })
+      showScanToast('error', err instanceof Error ? err.message : 'Failed to print receipt')
     }
   }
 
@@ -264,12 +274,6 @@ export default function App() {
     }
     setSelectedProduct(null)
   }
-
-  useEffect(() => {
-    if (!scanToast) return
-    const id = setTimeout(() => setScanToast(null), 2500)
-    return () => clearTimeout(id)
-  }, [scanToast])
 
   /**
    * Routes a parsed scan by its {@link ScanResult.source}:
@@ -283,7 +287,7 @@ export default function App() {
    */
   const handleScan = ({ source, barcode }: ScanResult) => {
     if (source === 'KITCHEN') {
-      setScanToast({ kind: 'success', message: `Kitchen order routed: ${barcode}` })
+      showScanToast('success', `Kitchen order routed: ${barcode}`)
       return
     }
 
@@ -295,18 +299,16 @@ export default function App() {
           variant.title === 'Default Title'
             ? product.title
             : `${product.title} (${variant.title})`
-        setScanToast({ kind: 'success', message: `Added: ${label}` })
+        showScanToast('success', `Added: ${label}`)
         return
       }
     }
-    setScanToast({ kind: 'error', message: `Barcode not recognized: ${barcode}` })
+    showScanToast('error', `Barcode not recognized: ${barcode}`)
   }
 
   useBarcodeScanner(handleScan, {
     enabled: activeView === 'catalog' && !!currentStaff && !searchInputFocused
   })
-
-  const filteredProducts = filterProducts(products, searchQuery)
 
   const demoModeBanner = demoMode && (
     <div className="flex items-center justify-center gap-2 bg-amber-500 py-2.5 text-center text-base font-bold uppercase tracking-wide text-white">
@@ -358,14 +360,18 @@ export default function App() {
     return <LocationPendingScreen onLogout={() => void logout()} />
   }
 
+  if (!etimsComplete) {
+    return <EtimsSetupGate onComplete={() => setEtimsComplete(true)} />
+  }
+
   return (
     <div className="flex h-screen flex-col bg-slate-50 text-slate-900">
       {demoModeBanner}
       {/* Header */}
-      <header className="flex h-20 items-center justify-between border-b border-slate-200 bg-white px-6 shadow-sm">
-        <div className="flex items-center gap-6">
-          <img src={rubisLogo} alt="RUBIS Energie" className="h-9 w-auto" />
-          <nav className="flex gap-2">
+      <header className="flex h-20 w-full shrink-0 items-center justify-between border-b border-slate-200 bg-white px-6 shadow-sm">
+        <div className="flex shrink-0 items-center gap-6">
+          <img src={rubisLogo} alt="RUBIS Energie" className="h-9 w-auto shrink-0" />
+          <nav className="flex min-w-0 gap-2">
             <button
               type="button"
               onClick={() => setActiveView('catalog')}
@@ -391,7 +397,10 @@ export default function App() {
             {currentStaff.role === 'admin' && (
               <button
                 type="button"
-                onClick={() => setActiveView('admin')}
+                onClick={() => {
+                  setActiveView('admin')
+                  setAdminInitialTab(undefined)
+                }}
                 className={`flex h-14 items-center rounded-lg px-6 text-lg font-medium transition-colors ${
                   activeView === 'admin'
                     ? 'bg-rose-100 text-rose-700'
@@ -403,8 +412,8 @@ export default function App() {
             )}
           </nav>
         </div>
-        <div className="flex items-center gap-4 text-base text-slate-600">
-          <div className="flex items-center gap-2">
+        <div className="flex shrink-0 items-center gap-4 text-base text-slate-600">
+          <div className="flex shrink-0 items-center gap-2">
             <span className="font-medium text-slate-700">
               {currentStaff.name}
             </span>
@@ -422,7 +431,7 @@ export default function App() {
             </button>
           </div>
           {online ? (
-            <span className="flex items-center gap-2 rounded-full bg-emerald-100 px-3 py-1 font-medium text-emerald-700">
+            <span className="flex shrink-0 items-center gap-2 rounded-full bg-emerald-100 px-3 py-1 font-medium text-emerald-700">
               <span
                 className="h-2.5 w-2.5 rounded-full bg-emerald-500"
                 aria-hidden
@@ -430,7 +439,7 @@ export default function App() {
               Online
             </span>
           ) : (
-            <span className="flex items-center gap-2 rounded-full bg-rose-100 px-3 py-1 font-medium text-rose-700">
+            <span className="flex shrink-0 items-center gap-2 rounded-full bg-rose-100 px-3 py-1 font-medium text-rose-700">
               <span
                 className="h-2.5 w-2.5 rounded-full bg-rose-500"
                 aria-hidden
@@ -438,12 +447,20 @@ export default function App() {
               Offline — sales will queue
             </span>
           )}
+          <UnfiledSalesBadge
+            count={unfiledCount}
+            onClick={() => {
+              if (currentStaff.role !== 'admin') return
+              setActiveView('admin')
+              setAdminInitialTab('needsAttention')
+            }}
+          />
           <ConnectivityBadges
             status={connectivityStatus}
             barcodeStatus={barcodeStatus}
             onSelect={setSelectedConnectivity}
           />
-          <span className="font-mono tabular-nums" aria-label="clock">
+          <span className="shrink-0 font-mono tabular-nums" aria-label="clock">
             {now}
           </span>
         </div>
@@ -459,40 +476,25 @@ export default function App() {
         />
       )}
 
-      {/* Main: product grid + cart, or order history */}
+      {/* Main: fast-checkout layout, or order history */}
       {activeView === 'catalog' ? (
-        <main className="flex flex-1 overflow-hidden">
-          {/* Product grid */}
-          <section className="flex-1 overflow-y-auto">
-            <div className="sticky top-0 z-10 flex items-center gap-3 border-b border-slate-200 bg-slate-50 px-6 py-4 shadow-sm">
-              <h2 className="text-xl font-semibold text-slate-700">Products</h2>
-              {cached && (
-                <span className="rounded-full bg-amber-100 px-2.5 py-1 text-sm font-medium text-amber-700">
-                  Cached catalog (offline)
-                </span>
-              )}
-              <ProductSearchBar
-                value={searchQuery}
-                onChange={setSearchQuery}
-                onFocus={() => setSearchInputFocused(true)}
-                onBlur={() => setSearchInputFocused(false)}
-              />
-            </div>
+        <main className="flex flex-1 flex-col overflow-hidden lg:flex-row">
+          {/* Left zone: search/scan + cart table (~65% on lg:+) */}
+          <section className="flex min-h-0 flex-1 flex-col overflow-hidden lg:w-[65%] lg:flex-none">
+            <PosSearchBar
+              products={products}
+              onAddVariant={handleAddToCart}
+              onOpenVariantPicker={setSelectedProduct}
+              onNotFound={(query) => showScanToast('error', `Product Not Found: "${query}"`)}
+              onFocusChange={setSearchInputFocused}
+            />
 
-            <div className="p-6">
             {status === 'loading' && (
-              <div className="grid grid-cols-3 gap-6">
-                {Array.from({ length: 8 }).map((_, i) => (
-                  <div
-                    key={i}
-                    className="h-[160px] animate-pulse rounded-xl bg-slate-200"
-                  />
-                ))}
-              </div>
+              <p className="px-4 py-2 text-base text-slate-400">Loading catalog…</p>
             )}
 
             {status === 'error' && (
-              <div className="flex flex-col items-center">
+              <div className="flex flex-col items-center gap-2 p-4">
                 <EmptyState
                   icon={<WarningIcon className="h-10 w-10" />}
                   title={error ?? 'Failed to load products'}
@@ -501,169 +503,30 @@ export default function App() {
                 <button
                   type="button"
                   onClick={() => void fetchProducts()}
-                  className="mt-2 h-12 rounded-lg border border-slate-300 px-6 text-lg font-medium text-slate-700 hover:bg-slate-50"
+                  className="h-12 rounded-lg border border-slate-300 px-6 text-lg font-medium text-slate-700 hover:bg-slate-50"
                 >
                   Try again
                 </button>
               </div>
             )}
 
-            {status === 'ready' && products.length === 0 && (
-              <EmptyState
-                icon={<InboxIcon className="h-10 w-10" />}
-                title="No products found"
-                subtitle="Your Shopify store has no active products."
-              />
+            {cached && (
+              <span className="mx-4 mt-2 inline-flex w-fit shrink-0 rounded-full bg-amber-100 px-2.5 py-1 text-sm font-medium text-amber-700">
+                Cached catalog (offline)
+              </span>
             )}
 
-            {status === 'ready' && products.length > 0 && filteredProducts.length === 0 && (
-              <EmptyState
-                icon={<SearchIcon className="h-10 w-10" />}
-                title="No matches"
-                subtitle={`Nothing found for "${searchQuery.trim()}".`}
-              />
-            )}
-
-            {status === 'ready' && filteredProducts.length > 0 && (
-              <div className="grid grid-cols-3 gap-6">
-                {filteredProducts.map((product) => (
-                  <ProductCard
-                    key={product.id}
-                    product={product}
-                    onAddToCart={(variant) => handleAddToCart(product, variant)}
-                    onSelectProduct={setSelectedProduct}
-                  />
-                ))}
-              </div>
-            )}
-            </div>
+            <PosCartTable
+              items={cartItems}
+              onUpdateQuantity={updateQuantity}
+              onRemove={removeItem}
+              flashId={flashId}
+            />
           </section>
 
-          {/* Cart sidebar */}
-          <aside className="flex w-120 shrink-0 flex-col border-l border-slate-200 bg-white">
-            <div className="border-b border-slate-200 p-5">
-              <h2 className="text-xl font-bold text-slate-700">
-                Cart ({cartCount} items)
-              </h2>
-            </div>
-
-            <div className="flex-1 overflow-y-auto p-4">
-              {cartItems.length === 0 ? (
-                <EmptyState icon={<CartIcon className="h-10 w-10" />} title="Cart is empty" />
-              ) : (
-                cartItems.map((item) => (
-                  <CartLineItem
-                    key={item.id}
-                    item={item}
-                    onUpdateQuantity={updateQuantity}
-                    onRemove={removeItem}
-                    onSetPrice={setItemPrice}
-                    onSetDiscount={setItemDiscount}
-                    requestManagerPin={requestManagerPin}
-                    showToast={setScanToast}
-                  />
-                ))
-              )}
-            </div>
-
-            <div className="border-t border-slate-200 p-5">
-              <div className="mb-3 flex items-center justify-between">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setCartDiscountValue(cartDiscount ? String(cartDiscount.value) : '')
-                    setCartDiscountType(cartDiscount?.type ?? 'percent')
-                    setShowCartDiscountEditor((prev) => !prev)
-                  }}
-                  className="text-sm font-medium text-slate-500 hover:text-rose-600"
-                >
-                  {cartDiscount ? 'Edit Discount' : '+ Discount'}
-                </button>
-                {cartDiscount && (
-                  <span className="text-sm font-medium text-emerald-600">
-                    {cartDiscount.type === 'percent'
-                      ? `${cartDiscount.value}% off`
-                      : `${formatCurrency(cartDiscount.value)} off`}
-                  </span>
-                )}
-              </div>
-
-              {showCartDiscountEditor && (
-                <div className="mb-3 flex items-center gap-2 rounded-lg bg-slate-50 p-2">
-                  <select
-                    value={cartDiscountType}
-                    onChange={(e) => setCartDiscountType(e.target.value as Discount['type'])}
-                    className="h-11 rounded-md border border-slate-300 px-2 text-lg focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-100"
-                  >
-                    <option value="percent">%</option>
-                    <option value="fixed">Ksh</option>
-                  </select>
-                  <input
-                    type="number"
-                    min="0"
-                    step="0.01"
-                    value={cartDiscountValue}
-                    onChange={(e) => setCartDiscountValue(e.target.value)}
-                    autoFocus
-                    className="h-11 w-24 rounded-md border border-slate-300 px-2 text-lg focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-100"
-                  />
-                  <button
-                    type="button"
-                    onClick={applyCartDiscount}
-                    className="text-sm font-medium text-rose-600 hover:text-rose-700"
-                  >
-                    Apply
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setShowCartDiscountEditor(false)}
-                    className="text-sm text-slate-500 hover:text-slate-700"
-                  >
-                    Cancel
-                  </button>
-                </div>
-              )}
-
-              {cartDiscount && (
-                <div className="mb-1 flex justify-between text-base text-slate-500">
-                  <span>Subtotal</span>
-                  <span>{formatCurrency(cartSubtotal)}</span>
-                </div>
-              )}
-
-              <div className="mb-3 flex justify-between text-2xl font-bold">
-                <span>Total</span>
-                <span>{formatCurrency(cartTotal)}</span>
-              </div>
-
-              {checkoutStatus === 'synced' && (
-                <p className="mb-3 flex items-center gap-2 rounded-lg bg-emerald-50 px-3 py-2 text-base font-medium text-emerald-700">
-                  <CheckIcon className="h-5 w-5" />
-                  Order synced to Shopify
-                </p>
-              )}
-
-              {checkoutStatus === 'queued-offline' && (
-                <p className="mb-3 rounded-lg bg-amber-50 px-3 py-2 text-base font-medium text-amber-700">
-                  Saved Offline — Will Sync
-                </p>
-              )}
-
-              {checkoutStatus === 'error' && (
-                <p className="mb-3 rounded-lg bg-rose-50 px-3 py-2 text-base font-medium text-rose-700">
-                  {checkoutError ?? 'Checkout failed'}
-                </p>
-              )}
-
-              <button
-                type="button"
-                disabled={cartCount === 0 || checkoutStatus === 'submitting'}
-                onClick={() => setCheckoutModalOpen(true)}
-                className="h-16 w-full rounded-lg bg-rose-600 px-6 text-xl font-bold text-white transition active:scale-95 disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                Checkout
-              </button>
-            </div>
+          {/* Right zone: always-visible checkout control panel (~35% on lg:+) */}
+          <aside className="flex w-full shrink-0 flex-col border-t border-slate-200 lg:w-[35%] lg:border-l lg:border-t-0">
+            <PosCheckoutPanel requestManagerPin={requestManagerPin} />
           </aside>
         </main>
       ) : activeView === 'orders' ? (
@@ -680,20 +543,8 @@ export default function App() {
       ) : (
         <main className="flex-1 overflow-y-auto p-6">
           <h2 className="mb-4 text-lg font-semibold text-slate-700">Admin</h2>
-          <AdminScreen requestManagerPin={requestManagerPin} />
+          <AdminScreen requestManagerPin={requestManagerPin} initialTab={adminInitialTab} />
         </main>
-      )}
-
-      {/* Barcode scan toast */}
-      {scanToast && (
-        <div
-          role="status"
-          className={`fixed bottom-6 left-1/2 z-50 -translate-x-1/2 rounded-lg px-4 py-2 text-sm font-medium text-white shadow-lg ${
-            scanToast.kind === 'success' ? 'bg-emerald-600' : 'bg-rose-600'
-          }`}
-        >
-          {scanToast.message}
-        </div>
       )}
 
       {/* Variant picker modal */}
@@ -703,11 +554,6 @@ export default function App() {
           onSelectVariant={handleSelectVariant}
           onClose={() => setSelectedProduct(null)}
         />
-      )}
-
-      {/* Checkout modal */}
-      {checkoutModalOpen && (
-        <CheckoutModal onClose={() => setCheckoutModalOpen(false)} />
       )}
 
       {/* Manager PIN gate for discounts/price overrides/voids */}
@@ -722,11 +568,20 @@ export default function App() {
         />
       )}
 
-      {/* Auto-update toast */}
+      {/*
+        Toast producers (phase-84) — each decides its own content off its
+        own trigger (IPC stream or cartStore) and renders nothing itself;
+        ToastStack is the only thing that actually draws a toast, in one
+        unified top-center column.
+      */}
       <UpdateToast />
-
-      {/* Connectivity change toasts */}
       <ConnectivityToast />
+      <FiscalNotice />
+      <SaleCompleteToast />
+      <ToastStack />
+
+      {/* On-screen keyboard (phase-86) — opened by any field that calls keyboardStore's open() */}
+      <VirtualKeyboardModal />
     </div>
   )
 }

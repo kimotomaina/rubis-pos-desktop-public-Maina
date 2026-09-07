@@ -27,6 +27,14 @@ interface CheckoutModalProps {
  * M-Pesa/Card show a reference-number field instead. "Complete Sale"
  * stays disabled until {@link canCompleteSale} is satisfied.
  *
+ * Laid out as a fixed three-region column (`max-h-[90vh] overflow-hidden`
+ * on the outer panel) so a tall cash numpad can never push the window
+ * itself into scrolling: a `shrink-0` header, a scrollable body for
+ * the KRA PIN/payment-method selection, and a `shrink-0` footer
+ * holding the running total plus (for cash) the numpad side-by-side
+ * with it on `md:`+ screens, stacked below it on narrower ones, and
+ * the "Complete Sale" button.
+ *
  * @param {CheckoutModalProps} props
  * @returns {JSX.Element}
  */
@@ -41,10 +49,12 @@ export default function CheckoutModal({ onClose }: CheckoutModalProps) {
   const [method, setMethod] = useState<PaymentMethod | null>(null)
   const [tenderedInput, setTenderedInput] = useState('')
   const [referenceNumber, setReferenceNumber] = useState('')
+  const [companyName, setCompanyName] = useState('')
   const [customerPin, setCustomerPin] = useState('')
 
   const tenderedAmount = parseFloat(tenderedInput) || 0
   const changeDue = calculateChange(cartTotal, tenderedAmount)
+  const trimmedCompanyName = companyName.trim()
   const trimmedCustomerPin = customerPin.trim()
   const customerPinError =
     trimmedCustomerPin.length > 0 && !isValidKraPinFormat(trimmedCustomerPin)
@@ -75,7 +85,8 @@ export default function CheckoutModal({ onClose }: CheckoutModalProps) {
       tenderedAmount: method === 'cash' ? tenderedAmount : cartTotal,
       changeDue: method === 'cash' ? changeDue : 0,
       referenceNumber: method === 'cash' ? undefined : referenceNumber.trim(),
-      customerPin: trimmedCustomerPin || undefined
+      customerPin: trimmedCustomerPin || undefined,
+      companyName: trimmedCompanyName || undefined
     })
   }
 
@@ -94,7 +105,8 @@ export default function CheckoutModal({ onClose }: CheckoutModalProps) {
       tenderedAmount: cartTotal,
       changeDue: 0,
       referenceNumber: mpesaReference,
-      customerPin: trimmedCustomerPin || undefined
+      customerPin: trimmedCustomerPin || undefined,
+      companyName: trimmedCompanyName || undefined
     })
   }
 
@@ -130,10 +142,10 @@ export default function CheckoutModal({ onClose }: CheckoutModalProps) {
       onClick={onClose}
     >
       <div
-        className="flex max-h-[90vh] min-h-[75vh] w-full min-w-[75vw] max-w-3xl flex-col rounded-2xl bg-white shadow-xl"
+        className="flex w-full max-w-4xl max-h-[90vh] flex-col overflow-hidden rounded-xl bg-white shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="flex shrink-0 items-center justify-between border-b border-slate-200 p-4">
+        <div className="flex shrink-0 items-center justify-between border-b border-slate-200 px-6 py-4">
           <h3 className="text-xl font-semibold text-slate-900">Checkout</h3>
           <button
             type="button"
@@ -145,15 +157,21 @@ export default function CheckoutModal({ onClose }: CheckoutModalProps) {
           </button>
         </div>
 
-        <div className="flex-1 overflow-y-auto p-4">
-          <div className="mb-4 flex justify-between text-3xl font-bold text-slate-900">
-            <span>Total</span>
-            <span>{formatCurrency(cartTotal)}</span>
+        <div className="flex-1 overflow-y-auto p-6">
+          <div className="mb-4">
+            <label className="mb-1 block text-base font-medium text-slate-600">Company Name</label>
+            <input
+              type="text"
+              value={companyName}
+              onChange={(e) => setCompanyName(e.target.value)}
+              placeholder="Enter Company Name (Optional)"
+              className="h-12 w-full rounded-lg border border-slate-300 px-4 text-lg focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-100"
+            />
           </div>
 
           <div className="mb-4">
             <label className="mb-1 block text-base font-medium text-slate-600">
-              Customer KRA PIN 
+              Customer KRA PIN
             </label>
             <input
               type="text"
@@ -184,37 +202,13 @@ export default function CheckoutModal({ onClose }: CheckoutModalProps) {
           )}
 
           {method === 'cash' && (
-            <div>
-              <button
-                type="button"
-                onClick={() => setMethod(null)}
-                className="mb-3 text-base text-slate-500 hover:text-slate-700"
-              >
-                ← Change payment method
-              </button>
-
-              <p className="mb-1 text-base font-medium text-slate-600">
-                Amount Tendered
-              </p>
-              <p className="mb-3 rounded-lg bg-slate-100 px-4 py-3 text-right text-3xl font-mono">
-                Ksh {tenderedInput || '0'}
-              </p>
-
-              <div className="mb-3 flex justify-between text-base font-medium">
-                <span className="text-slate-600">Change Due</span>
-                <span className={changeDue > 0 ? 'text-emerald-600' : 'text-slate-400'}>
-                  {formatCurrency(changeDue)}
-                </span>
-              </div>
-
-              {tenderedAmount > 0 && tenderedAmount < cartTotal && (
-                <p className="mb-3 text-base font-medium text-rose-600">
-                  Insufficient amount
-                </p>
-              )}
-
-              <VirtualNumpad value={tenderedInput} onChange={setTenderedInput} />
-            </div>
+            <button
+              type="button"
+              onClick={() => setMethod(null)}
+              className="text-base text-slate-500 hover:text-slate-700"
+            >
+              ← Change payment method
+            </button>
           )}
 
           {method === 'mpesa' && (
@@ -247,6 +241,37 @@ export default function CheckoutModal({ onClose }: CheckoutModalProps) {
               />
             </div>
           )}
+        </div>
+
+        <div className="shrink-0 border-t border-slate-200 bg-slate-50 px-6 py-4">
+          <div className={method === 'cash' ? 'grid grid-cols-1 gap-4 md:grid-cols-2' : ''}>
+            <div>
+              <div className="flex justify-between text-2xl font-bold text-slate-900">
+                <span>Total</span>
+                <span>{formatCurrency(cartTotal)}</span>
+              </div>
+
+              {method === 'cash' && (
+                <div className="mt-3">
+                  <p className="mb-1 text-base font-medium text-slate-600">Amount Tendered</p>
+                  <p className="mb-2 rounded-lg bg-slate-100 px-4 py-2 text-right text-2xl font-mono">
+                    Ksh {tenderedInput || '0'}
+                  </p>
+                  <div className="flex justify-between text-base font-medium">
+                    <span className="text-slate-600">Change Due</span>
+                    <span className={changeDue > 0 ? 'text-emerald-600' : 'text-slate-400'}>
+                      {formatCurrency(changeDue)}
+                    </span>
+                  </div>
+                  {tenderedAmount > 0 && tenderedAmount < cartTotal && (
+                    <p className="mt-1 text-base font-medium text-rose-600">Insufficient amount</p>
+                  )}
+                </div>
+              )}
+            </div>
+
+            {method === 'cash' && <VirtualNumpad value={tenderedInput} onChange={setTenderedInput} />}
+          </div>
 
           {checkoutStatus === 'error' && (
             <p className="mt-3 rounded-lg bg-rose-50 px-3 py-2 text-base font-medium text-rose-700">

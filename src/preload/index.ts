@@ -5,22 +5,28 @@ import type { ProductSummary } from '../renderer/src/types/shopify.js'
 import type {
   CheckoutReceipt,
   CheckoutRequest,
+  FiscalResendResult,
   OrderRow,
   StaffSummary,
   StaffRole,
   ShiftRow,
   IntegrationProviderName,
   PrinterConfig,
-  PrinterType
+  PrinterType,
+  MpesaTransactionRow,
+  AppConfigCategory,
+  NeedsAttentionRow
 } from '../main/services/database.js'
 import type { ReceiptPrintResult } from '../main/services/printer.js'
 import type { ZReport, DailySummary } from '../main/services/reports.js'
 import type { UpdateStatus } from '../main/services/updater.js'
+import type { FiscalConnectionTestResult } from '../main/services/integrations/fiscal-connection-test.js'
 import type {
   StkPushRequest,
   StkPushResult,
   ManualCodeVerification,
-  ManualCodeVerificationResult
+  ManualCodeVerificationResult,
+  StkPushStatusResult
 } from '../main/services/integrations/mpesa.js'
 
 /** Status payload broadcast over the `network:status` channel. */
@@ -185,6 +191,50 @@ const api = {
     localId: number
   ): Promise<ServiceResult<{ queueId: number }>> =>
     ipcRenderer.invoke('orders:retrySync', localId),
+
+  /**
+   * Corrects (or, passing `null`, removes) the buyer PIN on a sale
+   * flagged `needs_fixing` for a wrong PIN, then resends its
+   * fiscalization through the same guarded retry/resend path.
+   *
+   * @param {number} localId
+   * @param {string | null} buyerPin
+   * @returns {Promise<ServiceResult<FiscalResendResult>>}
+   */
+  correctPinAndResend: (
+    localId: number,
+    buyerPin: string | null
+  ): Promise<ServiceResult<FiscalResendResult>> =>
+    ipcRenderer.invoke('fiscal:correct-pin-and-resend', { localId, buyerPin }),
+
+  /**
+   * Resends a sale's fiscalization as-is (no PIN change) — the
+   * back-office list's plain "Resend" action (phase-88, Step 4). Same
+   * guarded retry/resend path as `correctPinAndResend`.
+   *
+   * @param {number} localId
+   * @returns {Promise<ServiceResult<FiscalResendResult>>}
+   */
+  resendFiscalization: (localId: number): Promise<ServiceResult<FiscalResendResult>> =>
+    ipcRenderer.invoke('fiscal:resend', { localId }),
+
+  /**
+   * The back-office "needs attention" list — every `needs_fixing` sale
+   * plus every stuck-`waiting` sale (phase-88, Step 4).
+   *
+   * @returns {Promise<ServiceResult<NeedsAttentionRow[]>>}
+   */
+  getSalesNeedingAttention: (): Promise<ServiceResult<NeedsAttentionRow[]>> =>
+    ipcRenderer.invoke('fiscal:needs-attention'),
+
+  /**
+   * The Rule-3 safety-net count: every completed-but-unfiled sale,
+   * regardless of the stuck threshold (phase-88, Step 4).
+   *
+   * @returns {Promise<ServiceResult<number>>}
+   */
+  getUnfiledSalesCount: (): Promise<ServiceResult<number>> =>
+    ipcRenderer.invoke('fiscal:unfiled-count'),
 
   /**
    * Prints (or, in mock mode, logs) a receipt for a local order.
@@ -387,6 +437,124 @@ const api = {
     request: ManualCodeVerification
   ): Promise<ServiceResult<ManualCodeVerificationResult>> =>
     ipcRenderer.invoke('integrations:mpesa-verify-code', request),
+
+  /**
+   * Logs a newly initiated STK Push for the M-Pesa Logs screen.
+   *
+   * @param {object} request
+   * @param {number} [request.orderLocalId]
+   * @param {string} request.checkoutRequestId
+   * @param {string} request.merchantRequestId
+   * @param {string} request.phoneNumber
+   * @param {number} request.amount
+   * @param {'pending' | 'success' | 'failed'} [request.status] — defaults to `'pending'`
+   * @returns {Promise<ServiceResult<{ id: number }>>}
+   */
+  logMpesaTransaction: (request: {
+    orderLocalId?: number
+    checkoutRequestId: string
+    merchantRequestId: string
+    phoneNumber: string
+    amount: number
+    status?: 'pending' | 'success' | 'failed'
+  }): Promise<ServiceResult<{ id: number }>> =>
+    ipcRenderer.invoke('mpesa:log-transaction', request),
+
+  /**
+   * Fetches recent M-Pesa transactions for the M-Pesa Logs screen.
+   *
+   * @param {number} [limit=50]
+   * @returns {Promise<ServiceResult<MpesaTransactionRow[]>>}
+   */
+  getMpesaTransactions: (limit?: number): Promise<ServiceResult<MpesaTransactionRow[]>> =>
+    ipcRenderer.invoke('mpesa:get-logs', limit),
+
+  /**
+   * Re-checks a pending STK Push's outcome and persists the result —
+   * the M-Pesa Logs screen's "Check Status" action.
+   *
+   * @param {string} checkoutRequestId
+   * @returns {Promise<ServiceResult<StkPushStatusResult>>}
+   */
+  queryMpesaStatus: (checkoutRequestId: string): Promise<ServiceResult<StkPushStatusResult>> =>
+    ipcRenderer.invoke('mpesa:query-status', checkoutRequestId),
+
+  /**
+   * Reports whether the M-Pesa consumer secret / passkey are
+   * currently stored in the credential vault — never the values.
+   *
+   * @returns {Promise<ServiceResult<{ consumerSecretConfigured: boolean; passkeyConfigured: boolean }>>}
+   */
+  getMpesaCredentialStatus: (): Promise<
+    ServiceResult<{ consumerSecretConfigured: boolean; passkeyConfigured: boolean }>
+  > => ipcRenderer.invoke('secrets:get-mpesa-status'),
+
+  /**
+   * Saves the M-Pesa consumer secret and/or passkey to the credential
+   * vault (Admin screen). Requires a re-verified admin Manager PIN.
+   * Takes effect on next restart.
+   *
+   * @param {object} credentials
+   * @param {string} [credentials.consumerSecret]
+   * @param {string} [credentials.passkey]
+   * @param {number} managerId
+   * @param {string} managerPin
+   * @returns {Promise<ServiceResult<void>>}
+   */
+  setMpesaCredentials: (
+    credentials: { consumerSecret?: string; passkey?: string },
+    managerId: number,
+    managerPin: string
+  ): Promise<ServiceResult<void>> =>
+    ipcRenderer.invoke('secrets:set-mpesa-credentials', { ...credentials, managerId, managerPin }),
+
+  /**
+   * Verifies the currently configured Daraja credentials via an
+   * OAuth2 token exchange only — no STK Push, no charge.
+   *
+   * @returns {Promise<ServiceResult<void>>}
+   */
+  testMpesaConnection: (): Promise<ServiceResult<void>> => ipcRenderer.invoke('config:test-mpesa'),
+
+  /**
+   * Reads every `app_configurations` value, optionally scoped to one
+   * category, for the Admin screen.
+   *
+   * @param {AppConfigCategory} [category]
+   * @returns {Promise<ServiceResult<Record<string, string>>>}
+   */
+  getAllConfigs: (category?: AppConfigCategory): Promise<ServiceResult<Record<string, string>>> =>
+    ipcRenderer.invoke('config:get-all', category),
+
+  /**
+   * Writes one `app_configurations` value (Admin screen). Requires a
+   * re-verified admin Manager PIN.
+   *
+   * @param {string} key
+   * @param {string} value
+   * @param {object} [options]
+   * @param {boolean} [options.requiresRestart]
+   * @param {AppConfigCategory} [options.category]
+   * @param {number} managerId
+   * @param {string} managerPin
+   * @returns {Promise<ServiceResult<void>>}
+   */
+  setConfig: (
+    key: string,
+    value: string,
+    options: { requiresRestart?: boolean; category?: AppConfigCategory } | undefined,
+    managerId: number,
+    managerPin: string
+  ): Promise<ServiceResult<void>> =>
+    ipcRenderer.invoke('config:set', { key, value, ...options, managerId, managerPin }),
+
+  /**
+   * Relaunches the app — used after saving a `requiresRestart`
+   * configuration.
+   *
+   * @returns {Promise<ServiceResult<void>>}
+   */
+  restartApp: (): Promise<ServiceResult<void>> => ipcRenderer.invoke('app:restart'),
 
   /**
    * Reads a provider's stored integration config (Admin screen).
@@ -622,7 +790,93 @@ const api = {
    * @returns {Promise<ServiceResult<void>>}
    */
   clearConfig: (managerId: number, managerPin: string): Promise<ServiceResult<void>> =>
-    ipcRenderer.invoke('config:clear', { managerId, managerPin })
+    ipcRenderer.invoke('config:clear', { managerId, managerPin }),
+
+  /**
+   * Reports whether this till may proceed past the mandatory eTIMS
+   * setup gate — always complete in mock mode, otherwise requires the
+   * four Real-eTIMS connection fields to already be saved.
+   *
+   * @returns {Promise<ServiceResult<{ isComplete: boolean; missingFields: string[] }>>}
+   */
+  checkEtimsCompletion: (): Promise<
+    ServiceResult<{ isComplete: boolean; missingFields: string[] }>
+  > => ipcRenderer.invoke('setup:check-etims-completion'),
+
+  /**
+   * Saves the four required Real-eTIMS connection fields from the
+   * setup gate. No manager PIN required.
+   *
+   * @param {object} config
+   * @param {string} config.baseUrl
+   * @param {string} config.deviceIp
+   * @param {string} config.devicePort
+   * @param {string} config.password
+   * @returns {Promise<ServiceResult<void>>}
+   */
+  saveEtimsConfig: (config: {
+    baseUrl: string
+    deviceIp: string
+    devicePort: string
+    password: string
+  }): Promise<ServiceResult<void>> => ipcRenderer.invoke('setup:save-etims-config', config),
+
+  /**
+   * Saves the fiscal device password to the credential vault. Requires a
+   * re-verified admin Manager PIN. Applies to the next sale.
+   *
+   * @param {string} password
+   * @param {number} managerId
+   * @param {string} managerPin
+   * @returns {Promise<ServiceResult<void>>}
+   */
+  setEtimsPassword: (
+    password: string,
+    managerId: number,
+    managerPin: string
+  ): Promise<ServiceResult<void>> =>
+    ipcRenderer.invoke('secrets:set-etims-password', { password, managerId, managerPin }),
+
+  /**
+   * Reports whether a fiscal device password is stored, never the value.
+   *
+   * @returns {Promise<ServiceResult<{ passwordConfigured: boolean }>>}
+   */
+  getEtimsSecretStatus: (): Promise<ServiceResult<{ passwordConfigured: boolean }>> =>
+    ipcRenderer.invoke('secrets:get-etims-status'),
+
+  /**
+   * Walks the three hops to the fiscal device and reports which one
+   * broke, in plain words.
+   *
+   * @returns {Promise<ServiceResult<FiscalConnectionTestResult>>}
+   */
+  testEtimsConnection: (): Promise<ServiceResult<FiscalConnectionTestResult>> =>
+    ipcRenderer.invoke('config:test-etims'),
+
+  /**
+   * Reads the store name and KRA PIN printed on every receipt.
+   *
+   * @returns {Promise<ServiceResult<{ storeName: string; storeKraPin: string }>>}
+   */
+  getStoreIdentity: (): Promise<ServiceResult<{ storeName: string; storeKraPin: string }>> =>
+    ipcRenderer.invoke('store:get-identity'),
+
+  /**
+   * Saves the store name and KRA PIN printed on every receipt. Requires
+   * a re-verified admin Manager PIN.
+   *
+   * @param {object} identity
+   * @param {number} managerId
+   * @param {string} managerPin
+   * @returns {Promise<ServiceResult<void>>}
+   */
+  setStoreIdentity: (
+    identity: { storeName: string; storeKraPin: string },
+    managerId: number,
+    managerPin: string
+  ): Promise<ServiceResult<void>> =>
+    ipcRenderer.invoke('store:set-identity', { ...identity, managerId, managerPin })
 }
 
 if (process.contextIsolated) {

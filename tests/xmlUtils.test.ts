@@ -1,7 +1,9 @@
 /**
- * XML serialization/parsing utility tests, covering the object/array/
- * escaping rules `serializeToXml` follows and the casing/nesting
- * variants `parseXmlResponse` and its extraction helpers tolerate.
+ * XML serialization/parsing utility tests, covering the
+ * `<Command Name="…"><Args><Arg Name Value/></Args></Command>` envelope
+ * `serializeToXml` emits (the shape the vendor's own
+ * `fillXmlWithParamVals` builds) and the response variants
+ * `parseXmlResponse` and its extraction helpers tolerate.
  */
 
 import { describe, it, expect } from 'vitest'
@@ -14,54 +16,67 @@ import {
 } from '../src/main/services/integrations/xml-utils.js'
 
 describe('serializeToXml', () => {
-  it('wraps a flat object in a <Request Name="commandName"> envelope', () => {
-    const xml = serializeToXml({ taxpayerPin: 'P051234567Z', currency: 'KES' }, 'OpenInvoice')
+  it('emits a self-closing <Command Name> with no <Args> for a no-argument command', () => {
+    expect(serializeToXml({}, 'ReadStatus')).toBe('<Command Name="ReadStatus"/>')
+    expect(serializeToXml({}, 'CloseReceipt')).toBe('<Command Name="CloseReceipt"/>')
+  })
+
+  it('wraps arguments in <Args> as <Arg Name Value/> elements, in insertion order', () => {
+    const xml = serializeToXml(
+      { CompanyName: 'Acme Ltd', ClientPINnum: 'P051234567Z' },
+      'OpenInvoiceWithFreeCustomerData'
+    )
 
     expect(xml).toBe(
-      '<Request Name="OpenInvoice"><taxpayerPin>P051234567Z</taxpayerPin><currency>KES</currency></Request>'
+      '<Command Name="OpenInvoiceWithFreeCustomerData"><Args>' +
+        '<Arg Name="CompanyName" Value="Acme Ltd"/>' +
+        '<Arg Name="ClientPINnum" Value="P051234567Z"/>' +
+        '</Args></Command>'
     )
   })
 
-  it('serializes nested objects as nested elements inside the envelope', () => {
-    const xml = serializeToXml({ data: { item: 'value' } }, 'OpenInvoice')
-
-    expect(xml).toBe('<Request Name="OpenInvoice"><data><item>value</item></data></Request>')
-  })
-
-  it('serializes arrays as one repeated singular element per entry', () => {
-    const xml = serializeToXml({ items: [{ name: 'A' }, { name: 'B' }] }, 'OpenInvoice')
-
-    expect(xml).toBe(
-      '<Request Name="OpenInvoice"><items><item><name>A</name></item><item><name>B</name></item></items></Request>'
+  it('keeps an <Arg> with an empty value for a deliberately blank argument', () => {
+    expect(serializeToXml({ HSCode: '' }, 'SellPLUfromExtDB')).toBe(
+      '<Command Name="SellPLUfromExtDB"><Args><Arg Name="HSCode" Value=""/></Args></Command>'
     )
   })
 
-  it('serializes numbers and booleans as text content', () => {
-    const xml = serializeToXml({ quantity: 2, unitPrice: 12.5, taxable: true }, 'SellPLU')
-
-    expect(xml).toBe(
-      '<Request Name="SellPLU"><quantity>2</quantity><unitPrice>12.5</unitPrice><taxable>true</taxable></Request>'
+  it('omits an argument entirely when its value is undefined', () => {
+    expect(serializeToXml({ Quantity: '2', DiscAddP: undefined }, 'SellPLUfromExtDB')).toBe(
+      '<Command Name="SellPLUfromExtDB"><Args><Arg Name="Quantity" Value="2"/></Args></Command>'
     )
   })
 
-  it('omits properties whose value is undefined', () => {
-    const xml = serializeToXml({ a: 'x', b: undefined }, 'CloseReceipt')
-
-    expect(xml).toBe('<Request Name="CloseReceipt"><a>x</a></Request>')
+  it('drops <Args> altogether when every argument was undefined', () => {
+    expect(serializeToXml({ DiscAddP: undefined }, 'ReadDateTime')).toBe(
+      '<Command Name="ReadDateTime"/>'
+    )
   })
 
-  it('escapes XML special characters in text content', () => {
-    const xml = serializeToXml({ description: `Fish & Chips <Large> "Combo" 'Deal'` }, 'SellPLU')
+  it('serializes numbers as attribute values', () => {
+    expect(serializeToXml({ Price: 12.5, Quantity: 2 }, 'SellPLUfromExtDB')).toBe(
+      '<Command Name="SellPLUfromExtDB"><Args>' +
+        '<Arg Name="Price" Value="12.5"/><Arg Name="Quantity" Value="2"/>' +
+        '</Args></Command>'
+    )
+  })
+
+  it('escapes XML special characters in argument values', () => {
+    const xml = serializeToXml({ NamePLU: `Fish & Chips <Large> "Combo" 'Deal'` }, 'SellPLUfromExtDB')
 
     expect(xml).toBe(
-      '<Request Name="SellPLU"><description>Fish &amp; Chips &lt;Large&gt; &quot;Combo&quot; &apos;Deal&apos;</description></Request>'
+      '<Command Name="SellPLUfromExtDB"><Args>' +
+        '<Arg Name="NamePLU" Value="Fish &amp; Chips &lt;Large&gt; &quot;Combo&quot; &apos;Deal&apos;"/>' +
+        '</Args></Command>'
     )
   })
 
   it('escapes special characters in the command name itself', () => {
-    const xml = serializeToXml({}, 'Open&Close')
+    expect(serializeToXml({}, 'Open&Close')).toBe('<Command Name="Open&amp;Close"/>')
+  })
 
-    expect(xml).toBe('<Request Name="Open&amp;Close"></Request>')
+  it('emits no XML declaration, matching the vendor client omit-xml-declaration setting', () => {
+    expect(serializeToXml({ A: 'b' }, 'ReadStatus').startsWith('<Command')).toBe(true)
   })
 })
 

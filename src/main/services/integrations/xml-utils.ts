@@ -1,9 +1,18 @@
 /**
- * Lightweight XML serialization/parsing for the ZFP Lab Server fiscal
- * device SDK, which requires request/response bodies as XML
- * (`Content-Type: text/xml`) rather than JSON. Custom rather than a
- * dependency (e.g. `xml2js`) since the payload shapes exchanged with
- * the device are simple, flat-ish, and fully known ahead of time.
+ * Lightweight XML serialization/parsing for the local ZFPLabServer,
+ * which speaks XML bodies over a `Content-Type: text/plain` header —
+ * the literal, if surprising, value the vendor client sends
+ * rather than JSON. Custom rather than a dependency (e.g. `xml2js`)
+ * since the command envelope is a single fixed shape, confirmed by
+ * decompiling the vendor's `FPcore.jar`:
+ *
+ *   - no arguments:  `<Command Name="ReadStatus"/>`
+ *   - with args:     `<Command Name="X"><Args><Arg Name="k" Value="v"/>…</Args></Command>`
+ *
+ * The `<Args>` element is emitted only when there is at least one
+ * argument, and argument values are XML *attribute* values (escaped
+ * accordingly). The vendor client sets `omit-xml-declaration`, so no
+ * `<?xml …?>` prolog is emitted either.
  */
 
 /** Characters requiring escaping inside XML text content. */
@@ -27,87 +36,99 @@ export function escapeXml(value: string): string {
 }
 
 /**
- * Serializes a JavaScript value to an XML fragment: objects become
- * nested elements keyed by property name, arrays repeat the singular
- * form of their parent tag (`items` → `<item>` per entry), and
- * primitives become escaped text content. Used by
- * {@link serializeToXml} for the payload's inner fields.
+ * Serializes one command argument to an `<Arg Name="…" Value="…"/>`
+ * element, matching what the vendor's `fillXmlWithParamVals` builds
+ * (`createElement("Arg")` + `setAttribute("Name"/"Value")`).
  *
+ * @param {string} name
  * @param {unknown} value
- * @param {string} tagName
  * @returns {string}
  */
-function serializeValue(value: unknown, tagName: string): string {
-  if (Array.isArray(value)) {
-    const itemTag = singularize(tagName)
-    return `<${tagName}>${value.map((item) => serializeValue(item, itemTag)).join('')}</${tagName}>`
-  }
-  if (value && typeof value === 'object') {
-    return `<${tagName}>${serializeFields(value as Record<string, unknown>)}</${tagName}>`
-  }
-  return `<${tagName}>${escapeXml(String(value))}</${tagName}>`
-}
-
-/** Serializes each own property of `obj` as a sibling XML element. */
-function serializeFields(obj: Record<string, unknown>): string {
-  return Object.entries(obj)
-    .filter(([, value]) => value !== undefined)
-    .map(([key, value]) => serializeValue(value, key))
-    .join('')
+function serializeArg(name: string, value: unknown): string {
+  return `<Arg Name="${escapeXml(name)}" Value="${escapeXml(String(value))}"/>`
 }
 
 /**
- * Derives the per-item tag name for an array property — strips a
- * trailing `s` (`items` → `item`) or falls back to `item` when the key
- * gives no better hint.
+ * Serializes `args` into the ZFPLabServer's `<Command Name="…">`
+ * envelope. Arguments are emitted in insertion order inside a single
+ * `<Args>` element; a command with no arguments collapses to a
+ * self-closing `<Command Name="…"/>` with no `<Args>` child at all,
+ * exactly as the vendor client does (it only creates `Args` when its
+ * parameter map is non-empty).
  *
- * @param {string} pluralTag
- * @returns {string}
- */
-function singularize(pluralTag: string): string {
-  if (pluralTag.endsWith('s') && pluralTag.length > 1) {
-    return pluralTag.slice(0, -1)
-  }
-  return 'item'
-}
-
-/**
- * Serializes `payload` to an XML document string wrapped in a
- * `<Request Name="commandName">` envelope. The Tremol ZFP server's XML
- * schema is case-sensitive on this attribute: neither `name` nor
- * `command` (both tried against a live device) satisfied it, only the
- * capitalized `Name`.
+ * `undefined` argument values are dropped — that is how an optional
+ * argument (e.g. `DiscAddP`) is omitted. A deliberately blank argument
+ * is passed as `''` and keeps its `<Arg>` element with an empty value.
  *
  * @example
- * serializeToXml({ taxpayerPin: 'P051234567Z', currency: 'KES' }, 'OpenInvoice')
- * // '<Request Name="OpenInvoice"><taxpayerPin>P051234567Z</taxpayerPin><currency>KES</currency></Request>'
+ * serializeToXml({}, 'ReadStatus')
+ * // '<Command Name="ReadStatus"/>'
+ * serializeToXml({ CompanyName: 'Acme', ClientPINnum: '' }, 'OpenInvoiceWithFreeCustomerData')
+ * // '<Command Name="OpenInvoiceWithFreeCustomerData"><Args><Arg Name="CompanyName" Value="Acme"/><Arg Name="ClientPINnum" Value=""/></Args></Command>'
  *
- * @param {object} payload
+ * @param {object} args
  * @param {string} commandName
  * @returns {string}
  */
-export function serializeToXml(payload: object, commandName: string): string {
-  return `<Request Name="${escapeXml(commandName)}">${serializeFields(payload as Record<string, unknown>)}</Request>`
+export function serializeToXml(args: object, commandName: string): string {
+  const entries = Object.entries(args as Record<string, unknown>).filter(
+    ([, value]) => value !== undefined
+  )
+  const name = escapeXml(commandName)
+  if (entries.length === 0) {
+    return `<Command Name="${name}"/>`
+  }
+  const argXml = entries.map(([key, value]) => serializeArg(key, value)).join('')
+  return `<Command Name="${name}"><Args>${argXml}</Args></Command>`
 }
 
-/** Element/attribute names checked, in order, when extracting the fiscal invoice number from a parsed response. */
-const INVOICE_NUMBER_KEYS = ['invoiceNumber', 'InvoiceNumber', 'receiptNumber', 'ReceiptNumber']
+/**
+ * Element names checked, in order, when extracting the fiscal invoice
+ * number from a parsed response. `InvoiceNum` is the name the vendor
+ * `CloseReceipt` definition declares (`<Res Name="InvoiceNum" …>`); the
+ * rest are legacy casings kept so an already-stored response shape
+ * still reads back.
+ */
+const INVOICE_NUMBER_KEYS = [
+  'InvoiceNum',
+  'invoiceNum',
+  'invoiceNumber',
+  'InvoiceNumber',
+  'receiptNumber',
+  'ReceiptNumber'
+]
 
-/** Element/attribute names checked, in order, when extracting the fiscal QR code from a parsed response. */
-const QR_CODE_KEYS = ['qrCode', 'QrCode', 'qr_code']
+/** Element names checked, in order, when extracting the fiscal QR code. `QRcode` is the vendor's declared name. */
+const QR_CODE_KEYS = ['QRcode', 'QRCode', 'qrCode', 'QrCode', 'qr_code']
 
 /**
- * Parses an XML response from the ZFP Lab Server into a flat
- * `Record<string, string>` of every top-level (and one-level-nested)
- * element's text content, keyed by tag name — enough for
- * `real-etims-provider.ts` to look up `invoiceNumber`/`qrCode` by any
- * of their observed casings without a full DOM parser.
+ * Parses a ZFPLabServer XML response into a flat
+ * `Record<string, string>` — enough for `real-etims-provider.ts` to
+ * look up the confirmed response field names without a full DOM parser.
+ * Three things are pulled out:
  *
- * A `<Res Code="...">` error response (e.g.
- * `<Res Code="63"><Err><Message>...</Message></Err></Res>`) is
- * flattened the same way, additionally exposing the root's `Code`
- * attribute as `code` and the nested `<Message>` element under its
- * own literal tag name.
+ *   1. the root `<Res Code="…">` attribute, exposed as `code` (`'0'` is
+ *      success; anything else is a server- or device-level error);
+ *   2. the `Source` attribute of an `<Err …>` element, exposed as
+ *      `errSource` — the server tags its own transport/session failures
+ *      as `Source="Server"`, distinguishing them from device business
+ *      errors;
+ *   3. on a Code-40 ("command error") response, the `STE1`/`STE2`/
+ *      `FPLibErrorCode` attributes of the same `<Err …>` element, exposed
+ *      under those same names as **raw hex strings** (e.g. `"3a"`) — the
+ *      vendor's own client (`fp_core.js:71-75`) only ever reads these
+ *      three when `Res Code === 40`, then `parseInt(x, 16)`s them; this
+ *      parser does the same raw extraction (no radix conversion — that's
+ *      the caller's job, see `real-etims-provider.ts`'s `checkDeviceResponse`)
+ *      so the STE1 (device/FD condition) and STE2 (command/business
+ *      condition) bytes documented in protocol PDF §1.2.1's two-column
+ *      "Table Errors" are actually readable, not silently dropped;
+ *   4. every leaf element's text content keyed by tag name (e.g.
+ *      `<Message>`, `<clientID>`), *and* every `Name="…" Value="…"`
+ *      attribute pair keyed by its `Name` — the vendor's own result
+ *      reader (`CreateRes`) walks `<Res Name="X" Value="Y"/>` children,
+ *      so both shapes are accepted rather than guessing which one a
+ *      given command returns.
  *
  * @param {string} xml
  * @returns {Record<string, string>}
@@ -118,6 +139,33 @@ export function parseXmlResponse(xml: string): Record<string, string> {
   const rootCodeMatch = xml.match(/<Res\s+Code="([^"]*)"/)
   if (rootCodeMatch) {
     result.code = rootCodeMatch[1]
+  }
+
+  const errSourceMatch = xml.match(/<Err\b[^>]*\bSource="([^"]*)"/)
+  if (errSourceMatch) {
+    result.errSource = errSourceMatch[1]
+  }
+
+  const ste1Match = xml.match(/<Err\b[^>]*\bSTE1="([^"]*)"/)
+  if (ste1Match) {
+    result.STE1 = ste1Match[1]
+  }
+
+  const ste2Match = xml.match(/<Err\b[^>]*\bSTE2="([^"]*)"/)
+  if (ste2Match) {
+    result.STE2 = ste2Match[1]
+  }
+
+  const fpLibErrorCodeMatch = xml.match(/<Err\b[^>]*\bFPLibErrorCode="([^"]*)"/)
+  if (fpLibErrorCodeMatch) {
+    result.FPLibErrorCode = fpLibErrorCodeMatch[1]
+  }
+
+  const namedValuePattern = /\bName="([^"]*)"\s+Value="([^"]*)"/g
+  let namedMatch: RegExpExecArray | null
+  while ((namedMatch = namedValuePattern.exec(xml)) !== null) {
+    const [, name, value] = namedMatch
+    if (name) result[name] = unescapeXml(value)
   }
 
   const elementPattern = /<([A-Za-z_][\w.-]*)(?:\s+[^>]*)?>([\s\S]*?)<\/\1>/g

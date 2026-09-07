@@ -1,0 +1,11 @@
+<Res Code="0">
+  <Res Name="Power_down_in_opened_fiscal_receipt" Value="0" Type="Status" Byte="0" Bit="1"/>
+  <Res Name="DateTime_not_set" Value="0" Type="Status" Byte="0" Bit="3"/>
+  <Res Name="DateTime_wrong" Value="0" Type="Status" Byte="0" Bit="4"/>
+  <Res Name="RAM_reset" Value="0" Type="Status" Byte="0" Bit="5"/>
+  <Res Name="Hardware_clock_error" Value="0" Type="Status" Byte="0" Bit="6"/>
+  <Res Name="Opened_Fiscal_Receipt" Value="0" Type="Status" Byte="2" Bit="1"/>
+  <Res Name="CU_fiscalized" Value="1" Type="Status" Byte="3" Bit="5"/>
+  <Res Name="CU_produced" Value="1" Type="Status" Byte="3" Bit="6"/>
+  <Res Name="Paired_with_TIMS" Value="1" Type="Status" Byte="4" Bit="0"/>
+</Res>

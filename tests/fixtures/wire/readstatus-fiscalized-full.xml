@@ -1,0 +1,39 @@
+<!--
+  Authored, not captured live — the running device never returned a
+  Code-0 ReadStatus during this project's live sessions (see
+  readstatus-live-captured-code19.xml). All 22 named status bits from
+  PDF §2.2.1 / tremol-contract.json's ReadStatus.response, in the
+  vendor's declared order, each Type="Status" (parsed as boolean via
+  value === "1"). Byte/Bit annotations match the PDF. Values: the three
+  bits that mean "fiscalized and paired with TIMS" are 1
+  (CU_fiscalized, CU_produced, Paired_with_TIMS); every other bit is 0
+  (healthy device, no fault conditions). Used by the Chunk 2 mock
+  engine and by tests asserting the full 22-flag shape — distinct from
+  readstatus-ok-healthy.xml (the manual's partial documented example,
+  kept untouched) and readstatus-live-captured-code19.xml (a real
+  Code-19 capture, not a Code-0 success).
+-->
+<Res Code="0">
+  <Res Name="Power_down_in_opened_fiscal_receipt" Value="0" Type="Status" Byte="0" Bit="1"/>
+  <Res Name="DateTime_not_set" Value="0" Type="Status" Byte="0" Bit="3"/>
+  <Res Name="DateTime_wrong" Value="0" Type="Status" Byte="0" Bit="4"/>
+  <Res Name="RAM_reset" Value="0" Type="Status" Byte="0" Bit="5"/>
+  <Res Name="Hardware_clock_error" Value="0" Type="Status" Byte="0" Bit="6"/>
+  <Res Name="Reports_registers_Overflow" Value="0" Type="Status" Byte="1" Bit="1"/>
+  <Res Name="Opened_Fiscal_Receipt" Value="0" Type="Status" Byte="2" Bit="1"/>
+  <Res Name="Receipt_Invoice_Type" Value="0" Type="Status" Byte="2" Bit="2"/>
+  <Res Name="SD_card_near_full" Value="0" Type="Status" Byte="2" Bit="5"/>
+  <Res Name="SD_card_full" Value="0" Type="Status" Byte="2" Bit="6"/>
+  <Res Name="CU_fiscalized" Value="1" Type="Status" Byte="3" Bit="5"/>
+  <Res Name="CU_produced" Value="1" Type="Status" Byte="3" Bit="6"/>
+  <Res Name="Paired_with_TIMS" Value="1" Type="Status" Byte="4" Bit="0"/>
+  <Res Name="Unsent_receipts" Value="0" Type="Status" Byte="4" Bit="1"/>
+  <Res Name="Service_contract_nearly_expired" Value="0" Type="Status" Byte="4" Bit="2"/>
+  <Res Name="No_Sec_IC" Value="0" Type="Status" Byte="5" Bit="0"/>
+  <Res Name="No_certificates" Value="0" Type="Status" Byte="5" Bit="1"/>
+  <Res Name="Service_jumper" Value="0" Type="Status" Byte="5" Bit="2"/>
+  <Res Name="Expired_service_contract" Value="0" Type="Status" Byte="5" Bit="3"/>
+  <Res Name="Missing_SD_card" Value="0" Type="Status" Byte="5" Bit="4"/>
+  <Res Name="Wrong_SD_card" Value="0" Type="Status" Byte="5" Bit="5"/>
+  <Res Name="Update_is_available" Value="0" Type="Status" Byte="5" Bit="6"/>
+</Res>

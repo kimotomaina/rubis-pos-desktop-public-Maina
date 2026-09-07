@@ -1,15 +1,28 @@
 import { useEffect, useState } from 'react'
 import type { UpdateStatus } from '../../../main/services/updater.js'
+import { UPDATE_TOAST_TIMEOUT_MS } from '../lib/toastTimeouts.js'
+import { useToastStore } from '../stores/toastStore.js'
 
 type ToastStatus = Extract<UpdateStatus, { kind: 'downloading' | 'downloaded' }>
 
+const UPDATE_TOAST_ID = 'update'
+
 /**
- * Subtle bottom-corner toast for auto-update progress. Silent for
- * `checking`/`not-available`/`error` — only surfaces once a download is
- * actually in progress or ready to install, so it never distracts a
- * cashier mid-sale.
+ * Pushes auto-update progress into the shared toast stack (phase-84).
+ * Silent for `checking`/`not-available`/`error` — only surfaces once a
+ * download is actually in progress or ready to install, so it never
+ * distracts a cashier mid-sale. Renders nothing itself; `ToastStack` is
+ * the only thing that draws it on screen.
  *
- * @returns {JSX.Element | null}
+ * The toast now carries a timeout (`UPDATE_TOAST_TIMEOUT_MS` — see that
+ * constant's doc for why a long one is safe here), where it previously
+ * had none. Every `download-progress` tick re-shows the toast, which
+ * resets its countdown (`toastStore`'s `updatedAt` stamp) — so it can't
+ * disappear mid-download. Dismissing it, by the close button or the
+ * timeout, only hides the toast; it has no effect on whether the update
+ * installs.
+ *
+ * @returns {null}
  */
 export default function UpdateToast() {
   const [status, setStatus] = useState<ToastStatus | null>(null)
@@ -23,38 +36,43 @@ export default function UpdateToast() {
     })
   }, [])
 
-  if (!status) return null
-
-  const handleInstall = async () => {
+  const handleInstall = async (): Promise<void> => {
     setInstalling(true)
     await window.api.installUpdate()
   }
 
-  return (
-    <div className="fixed bottom-4 right-4 z-50 w-72 rounded-xl bg-slate-900 p-4 text-base text-white shadow-xl">
-      {status.kind === 'downloading' ? (
-        <>
-          <p className="font-medium">Downloading update…</p>
-          <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-slate-700">
+  useEffect(() => {
+    if (!status) return
+
+    useToastStore.getState().show({
+      id: UPDATE_TOAST_ID,
+      tone: 'info',
+      message:
+        status.kind === 'downloading' ? 'Downloading update…' : `Update ready - v${status.version}`,
+      timeoutMs: UPDATE_TOAST_TIMEOUT_MS,
+      onDismiss: () => useToastStore.getState().dismiss(UPDATE_TOAST_ID),
+      actions:
+        status.kind === 'downloading' ? (
+          <div className="h-1.5 w-full overflow-hidden rounded-full bg-slate-700">
             <div
               className="h-full rounded-full bg-emerald-500 transition-all"
               style={{ width: `${Math.round(status.percent)}%` }}
             />
           </div>
-        </>
-      ) : (
-        <>
-          <p className="font-medium">Update ready — v{status.version}</p>
+        ) : (
           <button
             type="button"
             disabled={installing}
             onClick={() => void handleInstall()}
-            className="mt-2 w-full rounded-lg bg-emerald-600 py-2 text-base font-semibold text-white transition active:scale-95 disabled:cursor-not-allowed disabled:opacity-50"
+            className="w-full rounded-lg bg-emerald-600 py-2 text-base font-semibold text-white transition active:scale-95 disabled:cursor-not-allowed disabled:opacity-50"
           >
             {installing ? 'Restarting…' : 'Restart & Install'}
           </button>
-        </>
-      )}
-    </div>
-  )
+        )
+    })
+    // Re-registers the toast (resetting its countdown) on every status
+    // or installing-state change, not just on the first sighting.
+  }, [status, installing])
+
+  return null
 }

@@ -1,0 +1,5174 @@
+{
+  "generatedFrom": "Tremol vendor SDK Libs/JS/fp.js (var defs)",
+  "commandCount": 122,
+  "commands": {
+    "ChangeSDcard": {
+      "cmdByte": "0x41",
+      "operation": "Change SD card.",
+      "args": [
+        {
+          "name": "Password",
+          "type": "Text",
+          "maxLen": 6,
+          "value": "",
+          "compulsory": true
+        },
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "3",
+          "compulsory": true
+        },
+        {
+          "name": "SerialNum",
+          "type": "Text",
+          "maxLen": 20,
+          "value": "",
+          "compulsory": true
+        },
+        {
+          "name": "PINnum",
+          "type": "Text",
+          "maxLen": 11,
+          "value": "",
+          "compulsory": true
+        }
+      ],
+      "response": []
+    },
+    "StartDeviceUpdate": {
+      "cmdByte": "0x7C",
+      "operation": "Start a device update procedure if a new update is available.",
+      "args": [
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "U",
+          "compulsory": true
+        }
+      ],
+      "response": []
+    },
+    "StartWiFiTest": {
+      "cmdByte": "0x4E",
+      "operation": "Start WiFi test on the device the result",
+      "args": [
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "R",
+          "compulsory": true
+        },
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "W",
+          "compulsory": true
+        },
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "T",
+          "compulsory": true
+        }
+      ],
+      "response": []
+    },
+    "ReadCUnumbers": {
+      "cmdByte": "0x60",
+      "operation": "Provides information about the manufacturing number of the CU and PIN number.",
+      "args": [],
+      "response": [
+        {
+          "name": "SerialNumber",
+          "type": "Text",
+          "maxLen": 20
+        },
+        {
+          "name": "PINnumber",
+          "type": "Text",
+          "maxLen": 11
+        }
+      ]
+    },
+    "ProgramServiceContractPassword": {
+      "cmdByte": "0x5A",
+      "operation": "Program service contract password",
+      "args": [
+        {
+          "name": "Option",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "P",
+          "compulsory": true
+        },
+        {
+          "name": "Old_Password",
+          "type": "Text",
+          "maxLen": 5,
+          "value": "",
+          "compulsory": true
+        },
+        {
+          "name": "New_Password",
+          "type": "Text",
+          "maxLen": 5,
+          "value": "",
+          "compulsory": true
+        }
+      ],
+      "response": []
+    },
+    "StoreEJByDate": {
+      "cmdByte": "0x7C",
+      "operation": "Store Electronic Journal Report from report from date to date to External USB, External SD card.",
+      "args": [
+        {
+          "name": "OptionReportStorage",
+          "type": "Option",
+          "maxLen": 2,
+          "value": "",
+          "compulsory": true,
+          "options": [
+            {
+              "name": "Storage in External SD card memory",
+              "value": "J4"
+            },
+            {
+              "name": "Storage in External SD card memory for JSON",
+              "value": "JX"
+            }
+          ]
+        },
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "D",
+          "compulsory": true
+        },
+        {
+          "name": "StartRepFromDate",
+          "type": "DateTime",
+          "maxLen": 10,
+          "value": "",
+          "compulsory": true
+        },
+        {
+          "name": "EndRepFromDate",
+          "type": "DateTime",
+          "maxLen": 10,
+          "value": "",
+          "compulsory": true
+        }
+      ],
+      "response": []
+    },
+    "DisplayTextLines1and2": {
+      "cmdByte": "0x27",
+      "operation": "Shows a 16-symbols text in the first line and last 16-symbols text in the second line of the external display lines.",
+      "args": [
+        {
+          "name": "Text",
+          "type": "Text",
+          "maxLen": 32,
+          "value": "",
+          "compulsory": true
+        }
+      ],
+      "response": []
+    },
+    "ReadDateTime": {
+      "cmdByte": "0x68",
+      "operation": "Provides information about the current date and time.",
+      "args": [],
+      "response": [
+        {
+          "name": "DateTime",
+          "type": "DateTime",
+          "maxLen": 10
+        }
+      ]
+    },
+    "CancelReceipt": {
+      "cmdByte": "0x39",
+      "operation": "Available only if the receipt is not closed. Cancel all sales in the receipt and close it .",
+      "args": [],
+      "response": []
+    },
+    "Read_IdleTimeout": {
+      "cmdByte": "0x4E",
+      "operation": "Provides information about device's idle timeout. This timeout is seconds in which the connection will be closed when there is an inactivity. This information is available if the device has LAN or WiFi. Maximal value - 7200, minimal value 1. 0 is for never close the connection.",
+      "args": [
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "R",
+          "compulsory": true
+        },
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "Z",
+          "compulsory": true
+        },
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "I",
+          "compulsory": true
+        }
+      ],
+      "response": [
+        {
+          "name": "IdleTimeout",
+          "type": "Decimal_with_format",
+          "maxLen": 4
+        }
+      ]
+    },
+    "ReadInvoice_Threshold": {
+      "cmdByte": "0x4E",
+      "operation": "Read invoice threshold count",
+      "args": [
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "R",
+          "compulsory": true
+        },
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "S",
+          "compulsory": true
+        },
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "I",
+          "compulsory": true
+        }
+      ],
+      "response": [
+        {
+          "name": "Value",
+          "type": "Decimal",
+          "maxLen": 5
+        }
+      ]
+    },
+    "ReadTimeThreshold_Minutes": {
+      "cmdByte": "0x4E",
+      "operation": "Read time threshold minutes",
+      "args": [
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "R",
+          "compulsory": true
+        },
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "S",
+          "compulsory": true
+        },
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "T",
+          "compulsory": true
+        }
+      ],
+      "response": [
+        {
+          "name": "Value",
+          "type": "Decimal",
+          "maxLen": 5
+        }
+      ]
+    },
+    "ReadHTTPS_Server": {
+      "cmdByte": "0x4E",
+      "operation": "Providing information about server HTTPS address.",
+      "args": [
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "R",
+          "compulsory": true
+        },
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "S",
+          "compulsory": true
+        },
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "H",
+          "compulsory": true
+        }
+      ],
+      "response": [
+        {
+          "name": "ParamLength",
+          "type": "Decimal",
+          "maxLen": 3
+        },
+        {
+          "name": "Address",
+          "type": "Text",
+          "maxLen": 50
+        }
+      ]
+    },
+    "SetDeviceTCP_MACAddress": {
+      "cmdByte": "0x4E",
+      "operation": "Program device's MAC address . To apply use - SaveNetworkSettings()",
+      "args": [
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "P",
+          "compulsory": true
+        },
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "T",
+          "compulsory": true
+        },
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "6",
+          "compulsory": true
+        },
+        {
+          "name": "MACAddress",
+          "type": "Text",
+          "maxLen": 12,
+          "value": "",
+          "compulsory": true
+        }
+      ],
+      "response": []
+    },
+    "SellPLUfromExtDB_HS": {
+      "cmdByte": "0x31",
+      "operation": "Register the sell (for correction use minus sign in the price field) of article with specified name, price, quantity, VAT class and/or discount/addition on the transaction.",
+      "args": [
+        {
+          "name": "NamePLU",
+          "type": "Text",
+          "maxLen": 36,
+          "value": "",
+          "compulsory": true
+        },
+        {
+          "name": "reserved",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": " ",
+          "compulsory": true
+        },
+        {
+          "name": "Price",
+          "type": "Decimal",
+          "maxLen": 15,
+          "value": "",
+          "compulsory": true
+        },
+        {
+          "name": "reserved",
+          "type": "OptionHardcoded",
+          "maxLen": 3,
+          "value": "   ",
+          "compulsory": true
+        },
+        {
+          "name": "HSCode",
+          "type": "Text",
+          "maxLen": 10,
+          "value": "",
+          "compulsory": true
+        },
+        {
+          "name": "reserved",
+          "type": "OptionHardcoded",
+          "maxLen": 20,
+          "value": "                    ",
+          "compulsory": true
+        },
+        {
+          "name": "reserved",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "0",
+          "compulsory": true
+        },
+        {
+          "name": "Quantity",
+          "type": "Decimal",
+          "maxLen": 10,
+          "value": "",
+          "compulsory": false
+        },
+        {
+          "name": "DiscAddP",
+          "type": "Decimal",
+          "maxLen": 7,
+          "value": "",
+          "compulsory": false
+        }
+      ],
+      "response": []
+    },
+    "ReadGPRS_APN": {
+      "cmdByte": "0x4E",
+      "operation": "Provides information about device's GRPS APN.",
+      "args": [
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "R",
+          "compulsory": true
+        },
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "G",
+          "compulsory": true
+        },
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "A",
+          "compulsory": true
+        }
+      ],
+      "response": [
+        {
+          "name": "gprsAPNlength",
+          "type": "Decimal",
+          "maxLen": 3
+        },
+        {
+          "name": "APN",
+          "type": "Text",
+          "maxLen": 100
+        }
+      ]
+    },
+    "ReadGPRS_Username": {
+      "cmdByte": "0x4E",
+      "operation": "Providing information about device's GPRS user name.",
+      "args": [
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "R",
+          "compulsory": true
+        },
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "G",
+          "compulsory": true
+        },
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "U",
+          "compulsory": true
+        }
+      ],
+      "response": [
+        {
+          "name": "gprsUserNameLength",
+          "type": "Decimal",
+          "maxLen": 3
+        },
+        {
+          "name": "Username",
+          "type": "Text",
+          "maxLen": 100
+        }
+      ]
+    },
+    "SaveNetworkSettings": {
+      "cmdByte": "0x4E",
+      "operation": "After every change on Idle timeout, LAN/WiFi/GPRS usage, LAN/WiFi/TCP/GPRS password or TCP auto start networks settings this Save command needs to be execute.",
+      "args": [
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "P",
+          "compulsory": true
+        },
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "A",
+          "compulsory": true
+        }
+      ],
+      "response": []
+    },
+    "ReadEODAmountsByDate": {
+      "cmdByte": "0x6D",
+      "operation": "Provides information about the accumulated EOD turnover and VAT amounts by date",
+      "args": [
+        {
+          "name": "Option",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "d",
+          "compulsory": true
+        },
+        {
+          "name": "EOD_Date",
+          "type": "DateTime",
+          "maxLen": 10,
+          "value": "",
+          "compulsory": true
+        }
+      ],
+      "response": [
+        {
+          "name": "Option",
+          "type": "OptionHardcoded",
+          "maxLen": 1
+        },
+        {
+          "name": "EOD_Date",
+          "type": "DateTime",
+          "maxLen": 10
+        },
+        {
+          "name": "EOD_sale_turnover",
+          "type": "Decimal",
+          "maxLen": 20
+        },
+        {
+          "name": "EOD_credit_turnover",
+          "type": "Decimal",
+          "maxLen": 20
+        },
+        {
+          "name": "EOD_saleVAT",
+          "type": "Decimal",
+          "maxLen": 20
+        },
+        {
+          "name": "EOD_creditVAT",
+          "type": "Decimal",
+          "maxLen": 20
+        },
+        {
+          "name": "InvoiceCount",
+          "type": "Text",
+          "maxLen": 4
+        },
+        {
+          "name": "CreditCount",
+          "type": "Text",
+          "maxLen": 4
+        }
+      ]
+    },
+    "ReadDeviceTCP_Addresses": {
+      "cmdByte": "0x4E",
+      "operation": "Provides information about device's network IP address, subnet mask, gateway address, DNS address.",
+      "args": [
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "R",
+          "compulsory": true
+        },
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "T",
+          "compulsory": true
+        },
+        {
+          "name": "OptionAddressType",
+          "type": "Option",
+          "maxLen": 1,
+          "value": "",
+          "compulsory": true,
+          "options": [
+            {
+              "name": "DNS address",
+              "value": "5"
+            },
+            {
+              "name": "Gateway address",
+              "value": "4"
+            },
+            {
+              "name": "IP address",
+              "value": "2"
+            },
+            {
+              "name": "Subnet Mask",
+              "value": "3"
+            }
+          ]
+        }
+      ],
+      "response": [
+        {
+          "name": "OptionAddressType",
+          "type": "Option",
+          "maxLen": 1,
+          "options": [
+            {
+              "name": "DNS address",
+              "value": "5"
+            },
+            {
+              "name": "Gateway address",
+              "value": "4"
+            },
+            {
+              "name": "IP address",
+              "value": "2"
+            },
+            {
+              "name": "Subnet Mask",
+              "value": "3"
+            }
+          ]
+        },
+        {
+          "name": "DeviceAddress",
+          "type": "Text",
+          "maxLen": 15
+        }
+      ]
+    },
+    "DirectCommand": {
+      "cmdByte": "0xF1",
+      "operation": "Executes the direct command .",
+      "args": [
+        {
+          "name": "Input",
+          "type": "Text",
+          "maxLen": 200,
+          "value": "",
+          "compulsory": true
+        }
+      ],
+      "response": [
+        {
+          "name": "Output",
+          "type": "Text",
+          "maxLen": 200
+        }
+      ]
+    },
+    "ReadEJByDateTime": {
+      "cmdByte": "0x7C",
+      "operation": "Read Electronic Journal Report by initial to end date and time.",
+      "args": [
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 2,
+          "value": "J0",
+          "compulsory": true
+        },
+        {
+          "name": "OptionReportFormat",
+          "type": "Option",
+          "maxLen": 1,
+          "value": "",
+          "compulsory": true,
+          "options": [
+            {
+              "name": "Brief EJ",
+              "value": "t"
+            },
+            {
+              "name": "Detailed EJ",
+              "value": "T"
+            }
+          ]
+        },
+        {
+          "name": "StartRepFromDate",
+          "type": "DateTime",
+          "maxLen": 10,
+          "value": "",
+          "compulsory": true
+        },
+        {
+          "name": "EndRepFromDate",
+          "type": "DateTime",
+          "maxLen": 10,
+          "value": "",
+          "compulsory": true
+        }
+      ],
+      "response": []
+    },
+    "Read_ServerReadingTimeout": {
+      "cmdByte": "0x4E",
+      "operation": "Provides information about timeout when reading from a server. This time is in the seconds. Minimum value: 120, maximum value: 6000.",
+      "args": [
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "R",
+          "compulsory": true
+        },
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "S",
+          "compulsory": true
+        },
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "R",
+          "compulsory": true
+        }
+      ],
+      "response": [
+        {
+          "name": "ReadingTimeout",
+          "type": "Decimal_with_format",
+          "maxLen": 4
+        }
+      ]
+    },
+    "OpenSellAndCloseReceipt": {
+      "cmdByte": "0x2C",
+      "operation": "Opens receipt after which makes sell of article with specified name, price, quantity, VAT class and/or discount/addition on the transaction and then closes the receipt",
+      "args": [
+        {
+          "name": "ReceiptType",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "0",
+          "compulsory": true
+        },
+        {
+          "name": "TraderSystemInvNum",
+          "type": "Text",
+          "maxLen": 15,
+          "value": "",
+          "compulsory": true
+        },
+        {
+          "name": "NamePLU",
+          "type": "Text",
+          "maxLen": 36,
+          "value": "",
+          "compulsory": true
+        },
+        {
+          "name": "OptionVATClass",
+          "type": "Option",
+          "maxLen": 1,
+          "value": "",
+          "compulsory": true,
+          "options": [
+            {
+              "name": "VAT Class A",
+              "value": "A"
+            }
+          ]
+        },
+        {
+          "name": "Price",
+          "type": "Decimal",
+          "maxLen": 15,
+          "value": "",
+          "compulsory": true
+        },
+        {
+          "name": "MeasureUnit",
+          "type": "Text",
+          "maxLen": 3,
+          "value": "",
+          "compulsory": true
+        },
+        {
+          "name": "HSCode",
+          "type": "Text",
+          "maxLen": 10,
+          "value": "",
+          "compulsory": true
+        },
+        {
+          "name": "Quantity",
+          "type": "Decimal",
+          "maxLen": 10,
+          "value": "",
+          "compulsory": false
+        },
+        {
+          "name": "DiscAddP",
+          "type": "Decimal",
+          "maxLen": 7,
+          "value": "",
+          "compulsory": false
+        }
+      ],
+      "response": [
+        {
+          "name": "InvoiceNum",
+          "type": "Text",
+          "maxLen": 19
+        },
+        {
+          "name": "QRcode",
+          "type": "Text",
+          "maxLen": 128
+        }
+      ]
+    },
+    "SetWiFi_NetworkName": {
+      "cmdByte": "0x4E",
+      "operation": "Program device's TCP WiFi network name where it will be connected. To apply use -SaveNetworkSettings()",
+      "args": [
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "P",
+          "compulsory": true
+        },
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "W",
+          "compulsory": true
+        },
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "N",
+          "compulsory": true
+        },
+        {
+          "name": "WiFiNameLength",
+          "type": "Decimal",
+          "maxLen": 3,
+          "value": "",
+          "compulsory": true
+        },
+        {
+          "name": "WiFiNetworkName",
+          "type": "Text",
+          "maxLen": 100,
+          "value": "",
+          "compulsory": true
+        }
+      ],
+      "response": []
+    },
+    "ReadHScode": {
+      "cmdByte": "0x4F",
+      "operation": "Programs HS code at a given position (HS number in order).",
+      "args": [
+        {
+          "name": "Option",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "Z",
+          "compulsory": true
+        },
+        {
+          "name": "OptionR",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "R",
+          "compulsory": true
+        },
+        {
+          "name": "HS_Number",
+          "type": "Decimal_with_format",
+          "maxLen": 4,
+          "value": "",
+          "compulsory": true
+        }
+      ],
+      "response": [
+        {
+          "name": "Option",
+          "type": "OptionHardcoded",
+          "maxLen": 1
+        },
+        {
+          "name": "OptionR",
+          "type": "OptionHardcoded",
+          "maxLen": 1
+        },
+        {
+          "name": "HS_Number",
+          "type": "Decimal_with_format",
+          "maxLen": 4
+        },
+        {
+          "name": "HS_Code",
+          "type": "Text",
+          "maxLen": 10
+        },
+        {
+          "name": "HS_Name",
+          "type": "Text",
+          "maxLen": 20
+        },
+        {
+          "name": "OptionTaxable",
+          "type": "Option",
+          "maxLen": 1,
+          "options": [
+            {
+              "name": "Exempted",
+              "value": "1"
+            },
+            {
+              "name": "Taxable",
+              "value": "0"
+            }
+          ]
+        },
+        {
+          "name": "MesureUnit",
+          "type": "Text",
+          "maxLen": 3
+        },
+        {
+          "name": "VAT_Rate",
+          "type": "Decimal_with_format",
+          "maxLen": 6
+        }
+      ]
+    },
+    "ReadDiagnostics": {
+      "cmdByte": "0x22",
+      "operation": "Provides information about documents sending functions .",
+      "args": [],
+      "response": [
+        {
+          "name": "OptionDeviceType",
+          "type": "Option",
+          "maxLen": 1,
+          "options": [
+            {
+              "name": "A Type",
+              "value": "1"
+            },
+            {
+              "name": "B Type",
+              "value": "2"
+            }
+          ]
+        },
+        {
+          "name": "SDIdxPos",
+          "type": "Text",
+          "maxLen": 10
+        },
+        {
+          "name": "LastInvoiceCUNum",
+          "type": "Text",
+          "maxLen": 19
+        },
+        {
+          "name": "LastInvoiceDate",
+          "type": "Text",
+          "maxLen": 6
+        },
+        {
+          "name": "LastEODDate",
+          "type": "Text",
+          "maxLen": 6
+        },
+        {
+          "name": "InvoicesSent",
+          "type": "Text",
+          "maxLen": 4
+        }
+      ]
+    },
+    "ReadEJ_JSON": {
+      "cmdByte": "0x7C",
+      "operation": "Read whole Electronic Journal report from beginning to the end in the JSON format. The number of bytes equal to Length for JSON data must be read subsequently.",
+      "args": [
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 2,
+          "value": "JY",
+          "compulsory": true
+        },
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "*",
+          "compulsory": true
+        }
+      ],
+      "response": [
+        {
+          "name": "Length",
+          "type": "Decimal",
+          "maxLen": 10
+        }
+      ]
+    },
+    "ReadEJByCUInvoiceNum": {
+      "cmdByte": "0x7C",
+      "operation": "Read Electronic Journal Report by CU Invoice Number (Multiple invoices)",
+      "args": [
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 2,
+          "value": "J0",
+          "compulsory": true
+        },
+        {
+          "name": "OptionInvoiceReportFormat",
+          "type": "Option",
+          "maxLen": 1,
+          "value": "",
+          "compulsory": true,
+          "options": [
+            {
+              "name": "Brief EJ",
+              "value": "n"
+            },
+            {
+              "name": "Detailed EJ",
+              "value": "N"
+            }
+          ]
+        },
+        {
+          "name": "StartCUInvoiceNum",
+          "type": "Decimal_with_format",
+          "maxLen": 10,
+          "value": "",
+          "compulsory": true
+        },
+        {
+          "name": "EndCUInvoiceNum",
+          "type": "Decimal_with_format",
+          "maxLen": 10,
+          "value": "",
+          "compulsory": true
+        }
+      ],
+      "response": []
+    },
+    "DisplayTextLine1": {
+      "cmdByte": "0x25",
+      "operation": "Shows a 20-symbols text in the upper external display line.",
+      "args": [
+        {
+          "name": "Text",
+          "type": "Text",
+          "maxLen": 16,
+          "value": "",
+          "compulsory": true
+        }
+      ],
+      "response": []
+    },
+    "ReadVATrates": {
+      "cmdByte": "0x62",
+      "operation": "Provides information about the current VAT rates (the last value stored in FM).",
+      "args": [],
+      "response": [
+        {
+          "name": "VATrateA",
+          "type": "Decimal_with_format",
+          "maxLen": 7
+        },
+        {
+          "name": "VATrateB",
+          "type": "Decimal_with_format",
+          "maxLen": 7
+        },
+        {
+          "name": "VATrateC",
+          "type": "Decimal_with_format",
+          "maxLen": 7
+        },
+        {
+          "name": "VATrateD",
+          "type": "Decimal_with_format",
+          "maxLen": 7
+        },
+        {
+          "name": "VATrateE",
+          "type": "Decimal_with_format",
+          "maxLen": 7
+        }
+      ]
+    },
+    "OpenDebitNoteWithFreeCustomerData": {
+      "cmdByte": "0x30",
+      "operation": "Opens a fiscal invoice debit note receipt assigned to the specified operator number and operator password with free info for customer data. The Invoice receipt can be issued only if the invoice range (start and end numbers) is set.",
+      "args": [
+        {
+          "name": "reserved",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "1",
+          "compulsory": true
+        },
+        {
+          "name": "reserved",
+          "type": "OptionHardcoded",
+          "maxLen": 6,
+          "value": "     0",
+          "compulsory": true
+        },
+        {
+          "name": "reserved",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "0",
+          "compulsory": true
+        },
+        {
+          "name": "InvoiceDebitNoteType",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "@",
+          "compulsory": true
+        },
+        {
+          "name": "CompanyName",
+          "type": "Text",
+          "maxLen": 30,
+          "value": "",
+          "compulsory": true
+        },
+        {
+          "name": "ClientPINnum",
+          "type": "Text",
+          "maxLen": 14,
+          "value": "",
+          "compulsory": true
+        },
+        {
+          "name": "HeadQuarters",
+          "type": "Text",
+          "maxLen": 30,
+          "value": "",
+          "compulsory": true
+        },
+        {
+          "name": "Address",
+          "type": "Text",
+          "maxLen": 30,
+          "value": "",
+          "compulsory": true
+        },
+        {
+          "name": "PostalCodeAndCity",
+          "type": "Text",
+          "maxLen": 30,
+          "value": "",
+          "compulsory": true
+        },
+        {
+          "name": "ExemptionNum",
+          "type": "Text",
+          "maxLen": 30,
+          "value": "",
+          "compulsory": true
+        },
+        {
+          "name": "RelatedInvoiceNum",
+          "type": "Text",
+          "maxLen": 19,
+          "value": "",
+          "compulsory": true
+        },
+        {
+          "name": "TraderSystemInvNum",
+          "type": "Text",
+          "maxLen": 15,
+          "value": "",
+          "compulsory": true
+        }
+      ],
+      "response": []
+    },
+    "ReadEJByDateTime_JSON": {
+      "cmdByte": "0x7C",
+      "operation": "Read Electronic Journal Report by initial to end date and time in the JSON format. The number of bytes equal to Length for JSON data must be read subsequently.",
+      "args": [
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 2,
+          "value": "JY",
+          "compulsory": true
+        },
+        {
+          "name": "OptionReportFormat",
+          "type": "Option",
+          "maxLen": 1,
+          "value": "",
+          "compulsory": true,
+          "options": [
+            {
+              "name": "Brief EJ",
+              "value": "t"
+            },
+            {
+              "name": "Detailed EJ",
+              "value": "T"
+            }
+          ]
+        },
+        {
+          "name": "StartRepFromDate",
+          "type": "DateTime",
+          "maxLen": 10,
+          "value": "",
+          "compulsory": true
+        },
+        {
+          "name": "EndRepFromDate",
+          "type": "DateTime",
+          "maxLen": 10,
+          "value": "",
+          "compulsory": true
+        }
+      ],
+      "response": [
+        {
+          "name": "Length",
+          "type": "Decimal",
+          "maxLen": 10
+        }
+      ]
+    },
+    "ReadProxyServerAddress": {
+      "cmdByte": "0x4E",
+      "operation": "Provides information about the proxy server address.",
+      "args": [
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "R",
+          "compulsory": true
+        },
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "S",
+          "compulsory": true
+        },
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "P",
+          "compulsory": true
+        }
+      ],
+      "response": [
+        {
+          "name": "ParamLength",
+          "type": "Decimal",
+          "maxLen": 3
+        },
+        {
+          "name": "Address",
+          "type": "Text",
+          "maxLen": 21
+        }
+      ]
+    },
+    "ReadHScodeNumber": {
+      "cmdByte": "0x4F",
+      "operation": "Read the number of HS codes.",
+      "args": [
+        {
+          "name": "Option",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "z",
+          "compulsory": true
+        },
+        {
+          "name": "OptionR",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "R",
+          "compulsory": true
+        }
+      ],
+      "response": [
+        {
+          "name": "Option",
+          "type": "OptionHardcoded",
+          "maxLen": 1
+        },
+        {
+          "name": "OptionR",
+          "type": "OptionHardcoded",
+          "maxLen": 1
+        },
+        {
+          "name": "HScodesNumber",
+          "type": "Decimal_with_format",
+          "maxLen": 4
+        }
+      ]
+    },
+    "ReadLastAndTotalReceiptNum": {
+      "cmdByte": "0x71",
+      "operation": "Provides information about the number of the last issued receipt.",
+      "args": [],
+      "response": [
+        {
+          "name": "LastCUInvoiceNum",
+          "type": "Text",
+          "maxLen": 19
+        },
+        {
+          "name": "LastReceiptNum",
+          "type": "Decimal_with_format",
+          "maxLen": 7
+        }
+      ]
+    },
+    "ClearDisplay": {
+      "cmdByte": "0x24",
+      "operation": "Clears the external display.",
+      "args": [],
+      "response": []
+    },
+    "SetDHCP_Enabled": {
+      "cmdByte": "0x4E",
+      "operation": "Program device's TCP network DHCP enabled or disabled. To apply use -SaveNetworkSettings()",
+      "args": [
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "P",
+          "compulsory": true
+        },
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "T",
+          "compulsory": true
+        },
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "1",
+          "compulsory": true
+        },
+        {
+          "name": "OptionDHCPEnabled",
+          "type": "Option",
+          "maxLen": 1,
+          "value": "",
+          "compulsory": true,
+          "options": [
+            {
+              "name": "Disabled",
+              "value": "0"
+            },
+            {
+              "name": "Enabled",
+              "value": "1"
+            }
+          ]
+        }
+      ],
+      "response": []
+    },
+    "SetGPRS_APN": {
+      "cmdByte": "0x4E",
+      "operation": "Program device's GPRS APN. To apply use -SaveNetworkSettings()",
+      "args": [
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "P",
+          "compulsory": true
+        },
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "G",
+          "compulsory": true
+        },
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "A",
+          "compulsory": true
+        },
+        {
+          "name": "gprsAPNlength",
+          "type": "Decimal",
+          "maxLen": 3,
+          "value": "",
+          "compulsory": true
+        },
+        {
+          "name": "APN",
+          "type": "Text",
+          "maxLen": 100,
+          "value": "",
+          "compulsory": true
+        }
+      ],
+      "response": []
+    },
+    "ReadGPRS_AuthenticationType": {
+      "cmdByte": "0x4E",
+      "operation": "Read GPRS APN authentication type",
+      "args": [
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "R",
+          "compulsory": true
+        },
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "G",
+          "compulsory": true
+        },
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "N",
+          "compulsory": true
+        }
+      ],
+      "response": [
+        {
+          "name": "OptionAuthenticationType",
+          "type": "Option",
+          "maxLen": 1,
+          "options": [
+            {
+              "name": "CHAP",
+              "value": "2"
+            },
+            {
+              "name": "None",
+              "value": "0"
+            },
+            {
+              "name": "PAP",
+              "value": "1"
+            },
+            {
+              "name": "PAP or CHAP",
+              "value": "3"
+            }
+          ]
+        }
+      ]
+    },
+    "ReadEJByPINofBuyer": {
+      "cmdByte": "0x7C",
+      "operation": "Read Electronic Journal Report by PIN number of buyer.",
+      "args": [
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 2,
+          "value": "J0",
+          "compulsory": true
+        },
+        {
+          "name": "OptionPINReportFormat",
+          "type": "Option",
+          "maxLen": 1,
+          "value": "",
+          "compulsory": true,
+          "options": [
+            {
+              "name": "Brief EJ",
+              "value": "p"
+            },
+            {
+              "name": "Detailed EJ",
+              "value": "P"
+            }
+          ]
+        },
+        {
+          "name": "PINnumber",
+          "type": "Text",
+          "maxLen": 11,
+          "value": "",
+          "compulsory": true
+        }
+      ],
+      "response": []
+    },
+    "AddNewHScode": {
+      "cmdByte": "0x4F",
+      "operation": "Programs the customer DB for special customer receipt issuing.",
+      "args": [
+        {
+          "name": "Option",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "Z",
+          "compulsory": true
+        },
+        {
+          "name": "OptionW",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "W",
+          "compulsory": true
+        },
+        {
+          "name": "reserved",
+          "type": "OptionHardcoded",
+          "maxLen": 4,
+          "value": "0000",
+          "compulsory": true
+        },
+        {
+          "name": "HS_Code",
+          "type": "Text",
+          "maxLen": 10,
+          "value": "",
+          "compulsory": true
+        },
+        {
+          "name": "HS_Name",
+          "type": "Text",
+          "maxLen": 20,
+          "value": "",
+          "compulsory": true
+        },
+        {
+          "name": "OptionTaxable",
+          "type": "Option",
+          "maxLen": 1,
+          "value": "",
+          "compulsory": true,
+          "options": [
+            {
+              "name": "Exempted",
+              "value": "1"
+            },
+            {
+              "name": "Taxable",
+              "value": "0"
+            }
+          ]
+        },
+        {
+          "name": "MesureUnit",
+          "type": "Text",
+          "maxLen": 3,
+          "value": "",
+          "compulsory": true
+        },
+        {
+          "name": "VAT_rate",
+          "type": "Decimal_with_format",
+          "maxLen": 6,
+          "value": "",
+          "compulsory": true
+        }
+      ],
+      "response": []
+    },
+    "SetSerialNum": {
+      "cmdByte": "0x40",
+      "operation": "Stores the Manufacturing number into the operative memory.",
+      "args": [
+        {
+          "name": "Password",
+          "type": "Text",
+          "maxLen": 6,
+          "value": "",
+          "compulsory": true
+        },
+        {
+          "name": "SerialNum",
+          "type": "Text",
+          "maxLen": 20,
+          "value": "",
+          "compulsory": true
+        }
+      ],
+      "response": []
+    },
+    "RawRead": {
+      "cmdByte": "0xFF",
+      "operation": "Reads raw bytes from FP.",
+      "args": [
+        {
+          "name": "Count",
+          "type": "Decimal",
+          "maxLen": 5,
+          "value": "",
+          "compulsory": true
+        },
+        {
+          "name": "EndChar",
+          "type": "Text",
+          "maxLen": 1,
+          "value": "",
+          "compulsory": true
+        }
+      ],
+      "response": [
+        {
+          "name": "Bytes",
+          "type": "Base64",
+          "maxLen": 100000
+        }
+      ]
+    },
+    "ReadDHCP_Status": {
+      "cmdByte": "0x4E",
+      "operation": "Provides information about device's DHCP status",
+      "args": [
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "R",
+          "compulsory": true
+        },
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "T",
+          "compulsory": true
+        },
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "1",
+          "compulsory": true
+        }
+      ],
+      "response": [
+        {
+          "name": "OptionDHCPEnabled",
+          "type": "Option",
+          "maxLen": 1,
+          "options": [
+            {
+              "name": "Disabled",
+              "value": "0"
+            },
+            {
+              "name": "Enabled",
+              "value": "1"
+            }
+          ]
+        }
+      ]
+    },
+    "DisplayDateTime": {
+      "cmdByte": "0x28",
+      "operation": "Shows the current date and time on the external display.",
+      "args": [],
+      "response": []
+    },
+    "SetTCP_AutoStart": {
+      "cmdByte": "0x4E",
+      "operation": "Program device's autostart TCP conection in sale/line mode. To apply use -SaveNetworkSettings()",
+      "args": [
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "P",
+          "compulsory": true
+        },
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "Z",
+          "compulsory": true
+        },
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "2",
+          "compulsory": true
+        },
+        {
+          "name": "OptionTCPAutoStart",
+          "type": "Option",
+          "maxLen": 1,
+          "value": "",
+          "compulsory": true,
+          "options": [
+            {
+              "name": "No",
+              "value": "0"
+            },
+            {
+              "name": "Yes",
+              "value": "1"
+            }
+          ]
+        }
+      ],
+      "response": []
+    },
+    "SetTCP_ActiveModule": {
+      "cmdByte": "0x4E",
+      "operation": "Selects the active communication module - LAN or WiFi. This option can be set only if the device has both modules at the same time. To apply use - SaveNetworkSettings()",
+      "args": [
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "P",
+          "compulsory": true
+        },
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "Z",
+          "compulsory": true
+        },
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "U",
+          "compulsory": true
+        },
+        {
+          "name": "OptionUsedModule",
+          "type": "Option",
+          "maxLen": 1,
+          "value": "",
+          "compulsory": true,
+          "options": [
+            {
+              "name": "LAN module",
+              "value": "1"
+            },
+            {
+              "name": "WiFi module",
+              "value": "2"
+            }
+          ]
+        }
+      ],
+      "response": []
+    },
+    "ReadTCP_UsedModule": {
+      "cmdByte": "0x4E",
+      "operation": "Provides information about which module the device is in use: LAN or WiFi module. This information can be provided if the device has mounted both modules.",
+      "args": [
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "R",
+          "compulsory": true
+        },
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "Z",
+          "compulsory": true
+        },
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "U",
+          "compulsory": true
+        }
+      ],
+      "response": [
+        {
+          "name": "OptionUsedModule",
+          "type": "Option",
+          "maxLen": 1,
+          "options": [
+            {
+              "name": "LAN module",
+              "value": "1"
+            },
+            {
+              "name": "WiFi module",
+              "value": "2"
+            }
+          ]
+        }
+      ]
+    },
+    "ReadTCP_MACAddress": {
+      "cmdByte": "0x4E",
+      "operation": "Provides information about device's MAC address.",
+      "args": [
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "R",
+          "compulsory": true
+        },
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "T",
+          "compulsory": true
+        },
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "6",
+          "compulsory": true
+        }
+      ],
+      "response": [
+        {
+          "name": "MACAddress",
+          "type": "Text",
+          "maxLen": 12
+        }
+      ]
+    },
+    "ReadServiceContractExpiryDate": {
+      "cmdByte": "0x5A",
+      "operation": "Read the service contract expiry date",
+      "args": [
+        {
+          "name": "Option",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "D",
+          "compulsory": true
+        }
+      ],
+      "response": [
+        {
+          "name": "Option",
+          "type": "OptionHardcoded",
+          "maxLen": 1
+        },
+        {
+          "name": "OptionActivation",
+          "type": "Option",
+          "maxLen": 1,
+          "options": [
+            {
+              "name": "No",
+              "value": "0"
+            },
+            {
+              "name": "Yes",
+              "value": "1"
+            }
+          ]
+        },
+        {
+          "name": "ExpiryDate",
+          "type": "DateTime",
+          "maxLen": 10
+        }
+      ]
+    },
+    "CloseReceipt": {
+      "cmdByte": "0x38",
+      "operation": "Closes the opened fiscal receipt and returns receipt info.",
+      "args": [],
+      "response": [
+        {
+          "name": "InvoiceNum",
+          "type": "Text",
+          "maxLen": 19
+        },
+        {
+          "name": "QRcode",
+          "type": "Text",
+          "maxLen": 128
+        }
+      ]
+    },
+    "OpenCreditNoteWithFreeCustomerData": {
+      "cmdByte": "0x30",
+      "operation": "Opens a fiscal invoice credit note receipt assigned to the specified operator number and operator password with free info for customer data. The Invoice receipt can be issued only if the invoice range (start and end numbers) is set.",
+      "args": [
+        {
+          "name": "reserved",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "1",
+          "compulsory": true
+        },
+        {
+          "name": "reserved",
+          "type": "OptionHardcoded",
+          "maxLen": 6,
+          "value": "     0",
+          "compulsory": true
+        },
+        {
+          "name": "reserved",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "0",
+          "compulsory": true
+        },
+        {
+          "name": "InvoiceDebitNoteType",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "A",
+          "compulsory": true
+        },
+        {
+          "name": "CompanyName",
+          "type": "Text",
+          "maxLen": 30,
+          "value": "",
+          "compulsory": true
+        },
+        {
+          "name": "ClientPINnum",
+          "type": "Text",
+          "maxLen": 14,
+          "value": "",
+          "compulsory": true
+        },
+        {
+          "name": "HeadQuarters",
+          "type": "Text",
+          "maxLen": 30,
+          "value": "",
+          "compulsory": true
+        },
+        {
+          "name": "Address",
+          "type": "Text",
+          "maxLen": 30,
+          "value": "",
+          "compulsory": true
+        },
+        {
+          "name": "PostalCodeAndCity",
+          "type": "Text",
+          "maxLen": 30,
+          "value": "",
+          "compulsory": true
+        },
+        {
+          "name": "ExemptionNum",
+          "type": "Text",
+          "maxLen": 30,
+          "value": "",
+          "compulsory": true
+        },
+        {
+          "name": "RelatedInvoiceNum",
+          "type": "Text",
+          "maxLen": 19,
+          "value": "",
+          "compulsory": true
+        },
+        {
+          "name": "TraderSystemInvNum",
+          "type": "Text",
+          "maxLen": 15,
+          "value": "",
+          "compulsory": true
+        }
+      ],
+      "response": []
+    },
+    "ReadTcpPortNumber": {
+      "cmdByte": "0x4E",
+      "operation": "Provides information about device's TCP port number.",
+      "args": [
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "R",
+          "compulsory": true
+        },
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "Z",
+          "compulsory": true
+        },
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "P",
+          "compulsory": true
+        }
+      ],
+      "response": [
+        {
+          "name": "TcpPortNumber",
+          "type": "Decimal_with_format",
+          "maxLen": 5
+        }
+      ]
+    },
+    "DisplayTextLine2": {
+      "cmdByte": "0x26",
+      "operation": "Shows a 16-symbols text in the lower external display line.",
+      "args": [
+        {
+          "name": "Text",
+          "type": "Text",
+          "maxLen": 16,
+          "value": "",
+          "compulsory": true
+        }
+      ],
+      "response": []
+    },
+    "ReadEJByTraderSystemInvNum": {
+      "cmdByte": "0x7C",
+      "operation": "Read Electronic Journal Report by Trader System Invoice Number (Single Invoice).",
+      "args": [
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 2,
+          "value": "J0",
+          "compulsory": true
+        },
+        {
+          "name": "OptionTraderSystemReportFormat",
+          "type": "Option",
+          "maxLen": 1,
+          "value": "",
+          "compulsory": true,
+          "options": [
+            {
+              "name": "Brief EJ",
+              "value": "s"
+            },
+            {
+              "name": "Detailed EJ",
+              "value": "S"
+            }
+          ]
+        },
+        {
+          "name": "TraderSystemInvNum",
+          "type": "Text",
+          "maxLen": 15,
+          "value": "",
+          "compulsory": true
+        }
+      ],
+      "response": []
+    },
+    "SetWiFi_Password": {
+      "cmdByte": "0x4E",
+      "operation": "Program device's TCP WiFi password where it will be connected. To apply use -SaveNetworkSettings()",
+      "args": [
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "P",
+          "compulsory": true
+        },
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "W",
+          "compulsory": true
+        },
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "P",
+          "compulsory": true
+        },
+        {
+          "name": "PassLength",
+          "type": "Decimal",
+          "maxLen": 3,
+          "value": "",
+          "compulsory": true
+        },
+        {
+          "name": "Password",
+          "type": "Text",
+          "maxLen": 100,
+          "value": "",
+          "compulsory": true
+        }
+      ],
+      "response": []
+    },
+    "ReadInfoFromLastServerCommunication": {
+      "cmdByte": "0x5A",
+      "operation": "Provide information from the last communication with the server.",
+      "args": [
+        {
+          "name": "Option",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "S",
+          "compulsory": true
+        },
+        {
+          "name": "OptionServerResponse",
+          "type": "Option",
+          "maxLen": 1,
+          "value": "",
+          "compulsory": true,
+          "options": [
+            {
+              "name": "At send EOD",
+              "value": "Z"
+            },
+            {
+              "name": "At send receipt",
+              "value": "R"
+            }
+          ]
+        },
+        {
+          "name": "OptionTransactionType",
+          "type": "Option",
+          "maxLen": 1,
+          "value": "",
+          "compulsory": true,
+          "options": [
+            {
+              "name": "Error Code",
+              "value": "c"
+            },
+            {
+              "name": "Error Message",
+              "value": "m"
+            },
+            {
+              "name": "Exception Message",
+              "value": "e"
+            },
+            {
+              "name": "Response Code",
+              "value": "r"
+            },
+            {
+              "name": "Status",
+              "value": "s"
+            }
+          ]
+        }
+      ],
+      "response": [
+        {
+          "name": "Option",
+          "type": "OptionHardcoded",
+          "maxLen": 1
+        },
+        {
+          "name": "OptionServerResponse",
+          "type": "Option",
+          "maxLen": 1,
+          "options": [
+            {
+              "name": "At send EOD",
+              "value": "Z"
+            },
+            {
+              "name": "At send receipt",
+              "value": "R"
+            }
+          ]
+        },
+        {
+          "name": "OptionTransactionType",
+          "type": "Option",
+          "maxLen": 1,
+          "options": [
+            {
+              "name": "Error Code",
+              "value": "c"
+            },
+            {
+              "name": "Error Message",
+              "value": "m"
+            },
+            {
+              "name": "Exception Message",
+              "value": "e"
+            },
+            {
+              "name": "Response Code",
+              "value": "r"
+            },
+            {
+              "name": "Status",
+              "value": "s"
+            }
+          ]
+        },
+        {
+          "name": "Message",
+          "type": "Text",
+          "maxLen": 200
+        }
+      ]
+    },
+    "ReadCUinvoiceNumber": {
+      "cmdByte": "0x5D",
+      "operation": "Request for original invoice number in case of open receipt rejection due to duplicate TRADER SYSTEM INVOICE NUMBER and response received.",
+      "args": [
+        {
+          "name": "Option",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "I",
+          "compulsory": true
+        }
+      ],
+      "response": [
+        {
+          "name": "Option",
+          "type": "OptionHardcoded",
+          "maxLen": 1
+        },
+        {
+          "name": "CU_InvoiceNumber",
+          "type": "Text",
+          "maxLen": 19
+        }
+      ]
+    },
+    "ConfirmFiscalization": {
+      "cmdByte": "0x41",
+      "operation": "Confirm PIN number.",
+      "args": [
+        {
+          "name": "Password",
+          "type": "Text",
+          "maxLen": 6,
+          "value": "",
+          "compulsory": true
+        },
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "2",
+          "compulsory": true
+        }
+      ],
+      "response": []
+    },
+    "StoreEJ": {
+      "cmdByte": "0x7C",
+      "operation": "Store whole Electronic Journal report to External SD card.",
+      "args": [
+        {
+          "name": "OptionReportStorage",
+          "type": "Option",
+          "maxLen": 2,
+          "value": "",
+          "compulsory": true,
+          "options": [
+            {
+              "name": "Storage in External SD card memory",
+              "value": "J4"
+            },
+            {
+              "name": "Storage in External SD card memory for JSON",
+              "value": "JX"
+            }
+          ]
+        },
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "*",
+          "compulsory": true
+        }
+      ],
+      "response": []
+    },
+    "ReadFirstEODDate": {
+      "cmdByte": "0x6D",
+      "operation": "Provides information about first EOD date",
+      "args": [
+        {
+          "name": "Option",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "d",
+          "compulsory": true
+        },
+        {
+          "name": "Option",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "f",
+          "compulsory": true
+        }
+      ],
+      "response": [
+        {
+          "name": "Option",
+          "type": "OptionHardcoded",
+          "maxLen": 1
+        },
+        {
+          "name": "Option",
+          "type": "OptionHardcoded",
+          "maxLen": 1
+        },
+        {
+          "name": "DateTime",
+          "type": "DateTime",
+          "maxLen": 10
+        }
+      ]
+    },
+    "ProgramExpirationServiceContract": {
+      "cmdByte": "0x5A",
+      "operation": "Program expiration date of the service contract",
+      "args": [
+        {
+          "name": "Option",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "B",
+          "compulsory": true
+        },
+        {
+          "name": "Password",
+          "type": "Text",
+          "maxLen": 5,
+          "value": "",
+          "compulsory": true
+        },
+        {
+          "name": "OptionActivation",
+          "type": "Option",
+          "maxLen": 1,
+          "value": "",
+          "compulsory": true,
+          "options": [
+            {
+              "name": "No",
+              "value": "0"
+            },
+            {
+              "name": "Yes",
+              "value": "1"
+            }
+          ]
+        },
+        {
+          "name": "ExpiryDate",
+          "type": "DateTime",
+          "maxLen": 10,
+          "value": "",
+          "compulsory": true
+        }
+      ],
+      "response": []
+    },
+    "ReadDeviceModuleSupportByFirmware": {
+      "cmdByte": "0x4E",
+      "operation": "FlagsModule is a char with bits representing modules supported by the firmware",
+      "args": [
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "R",
+          "compulsory": true
+        },
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "D",
+          "compulsory": true
+        },
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "S",
+          "compulsory": true
+        }
+      ],
+      "response": [
+        {
+          "name": "OptionLAN",
+          "type": "Option",
+          "maxLen": 1,
+          "options": [
+            {
+              "name": "No",
+              "value": "0"
+            },
+            {
+              "name": "Yes",
+              "value": "1"
+            }
+          ]
+        },
+        {
+          "name": "OptionWiFi",
+          "type": "Option",
+          "maxLen": 1,
+          "options": [
+            {
+              "name": "No",
+              "value": "0"
+            },
+            {
+              "name": "Yes",
+              "value": "1"
+            }
+          ]
+        },
+        {
+          "name": "OptionGPRS",
+          "type": "Option",
+          "maxLen": 1,
+          "options": [
+            {
+              "name": "No",
+              "value": "0"
+            },
+            {
+              "name": "Yes",
+              "value": "1"
+            }
+          ]
+        },
+        {
+          "name": "OptionBT",
+          "type": "Option",
+          "maxLen": 1,
+          "options": [
+            {
+              "name": "No",
+              "value": "0"
+            },
+            {
+              "name": "Yes",
+              "value": "1"
+            }
+          ]
+        }
+      ]
+    },
+    "ReadWiFi_Password": {
+      "cmdByte": "0x4E",
+      "operation": "Providing information about WiFi password where the device is connected.",
+      "args": [
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "R",
+          "compulsory": true
+        },
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "W",
+          "compulsory": true
+        },
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "P",
+          "compulsory": true
+        }
+      ],
+      "response": [
+        {
+          "name": "PassLength",
+          "type": "Decimal",
+          "maxLen": 3
+        },
+        {
+          "name": "Password",
+          "type": "Text",
+          "maxLen": 100
+        }
+      ]
+    },
+    "ReadEJByPINofBuyer_JSON": {
+      "cmdByte": "0x7C",
+      "operation": "Read Electronic Journal Report by PIN number of buyer in the JSON format. The number of bytes equal to Length for JSON data must be read subsequently.",
+      "args": [
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 2,
+          "value": "JY",
+          "compulsory": true
+        },
+        {
+          "name": "OptionPINReportFormat",
+          "type": "Option",
+          "maxLen": 1,
+          "value": "",
+          "compulsory": true,
+          "options": [
+            {
+              "name": "Brief EJ",
+              "value": "p"
+            },
+            {
+              "name": "Detailed EJ",
+              "value": "P"
+            }
+          ]
+        },
+        {
+          "name": "PINnumber",
+          "type": "Text",
+          "maxLen": 11,
+          "value": "",
+          "compulsory": true
+        }
+      ],
+      "response": [
+        {
+          "name": "Length",
+          "type": "Decimal",
+          "maxLen": 10
+        }
+      ]
+    },
+    "ReadNTP_Address": {
+      "cmdByte": "0x4E",
+      "operation": "Provides information about device's NTP address.",
+      "args": [
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "R",
+          "compulsory": true
+        },
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "S",
+          "compulsory": true
+        },
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "N",
+          "compulsory": true
+        }
+      ],
+      "response": [
+        {
+          "name": "AddressLen",
+          "type": "Decimal",
+          "maxLen": 3
+        },
+        {
+          "name": "NTPAddress",
+          "type": "Text",
+          "maxLen": 50
+        }
+      ]
+    },
+    "ReadDailyAmountsByVAT": {
+      "cmdByte": "0x6D",
+      "operation": "Provides information about the accumulated amounts and refunded amounts by VAT class in case that CU regularly informs about the Z report(7C)",
+      "args": [],
+      "response": [
+        {
+          "name": "SaleVATGrA",
+          "type": "Decimal",
+          "maxLen": 15
+        },
+        {
+          "name": "SaleVATGrB",
+          "type": "Decimal",
+          "maxLen": 15
+        },
+        {
+          "name": "SaleVATGrC",
+          "type": "Decimal",
+          "maxLen": 15
+        },
+        {
+          "name": "SaleVATGrD",
+          "type": "Decimal",
+          "maxLen": 15
+        },
+        {
+          "name": "SaleTurnoverVATGrE",
+          "type": "Decimal",
+          "maxLen": 15
+        },
+        {
+          "name": "SaleTurnoverABCD",
+          "type": "Decimal",
+          "maxLen": 15
+        },
+        {
+          "name": "RefundVATGrA",
+          "type": "Decimal",
+          "maxLen": 15
+        },
+        {
+          "name": "RefundVATGrB",
+          "type": "Decimal",
+          "maxLen": 15
+        },
+        {
+          "name": "RefundVATGrC",
+          "type": "Decimal",
+          "maxLen": 15
+        },
+        {
+          "name": "RefundVATGrD",
+          "type": "Decimal",
+          "maxLen": 15
+        },
+        {
+          "name": "RefundTurnoverVATGrE",
+          "type": "Decimal",
+          "maxLen": 15
+        },
+        {
+          "name": "RefundTurnoverABCD",
+          "type": "Decimal",
+          "maxLen": 15
+        }
+      ]
+    },
+    "ReadTotalMessagesCount": {
+      "cmdByte": "0x4E",
+      "operation": "Reads all messages from log",
+      "args": [
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "R",
+          "compulsory": true
+        },
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "L",
+          "compulsory": true
+        },
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "0",
+          "compulsory": true
+        }
+      ],
+      "response": [
+        {
+          "name": "Count",
+          "type": "Text",
+          "maxLen": 3
+        }
+      ]
+    },
+    "SetInvoice_ThresholdCount": {
+      "cmdByte": "0x4E",
+      "operation": "Programs invoice threshold count",
+      "args": [
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "P",
+          "compulsory": true
+        },
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "S",
+          "compulsory": true
+        },
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "I",
+          "compulsory": true
+        },
+        {
+          "name": "Value",
+          "type": "Decimal",
+          "maxLen": 5,
+          "value": "",
+          "compulsory": true
+        }
+      ],
+      "response": []
+    },
+    "SetServer_UsedComModule": {
+      "cmdByte": "0x4E",
+      "operation": "Program device used to talk with the server . To apply use - SaveNetworkSettings()",
+      "args": [
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "P",
+          "compulsory": true
+        },
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "S",
+          "compulsory": true
+        },
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "E",
+          "compulsory": true
+        },
+        {
+          "name": "OptionModule",
+          "type": "Option",
+          "maxLen": 1,
+          "value": "",
+          "compulsory": true,
+          "options": [
+            {
+              "name": "GSM",
+              "value": "0"
+            },
+            {
+              "name": "LAN/WiFi",
+              "value": "1"
+            }
+          ]
+        }
+      ],
+      "response": []
+    },
+    "SetTCP_Password": {
+      "cmdByte": "0x4E",
+      "operation": "Program device's TCP password. To apply use - SaveNetworkSettings()",
+      "args": [
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "P",
+          "compulsory": true
+        },
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "Z",
+          "compulsory": true
+        },
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "1",
+          "compulsory": true
+        },
+        {
+          "name": "PassLength",
+          "type": "Decimal",
+          "maxLen": 3,
+          "value": "",
+          "compulsory": true
+        },
+        {
+          "name": "Password",
+          "type": "Text",
+          "maxLen": 100,
+          "value": "",
+          "compulsory": true
+        }
+      ],
+      "response": []
+    },
+    "SetGPRS_AuthenticationType": {
+      "cmdByte": "0x4E",
+      "operation": "Programs GPRS APN authentication type",
+      "args": [
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "P",
+          "compulsory": true
+        },
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "G",
+          "compulsory": true
+        },
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "N",
+          "compulsory": true
+        },
+        {
+          "name": "OptionAuthenticationType",
+          "type": "Option",
+          "maxLen": 1,
+          "value": "",
+          "compulsory": true,
+          "options": [
+            {
+              "name": "CHAP",
+              "value": "2"
+            },
+            {
+              "name": "None",
+              "value": "0"
+            },
+            {
+              "name": "PAP",
+              "value": "1"
+            },
+            {
+              "name": "PAP or CHAP",
+              "value": "3"
+            }
+          ]
+        }
+      ],
+      "response": []
+    },
+    "ReadCurrentReceiptInfo": {
+      "cmdByte": "0x72",
+      "operation": "Read the current status of the receipt.",
+      "args": [],
+      "response": [
+        {
+          "name": "OptionIsReceiptOpened",
+          "type": "Option",
+          "maxLen": 1,
+          "options": [
+            {
+              "name": "No",
+              "value": "0"
+            },
+            {
+              "name": "Yes",
+              "value": "1"
+            }
+          ]
+        },
+        {
+          "name": "SalesNumber",
+          "type": "Text",
+          "maxLen": 3
+        },
+        {
+          "name": "SubtotalAmountVATGA",
+          "type": "Decimal",
+          "maxLen": 13
+        },
+        {
+          "name": "SubtotalAmountVATGB",
+          "type": "Decimal",
+          "maxLen": 13
+        },
+        {
+          "name": "SubtotalAmountVATGC",
+          "type": "Decimal",
+          "maxLen": 13
+        },
+        {
+          "name": "SubtotalAmountVATGD",
+          "type": "Decimal",
+          "maxLen": 13
+        },
+        {
+          "name": "SubtotalAmountVATGE",
+          "type": "Decimal",
+          "maxLen": 13
+        },
+        {
+          "name": "reserved",
+          "type": "OptionHardcoded",
+          "maxLen": 1
+        },
+        {
+          "name": "reserved",
+          "type": "OptionHardcoded",
+          "maxLen": 1
+        },
+        {
+          "name": "OptionReceiptFormat",
+          "type": "Option",
+          "maxLen": 1,
+          "options": [
+            {
+              "name": "Brief",
+              "value": "0"
+            },
+            {
+              "name": "Detailed",
+              "value": "1"
+            }
+          ]
+        },
+        {
+          "name": "reserved",
+          "type": "OptionHardcoded",
+          "maxLen": 1
+        },
+        {
+          "name": "reserved",
+          "type": "OptionHardcoded",
+          "maxLen": 1
+        },
+        {
+          "name": "OptionClientReceipt",
+          "type": "Option",
+          "maxLen": 1,
+          "options": [
+            {
+              "name": "invoice (client) receipt",
+              "value": "1"
+            },
+            {
+              "name": "standard receipt",
+              "value": "0"
+            }
+          ]
+        },
+        {
+          "name": "OptionPowerDownInReceipt",
+          "type": "Option",
+          "maxLen": 1,
+          "options": [
+            {
+              "name": "No",
+              "value": "0"
+            },
+            {
+              "name": "Yes",
+              "value": "1"
+            }
+          ]
+        },
+        {
+          "name": "reserved",
+          "type": "OptionHardcoded",
+          "maxLen": 1
+        }
+      ]
+    },
+    "ReadEJ": {
+      "cmdByte": "0x7C",
+      "operation": "Read whole Electronic Journal report from beginning to the end.",
+      "args": [
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 2,
+          "value": "J0",
+          "compulsory": true
+        },
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "*",
+          "compulsory": true
+        }
+      ],
+      "response": []
+    },
+    "ScanWiFiNetworks": {
+      "cmdByte": "0x4E",
+      "operation": "The device scan out the list of available WiFi networks.",
+      "args": [
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "R",
+          "compulsory": true
+        },
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "W",
+          "compulsory": true
+        },
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "S",
+          "compulsory": true
+        }
+      ],
+      "response": []
+    },
+    "SetDeviceTCP_Addresses": {
+      "cmdByte": "0x4E",
+      "operation": "Program device's network IP address, subnet mask, gateway address, DNS address. To apply use -SaveNetworkSettings()",
+      "args": [
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "P",
+          "compulsory": true
+        },
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "T",
+          "compulsory": true
+        },
+        {
+          "name": "OptionAddressType",
+          "type": "Option",
+          "maxLen": 1,
+          "value": "",
+          "compulsory": true,
+          "options": [
+            {
+              "name": "DNS address",
+              "value": "5"
+            },
+            {
+              "name": "Gateway address",
+              "value": "4"
+            },
+            {
+              "name": "IP address",
+              "value": "2"
+            },
+            {
+              "name": "Subnet Mask",
+              "value": "3"
+            }
+          ]
+        },
+        {
+          "name": "DeviceAddress",
+          "type": "Text",
+          "maxLen": 15,
+          "value": "",
+          "compulsory": true
+        }
+      ],
+      "response": []
+    },
+    "ReadEJByDate_JSON": {
+      "cmdByte": "0x7C",
+      "operation": "Read Electronic Journal Report by initial to end date in the JSON format. The number of bytes equal to Length for JSON data must be read subsequently.",
+      "args": [
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 2,
+          "value": "JY",
+          "compulsory": true
+        },
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "D",
+          "compulsory": true
+        },
+        {
+          "name": "StartRepFromDate",
+          "type": "DateTime",
+          "maxLen": 10,
+          "value": "",
+          "compulsory": true
+        },
+        {
+          "name": "EndRepFromDate",
+          "type": "DateTime",
+          "maxLen": 10,
+          "value": "",
+          "compulsory": true
+        }
+      ],
+      "response": [
+        {
+          "name": "Length",
+          "type": "Decimal",
+          "maxLen": 10
+        }
+      ]
+    },
+    "ReadEJByTraderSystemInvNum_JSON": {
+      "cmdByte": "0x7C",
+      "operation": "Read Electronic Journal Report by Trader System Invoice Number (Single Invoice) in the JSON format. The number of bytes equal to Length for JSON data must be read subsequently.",
+      "args": [
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 2,
+          "value": "JY",
+          "compulsory": true
+        },
+        {
+          "name": "OptionTraderSystemReportFormat",
+          "type": "Option",
+          "maxLen": 1,
+          "value": "",
+          "compulsory": true,
+          "options": [
+            {
+              "name": "Brief EJ",
+              "value": "s"
+            },
+            {
+              "name": "Detailed EJ",
+              "value": "S"
+            }
+          ]
+        },
+        {
+          "name": "TraderSystemInvNum",
+          "type": "Text",
+          "maxLen": 15,
+          "value": "",
+          "compulsory": true
+        }
+      ],
+      "response": [
+        {
+          "name": "Length",
+          "type": "Decimal",
+          "maxLen": 10
+        }
+      ]
+    },
+    "ReadStatus": {
+      "cmdByte": "0x20",
+      "operation": "Provides detailed 6-byte information about the current status of the CU.",
+      "args": [],
+      "response": [
+        {
+          "name": "Power_down_in_opened_fiscal_receipt",
+          "type": "Status",
+          "byte": 0,
+          "bit": 1
+        },
+        {
+          "name": "DateTime_not_set",
+          "type": "Status",
+          "byte": 0,
+          "bit": 3
+        },
+        {
+          "name": "DateTime_wrong",
+          "type": "Status",
+          "byte": 0,
+          "bit": 4
+        },
+        {
+          "name": "RAM_reset",
+          "type": "Status",
+          "byte": 0,
+          "bit": 5
+        },
+        {
+          "name": "Hardware_clock_error",
+          "type": "Status",
+          "byte": 0,
+          "bit": 6
+        },
+        {
+          "name": "Reports_registers_Overflow",
+          "type": "Status",
+          "byte": 1,
+          "bit": 1
+        },
+        {
+          "name": "Opened_Fiscal_Receipt",
+          "type": "Status",
+          "byte": 2,
+          "bit": 1
+        },
+        {
+          "name": "Receipt_Invoice_Type",
+          "type": "Status",
+          "byte": 2,
+          "bit": 2
+        },
+        {
+          "name": "SD_card_near_full",
+          "type": "Status",
+          "byte": 2,
+          "bit": 5
+        },
+        {
+          "name": "SD_card_full",
+          "type": "Status",
+          "byte": 2,
+          "bit": 6
+        },
+        {
+          "name": "CU_fiscalized",
+          "type": "Status",
+          "byte": 3,
+          "bit": 5
+        },
+        {
+          "name": "CU_produced",
+          "type": "Status",
+          "byte": 3,
+          "bit": 6
+        },
+        {
+          "name": "Paired_with_TIMS",
+          "type": "Status",
+          "byte": 4,
+          "bit": 0
+        },
+        {
+          "name": "Unsent_receipts",
+          "type": "Status",
+          "byte": 4,
+          "bit": 1
+        },
+        {
+          "name": "Service_contract_nearly_expired",
+          "type": "Status",
+          "byte": 4,
+          "bit": 2
+        },
+        {
+          "name": "No_Sec_IC",
+          "type": "Status",
+          "byte": 5,
+          "bit": 0
+        },
+        {
+          "name": "No_certificates",
+          "type": "Status",
+          "byte": 5,
+          "bit": 1
+        },
+        {
+          "name": "Service_jumper",
+          "type": "Status",
+          "byte": 5,
+          "bit": 2
+        },
+        {
+          "name": "Expired_service_contract",
+          "type": "Status",
+          "byte": 5,
+          "bit": 3
+        },
+        {
+          "name": "Missing_SD_card",
+          "type": "Status",
+          "byte": 5,
+          "bit": 4
+        },
+        {
+          "name": "Wrong_SD_card",
+          "type": "Status",
+          "byte": 5,
+          "bit": 5
+        },
+        {
+          "name": "Update_is_available",
+          "type": "Status",
+          "byte": 5,
+          "bit": 6
+        }
+      ]
+    },
+    "OpenReceipt": {
+      "cmdByte": "0x30",
+      "operation": "Opens a fiscal receipt assigned to the specified operator number and operator password, parameters for receipt format and VAT type.",
+      "args": [
+        {
+          "name": "reserved",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "1",
+          "compulsory": true
+        },
+        {
+          "name": "reserved",
+          "type": "OptionHardcoded",
+          "maxLen": 6,
+          "value": "     0",
+          "compulsory": true
+        },
+        {
+          "name": "OptionReceiptFormat",
+          "type": "Option",
+          "maxLen": 1,
+          "value": "",
+          "compulsory": true,
+          "options": [
+            {
+              "name": "Brief",
+              "value": "0"
+            },
+            {
+              "name": "Detailed",
+              "value": "1"
+            }
+          ]
+        },
+        {
+          "name": "ReceiptType",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "0",
+          "compulsory": true
+        },
+        {
+          "name": "TraderSystemInvNum",
+          "type": "Text",
+          "maxLen": 15,
+          "value": "",
+          "compulsory": true
+        }
+      ],
+      "response": []
+    },
+    "SetDateTime": {
+      "cmdByte": "0x48",
+      "operation": "Sets the date and time and current values.",
+      "args": [
+        {
+          "name": "DateTime",
+          "type": "DateTime",
+          "maxLen": 10,
+          "value": "",
+          "compulsory": true
+        }
+      ],
+      "response": []
+    },
+    "SellPLUfromExtDB": {
+      "cmdByte": "0x31",
+      "operation": "Register the sell (for correction use minus sign in the price field) of article with specified name, price, quantity, VAT class and/or discount/addition on the transaction.",
+      "args": [
+        {
+          "name": "NamePLU",
+          "type": "Text",
+          "maxLen": 36,
+          "value": "",
+          "compulsory": true
+        },
+        {
+          "name": "OptionVATClass",
+          "type": "Option",
+          "maxLen": 1,
+          "value": "",
+          "compulsory": true,
+          "options": [
+            {
+              "name": "VAT Class A",
+              "value": "A"
+            }
+          ]
+        },
+        {
+          "name": "Price",
+          "type": "Decimal",
+          "maxLen": 15,
+          "value": "",
+          "compulsory": true
+        },
+        {
+          "name": "MeasureUnit",
+          "type": "Text",
+          "maxLen": 3,
+          "value": "",
+          "compulsory": true
+        },
+        {
+          "name": "HSCode",
+          "type": "Text",
+          "maxLen": 10,
+          "value": "",
+          "compulsory": true
+        },
+        {
+          "name": "HSName",
+          "type": "Text",
+          "maxLen": 20,
+          "value": "",
+          "compulsory": true
+        },
+        {
+          "name": "VATGrRate",
+          "type": "Decimal",
+          "maxLen": 5,
+          "value": "",
+          "compulsory": true
+        },
+        {
+          "name": "Quantity",
+          "type": "Decimal",
+          "maxLen": 10,
+          "value": "",
+          "compulsory": false
+        },
+        {
+          "name": "DiscAddP",
+          "type": "Decimal",
+          "maxLen": 7,
+          "value": "",
+          "compulsory": false
+        }
+      ],
+      "response": []
+    },
+    "StartGPRStest": {
+      "cmdByte": "0x4E",
+      "operation": "Start GPRS test on the device the result",
+      "args": [
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "R",
+          "compulsory": true
+        },
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "G",
+          "compulsory": true
+        },
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "T",
+          "compulsory": true
+        }
+      ],
+      "response": []
+    },
+    "OpenSellAndCloseInvoice": {
+      "cmdByte": "0x2C",
+      "operation": "Opens invoice after which makes sell of article with specified name, price, quantity, VAT class and/or discount/addition on the transaction and then closes the invoice",
+      "args": [
+        {
+          "name": "InvoiceType",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "1",
+          "compulsory": true
+        },
+        {
+          "name": "ClientPINnum",
+          "type": "Text",
+          "maxLen": 14,
+          "value": "",
+          "compulsory": true
+        },
+        {
+          "name": "ExemptionNum",
+          "type": "Text",
+          "maxLen": 15,
+          "value": "",
+          "compulsory": true
+        },
+        {
+          "name": "TraderSystemInvNum",
+          "type": "Text",
+          "maxLen": 15,
+          "value": "",
+          "compulsory": true
+        },
+        {
+          "name": "NamePLU",
+          "type": "Text",
+          "maxLen": 36,
+          "value": "",
+          "compulsory": true
+        },
+        {
+          "name": "OptionVATClass",
+          "type": "Option",
+          "maxLen": 1,
+          "value": "",
+          "compulsory": true,
+          "options": [
+            {
+              "name": "VAT Class A",
+              "value": "A"
+            }
+          ]
+        },
+        {
+          "name": "Price",
+          "type": "Decimal",
+          "maxLen": 15,
+          "value": "",
+          "compulsory": true
+        },
+        {
+          "name": "MeasureUnit",
+          "type": "Text",
+          "maxLen": 3,
+          "value": "",
+          "compulsory": true
+        },
+        {
+          "name": "HSCode",
+          "type": "Text",
+          "maxLen": 10,
+          "value": "",
+          "compulsory": true
+        },
+        {
+          "name": "Quantity",
+          "type": "Decimal",
+          "maxLen": 10,
+          "value": "",
+          "compulsory": false
+        },
+        {
+          "name": "DiscAddP",
+          "type": "Decimal",
+          "maxLen": 7,
+          "value": "",
+          "compulsory": false
+        }
+      ],
+      "response": [
+        {
+          "name": "InvoiceNum",
+          "type": "Text",
+          "maxLen": 19
+        },
+        {
+          "name": "QRcode",
+          "type": "Text",
+          "maxLen": 128
+        }
+      ]
+    },
+    "OpenInvoiceWithFreeCustomerData": {
+      "cmdByte": "0x30",
+      "operation": "Opens a fiscal invoice receipt assigned to the specified operator number and operator password with free info for customer data. The Invoice receipt can be issued only if the invoice range (start and end numbers) is set.",
+      "args": [
+        {
+          "name": "reserved",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "1",
+          "compulsory": true
+        },
+        {
+          "name": "reserved",
+          "type": "OptionHardcoded",
+          "maxLen": 6,
+          "value": "     0",
+          "compulsory": true
+        },
+        {
+          "name": "reserved",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "0",
+          "compulsory": true
+        },
+        {
+          "name": "InvoiceType",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "1",
+          "compulsory": true
+        },
+        {
+          "name": "CompanyName",
+          "type": "Text",
+          "maxLen": 30,
+          "value": "",
+          "compulsory": true
+        },
+        {
+          "name": "ClientPINnum",
+          "type": "Text",
+          "maxLen": 14,
+          "value": "",
+          "compulsory": true
+        },
+        {
+          "name": "HeadQuarters",
+          "type": "Text",
+          "maxLen": 30,
+          "value": "",
+          "compulsory": true
+        },
+        {
+          "name": "Address",
+          "type": "Text",
+          "maxLen": 30,
+          "value": "",
+          "compulsory": true
+        },
+        {
+          "name": "PostalCodeAndCity",
+          "type": "Text",
+          "maxLen": 30,
+          "value": "",
+          "compulsory": true
+        },
+        {
+          "name": "ExemptionNum",
+          "type": "Text",
+          "maxLen": 30,
+          "value": "",
+          "compulsory": true
+        },
+        {
+          "name": "TraderSystemInvNum",
+          "type": "Text",
+          "maxLen": 15,
+          "value": "",
+          "compulsory": true
+        }
+      ],
+      "response": []
+    },
+    "SetGPRS_Password": {
+      "cmdByte": "0x4E",
+      "operation": "Program device's GPRS password. To apply use - SaveNetworkSettings()",
+      "args": [
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "P",
+          "compulsory": true
+        },
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "G",
+          "compulsory": true
+        },
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "P",
+          "compulsory": true
+        },
+        {
+          "name": "PassLength",
+          "type": "Decimal",
+          "maxLen": 3,
+          "value": "",
+          "compulsory": true
+        },
+        {
+          "name": "Password",
+          "type": "Text",
+          "maxLen": 100,
+          "value": "",
+          "compulsory": true
+        }
+      ],
+      "response": []
+    },
+    "SoftwareReset": {
+      "cmdByte": "0x3F",
+      "operation": "Restore default parameters of the device.",
+      "args": [
+        {
+          "name": "Password",
+          "type": "Text",
+          "maxLen": 6,
+          "value": "",
+          "compulsory": true
+        }
+      ],
+      "response": []
+    },
+    "DailyReport": {
+      "cmdByte": "0x7C",
+      "operation": "Provides information for the daily fiscal report  with zeroing and fiscal memory record, preceded by Electronic Journal report.",
+      "args": [
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "Z",
+          "compulsory": true
+        }
+      ],
+      "response": []
+    },
+    "ReadTCP_Password": {
+      "cmdByte": "0x4E",
+      "operation": "Provides information about device's TCP password.",
+      "args": [
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "R",
+          "compulsory": true
+        },
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "Z",
+          "compulsory": true
+        },
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "1",
+          "compulsory": true
+        }
+      ],
+      "response": [
+        {
+          "name": "PassLength",
+          "type": "Decimal",
+          "maxLen": 3
+        },
+        {
+          "name": "Password",
+          "type": "Text",
+          "maxLen": 100
+        }
+      ]
+    },
+    "ProgVATrates": {
+      "cmdByte": "0x42",
+      "operation": "Stores a block containing the values of the VAT rates into the CU",
+      "args": [
+        {
+          "name": "Password",
+          "type": "Text",
+          "maxLen": 6,
+          "value": "",
+          "compulsory": true
+        },
+        {
+          "name": "VATrateA",
+          "type": "Decimal_with_format",
+          "maxLen": 6,
+          "value": "",
+          "compulsory": true
+        },
+        {
+          "name": "VATrateB",
+          "type": "Decimal_with_format",
+          "maxLen": 6,
+          "value": "",
+          "compulsory": true
+        },
+        {
+          "name": "VATrateC",
+          "type": "Decimal_with_format",
+          "maxLen": 6,
+          "value": "",
+          "compulsory": true
+        },
+        {
+          "name": "VATrateD",
+          "type": "Decimal_with_format",
+          "maxLen": 6,
+          "value": "",
+          "compulsory": true
+        },
+        {
+          "name": "VATrateE",
+          "type": "Decimal_with_format",
+          "maxLen": 6,
+          "value": "",
+          "compulsory": true
+        }
+      ],
+      "response": []
+    },
+    "SetDeviceNTP_Address": {
+      "cmdByte": "0x4E",
+      "operation": "Program device's NTP address . To apply use - SaveNetworkSettings()",
+      "args": [
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "P",
+          "compulsory": true
+        },
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "S",
+          "compulsory": true
+        },
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "N",
+          "compulsory": true
+        },
+        {
+          "name": "AddressLen",
+          "type": "Decimal",
+          "maxLen": 3,
+          "value": "",
+          "compulsory": true
+        },
+        {
+          "name": "NTPAddress",
+          "type": "Text",
+          "maxLen": 50,
+          "value": "",
+          "compulsory": true
+        }
+      ],
+      "response": []
+    },
+    "ReadEJByDate": {
+      "cmdByte": "0x7C",
+      "operation": "Read Electronic Journal Report by initial to end date.",
+      "args": [
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 2,
+          "value": "J0",
+          "compulsory": true
+        },
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "D",
+          "compulsory": true
+        },
+        {
+          "name": "StartRepFromDate",
+          "type": "DateTime",
+          "maxLen": 10,
+          "value": "",
+          "compulsory": true
+        },
+        {
+          "name": "EndRepFromDate",
+          "type": "DateTime",
+          "maxLen": 10,
+          "value": "",
+          "compulsory": true
+        }
+      ],
+      "response": []
+    },
+    "StoreEJByPINofBuyer": {
+      "cmdByte": "0x7C",
+      "operation": "Store Electronic Journal Report by PIN number of buyer to External SD card.",
+      "args": [
+        {
+          "name": "OptionReportStorage",
+          "type": "Option",
+          "maxLen": 2,
+          "value": "",
+          "compulsory": true,
+          "options": [
+            {
+              "name": "Storage in External SD card memory",
+              "value": "J4"
+            },
+            {
+              "name": "Storage in External SD card memory for JSON",
+              "value": "JX"
+            }
+          ]
+        },
+        {
+          "name": "OptionPINReportFormat",
+          "type": "Option",
+          "maxLen": 1,
+          "value": "",
+          "compulsory": true,
+          "options": [
+            {
+              "name": "Brief EJ",
+              "value": "p"
+            },
+            {
+              "name": "Detailed EJ",
+              "value": "P"
+            }
+          ]
+        },
+        {
+          "name": "PINnumber",
+          "type": "Text",
+          "maxLen": 11,
+          "value": "",
+          "compulsory": true
+        }
+      ],
+      "response": []
+    },
+    "StoreEJByDateTime": {
+      "cmdByte": "0x7C",
+      "operation": "Store Electronic Journal Report from report from datetime to datetime to External SD card.",
+      "args": [
+        {
+          "name": "OptionReportStorage",
+          "type": "Option",
+          "maxLen": 2,
+          "value": "",
+          "compulsory": true,
+          "options": [
+            {
+              "name": "Storage in External SD card memory",
+              "value": "J4"
+            },
+            {
+              "name": "Storage in External SD card memory for JSON",
+              "value": "JX"
+            }
+          ]
+        },
+        {
+          "name": "OptionReportFormat",
+          "type": "Option",
+          "maxLen": 1,
+          "value": "",
+          "compulsory": true,
+          "options": [
+            {
+              "name": "Brief EJ",
+              "value": "t"
+            },
+            {
+              "name": "Detailed EJ",
+              "value": "T"
+            }
+          ]
+        },
+        {
+          "name": "StartRepFromDate",
+          "type": "DateTime",
+          "maxLen": 10,
+          "value": "",
+          "compulsory": true
+        },
+        {
+          "name": "EndRepFromDate",
+          "type": "DateTime",
+          "maxLen": 10,
+          "value": "",
+          "compulsory": true
+        }
+      ],
+      "response": []
+    },
+    "InfoLastReceiptDuplicate": {
+      "cmdByte": "0x3A",
+      "operation": "Informs about the issued document",
+      "args": [],
+      "response": []
+    },
+    "StoreEJByTraderSystemInvNum": {
+      "cmdByte": "0x7C",
+      "operation": "Store Electronic Journal Report by Trader System Invoice Number (Single Invoice) to External SD card.",
+      "args": [
+        {
+          "name": "OptionReportStorage",
+          "type": "Option",
+          "maxLen": 2,
+          "value": "",
+          "compulsory": true,
+          "options": [
+            {
+              "name": "Storage in External SD card memory",
+              "value": "J4"
+            },
+            {
+              "name": "Storage in External SD card memory for JSON",
+              "value": "JX"
+            }
+          ]
+        },
+        {
+          "name": "OptionTraderSystemReportFormat",
+          "type": "Option",
+          "maxLen": 1,
+          "value": "",
+          "compulsory": true,
+          "options": [
+            {
+              "name": "Brief EJ",
+              "value": "s"
+            },
+            {
+              "name": "Detailed EJ",
+              "value": "S"
+            }
+          ]
+        },
+        {
+          "name": "TraderSystemInvNum",
+          "type": "Text",
+          "maxLen": 15,
+          "value": "",
+          "compulsory": true
+        }
+      ],
+      "response": []
+    },
+    "SetIdle_Timeout": {
+      "cmdByte": "0x4E",
+      "operation": "Program device's idle timeout setting. Set timeout for closing the connection if there is an inactivity. Maximal value - 7200, minimal value 1. 0 is for never close the connection. This option can be used only if the device has LAN or WiFi. To apply use - SaveNetworkSettings()",
+      "args": [
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "P",
+          "compulsory": true
+        },
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "Z",
+          "compulsory": true
+        },
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "I",
+          "compulsory": true
+        },
+        {
+          "name": "IdleTimeout",
+          "type": "Decimal_with_format",
+          "maxLen": 4,
+          "value": "",
+          "compulsory": true
+        }
+      ],
+      "response": []
+    },
+    "ReadTCP_AutoStartStatus": {
+      "cmdByte": "0x4E",
+      "operation": "Provides information about if the TCP connection autostart when the device enter in Line/Sale mode.",
+      "args": [
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "R",
+          "compulsory": true
+        },
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "Z",
+          "compulsory": true
+        },
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "2",
+          "compulsory": true
+        }
+      ],
+      "response": [
+        {
+          "name": "OptionTCPAutoStart",
+          "type": "Option",
+          "maxLen": 1,
+          "options": [
+            {
+              "name": "No",
+              "value": "0"
+            },
+            {
+              "name": "Yes",
+              "value": "1"
+            }
+          ]
+        }
+      ]
+    },
+    "ReadGPRS_Password": {
+      "cmdByte": "0x4E",
+      "operation": "Provides information about device's GPRS password.",
+      "args": [
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "R",
+          "compulsory": true
+        },
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "G",
+          "compulsory": true
+        },
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "P",
+          "compulsory": true
+        }
+      ],
+      "response": [
+        {
+          "name": "PassLength",
+          "type": "Decimal",
+          "maxLen": 3
+        },
+        {
+          "name": "Password",
+          "type": "Text",
+          "maxLen": 100
+        }
+      ]
+    },
+    "ReadServer_UsedComModule": {
+      "cmdByte": "0x4E",
+      "operation": "Read device communication usage with server",
+      "args": [
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "R",
+          "compulsory": true
+        },
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "S",
+          "compulsory": true
+        },
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "E",
+          "compulsory": true
+        }
+      ],
+      "response": [
+        {
+          "name": "OptionModule",
+          "type": "Option",
+          "maxLen": 1,
+          "options": [
+            {
+              "name": "GSM",
+              "value": "0"
+            },
+            {
+              "name": "LAN/WiFi",
+              "value": "1"
+            }
+          ]
+        }
+      ]
+    },
+    "ProgContractWarningMessages": {
+      "cmdByte": "0x5A",
+      "operation": "Program the service contract expired warning message text.",
+      "args": [
+        {
+          "name": "Option",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "M",
+          "compulsory": true
+        },
+        {
+          "name": "Password",
+          "type": "Text",
+          "maxLen": 6,
+          "value": "",
+          "compulsory": true
+        },
+        {
+          "name": "Line1",
+          "type": "Text",
+          "maxLen": 64,
+          "value": "",
+          "compulsory": true
+        },
+        {
+          "name": "Line2",
+          "type": "Text",
+          "maxLen": 64,
+          "value": "",
+          "compulsory": true
+        },
+        {
+          "name": "Line3",
+          "type": "Text",
+          "maxLen": 64,
+          "value": "",
+          "compulsory": true
+        }
+      ],
+      "response": []
+    },
+    "ReadSpecificMessage": {
+      "cmdByte": "0x4E",
+      "operation": "Reads specific message number",
+      "args": [
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "R",
+          "compulsory": true
+        },
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "L",
+          "compulsory": true
+        },
+        {
+          "name": "MessageNum",
+          "type": "Text",
+          "maxLen": 2,
+          "value": "",
+          "compulsory": true
+        }
+      ],
+      "response": [
+        {
+          "name": "MessageNum",
+          "type": "Text",
+          "maxLen": 2
+        },
+        {
+          "name": "DateTime",
+          "type": "DateTime",
+          "maxLen": 10
+        },
+        {
+          "name": "Type",
+          "type": "Text",
+          "maxLen": 1
+        },
+        {
+          "name": "Code",
+          "type": "Text",
+          "maxLen": 3
+        },
+        {
+          "name": "MessageText",
+          "type": "Text",
+          "maxLen": 128
+        }
+      ]
+    },
+    "SetTcpPortNumber": {
+      "cmdByte": "0x4E",
+      "operation": "Program TCP port of the device.",
+      "args": [
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "P",
+          "compulsory": true
+        },
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "Z",
+          "compulsory": true
+        },
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "P",
+          "compulsory": true
+        },
+        {
+          "name": "TcpPortNumber",
+          "type": "Decimal_with_format",
+          "maxLen": 5,
+          "value": "",
+          "compulsory": true
+        }
+      ],
+      "response": []
+    },
+    "SetHTTPS_Address": {
+      "cmdByte": "0x4E",
+      "operation": "Programs server HTTPS address.",
+      "args": [
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "P",
+          "compulsory": true
+        },
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "S",
+          "compulsory": true
+        },
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "H",
+          "compulsory": true
+        },
+        {
+          "name": "ParamLength",
+          "type": "Decimal",
+          "maxLen": 3,
+          "value": "",
+          "compulsory": true
+        },
+        {
+          "name": "Address",
+          "type": "Text",
+          "maxLen": 50,
+          "value": "",
+          "compulsory": true
+        }
+      ],
+      "response": []
+    },
+    "Subtotal": {
+      "cmdByte": "0x33",
+      "operation": "Calculate the subtotal amount with printing and display visualization options. Provide information about values of the calculated amounts. If a percent or value discount/addition has been specified the subtotal and the discount/addition value will be printed regardless the parameter for printing.",
+      "args": [
+        {
+          "name": "OptionPrinting",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "0",
+          "compulsory": true
+        },
+        {
+          "name": "OptionDisplay",
+          "type": "Option",
+          "maxLen": 1,
+          "value": "",
+          "compulsory": true,
+          "options": [
+            {
+              "name": "No",
+              "value": "0"
+            },
+            {
+              "name": "Yes",
+              "value": "1"
+            }
+          ]
+        },
+        {
+          "name": "DiscAddV",
+          "type": "Decimal",
+          "maxLen": 13,
+          "value": "",
+          "compulsory": false
+        },
+        {
+          "name": "DiscAddP",
+          "type": "Decimal",
+          "maxLen": 7,
+          "value": "",
+          "compulsory": false
+        }
+      ],
+      "response": [
+        {
+          "name": "SubtotalValue",
+          "type": "Decimal",
+          "maxLen": 13
+        }
+      ]
+    },
+    "EraseHScodes": {
+      "cmdByte": "0x4F",
+      "operation": "Erase HS codes.",
+      "args": [
+        {
+          "name": "Option",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "z",
+          "compulsory": true
+        },
+        {
+          "name": "OptionR",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "D",
+          "compulsory": true
+        },
+        {
+          "name": "Password",
+          "type": "Text",
+          "maxLen": 6,
+          "value": "",
+          "compulsory": true
+        }
+      ],
+      "response": []
+    },
+    "SetPINnumber": {
+      "cmdByte": "0x41",
+      "operation": "Stores PIN number in operative memory.",
+      "args": [
+        {
+          "name": "Password",
+          "type": "Text",
+          "maxLen": 6,
+          "value": "",
+          "compulsory": true
+        },
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "1",
+          "compulsory": true
+        },
+        {
+          "name": "PINnum",
+          "type": "Text",
+          "maxLen": 11,
+          "value": "",
+          "compulsory": true
+        }
+      ],
+      "response": []
+    },
+    "ProgramProxyServerAddress": {
+      "cmdByte": "0x4E",
+      "operation": "Program the proxy server address.",
+      "args": [
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "P",
+          "compulsory": true
+        },
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "S",
+          "compulsory": true
+        },
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "P",
+          "compulsory": true
+        },
+        {
+          "name": "ParamLength",
+          "type": "Decimal",
+          "maxLen": 3,
+          "value": "",
+          "compulsory": true
+        },
+        {
+          "name": "Address",
+          "type": "Text",
+          "maxLen": 21,
+          "value": "",
+          "compulsory": true
+        }
+      ],
+      "response": []
+    },
+    "ReadEJByCUInvoiceNum_JSON": {
+      "cmdByte": "0x7C",
+      "operation": "Read Electronic Journal Report by CU Invoice Number (Multiple invoices) in the JSON format. The number of bytes equal to Length for JSON data must be read subsequently.",
+      "args": [
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 2,
+          "value": "JY",
+          "compulsory": true
+        },
+        {
+          "name": "OptionInvoiceReportFormat",
+          "type": "Option",
+          "maxLen": 1,
+          "value": "",
+          "compulsory": true,
+          "options": [
+            {
+              "name": "Brief EJ",
+              "value": "n"
+            },
+            {
+              "name": "Detailed EJ",
+              "value": "N"
+            }
+          ]
+        },
+        {
+          "name": "StartCUInvoiceNum",
+          "type": "Decimal_with_format",
+          "maxLen": 10,
+          "value": "",
+          "compulsory": true
+        },
+        {
+          "name": "EndCUInvoiceNum",
+          "type": "Decimal_with_format",
+          "maxLen": 10,
+          "value": "",
+          "compulsory": true
+        }
+      ],
+      "response": [
+        {
+          "name": "Length",
+          "type": "Decimal",
+          "maxLen": 10
+        }
+      ]
+    },
+    "ProgramServerReadingTimeout": {
+      "cmdByte": "0x4E",
+      "operation": "Programming timeout when reading from server. This timeout is seconds. Minimum value: 120, maximum value: 6000.",
+      "args": [
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "P",
+          "compulsory": true
+        },
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "S",
+          "compulsory": true
+        },
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "R",
+          "compulsory": true
+        },
+        {
+          "name": "ReadingTimeout",
+          "type": "Decimal_with_format",
+          "maxLen": 4,
+          "value": "",
+          "compulsory": true
+        }
+      ],
+      "response": []
+    },
+    "ReadOrStoreInvoiceCopy": {
+      "cmdByte": "0x7C",
+      "operation": "Read/Store Invoice receipt copy to External SD card.",
+      "args": [
+        {
+          "name": "OptionInvoiceCopy",
+          "type": "Option",
+          "maxLen": 2,
+          "value": "",
+          "compulsory": true,
+          "options": [
+            {
+              "name": "Reading",
+              "value": "J0"
+            },
+            {
+              "name": "Storage in External SD card memory",
+              "value": "J4"
+            }
+          ]
+        },
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "I",
+          "compulsory": true
+        },
+        {
+          "name": "CUInvoiceNum",
+          "type": "Text",
+          "maxLen": 10,
+          "value": "",
+          "compulsory": true
+        }
+      ],
+      "response": []
+    },
+    "ReadEODAmounts": {
+      "cmdByte": "0x6D",
+      "operation": "Provides information about the accumulated EOD turnover and VAT",
+      "args": [
+        {
+          "name": "Option",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "d",
+          "compulsory": true
+        }
+      ],
+      "response": [
+        {
+          "name": "Option",
+          "type": "OptionHardcoded",
+          "maxLen": 1
+        },
+        {
+          "name": "EOD_sale_turnover",
+          "type": "Decimal",
+          "maxLen": 20
+        },
+        {
+          "name": "EOD_credit_turnover",
+          "type": "Decimal",
+          "maxLen": 20
+        },
+        {
+          "name": "EOD_saleVAT",
+          "type": "Decimal",
+          "maxLen": 20
+        },
+        {
+          "name": "EOD_creditVAT",
+          "type": "Decimal",
+          "maxLen": 20
+        }
+      ]
+    },
+    "StartLANtest": {
+      "cmdByte": "0x4E",
+      "operation": "Start LAN test on the device the result",
+      "args": [
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "R",
+          "compulsory": true
+        },
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "T",
+          "compulsory": true
+        },
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "T",
+          "compulsory": true
+        }
+      ],
+      "response": []
+    },
+    "ReadDeviceModuleSupport": {
+      "cmdByte": "0x4E",
+      "operation": "FlagsModule is a char with bits representing modules supported by the device.",
+      "args": [
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "R",
+          "compulsory": true
+        },
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "D",
+          "compulsory": true
+        },
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "D",
+          "compulsory": true
+        }
+      ],
+      "response": [
+        {
+          "name": "OptionLAN",
+          "type": "Option",
+          "maxLen": 1,
+          "options": [
+            {
+              "name": "No",
+              "value": "0"
+            },
+            {
+              "name": "Yes",
+              "value": "1"
+            }
+          ]
+        },
+        {
+          "name": "OptionWiFi",
+          "type": "Option",
+          "maxLen": 1,
+          "options": [
+            {
+              "name": "No",
+              "value": "0"
+            },
+            {
+              "name": "Yes",
+              "value": "1"
+            }
+          ]
+        },
+        {
+          "name": "OptionGPRS",
+          "type": "Option",
+          "maxLen": 1,
+          "options": [
+            {
+              "name": "No",
+              "value": "0"
+            },
+            {
+              "name": "Yes",
+              "value": "1"
+            }
+          ]
+        },
+        {
+          "name": "OptionBT",
+          "type": "Option",
+          "maxLen": 1,
+          "options": [
+            {
+              "name": "No",
+              "value": "0"
+            },
+            {
+              "name": "Yes",
+              "value": "1"
+            }
+          ]
+        }
+      ]
+    },
+    "StoreEJByCUInvoiceNum": {
+      "cmdByte": "0x7C",
+      "operation": "Store Electronic Journal Report by CU Invoice Number (Multiple invoices) to External SD card.",
+      "args": [
+        {
+          "name": "OptionReportStorage",
+          "type": "Option",
+          "maxLen": 2,
+          "value": "",
+          "compulsory": true,
+          "options": [
+            {
+              "name": "Storage in External SD card memory",
+              "value": "J4"
+            },
+            {
+              "name": "Storage in External SD card memory for JSON",
+              "value": "JX"
+            }
+          ]
+        },
+        {
+          "name": "OptionInvoiceReportFormat",
+          "type": "Option",
+          "maxLen": 1,
+          "value": "",
+          "compulsory": true,
+          "options": [
+            {
+              "name": "Brief EJ",
+              "value": "n"
+            },
+            {
+              "name": "Detailed EJ",
+              "value": "N"
+            }
+          ]
+        },
+        {
+          "name": "StartCUInvoiceNum",
+          "type": "Decimal_with_format",
+          "maxLen": 10,
+          "value": "",
+          "compulsory": true
+        },
+        {
+          "name": "EndCUInvoiceNum",
+          "type": "Decimal_with_format",
+          "maxLen": 10,
+          "value": "",
+          "compulsory": true
+        }
+      ],
+      "response": []
+    },
+    "ReadWiFi_NetworkName": {
+      "cmdByte": "0x4E",
+      "operation": "Provides information about WiFi network name where the device is connected.",
+      "args": [
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "R",
+          "compulsory": true
+        },
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "W",
+          "compulsory": true
+        },
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "N",
+          "compulsory": true
+        }
+      ],
+      "response": [
+        {
+          "name": "WiFiNameLength",
+          "type": "Decimal",
+          "maxLen": 3
+        },
+        {
+          "name": "WiFiNetworkName",
+          "type": "Text",
+          "maxLen": 100
+        }
+      ]
+    },
+    "ReadVersion": {
+      "cmdByte": "0x21",
+      "operation": "Provides information about the device version.",
+      "args": [],
+      "response": [
+        {
+          "name": "Version",
+          "type": "Text",
+          "maxLen": 30
+        }
+      ]
+    },
+    "ReadContractWarningMessage": {
+      "cmdByte": "0x5A",
+      "operation": "Read the service contract warning message text.",
+      "args": [
+        {
+          "name": "Option",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "m",
+          "compulsory": true
+        }
+      ],
+      "response": [
+        {
+          "name": "Option",
+          "type": "OptionHardcoded",
+          "maxLen": 1
+        },
+        {
+          "name": "Line1",
+          "type": "Text",
+          "maxLen": 64
+        },
+        {
+          "name": "Line2",
+          "type": "Text",
+          "maxLen": 64
+        },
+        {
+          "name": "Line3",
+          "type": "Text",
+          "maxLen": 64
+        }
+      ]
+    },
+    "RawWrite": {
+      "cmdByte": "0xFE",
+      "operation": "Writes raw bytes to FP",
+      "args": [
+        {
+          "name": "Bytes",
+          "type": "Base64",
+          "maxLen": 5000,
+          "value": "",
+          "compulsory": true
+        }
+      ],
+      "response": []
+    },
+    "ProgHScode": {
+      "cmdByte": "0x4F",
+      "operation": "Programs HS code at a given position (HS number in order).",
+      "args": [
+        {
+          "name": "Option",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "Z",
+          "compulsory": true
+        },
+        {
+          "name": "OptionW",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "W",
+          "compulsory": true
+        },
+        {
+          "name": "HS_Number",
+          "type": "Decimal_with_format",
+          "maxLen": 4,
+          "value": "",
+          "compulsory": true
+        },
+        {
+          "name": "HS_Code",
+          "type": "Text",
+          "maxLen": 10,
+          "value": "",
+          "compulsory": true
+        },
+        {
+          "name": "HS_Name",
+          "type": "Text",
+          "maxLen": 20,
+          "value": "",
+          "compulsory": true
+        },
+        {
+          "name": "OptionTaxable",
+          "type": "Option",
+          "maxLen": 1,
+          "value": "",
+          "compulsory": true,
+          "options": [
+            {
+              "name": "Exempted",
+              "value": "1"
+            },
+            {
+              "name": "Taxable",
+              "value": "0"
+            }
+          ]
+        },
+        {
+          "name": "MesureUnit",
+          "type": "Text",
+          "maxLen": 3,
+          "value": "",
+          "compulsory": true
+        },
+        {
+          "name": "VAT_Rate",
+          "type": "Decimal_with_format",
+          "maxLen": 6,
+          "value": "",
+          "compulsory": true
+        }
+      ],
+      "response": []
+    },
+    "SetTime_ThresholdMinutes": {
+      "cmdByte": "0x4E",
+      "operation": "Programs time threshold minutes",
+      "args": [
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "P",
+          "compulsory": true
+        },
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "S",
+          "compulsory": true
+        },
+        {
+          "name": "",
+          "type": "OptionHardcoded",
+          "maxLen": 1,
+          "value": "T",
+          "compulsory": true
+        },
+        {
+          "name": "Value",
+          "type": "Decimal",
+          "maxLen": 5,
+          "value": "",
+          "compulsory": true
+        }
+      ],
+      "response": []
+    }
+  }
+}

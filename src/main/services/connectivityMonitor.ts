@@ -1,7 +1,7 @@
 /**
  * Connectivity monitor for the till's external dependencies — M-Pesa
- * (Daraja), the local fiscal device (ZFPLabServer), and the receipt
- * printer. Polls each on an interval (default 30s) plus an immediate
+ * (Daraja), the local fiscalization service (ZFPLabServer), and the
+ * receipt printer. Polls each on an interval (default 30s) plus an immediate
  * check on `start()`, and reports the full status set on every pass
  * (not just on transition) so a details view can show a live "last
  * checked"/"response time" even when nothing has changed.

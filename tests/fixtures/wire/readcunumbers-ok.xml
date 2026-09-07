@@ -1,0 +1,14 @@
+<!--
+  Authored from tremol-contract.json's ReadCUnumbers.response
+  (SerialNumber Text maxLen 20, PINnumber Text maxLen 11, in that order,
+  no other fields) + PDF §2.4.1 ("Command: 60h / ' - Read CU numbers" —
+  arg-free, output <SerialNumber[20]><;><PINnumber[11]>) — not captured
+  live (the running device never returned a Code-0 response during this
+  project's live sessions; see readstatus-live-captured-code19.xml).
+  SerialNumber is deliberately visibly synthetic ("MOCK-CU-" prefix) so
+  it can never be mistaken for a real Tremol-issued serial.
+-->
+<Res Code="0">
+  <Res Name="SerialNumber" Value="MOCK-CU-SERIAL-0001" Type="Text"/>
+  <Res Name="PINnumber" Value="00000000001" Type="Text"/>
+</Res>

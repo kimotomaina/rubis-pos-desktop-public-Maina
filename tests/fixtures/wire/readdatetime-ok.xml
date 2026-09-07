@@ -1,0 +1,8 @@
+<!--
+  Authored from tremol-contract.json's ReadDateTime.response (a single
+  DateTime field) + PDF §2.4.3 — not captured live. Format is
+  dd-MM-yyyy HH:mm:ss, per fp_core.js's Date.TremolFpFormat parse rule.
+-->
+<Res Code="0">
+  <Res Name="DateTime" Value="05-09-2026 14:30:00" Type="DateTime"/>
+</Res>

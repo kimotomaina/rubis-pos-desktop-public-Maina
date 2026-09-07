@@ -158,6 +158,9 @@ describe('RubisDatabase.init', () => {
     expect(fake.connection.exec).toHaveBeenCalledWith(SCHEMA.queueIndex)
     expect(fake.connection.exec).toHaveBeenCalledWith(SCHEMA.integrations)
     expect(fake.connection.exec).toHaveBeenCalledWith(SCHEMA.printers)
+    expect(fake.connection.exec).toHaveBeenCalledWith(SCHEMA.mpesaTransactions)
+    expect(fake.connection.exec).toHaveBeenCalledWith(SCHEMA.mpesaTransactionsCheckoutRequestIndex)
+    expect(fake.connection.exec).toHaveBeenCalledWith(SCHEMA.appConfigurations)
   })
 
   it('sets synchronous = NORMAL for faster writes without sacrificing WAL crash safety', () => {
@@ -181,6 +184,35 @@ describe('RubisDatabase.init', () => {
     db.init()
     db.init()
     expect(MockedDatabaseCtor).toHaveBeenCalledTimes(1)
+  })
+
+  it('adds all six fiscal_* columns to orders via ALTER TABLE (phase-71: the three new status columns)', () => {
+    db.init()
+
+    for (const column of [
+      'fiscal_invoice_number',
+      'fiscal_qr_code',
+      'fiscal_fiscalized_at',
+      'fiscal_status',
+      'fiscal_error_reason',
+      'fiscal_error_kind'
+    ]) {
+      expect(fake.connection.exec).toHaveBeenCalledWith(`ALTER TABLE orders ADD COLUMN ${column} TEXT`)
+    }
+  })
+
+  it('is safe to run against an already-migrated database — a duplicate-column throw from ALTER TABLE is swallowed', () => {
+    // Simulates a fresh RubisDatabase instance (e.g. app restart) opening
+    // a database that already has these columns from a previous run —
+    // real better-sqlite3 throws SQLITE_ERROR on a duplicate ADD COLUMN;
+    // migrateOrdersFiscalColumns must swallow that, not let init() throw.
+    fake.connection.exec.mockImplementation((sql: string) => {
+      if (sql.startsWith('ALTER TABLE orders ADD COLUMN')) {
+        throw new Error('SQLITE_ERROR: duplicate column name')
+      }
+    })
+
+    expect(() => db.init()).not.toThrow()
   })
 
   afterEach(() => {
@@ -499,6 +531,83 @@ describe('RubisDatabase.markFiscalQueueItemSynced', () => {
     expect(fake.callsFor('run', 'UPDATE orders')).toHaveLength(0)
     expect(fake.callsFor('run', 'DELETE FROM sync_queue')).toHaveLength(0)
   })
+
+  it('also writes fiscal_status = fiscalized (phase-71) — the same writer a queued retry\'s success uses', () => {
+    const { fake, db } = freshDb()
+    fake.setGetResult('FROM sync_queue WHERE id', { entity_id: 7 })
+
+    db.markFiscalQueueItemSynced(4, 'KRA-0001', 'base64qr')
+
+    const updates = fake.callsFor('run', "UPDATE orders SET fiscal_invoice_number")
+    expect(updates).toHaveLength(1)
+    expect(updates[0].sql).toContain("fiscal_status = 'fiscalized'")
+  })
+})
+
+describe('RubisDatabase.setOrderFiscalInfo', () => {
+  it('sets fiscal_status = fiscalized and clears any previous error reason/kind', () => {
+    const { fake, db } = freshDb()
+
+    db.setOrderFiscalInfo(7, 'KRA-0001', 'base64qr')
+
+    const updates = fake.callsFor('run', 'UPDATE orders SET fiscal_invoice_number')
+    expect(updates).toHaveLength(1)
+    expect(updates[0].sql).toContain("fiscal_status = 'fiscalized'")
+    expect(updates[0].sql).toContain('fiscal_error_reason = NULL')
+    expect(updates[0].sql).toContain('fiscal_error_kind = NULL')
+    // phase-88/Step 4: a successful fiscalization also clears any
+    // previously stored fixable-rejection tag (e.g. a wrong-PIN flag
+    // from an earlier failed attempt on this same sale).
+    expect(updates[0].sql).toContain('fiscal_data_issue = NULL')
+    expect(updates[0].params).toEqual(['KRA-0001', 'base64qr', expect.any(String), 7])
+  })
+})
+
+describe('RubisDatabase.setOrderFiscalFailure', () => {
+  it('records a waiting/technical failure without touching invoice/QR/fiscalized-at', () => {
+    const { fake, db } = freshDb()
+
+    db.setOrderFiscalFailure(7, 'waiting', 'Fiscal device unreachable', 'technical')
+
+    const updates = fake.callsFor('run', 'UPDATE orders SET fiscal_status')
+    expect(updates).toHaveLength(1)
+    // dataIssue defaults to null when the caller doesn't pass one.
+    expect(updates[0].params).toEqual(['waiting', 'Fiscal device unreachable', 'technical', null, 7])
+    expect(updates[0].sql).not.toContain('fiscal_invoice_number')
+  })
+
+  it('records a needs_fixing/data failure (e.g. a business rejection like wrong PIN)', () => {
+    const { fake, db } = freshDb()
+
+    db.setOrderFiscalFailure(9, 'needs_fixing', 'Wrong client PIN', 'data')
+
+    const updates = fake.callsFor('run', 'UPDATE orders SET fiscal_status')
+    expect(updates[0].params).toEqual(['needs_fixing', 'Wrong client PIN', 'data', null, 9])
+  })
+
+  it('records a needs_fixing/system failure (e.g. Code 63, a malformed request)', () => {
+    const { fake, db } = freshDb()
+
+    db.setOrderFiscalFailure(11, 'needs_fixing', 'ZFPLabServer rejected the request format', 'system')
+
+    const updates = fake.callsFor('run', 'UPDATE orders SET fiscal_status')
+    expect(updates[0].params).toEqual([
+      'needs_fixing',
+      'ZFPLabServer rejected the request format',
+      'system',
+      null,
+      11
+    ])
+  })
+
+  it('persists the wrong-pin data-issue tag when explicitly passed (phase-88/Step 4)', () => {
+    const { fake, db } = freshDb()
+
+    db.setOrderFiscalFailure(12, 'needs_fixing', 'Wrong client PIN', 'data', 'wrong-pin')
+
+    const updates = fake.callsFor('run', 'UPDATE orders SET fiscal_status')
+    expect(updates[0].params).toEqual(['needs_fixing', 'Wrong client PIN', 'data', 'wrong-pin', 12])
+  })
 })
 
 describe('RubisDatabase.recordFiscalQueueFailure', () => {
@@ -712,6 +821,237 @@ describe('RubisDatabase printers', () => {
     }) as typeof fake.connection.prepare
 
     expect(db.deletePrinter('unknown-id')).toBe(false)
+  })
+})
+
+describe('RubisDatabase mpesaTransactions', () => {
+  it('logs a new transaction as pending', () => {
+    const { fake, db } = freshDb()
+    fake.queueRunResult('INSERT INTO mpesa_transactions', 5)
+
+    const result = db.logMpesaTransaction({
+      orderLocalId: 7,
+      checkoutRequestId: 'ws_CO_1',
+      merchantRequestId: '29115-1',
+      phoneNumber: '254712345678',
+      amount: 100
+    })
+
+    expect(result).toEqual({ id: 5 })
+    const inserts = fake.callsFor('run', 'INSERT INTO mpesa_transactions')
+    expect(inserts).toHaveLength(1)
+    expect(inserts[0].params).toEqual([7, 'ws_CO_1', '29115-1', '254712345678', 100, 'pending'])
+  })
+
+  it('logs a transaction with no linked order as null', () => {
+    const { fake, db } = freshDb()
+
+    db.logMpesaTransaction({
+      checkoutRequestId: 'ws_CO_2',
+      merchantRequestId: '29115-2',
+      phoneNumber: '254712345678',
+      amount: 50
+    })
+
+    const inserts = fake.callsFor('run', 'INSERT INTO mpesa_transactions')
+    expect(inserts[0].params[0]).toBeNull()
+  })
+
+  it('defaults status to pending when omitted', () => {
+    const { fake, db } = freshDb()
+
+    db.logMpesaTransaction({
+      checkoutRequestId: 'ws_CO_3',
+      merchantRequestId: '29115-3',
+      phoneNumber: '254712345678',
+      amount: 50
+    })
+
+    const inserts = fake.callsFor('run', 'INSERT INTO mpesa_transactions')
+    expect(inserts[0].params[5]).toBe('pending')
+  })
+
+  it('logs a rejected STK Push attempt as failed', () => {
+    const { fake, db } = freshDb()
+
+    db.logMpesaTransaction({
+      checkoutRequestId: 'failed-12345',
+      merchantRequestId: '',
+      phoneNumber: '254712345678',
+      amount: 50,
+      status: 'failed'
+    })
+
+    const inserts = fake.callsFor('run', 'INSERT INTO mpesa_transactions')
+    expect(inserts[0].params).toEqual([null, 'failed-12345', '', '254712345678', 50, 'failed'])
+  })
+
+  it('returns an empty list when no transactions are logged', () => {
+    const { db } = freshDb()
+
+    expect(db.getMpesaTransactions()).toEqual([])
+  })
+
+  it('lists recent transactions with a default limit of 50', () => {
+    const { fake, db } = freshDb()
+    const row = {
+      id: 1,
+      order_local_id: 7,
+      checkout_request_id: 'ws_CO_1',
+      merchant_request_id: '29115-1',
+      phone_number: '254712345678',
+      amount: 100,
+      status: 'pending',
+      mpesa_receipt_number: null,
+      created_at: '2026-08-24T10:00:00.000Z',
+      updated_at: '2026-08-24T10:00:00.000Z'
+    }
+    fake.setAllResult('FROM mpesa_transactions', [row])
+
+    const rows = db.getMpesaTransactions()
+
+    expect(fake.callsFor('all', 'FROM mpesa_transactions')[0].params).toEqual([50])
+    expect(rows).toEqual([row])
+  })
+
+  it('respects a custom limit', () => {
+    const { fake, db } = freshDb()
+
+    db.getMpesaTransactions(10)
+
+    expect(fake.callsFor('all', 'FROM mpesa_transactions')[0].params).toEqual([10])
+  })
+
+  it('updates a transaction to success with its receipt number', () => {
+    const { fake, db } = freshDb()
+
+    const updated = db.updateMpesaTransactionStatus('ws_CO_1', 'success', 'NLJ7RT61SV')
+
+    expect(updated).toBe(true)
+    const updates = fake.callsFor('run', 'UPDATE mpesa_transactions')
+    expect(updates).toHaveLength(1)
+    expect(updates[0].params).toEqual(['success', 'NLJ7RT61SV', 'ws_CO_1'])
+  })
+
+  it('updates a transaction to failed with a null receipt number', () => {
+    const { fake, db } = freshDb()
+
+    db.updateMpesaTransactionStatus('ws_CO_1', 'failed')
+
+    const updates = fake.callsFor('run', 'UPDATE mpesa_transactions')
+    expect(updates[0].params).toEqual(['failed', null, 'ws_CO_1'])
+  })
+
+  it('reports false when no transaction matches the checkout request id', () => {
+    const { fake, db } = freshDb()
+    const originalPrepare = fake.connection.prepare
+    fake.connection.prepare = vi.fn((sql: string) => {
+      if (sql.includes('UPDATE mpesa_transactions')) {
+        return { run: () => ({ changes: 0 }), get: () => undefined, all: () => [] }
+      }
+      return originalPrepare(sql)
+    }) as typeof fake.connection.prepare
+
+    expect(db.updateMpesaTransactionStatus('unknown', 'success')).toBe(false)
+  })
+})
+
+describe('RubisDatabase appConfigurations', () => {
+  it('returns null for an unset key', () => {
+    const { db } = freshDb()
+
+    expect(db.getConfig('mock_mpesa_enabled')).toBeNull()
+  })
+
+  it('reads back a stored value', () => {
+    const { fake, db } = freshDb()
+    fake.setGetResult('FROM app_configurations', { value: 'true' })
+
+    expect(db.getConfig('mock_mpesa_enabled')).toBe('true')
+  })
+
+  it('inserts a new value with the given metadata', () => {
+    const { fake, db } = freshDb()
+
+    db.setConfig('mock_mpesa_enabled', 'true', { encrypted: false, requiresRestart: true, category: 'mpesa' })
+
+    const upsertCalls = fake.callsFor('run', 'INSERT INTO app_configurations')
+    expect(upsertCalls).toHaveLength(1)
+    expect(upsertCalls[0].params).toEqual(['mock_mpesa_enabled', 'true', 0, 1, 'mpesa'])
+  })
+
+  it('defaults metadata to unencrypted, no restart, general category when omitted on first insert', () => {
+    const { fake, db } = freshDb()
+
+    db.setConfig('some_key', 'some_value')
+
+    const upsertCalls = fake.callsFor('run', 'INSERT INTO app_configurations')
+    expect(upsertCalls[0].params).toEqual(['some_key', 'some_value', 0, 0, 'general'])
+  })
+
+  it('preserves existing metadata on an update that omits options', () => {
+    const { fake, db } = freshDb()
+    fake.setGetResult('FROM app_configurations', {
+      encrypted: 1,
+      requires_restart: 1,
+      category: 'mpesa'
+    })
+
+    db.setConfig('mpesa_consumer_key', 'new-value')
+
+    const upsertCalls = fake.callsFor('run', 'INSERT INTO app_configurations')
+    expect(upsertCalls[0].params).toEqual(['mpesa_consumer_key', 'new-value', 1, 1, 'mpesa'])
+  })
+
+  it('returns an empty map when no configs are stored', () => {
+    const { db } = freshDb()
+
+    expect(db.getAllConfigs()).toEqual({})
+  })
+
+  it('returns all configs as a flat key/value map, skipping null values', () => {
+    const { fake, db } = freshDb()
+    fake.setAllResult('FROM app_configurations', [
+      { key: 'mock_mpesa_enabled', value: 'true' },
+      { key: 'mock_etims_enabled', value: null }
+    ])
+
+    expect(db.getAllConfigs()).toEqual({ mock_mpesa_enabled: 'true' })
+  })
+
+  it('scopes getAllConfigs to one category when given', () => {
+    const { fake, db } = freshDb()
+
+    db.getAllConfigs('mpesa')
+
+    const calls = fake.callsFor('all', 'FROM app_configurations WHERE category')
+    expect(calls).toHaveLength(1)
+    expect(calls[0].params).toEqual(['mpesa'])
+  })
+
+  it('lists restart-required configs, normalizing booleans', () => {
+    const { fake, db } = freshDb()
+    fake.setAllResult('WHERE requires_restart = 1', [
+      {
+        key: 'mock_mpesa_enabled',
+        value: 'true',
+        encrypted: 0,
+        requires_restart: 1,
+        category: 'mpesa',
+        last_updated: '2026-08-24T10:00:00.000Z'
+      }
+    ])
+
+    expect(db.getRestartRequiredConfigs()).toEqual([
+      {
+        key: 'mock_mpesa_enabled',
+        value: 'true',
+        encrypted: false,
+        requires_restart: true,
+        category: 'mpesa',
+        last_updated: '2026-08-24T10:00:00.000Z'
+      }
+    ])
   })
 })
 

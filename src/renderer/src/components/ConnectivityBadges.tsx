@@ -34,10 +34,17 @@ const BADGE_STYLES = {
 } as const
 
 /**
- * Compact, clickable status badges for M-Pesa, the fiscal device, the
+ * Compact, clickable status badges for M-Pesa, the fiscal server, the
  * barcode scanner, and the receipt printer — sits next to the
  * existing "Online" badge. Each badge opens the connectivity details
  * modal for that integration when clicked.
+ *
+ * The fiscal badge only reflects whether the fiscal SERVER on this till
+ * answers an HTTP probe (phase-95, Finding 4) — it says nothing about
+ * the device, the TCP password, or TIMS pairing, so it can read
+ * "Fiscal Server ✓" while every sale still fails to file. The unfiled
+ * sales count ({@link UnfiledSalesBadge}) is the real "are sales
+ * filing" signal; "Test connection" in Admin is the real device check.
  *
  * @param {ConnectivityBadgesProps} props
  * @returns {JSX.Element}
@@ -48,7 +55,7 @@ export default function ConnectivityBadges({ status, barcodeStatus, onSelect }: 
   const printerConnected = status?.printer.connected ?? false
 
   return (
-    <div className="flex items-center gap-1.5">
+    <div className="flex shrink-0 items-center gap-1.5">
       <button
         type="button"
         onClick={() => onSelect('mpesa')}
@@ -60,10 +67,10 @@ export default function ConnectivityBadges({ status, barcodeStatus, onSelect }: 
       <button
         type="button"
         onClick={() => onSelect('fiscal')}
-        title={`Fiscal Device: ${fiscalConnected ? 'Connected' : 'Disconnected'}`}
+        title={`Fiscal server: ${fiscalConnected ? 'Reachable' : 'Not reachable'}. This does not confirm sales are filing. See the unfiled sales count for that.`}
         className={`flex items-center gap-1 rounded-full px-2 py-1 text-sm font-medium ${BADGE_STYLES[fiscalConnected ? 'connected' : 'disconnected']}`}
       >
-        {fiscalConnected ? '✓' : '✗'} Fiscal
+        {fiscalConnected ? '✓' : '✗'} Fiscal Server
       </button>
       <button
         type="button"

@@ -9,9 +9,21 @@ import type {
 /** Display label per integration. */
 const INTEGRATION_LABELS: Record<ConnectivityIntegration, string> = {
   mpesa: 'M-Pesa',
-  fiscal: 'Fiscal Device',
+  fiscal: 'Fiscal Server',
   printer: 'Receipt Printer',
   barcode: 'Barcode Scanner'
+}
+
+/**
+ * A short clarifying note shown under an integration's status, when one
+ * is needed. The fiscal check only reaches the server on this till, not
+ * the control unit itself (phase-95, Finding 4) — this is the one place
+ * that distinction needs spelling out, since a green status here can
+ * otherwise be misread as "sales are filing."
+ */
+const INTEGRATION_NOTES: Partial<Record<ConnectivityIntegration, string>> = {
+  fiscal:
+    'This only checks whether the fiscal server on this till responds. It does not confirm sales are being filed. See the unfiled sales count for that, or press Test Connection in Admin for the full device check.'
 }
 
 /** Props for {@link ConnectivityModal}. */
@@ -148,6 +160,9 @@ export default function ConnectivityModal({
               <p className="rounded-lg bg-rose-50 px-3 py-2 text-sm font-medium text-rose-700">
                 {check.error}
               </p>
+            )}
+            {INTEGRATION_NOTES[integration] && (
+              <p className="text-sm text-slate-500">{INTEGRATION_NOTES[integration]}</p>
             )}
             <button
               type="button"

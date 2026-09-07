@@ -7,6 +7,14 @@ import { config as loadEnvFile } from 'dotenv'
 import electronUpdater from 'electron-updater'
 
 /**
+ * Must be set before `app` is ready — Chromium reads this switch at
+ * startup to correctly scale the window/UI on a high-DPI Windows
+ * display (a common till setup) instead of rendering blurry or at the
+ * wrong physical size. Harmless on displays running at 100% scaling.
+ */
+app.commandLine.appendSwitch('high-dpi-support', '1')
+
+/**
  * `VITE_*` credentials (store URL, admin token, printer IP, etc.) are
  * per-till runtime config, not build-time constants — so they're loaded
  * from a `.env` file at startup rather than statically inlined. In dev,
@@ -41,10 +49,12 @@ import {
   resolveShopifyStoreUrl,
   validateAndFetchLocations
 } from './services/shopify.js'
-import { createDatabase } from './services/database.js'
+import { createDatabase, STUCK_WAITING_THRESHOLD_MS } from './services/database.js'
+import { migrateEnvConfigToDatabase } from './services/configMigration.js'
 import { DEMO_PRODUCTS } from './services/demoData.js'
 import type {
   CheckoutReceipt,
+  FiscalResendResult,
   StaffSummary,
   ShiftRow
 } from './services/database.js'
@@ -54,11 +64,19 @@ import type {
   StkPushRequest,
   StkPushResult,
   ManualCodeVerification,
-  ManualCodeVerificationResult
+  ManualCodeVerificationResult,
+  StkPushStatusResult
 } from './services/integrations/mpesa.js'
-import { MockFiscalizationProvider } from './services/integrations/etims.js'
+import { DarajaMpesaProvider } from './services/integrations/daraja-mpesa-provider.js'
 import type { FiscalizationProvider } from './services/integrations/etims.js'
 import { RealFiscalizationProvider } from './services/integrations/real-etims-provider.js'
+import type { FiscalConnectionTestResult } from './services/integrations/fiscal-connection-test.js'
+import { resolveFiscalizationProvider } from './services/fiscal-provider-factory.js'
+import { DEFAULT_ETIMS_BASE_URL } from './services/integrations/http-client.js'
+import {
+  resolveEtimsDevicePassword,
+  redactIntegrationConfig
+} from './services/etimsCredentials.js'
 import {
   createConnectivityMonitor,
   checkHttpReachable,
@@ -83,8 +101,20 @@ import {
   configValidateSchema,
   configSaveSchema,
   configClearSchema,
-  locationSetSchema
+  locationSetSchema,
+  mpesaLogTransactionSchema,
+  mpesaQueryStatusSchema,
+  configSetSchema,
+  mpesaCredentialsSetSchema,
+  etimsConfigSaveSchema,
+  etimsPasswordSetSchema,
+  etimsIntegrationConfigSchema,
+  storeIdentitySetSchema,
+  correctPinAndResendSchema,
+  resendFiscalizationSchema
 } from './lib/ipcValidator.js'
+import { checkEtimsCompletion } from './services/etimsSetup.js'
+import type { EtimsCompletionStatus } from './services/etimsSetup.js'
 import { requireAdminPin } from './lib/requireAdminPin.js'
 import { restrictToOwnerOnly } from './lib/fileSecurity.js'
 import {
@@ -94,11 +124,25 @@ import {
   getSecret,
   deleteSecret,
   SECRET_SERVICE_NAME,
-  SHOPIFY_TOKEN_ACCOUNT
+  SHOPIFY_TOKEN_ACCOUNT,
+  ETIMS_DEVICE_PASSWORD_ACCOUNT
 } from './services/secretStore.js'
-import type { IntegrationProviderName, PrinterConfig, PrinterType } from './services/database.js'
+import type {
+  IntegrationProviderName,
+  PrinterConfig,
+  PrinterType,
+  MpesaTransactionRow,
+  AppConfigCategory,
+  NeedsAttentionRow
+} from './services/database.js'
 import { createSyncEngine } from './services/sync-engine.js'
 import { createFiscalEngine } from './services/fiscal-engine.js'
+import { runCheckout } from './services/checkout.js'
+import {
+  correctPinAndResend,
+  buildFiscalResendResult,
+  resendFiscalization
+} from './services/fiscal-retry.js'
 import { createNetworkMonitor } from './services/network.js'
 import { pushOrderToShopify } from './services/orders.js'
 import {
@@ -269,6 +313,18 @@ app.whenReady().then(async () => {
   db.init()
 
   /**
+   * One-time seed of the M-Pesa/eTIMS mock-vs-real toggles from
+   * `.env` into `app_configurations`, so an install with no `.env`
+   * file (and no prior Admin-screen edit) still has a starting value
+   * — see `configMigration.ts`. Safe to call on every launch: it's a
+   * no-op once the migration has run.
+   */
+  migrateEnvConfigToDatabase(db, {
+    VITE_USE_MOCK_MPESA: process.env.VITE_USE_MOCK_MPESA,
+    VITE_USE_MOCK_ETIMS: process.env.VITE_USE_MOCK_ETIMS
+  })
+
+  /**
    * Restricts the SQLite file to owner-only access.
    * `userData` is already scoped to the current Windows user profile;
    * this is a second, explicit layer on top of that. Non-fatal on
@@ -322,6 +378,12 @@ app.whenReady().then(async () => {
 
   /** `settings` table key the Shopify store URL is persisted under. */
   const SHOPIFY_STORE_URL_SETTING_KEY = 'shopify_store_url'
+
+  /** `settings` table key for the store name printed on every receipt. */
+  const STORE_NAME_SETTING_KEY = 'store_name'
+
+  /** `settings` table key for the store's own KRA PIN, printed on every receipt. */
+  const STORE_KRA_PIN_SETTING_KEY = 'store_kra_pin'
 
   /**
    * Store URL, not a secret (a public shop domain) so it lives in the
@@ -398,7 +460,13 @@ app.whenReady().then(async () => {
    */
   const printerSettings: PrinterSettings = {
     interfaceName: process.env.VITE_PRINTER_INTERFACE || 'tcp://192.168.0.100:9100',
-    storeName: process.env.VITE_STORE_NAME || 'RUBIS',
+    /**
+     * Admin-set (Integrations tab) so a branch can correct its own
+     * receipt header without a rebuild. `VITE_STORE_NAME` remains a
+     * fallback for an install that predates the setting.
+     */
+    storeName: db.getSetting(STORE_NAME_SETTING_KEY) || process.env.VITE_STORE_NAME || 'RUBIS',
+    storeKraPin: db.getSetting(STORE_KRA_PIN_SETTING_KEY) || undefined,
     taxRate: Number(process.env.VITE_TAX_RATE) || 0,
     mock: process.env.VITE_MOCK_PRINTER === 'true'
   }
@@ -418,54 +486,176 @@ app.whenReady().then(async () => {
    * M-Pesa / eTIMS integrations. Each has its own mock/real switch —
    * `VITE_USE_MOCK_MPESA` and `VITE_USE_MOCK_ETIMS` — rather than one
    * blanket flag, since a till may want a real fiscal device wired up
-   * while M-Pesa is still mocked, or vice versa. Both **default to
-   * mock** when unset (only the literal string `'false'` turns mock
-   * off), so a fresh checkout — including this one — never talks to a
-   * real Shopify-adjacent integration or physical fiscal device by
-   * accident. M-Pesa has no real provider implementation yet (this
-   * branch point is ready for a `DarajaMpesaProvider` alongside the
-   * mock); `mockMpesaEnabled` currently only gates whether checkout
-   * verifies a manually-entered M-Pesa code at all, not which provider
-   * class is used. eTIMS's `mockEtimsEnabled` does select the provider
-   * class: `MockFiscalizationProvider` or a real,
-   * `RealFiscalizationProvider` talking to the local ZFPLabServer over
-   * HTTP (its base URL comes from the `integrations` table). Either
-   * way, a fiscalization failure is queued for retry rather than
-   * blocking the sale (see the `orders:checkout` handler below).
+   * while M-Pesa is still mocked, or vice versa.
+   *
+   * **The two switches default differently.** M-Pesa defaults to mock
+   * when unset, so a fresh checkout never charges a real customer by
+   * accident. eTIMS defaults to **real**: a mocked fiscalization mints a
+   * synthetic invoice number that would print on a receipt as though the
+   * sale had been filed with KRA, so "no configuration" must never mean
+   * "silently mock" (Rule 2). `resolveFiscalizationProvider` enforces the
+   * stronger half of that — a packaged build cannot select the mock at
+   * all, and does not contain it.
+   *
+   * `mockMpesaEnabled` selects between `MockMpesaProvider` and a real
+   * `DarajaMpesaProvider` talking to Safaricom's Daraja API (credentials
+   * come from the `integrations` table, falling back to `MPESA_*` env
+   * vars) — with mocking off, checkout's manual-code verification also
+   * switches from the mock's sentinel logic to
+   * `DarajaMpesaProvider.verifyTransactionCode`, which reports that path
+   * unsupported (Daraja has no code-lookup endpoint).
+   *
+   * Either way, a fiscalization failure — including the device being
+   * unreachable or rejecting the TCP password — is queued in `sync_queue`
+   * for retry rather than blocking the sale (see the `orders:checkout`
+   * handler below), so the till stays usable and queued invoices heal
+   * themselves once the device comes back.
    */
-  const mockMpesaEnabled = process.env.VITE_USE_MOCK_MPESA !== 'false'
-  const mockEtimsEnabled = process.env.VITE_USE_MOCK_ETIMS !== 'false'
-  const mpesaProvider: MpesaProvider = new MockMpesaProvider()
+  /** Vault account names for the two secret-bearing Daraja fields, mirroring `SHOPIFY_TOKEN_ACCOUNT`'s pattern. */
+  const MPESA_CONSUMER_SECRET_ACCOUNT = 'mpesa-consumer-secret'
+  const MPESA_PASSKEY_ACCOUNT = 'mpesa-passkey'
+
+  /**
+   * Off by default (phase-80): a normal sale logs only its fiscal
+   * outcome, not the wire-level XML/HTTP trace or per-step progress.
+   * Flip on to get that trace back when diagnosing a live device issue,
+   * without a code change.
+   */
+  const fiscalDebugLogging = (process.env.FISCAL_DEBUG_LOGGING || '').trim().toLowerCase() === 'true'
+
+  const rawMockMpesa = (process.env.VITE_USE_MOCK_MPESA || 'true').trim().toLowerCase()
+  /**
+   * eTIMS defaults to REAL when unset, unlike M-Pesa. A till installed
+   * without a `.env` must not quietly fiscalize against the mock and
+   * print `KRA-MOCK-` invoice numbers on receipts for sales that were
+   * never filed (Rule 2). `resolveFiscalizationProvider` refuses the
+   * mock in a packaged build regardless of what this resolves to.
+   */
+  const rawMockEtims = (process.env.VITE_USE_MOCK_ETIMS || 'false').trim().toLowerCase()
+  const mockMpesaEnabled =
+    (db.getConfig('mock_mpesa_enabled') ?? (rawMockMpesa !== 'false' ? 'true' : 'false')) === 'true'
+  const mockEtimsEnabled =
+    (db.getConfig('mock_etims_enabled') ?? (rawMockEtims === 'true' ? 'true' : 'false')) === 'true'
+  console.log(
+    `[DEBUG-ETIMS] Startup: raw VITE_USE_MOCK_MPESA="${rawMockMpesa}", raw VITE_USE_MOCK_ETIMS="${rawMockEtims}", ` +
+      `db mock_mpesa_enabled=${JSON.stringify(db.getConfig('mock_mpesa_enabled'))}, db mock_etims_enabled=${JSON.stringify(db.getConfig('mock_etims_enabled'))}, ` +
+      `resolved mockMpesaEnabled=${mockMpesaEnabled}, resolved mockEtimsEnabled=${mockEtimsEnabled}`
+  )
+  const mpesaConfig = db.getIntegrationConfig<{
+    consumerKey?: string
+    shortcode?: string
+    environment?: 'sandbox' | 'production'
+    callbackUrl?: string
+  }>('mpesa')
+  /**
+   * `consumerSecret`/`passkey` are the two Daraja fields that can
+   * actually authorize a transaction, so — unlike `consumerKey`/
+   * `shortcode`/`environment`/`callbackUrl`, which live in the
+   * plaintext `integrations` table alongside eTIMS's config — they're
+   * resolved from the OS-encrypted vault (`secretStore.ts`), the same
+   * mechanism the Shopify Admin API token already uses. `.env`'s
+   * `MPESA_CONSUMER_SECRET`/`MPESA_PASSKEY` remain a fallback for an
+   * install that hasn't set them via the Admin screen yet.
+   */
+  const mpesaConsumerSecret =
+    (await getSecret(keytar, SECRET_SERVICE_NAME, MPESA_CONSUMER_SECRET_ACCOUNT)) ??
+    process.env.MPESA_CONSUMER_SECRET ??
+    ''
+  const mpesaPasskey =
+    (await getSecret(keytar, SECRET_SERVICE_NAME, MPESA_PASSKEY_ACCOUNT)) ??
+    process.env.MPESA_PASSKEY ??
+    ''
+  const mpesaProvider: MpesaProvider = mockMpesaEnabled
+    ? new MockMpesaProvider()
+    : new DarajaMpesaProvider({
+        consumerKey: mpesaConfig.consumerKey || process.env.MPESA_CONSUMER_KEY || '',
+        consumerSecret: mpesaConsumerSecret,
+        shortcode: mpesaConfig.shortcode || process.env.MPESA_SHORTCODE || '',
+        passkey: mpesaPasskey,
+        environment:
+          mpesaConfig.environment ??
+          (process.env.MPESA_ENVIRONMENT === 'production' ? 'production' : 'sandbox'),
+        callbackUrl: mpesaConfig.callbackUrl ?? process.env.MPESA_CALLBACK_URL
+      })
+  /**
+   * The device TCP password is resolved from the OS-encrypted vault, not
+   * this row — and a legacy plaintext `password` left on the row by an
+   * older install is migrated into the vault and deleted here, on first
+   * launch, without the operator retyping anything.
+   */
+  const etimsPasswordResolution = await resolveEtimsDevicePassword({ keytar, db })
+  if (etimsPasswordResolution.source === 'migrated-from-plaintext') {
+    console.log(
+      '[rubis-pos] Moved the fiscal device password out of the plaintext integrations row into the credential vault.'
+    )
+  }
   const etimsConfig = db.getIntegrationConfig<{
     baseUrl?: string
     endpoints?: Partial<FiscalEndpointPaths>
     defaultVatClass?: string
-    password?: string
+    deviceIp?: string
+    devicePort?: string
   }>('etims')
-  const fiscalizationProvider: FiscalizationProvider = mockEtimsEnabled
-    ? new MockFiscalizationProvider()
-    : new RealFiscalizationProvider({
-        baseUrl: etimsConfig.baseUrl,
-        endpoints: etimsConfig.endpoints,
-        defaultVatClass: etimsConfig.defaultVatClass,
-        password: etimsConfig.password,
-        lookupInvoice: (invoiceNumber) => {
-          const order = db.getOrderByFiscalInvoiceNumber(invoiceNumber)
-          if (!order?.fiscal_invoice_number) return undefined
-          return {
-            invoiceNumber: order.fiscal_invoice_number,
-            qrCode: order.fiscal_qr_code ?? '',
-            fiscalizedAt: order.fiscal_fiscalized_at ?? order.created_at
-          }
+  const fiscalizationProvider: FiscalizationProvider = await resolveFiscalizationProvider({
+    isPackaged: app.isPackaged,
+    mockRequested: mockEtimsEnabled,
+    realOptions: {
+      baseUrl: etimsConfig.baseUrl,
+      endpoints: etimsConfig.endpoints,
+      defaultVatClass: etimsConfig.defaultVatClass,
+      password: etimsPasswordResolution.password ?? undefined,
+      deviceIp: etimsConfig.deviceIp,
+      devicePort: etimsConfig.devicePort,
+      debugLogging: fiscalDebugLogging,
+      logger: console,
+      lookupInvoice: (invoiceNumber) => {
+        const order = db.getOrderByFiscalInvoiceNumber(invoiceNumber)
+        if (!order?.fiscal_invoice_number) return undefined
+        return {
+          invoiceNumber: order.fiscal_invoice_number,
+          qrCode: order.fiscal_qr_code ?? '',
+          fiscalizedAt: order.fiscal_fiscalized_at ?? order.created_at
         }
-      })
+      }
+    }
+  })
+  /**
+   * Re-reads the saved device details and pushes them into the live
+   * provider, so a save from the Admin screen applies to the next sale
+   * instead of the next launch.
+   *
+   * A no-op for the development stand-in, which has nothing to
+   * configure.
+   *
+   * @returns {Promise<void>}
+   */
+  async function applyEtimsConfigToProvider(): Promise<void> {
+    if (!(fiscalizationProvider instanceof RealFiscalizationProvider)) return
+
+    const saved = db.getIntegrationConfig<{
+      baseUrl?: string
+      defaultVatClass?: string
+      deviceIp?: string
+      devicePort?: string
+    }>('etims')
+    const resolution = await resolveEtimsDevicePassword({ keytar, db })
+
+    fiscalizationProvider.reconfigure({
+      baseUrl: saved.baseUrl,
+      deviceIp: saved.deviceIp,
+      devicePort: saved.devicePort,
+      defaultVatClass: saved.defaultVatClass,
+      password: resolution.password ?? undefined
+    })
+  }
+
   console.log(
     `[DEBUG-ETIMS] Startup: mockMpesaEnabled = ${mockMpesaEnabled}, mockEtimsEnabled = ${mockEtimsEnabled}`
   )
   console.log(
-    mockEtimsEnabled
-      ? '[DEBUG-ETIMS] Startup: using MockFiscalizationProvider'
-      : `[DEBUG-ETIMS] Startup: using RealFiscalizationProvider, baseUrl = ${etimsConfig.baseUrl ?? '(default) http://localhost:4444'}, endpoints = ${JSON.stringify(etimsConfig.endpoints)}`
+    !(fiscalizationProvider instanceof RealFiscalizationProvider)
+      ? '[DEBUG-ETIMS] Startup: using the mock fiscalization provider (development only)'
+      : `[DEBUG-ETIMS] Startup: using RealFiscalizationProvider, baseUrl = ${etimsConfig.baseUrl || `(default) ${DEFAULT_ETIMS_BASE_URL}`}, deviceIp = ${etimsConfig.deviceIp || '(not configured)'}, devicePort = ${etimsConfig.devicePort || '(not configured)'}, password = ${etimsPasswordResolution.password ? `**** (from ${etimsPasswordResolution.source})` : '(not configured)'}, endpoints = ${JSON.stringify(etimsConfig.endpoints)}`
   )
 
   const engine = createSyncEngine({
@@ -494,7 +684,8 @@ app.whenReady().then(async () => {
   const fiscalEngine = createFiscalEngine({
     db,
     submitInvoice: (request) => fiscalizationProvider.submitInvoice(request),
-    intervalMs: 30_000
+    intervalMs: 30_000,
+    logger: console
   })
 
   /** Broadcasts a JSON payload to every open window. */
@@ -541,7 +732,15 @@ app.whenReady().then(async () => {
     checkFiscal: () =>
       mockEtimsEnabled
         ? Promise.resolve(mockDisconnectedResult('eTIMS mock mode enabled'))
-        : checkHttpReachable(etimsConfig.baseUrl ?? 'http://localhost:4444'),
+        : checkHttpReachable(
+            /**
+             * Read fresh on every check rather than closing over the
+             * startup `etimsConfig` snapshot — otherwise this kept
+             * probing the OLD server address after an Admin save until
+             * the next relaunch (phase-95, Finding 4's staleness note).
+             */
+            db.getIntegrationConfig<{ baseUrl?: string }>('etims').baseUrl || DEFAULT_ETIMS_BASE_URL
+          ),
     checkPrinter: () =>
       printerSettings.mock
         ? Promise.resolve(mockConnectedResult())
@@ -550,6 +749,24 @@ app.whenReady().then(async () => {
     emit: (status) => broadcast('connectivity:status', status)
   })
   connectivityMonitor.start()
+
+  /**
+   * Release the ZFPLabServer device session on shutdown — the vendor
+   * demo does the same from its form-closing handler. Deliberately not
+   * done per sale: the session is what `settings()` establishes, and
+   * tearing it down between transactions would force a fresh handshake
+   * on every one. Best-effort and time-boxed by the HTTP client's own
+   * timeout; a failure here must never delay or block quitting.
+   */
+  app.on('before-quit', () => {
+    if (fiscalizationProvider instanceof RealFiscalizationProvider) {
+      void fiscalizationProvider
+        .closeServerConnection()
+        .catch((error) =>
+          console.warn('[rubis-pos] ZFPLabServer session close failed on quit:', error)
+        )
+    }
+  })
 
   app.on('will-quit', () => {
     engine.stop()
@@ -638,221 +855,26 @@ app.whenReady().then(async () => {
   ipcMain.handle(
     'orders:checkout',
     async (_event, request: unknown): Promise<ServiceResult<CheckoutReceipt>> => {
-      const t0 = Date.now()
-      const elapsed = (): string => `+${Date.now() - t0}ms`
-      try {
-        console.log(`[DEBUG-ETIMS] ========== CHECKOUT STARTED ========== ${elapsed()}`)
-        console.log(
-          `[DEBUG-ETIMS] 1. mockMpesaEnabled = ${mockMpesaEnabled}, mockEtimsEnabled = ${mockEtimsEnabled}`
-        )
-
-        console.log('[DEBUG-ETIMS] 2. Getting eTIMS config...')
-        const etimsConfig = db.getIntegrationConfig('etims')
-        console.log('[DEBUG-ETIMS] 3. Config:', etimsConfig, elapsed())
-
-        console.log('[DEBUG-ETIMS] 4. Request payload:', JSON.stringify(request, null, 2))
-
-        const validation = validate(checkoutRequestSchema, request)
-        if (!validation.success) {
-          return { success: false, error: validation.error }
-        }
-        const checkout = validation.data
-        const { items, total } = checkout
-
-        const staff = db.getStaffById(checkout.staffId)
-        if (!staff) {
-          return { success: false, error: 'No staff member is logged in' }
-        }
-
-        /**
-         * When paying by M-Pesa manual code entry (a reference number was
-         * captured at the till rather than via a completed STK Push), the
-         * code is verified before the order is persisted — an unverified
-         * code should never reach the ledger as a completed sale.
-         */
-        if (mockMpesaEnabled && checkout.paymentMethod === 'mpesa' && checkout.referenceNumber) {
-          const verification = await mpesaProvider.verifyTransactionCode({
-            transactionCode: checkout.referenceNumber,
-            amount: total
-          })
-          if (!verification.success) {
-            return { success: false, error: verification.error ?? 'M-Pesa verification failed' }
-          }
-          if (!verification.data?.verified) {
-            return {
-              success: false,
-              error: verification.data?.reason ?? 'M-Pesa transaction code could not be verified'
-            }
-          }
-        }
-
-        const openShift = db.getOpenShift()
-        const clientOrderUuid = randomUUID()
-
-        console.log('[DEBUG-ETIMS] 5. About to call db.queueOrder...')
-        const { localId } = db.queueOrder({
-          items,
-          total,
-          clientOrderUuid,
-          staffId: staff.id,
-          staffName: staff.name,
-          paymentMethod: checkout.paymentMethod,
-          tenderedAmount: checkout.tenderedAmount,
-          changeDue: checkout.changeDue,
-          referenceNumber: checkout.referenceNumber,
-          shiftId: openShift?.id,
-          customerPin: checkout.customerPin,
-          cartDiscount: checkout.cartDiscount
-        })
-        console.log('[DEBUG-ETIMS] 6. db.queueOrder result: SUCCESS, localId =', localId, elapsed())
-
-        console.log(
-          '[DEBUG-ETIMS] 6b. Kicking off Shopify sync tick (non-blocking). monitor.isOnline() =',
-          monitor.isOnline(),
-          elapsed()
-        )
-        if (monitor.isOnline()) {
-          void engine
-            .tick()
-            .then(() => console.log('[DEBUG-ETIMS] 6c. Background Shopify sync tick finished', elapsed()))
-            .catch((tickError) => {
-              console.error('[DEBUG-ETIMS] Shopify sync tick failed:', tickError)
-            })
-        }
-
-        const order = db.getOrder(localId)
-        const synced = order?.status === 'synced'
-        console.log('[DEBUG-ETIMS] 6d. db.getOrder read back, status =', order?.status, elapsed())
-
-        /**
-         * Fiscalization never blocks the sale — the cash/stock side of
-         * the transaction is already committed. An immediate failure
-         * (device unreachable, rejected request, or an unexpected
-         * throw) queues the same request in `sync_queue` for
-         * `fiscalEngine` to retry in the background instead of losing
-         * it, mirroring how a failed Shopify push falls back to
-         * `sync_queue` above rather than failing checkout.
-         */
-        let fiscal: CheckoutReceipt['fiscal']
-        console.log(`[DEBUG-ETIMS] ========== ATTEMPTING FISCALIZATION ========== ${elapsed()}`)
-        console.log(
-          '[DEBUG-ETIMS] 7. Checking fiscalizationProvider:',
-          typeof fiscalizationProvider
-        )
-        if (!fiscalizationProvider) {
-          console.error('[DEBUG-ETIMS] CRITICAL: fiscalizationProvider is UNDEFINED!')
-        }
-
-        let fiscalRequest: Parameters<typeof fiscalizationProvider.submitInvoice>[0] | undefined
-        try {
-          console.log('[DEBUG-ETIMS] 8. Building fiscalRequest...')
-          fiscalRequest = {
-            clientOrderUuid,
-            items: items.map((item) => ({
-              description: item.title,
-              quantity: item.quantity,
-              unitPrice: item.price,
-              taxRate: printerSettings.taxRate,
-              pluCode: item.id
-            })),
-            total,
-            taxAmount: total * printerSettings.taxRate,
-            paymentMethod: checkout.paymentMethod,
-            amountTendered: checkout.tenderedAmount,
-            buyerPin: checkout.customerPin
-          }
-          console.log(
-            '[DEBUG-ETIMS] 9. fiscalRequest built successfully:',
-            JSON.stringify(fiscalRequest, null, 2)
-          )
-
-          console.log(`[DEBUG-ETIMS] 10. Attempting fiscalizationProvider.submitInvoice... ${elapsed()}`)
-          const invoice = await fiscalizationProvider.submitInvoice(fiscalRequest)
-          console.log(
-            '[DEBUG-ETIMS] 11. Fiscalization result:',
-            JSON.stringify(invoice, null, 2),
-            elapsed()
-          )
-
-          if (invoice.success && invoice.data) {
-            console.log('[DEBUG-ETIMS] 12. Saving fiscal info to DB...')
-            fiscal = { invoiceNumber: invoice.data.invoiceNumber, qrCode: invoice.data.qrCode }
-            db.setOrderFiscalInfo(localId, invoice.data.invoiceNumber, invoice.data.qrCode)
-            console.log('[DEBUG-ETIMS] 13. Fiscal info saved successfully.')
-          } else {
-            console.warn(
-              '[rubis-pos] eTIMS fiscalization failed, queued for retry:',
-              invoice.error
-            )
-            db.queueFiscalInvoice(localId, fiscalRequest)
-            fiscalEngine.onCheckoutMade()
-          }
-        } catch (fiscalError) {
-          console.error('[DEBUG-ETIMS] CRITICAL: Fiscalization threw an unhandled exception!')
-          console.error(
-            '[DEBUG-ETIMS] Error name:',
-            fiscalError instanceof Error ? fiscalError.name : typeof fiscalError
-          )
-          console.error(
-            '[DEBUG-ETIMS] Error message:',
-            fiscalError instanceof Error ? fiscalError.message : String(fiscalError)
-          )
-          console.error(
-            '[DEBUG-ETIMS] Stack trace:',
-            fiscalError instanceof Error ? fiscalError.stack : undefined
-          )
-
-          try {
-            db.queueFiscalInvoice(
-              localId,
-              fiscalRequest ?? {
-                clientOrderUuid,
-                items: items.map((item) => ({
-                  description: item.title,
-                  quantity: item.quantity,
-                  unitPrice: item.price,
-                  taxRate: printerSettings.taxRate,
-                  pluCode: item.id
-                })),
-                total,
-                taxAmount: total * printerSettings.taxRate,
-                paymentMethod: checkout.paymentMethod,
-                amountTendered: checkout.tenderedAmount,
-                buyerPin: checkout.customerPin
-              }
-            )
-            fiscalEngine.onCheckoutMade()
-            console.log('[DEBUG-ETIMS] Fallback: Order queued for fiscalization despite error.')
-          } catch (queueError) {
-            console.error('[DEBUG-ETIMS] Fallback queue also failed:', queueError)
-          }
-        }
-
-        return {
-          success: true,
-          data: {
-            localId,
-            mode: synced ? 'synced' : 'queued-offline',
-            shopifyOrderId: synced
-              ? (order?.shopify_order_id ?? undefined)
-              : undefined,
-            fiscal
-          }
-        }
-      } catch (err) {
-        console.error('[DEBUG-ETIMS] CRITICAL: Unhandled exception in checkout!')
-        console.error('[DEBUG-ETIMS] Error name:', err instanceof Error ? err.name : typeof err)
-        console.error(
-          '[DEBUG-ETIMS] Error message:',
-          err instanceof Error ? err.message : String(err)
-        )
-        console.error('[DEBUG-ETIMS] Stack trace:', err instanceof Error ? err.stack : undefined)
-        return {
-          success: false,
-          error:
-            err instanceof Error ? err.message : 'Failed to record checkout'
-        }
+      const validation = validate(checkoutRequestSchema, request)
+      if (!validation.success) {
+        return { success: false, error: validation.error }
       }
+      return runCheckout(
+        {
+          db,
+          mpesaProvider,
+          fiscalizationProvider,
+          fiscalEngine,
+          monitor,
+          engineTick: () => engine.tick(),
+          idGen: randomUUID,
+          taxRate: printerSettings.taxRate,
+          mockMpesaEnabled,
+          logger: console,
+          debugLogging: fiscalDebugLogging
+        },
+        validation.data
+      )
     }
   )
 
@@ -885,14 +907,232 @@ app.whenReady().then(async () => {
   )
 
   /**
+   * IPC handler that logs a newly initiated STK Push against the
+   * M-Pesa Logs table. Called from checkout right after
+   * `integrations:mpesa-stk-push` succeeds, so the M-Pesa Logs screen
+   * has a `'pending'` row to show/check even before any status query
+   * resolves it.
+   */
+  ipcMain.handle(
+    'mpesa:log-transaction',
+    (_event, request: unknown): ServiceResult<{ id: number }> => {
+      const validation = validate(mpesaLogTransactionSchema, request)
+      if (!validation.success) {
+        return { success: false, error: validation.error }
+      }
+      try {
+        return { success: true, data: db.logMpesaTransaction(validation.data) }
+      } catch (err) {
+        return {
+          success: false,
+          error: err instanceof Error ? err.message : 'Failed to log M-Pesa transaction'
+        }
+      }
+    }
+  )
+
+  /**
+   * IPC handler that lists recent M-Pesa transactions for the M-Pesa
+   * Logs screen.
+   */
+  ipcMain.handle(
+    'mpesa:get-logs',
+    (_event, limit?: number): ServiceResult<MpesaTransactionRow[]> => {
+      try {
+        return { success: true, data: db.getMpesaTransactions(limit) }
+      } catch (err) {
+        return {
+          success: false,
+          error: err instanceof Error ? err.message : 'Failed to load M-Pesa transactions'
+        }
+      }
+    }
+  )
+
+  /**
+   * IPC handler that re-checks a pending STK Push's outcome via
+   * `queryStkPushStatus` and persists the result — the manual
+   * "Check Status" action on the M-Pesa Logs screen, standing in for
+   * a real callback receiver (see `daraja-mpesa-provider.ts`'s file
+   * doc).
+   */
+  ipcMain.handle(
+    'mpesa:query-status',
+    async (_event, request: unknown): Promise<ServiceResult<StkPushStatusResult>> => {
+      const validation = validate(mpesaQueryStatusSchema, request)
+      if (!validation.success) {
+        return { success: false, error: validation.error }
+      }
+      const result = await mpesaProvider.queryStkPushStatus(validation.data)
+      if (result.success && result.data && result.data.status !== 'pending') {
+        try {
+          db.updateMpesaTransactionStatus(
+            validation.data,
+            result.data.status,
+            result.data.receiptNumber
+          )
+        } catch (err) {
+          console.error('[rubis-pos] Failed to persist M-Pesa status query result:', err)
+        }
+      }
+      return result
+    }
+  )
+
+  /**
+   * IPC handler that reports whether the two secret-bearing Daraja
+   * fields (consumer secret, passkey) are currently stored in the
+   * credential vault — never the values themselves, mirroring
+   * `secrets:get-shopify-token-status`.
+   */
+  ipcMain.handle(
+    'secrets:get-mpesa-status',
+    async (): Promise<
+      ServiceResult<{ consumerSecretConfigured: boolean; passkeyConfigured: boolean }>
+    > => {
+      try {
+        const [consumerSecret, passkey] = await Promise.all([
+          getSecret(keytar, SECRET_SERVICE_NAME, MPESA_CONSUMER_SECRET_ACCOUNT),
+          getSecret(keytar, SECRET_SERVICE_NAME, MPESA_PASSKEY_ACCOUNT)
+        ])
+        return {
+          success: true,
+          data: { consumerSecretConfigured: !!consumerSecret, passkeyConfigured: !!passkey }
+        }
+      } catch (err) {
+        return {
+          success: false,
+          error: err instanceof Error ? err.message : 'Failed to read M-Pesa credential status'
+        }
+      }
+    }
+  )
+
+  /**
+   * IPC handler that saves one or both secret-bearing Daraja fields to
+   * the credential vault (Admin screen). Requires a re-verified admin
+   * Manager PIN — the same privilege class as
+   * `integrations:set-config`. Takes effect on next restart since
+   * `mpesaProvider` above is constructed once at startup — this
+   * mirrors `mock_mpesa_enabled`'s `requiresRestart` framing even
+   * though the credential itself isn't stored in `app_configurations`.
+   */
+  ipcMain.handle(
+    'secrets:set-mpesa-credentials',
+    async (_event, request: unknown): Promise<ServiceResult<void>> => {
+      const validation = validate(mpesaCredentialsSetSchema, request)
+      if (!validation.success) {
+        return { success: false, error: validation.error }
+      }
+      const authz = requireAdminPin(db, validation.data.managerId, validation.data.managerPin)
+      if (!authz.success) {
+        return authz
+      }
+      try {
+        if (validation.data.consumerSecret?.trim()) {
+          await setSecret(
+            keytar,
+            SECRET_SERVICE_NAME,
+            MPESA_CONSUMER_SECRET_ACCOUNT,
+            validation.data.consumerSecret.trim()
+          )
+        }
+        if (validation.data.passkey?.trim()) {
+          await setSecret(keytar, SECRET_SERVICE_NAME, MPESA_PASSKEY_ACCOUNT, validation.data.passkey.trim())
+        }
+        return { success: true }
+      } catch (err) {
+        return {
+          success: false,
+          error: err instanceof Error ? err.message : 'Failed to save M-Pesa credentials'
+        }
+      }
+    }
+  )
+
+  /**
+   * IPC handler that verifies the currently configured Daraja
+   * credentials by attempting an OAuth2 token exchange only — no STK
+   * Push, no charge. Only meaningful once `VITE_USE_MOCK_MPESA=false`
+   * and the app has restarted with real credentials in place; against
+   * `MockMpesaProvider` this always reports success trivially since
+   * the mock has no credentials to check.
+   */
+  ipcMain.handle('config:test-mpesa', async (): Promise<ServiceResult<void>> => {
+    if (mockMpesaEnabled) {
+      return { success: true }
+    }
+    return (mpesaProvider as DarajaMpesaProvider).testCredentials()
+  })
+
+  /**
+   * IPC handler that reads every `app_configurations` value for the
+   * Admin screen, optionally scoped to one category.
+   */
+  ipcMain.handle(
+    'config:get-all',
+    (_event, category?: AppConfigCategory): ServiceResult<Record<string, string>> => {
+      try {
+        return { success: true, data: db.getAllConfigs(category) }
+      } catch (err) {
+        return {
+          success: false,
+          error: err instanceof Error ? err.message : 'Failed to read configuration'
+        }
+      }
+    }
+  )
+
+  /**
+   * IPC handler that writes one `app_configurations` value (Admin
+   * screen). Requires a re-verified admin Manager PIN — the same
+   * privilege class as `integrations:set-config`, since these values
+   * select which provider (mock or real) a till talks to.
+   */
+  ipcMain.handle(
+    'config:set',
+    (_event, request: unknown): ServiceResult<void> => {
+      const validation = validate(configSetSchema, request)
+      if (!validation.success) {
+        return { success: false, error: validation.error }
+      }
+      const authz = requireAdminPin(db, validation.data.managerId, validation.data.managerPin)
+      if (!authz.success) {
+        return authz
+      }
+      try {
+        db.setConfig(validation.data.key, validation.data.value, {
+          requiresRestart: validation.data.requiresRestart,
+          category: validation.data.category
+        })
+        return { success: true }
+      } catch (err) {
+        return {
+          success: false,
+          error: err instanceof Error ? err.message : 'Failed to save configuration'
+        }
+      }
+    }
+  )
+
+  /**
    * IPC handler that reads a provider's stored integration config
    * for the Admin screen's Integrations panel.
+   *
+   * Any `password` key is stripped before the config crosses to the
+   * renderer. The fiscal device password lives in the credential vault
+   * now, so this should never see one — but a row written by an older
+   * build could still carry it before
+   * {@link resolveEtimsDevicePassword}'s migration has run, and no
+   * secret should reach a screen regardless. The Admin form reports
+   * "Configured"/"Not configured" from `secrets:get-etims-status`
+   * instead, mirroring the Shopify token and Daraja secrets.
    */
   ipcMain.handle(
     'integrations:get-config',
     (_event, provider: IntegrationProviderName): ServiceResult<Record<string, unknown>> => {
       try {
-        return { success: true, data: db.getIntegrationConfig(provider) }
+        return { success: true, data: redactIntegrationConfig(db.getIntegrationConfig(provider)) }
       } catch (err) {
         return {
           success: false,
@@ -920,13 +1160,178 @@ app.whenReady().then(async () => {
       if (!authz.success) {
         return authz
       }
+      // The generic schema accepts any record; the device fields get the
+      // same checks the setup gate enforces, so a save from the Admin
+      // screen can no longer store a malformed address the gate would
+      // have rejected.
+      if (validation.data.provider === 'etims') {
+        const etimsValidation = validate(etimsIntegrationConfigSchema, validation.data.config)
+        if (!etimsValidation.success) {
+          return { success: false, error: etimsValidation.error }
+        }
+      }
       try {
         db.setIntegrationConfig(validation.data.provider, validation.data.config)
+        if (validation.data.provider === 'etims') {
+          void applyEtimsConfigToProvider()
+        }
         return { success: true }
       } catch (err) {
         return {
           success: false,
           error: err instanceof Error ? err.message : 'Failed to save integration config'
+        }
+      }
+    }
+  )
+
+  /**
+   * IPC handler that saves the fiscal device's TCP password to the
+   * credential vault. Requires a re-verified admin Manager PIN — the
+   * same privilege class as `integrations:set-config`, and the same
+   * shape as `secrets:set-mpesa-credentials`.
+   *
+   * Unlike the M-Pesa handler this also re-applies the device config, so
+   * the new password is in force for the next sale rather than the next
+   * launch.
+   */
+  ipcMain.handle(
+    'secrets:set-etims-password',
+    async (_event, request: unknown): Promise<ServiceResult<void>> => {
+      const validation = validate(etimsPasswordSetSchema, request)
+      if (!validation.success) {
+        return { success: false, error: validation.error }
+      }
+      const authz = requireAdminPin(db, validation.data.managerId, validation.data.managerPin)
+      if (!authz.success) {
+        return authz
+      }
+      try {
+        const saved = await setSecret(
+          keytar,
+          SECRET_SERVICE_NAME,
+          ETIMS_DEVICE_PASSWORD_ACCOUNT,
+          validation.data.password.trim()
+        )
+        if (!saved) {
+          return {
+            success: false,
+            error: 'Could not save the fiscal device password securely on this machine.'
+          }
+        }
+        await applyEtimsConfigToProvider()
+        return { success: true }
+      } catch (err) {
+        return {
+          success: false,
+          error: err instanceof Error ? err.message : 'Failed to save the fiscal device password'
+        }
+      }
+    }
+  )
+
+  /**
+   * IPC handler that reports whether a fiscal device password is stored,
+   * never the value — mirroring `secrets:get-mpesa-status`.
+   */
+  ipcMain.handle(
+    'secrets:get-etims-status',
+    async (): Promise<ServiceResult<{ passwordConfigured: boolean }>> => {
+      try {
+        const password = await getSecret(
+          keytar,
+          SECRET_SERVICE_NAME,
+          ETIMS_DEVICE_PASSWORD_ACCOUNT
+        )
+        return { success: true, data: { passwordConfigured: Boolean(password) } }
+      } catch (err) {
+        return {
+          success: false,
+          error: err instanceof Error ? err.message : 'Failed to read fiscal device status'
+        }
+      }
+    }
+  )
+
+  /**
+   * IPC handler that reads the store identity printed on receipts.
+   * Not a secret — a shop's own name and KRA PIN appear on every receipt
+   * it issues — so no manager PIN to read.
+   */
+  ipcMain.handle(
+    'store:get-identity',
+    (): ServiceResult<{ storeName: string; storeKraPin: string }> => {
+      try {
+        return {
+          success: true,
+          data: {
+            storeName: db.getSetting(STORE_NAME_SETTING_KEY) ?? '',
+            storeKraPin: db.getSetting(STORE_KRA_PIN_SETTING_KEY) ?? ''
+          }
+        }
+      } catch (err) {
+        return {
+          success: false,
+          error: err instanceof Error ? err.message : 'Failed to read store details'
+        }
+      }
+    }
+  )
+
+  /**
+   * IPC handler that saves the store identity printed on receipts.
+   * Manager PIN required — it changes what every receipt this till
+   * issues claims about who issued it. Applies to the next receipt, not
+   * the next launch.
+   */
+  ipcMain.handle(
+    'store:set-identity',
+    (_event, request: unknown): ServiceResult<void> => {
+      const validation = validate(storeIdentitySetSchema, request)
+      if (!validation.success) {
+        return { success: false, error: validation.error }
+      }
+      const authz = requireAdminPin(db, validation.data.managerId, validation.data.managerPin)
+      if (!authz.success) {
+        return authz
+      }
+      try {
+        const storeName = validation.data.storeName.trim()
+        const storeKraPin = validation.data.storeKraPin.trim()
+        db.setSetting(STORE_NAME_SETTING_KEY, storeName)
+        db.setSetting(STORE_KRA_PIN_SETTING_KEY, storeKraPin)
+        printerSettings.storeName = storeName
+        printerSettings.storeKraPin = storeKraPin || undefined
+        return { success: true }
+      } catch (err) {
+        return {
+          success: false,
+          error: err instanceof Error ? err.message : 'Failed to save store details'
+        }
+      }
+    }
+  )
+
+  /**
+   * IPC handler behind the Admin screen's "Test connection" button.
+   * Walks the three hops between this till and a filed invoice and
+   * reports which one broke — see `fiscal-connection-test.ts`.
+   */
+  ipcMain.handle(
+    'config:test-etims',
+    async (): Promise<ServiceResult<FiscalConnectionTestResult>> => {
+      if (!(fiscalizationProvider instanceof RealFiscalizationProvider)) {
+        return {
+          success: false,
+          error: 'This till is running a development fiscal stand-in, so there is nothing to test.'
+        }
+      }
+      try {
+        return { success: true, data: await fiscalizationProvider.testConnection() }
+      } catch (err) {
+        return {
+          success: false,
+          error: err instanceof Error ? err.message : 'Failed to test the fiscal device connection'
         }
       }
     }
@@ -1152,6 +1557,94 @@ app.whenReady().then(async () => {
       }
     }
   )
+
+  /**
+   * IPC handler backing the mandatory eTIMS configuration gate:
+   * reports whether this till may proceed to the main POS UI. Real
+   * eTIMS mode requires `baseUrl`/`deviceIp`/`devicePort`/`password`
+   * to already be saved — left unconfigured, checkout previously
+   * reached the fiscal device and crashed with an HTTP 500 instead of
+   * blocking the UI up front. Mock mode is always complete.
+   */
+  ipcMain.handle('setup:check-etims-completion', async (): Promise<
+    ServiceResult<EtimsCompletionStatus>
+  > => {
+    try {
+      const config = db.getIntegrationConfig<{
+        baseUrl?: string
+        deviceIp?: string
+        devicePort?: string
+      }>('etims')
+      // The password is no longer on the row — it lives in the vault, so
+      // completeness has to ask the vault rather than read the config.
+      const password = await getSecret(keytar, SECRET_SERVICE_NAME, ETIMS_DEVICE_PASSWORD_ACCOUNT)
+      return {
+        success: true,
+        // Keyed on the provider actually in use, not on what the config
+        // asked for. A packaged build refuses the mock regardless of the
+        // stored flag, so an upgraded install whose row still says mock
+        // would otherwise skip this gate while running the real provider.
+        data: checkEtimsCompletion(!(fiscalizationProvider instanceof RealFiscalizationProvider), {
+          ...config,
+          password: password ?? undefined
+        })
+      }
+    } catch (err) {
+      return {
+        success: false,
+        error: err instanceof Error ? err.message : 'Failed to check eTIMS configuration'
+      }
+    }
+  })
+
+  /**
+   * IPC handler that saves the four required Real-eTIMS connection
+   * fields from the setup gate. No manager re-authorization — this
+   * runs before any staff has necessarily unblocked the till,
+   * mirroring `config:save`'s pre-login write. Preserves any other
+   * stored `etims` fields (e.g. `endpoints`, `defaultVatClass`).
+   *
+   * The password goes to the credential vault, never to the row — the
+   * gate writes the same way the Admin screen does.
+   */
+  ipcMain.handle(
+    'setup:save-etims-config',
+    async (_event, request: unknown): Promise<ServiceResult<void>> => {
+      const validation = validate(etimsConfigSaveSchema, request)
+      if (!validation.success) {
+        return { success: false, error: validation.error }
+      }
+      try {
+        const saved = await setSecret(
+          keytar,
+          SECRET_SERVICE_NAME,
+          ETIMS_DEVICE_PASSWORD_ACCOUNT,
+          validation.data.password.trim()
+        )
+        if (!saved) {
+          return {
+            success: false,
+            error: 'Could not save the fiscal device password securely on this machine.'
+          }
+        }
+        const existing = db.getIntegrationConfig('etims')
+        db.setIntegrationConfig('etims', {
+          ...existing,
+          baseUrl: validation.data.baseUrl.trim(),
+          deviceIp: validation.data.deviceIp.trim(),
+          devicePort: validation.data.devicePort.trim()
+        })
+        await applyEtimsConfigToProvider()
+        return { success: true }
+      } catch (err) {
+        return {
+          success: false,
+          error: err instanceof Error ? err.message : 'Failed to save eTIMS configuration'
+        }
+      }
+    }
+  )
+
 
   /**
    * Fetches this till's already-resolved Shopify store URL/token
@@ -1396,6 +1889,103 @@ app.whenReady().then(async () => {
         return {
           success: false,
           error: err instanceof Error ? err.message : 'Failed to retry order sync'
+        }
+      }
+    }
+  )
+
+  /**
+   * IPC handler for the till's wrong-PIN fix-and-resend (phase-78,
+   * Part C). Corrects (or, when `buyerPin` is `null`, removes) the
+   * buyer PIN on the sale's STORED fiscal request, then resends
+   * through the same guarded path every retry/resend uses — never a
+   * new submit path, so Rule 1 (never file twice) keeps holding.
+   */
+  ipcMain.handle(
+    'fiscal:correct-pin-and-resend',
+    async (_event, request: unknown): Promise<ServiceResult<FiscalResendResult>> => {
+      const validation = validate(correctPinAndResendSchema, request)
+      if (!validation.success) {
+        return { success: false, error: validation.error }
+      }
+      const { localId, buyerPin } = validation.data
+      try {
+        const outcome = await correctPinAndResend(
+          { db, fiscalizationProvider, logger: console },
+          localId,
+          buyerPin ?? undefined
+        )
+        return { success: true, data: buildFiscalResendResult(db, localId, outcome) }
+      } catch (err) {
+        return {
+          success: false,
+          error: err instanceof Error ? err.message : 'Failed to resend the fiscal invoice'
+        }
+      }
+    }
+  )
+
+  /**
+   * IPC handler for the back-office "Resend" action (phase-88, Step 4)
+   * — a plain resend with no PIN change, for a `needs_fixing`/`system`
+   * row or a stuck-`waiting` row. Goes through the same guarded
+   * `resendFiscalization` every other resend path uses (Rule 1 — never
+   * file twice — holds the same way it does everywhere else).
+   */
+  ipcMain.handle(
+    'fiscal:resend',
+    async (_event, request: unknown): Promise<ServiceResult<FiscalResendResult>> => {
+      const validation = validate(resendFiscalizationSchema, request)
+      if (!validation.success) {
+        return { success: false, error: validation.error }
+      }
+      const { localId } = validation.data
+      try {
+        const outcome = await resendFiscalization({ db, fiscalizationProvider, logger: console }, localId)
+        return { success: true, data: buildFiscalResendResult(db, localId, outcome) }
+      } catch (err) {
+        return {
+          success: false,
+          error: err instanceof Error ? err.message : 'Failed to resend the fiscal invoice'
+        }
+      }
+    }
+  )
+
+  /**
+   * IPC handler for the back-office "needs attention" list (phase-88,
+   * Step 4) — every `needs_fixing` order plus every stuck-`waiting`
+   * order. Read-only; the actions are the two handlers above.
+   */
+  ipcMain.handle(
+    'fiscal:needs-attention',
+    (): ServiceResult<NeedsAttentionRow[]> => {
+      try {
+        const rows = db.getOrdersNeedingAttention(Date.now(), STUCK_WAITING_THRESHOLD_MS)
+        return { success: true, data: rows }
+      } catch (err) {
+        return {
+          success: false,
+          error: err instanceof Error ? err.message : 'Failed to load sales needing attention'
+        }
+      }
+    }
+  )
+
+  /**
+   * IPC handler for the Rule-3 safety-net count (phase-88, Step 4) —
+   * every completed-but-unfiled sale, `waiting` or `needs_fixing`,
+   * regardless of the stuck threshold above.
+   */
+  ipcMain.handle(
+    'fiscal:unfiled-count',
+    (): ServiceResult<number> => {
+      try {
+        return { success: true, data: db.getUnfiledOrderCount() }
+      } catch (err) {
+        return {
+          success: false,
+          error: err instanceof Error ? err.message : 'Failed to count unfiled sales'
         }
       }
     }
@@ -1730,6 +2320,18 @@ app.whenReady().then(async () => {
    */
   ipcMain.handle('updater:install', (): ServiceResult<void> => {
     autoUpdater.quitAndInstall()
+    return { success: true }
+  })
+
+  /**
+   * IPC handler that relaunches the app — used by the Admin screen's
+   * restart-countdown after saving a `requiresRestart` configuration
+   * (e.g. the M-Pesa/eTIMS mock toggles), so the change actually takes
+   * effect (those providers are constructed once at startup).
+   */
+  ipcMain.handle('app:restart', (): ServiceResult<void> => {
+    app.relaunch()
+    app.quit()
     return { success: true }
   })
 
