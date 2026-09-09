@@ -35,3 +35,7 @@ yarn-error.log*
 .vite/
 .electron-vite-cache/
 *.tmp
+
+# Packaged release archive - never commit (394MB, exceeds GitHub 100MB limit)
+release.zip
+*.zip
