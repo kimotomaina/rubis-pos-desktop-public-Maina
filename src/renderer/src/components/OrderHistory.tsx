@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import type { OrderRow } from '../../../main/services/database.js'
 import type { OfflineOrderLine } from '../../../main/services/shopify-types.js'
 import { formatCurrency } from '../lib/currency'
+import { parseFiscalTimestamp } from '../lib/fiscalDate.js'
 import etimsLogoSrc from '../assets/logo-etims.png'
 
 /**
@@ -279,9 +280,8 @@ export default function OrderHistory({ onRetry, onPrint, requestManagerPin }: Or
                   </summary>
                   <p className="mt-1 text-slate-500">
                     Fiscalized at{' '}
-                    {order.fiscal_fiscalized_at
-                      ? new Date(order.fiscal_fiscalized_at).toLocaleString()
-                      : 'unknown time'}
+                    {parseFiscalTimestamp(order.fiscal_fiscalized_at)?.toLocaleString() ??
+                      'unknown time'}
                   </p>
                 </details>
               </div>

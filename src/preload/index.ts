@@ -28,6 +28,7 @@ import type {
   ManualCodeVerificationResult,
   StkPushStatusResult
 } from '../main/services/integrations/mpesa.js'
+import type { UnmatchedMpesaPayment } from '../main/services/integrations/sms-mpesa-provider.js'
 
 /** Status payload broadcast over the `network:status` channel. */
 export interface NetworkStatusPayload {
@@ -427,8 +428,28 @@ const api = {
     ipcRenderer.invoke('integrations:mpesa-stk-push', request),
 
   /**
-   * Verifies a manually entered M-Pesa transaction code. This is a
-   * placeholder pending real Daraja API integration.
+   * Recent M-Pesa payments this till received by message that no sale has
+   * used yet, plus one sentence on the reader's health so an empty list
+   * is never ambiguous.
+   *
+   * @returns {Promise<ServiceResult<{ payments: UnmatchedMpesaPayment[]; health: string | null }>>}
+   */
+  listUnmatchedMpesaPayments: (): Promise<
+    ServiceResult<{ payments: UnmatchedMpesaPayment[]; health: string | null }>
+  > => ipcRenderer.invoke('mpesa-sms:list-unmatched'),
+
+  /**
+   * Reports what this till's M-Pesa provider can do, so a payment
+   * screen never offers a route that cannot end in a confirmed payment.
+   *
+   * @returns {Promise<ServiceResult<{ manualCodeSupported: boolean }>>}
+   */
+  getMpesaCapabilities: (): Promise<ServiceResult<{ manualCodeSupported: boolean }>> =>
+    ipcRenderer.invoke('integrations:mpesa-capabilities'),
+
+  /**
+   * Verifies a manually entered M-Pesa transaction code against
+   * whatever confirmation source this till has.
    *
    * @param {ManualCodeVerification} request
    * @returns {Promise<ServiceResult<ManualCodeVerificationResult>>}

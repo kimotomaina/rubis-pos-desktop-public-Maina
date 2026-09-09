@@ -101,6 +101,18 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
   const [mpesaShortcode, setMpesaShortcode] = useState('')
   const [mpesaEnvironment, setMpesaEnvironment] = useState<'sandbox' | 'production'>('sandbox')
   const [mpesaCallbackUrl, setMpesaCallbackUrl] = useState('')
+  /**
+   * How this till confirms an M-Pesa payment, and where the messages
+   * arrive when it does so by message.
+   *
+   * Loaded and saved alongside the Daraja fields on purpose: saving an
+   * integration replaces the whole stored row, so an Admin screen that
+   * sent only the Daraja fields would switch a message-based till back to
+   * Daraja and erase its folder, discovered only when payments stopped
+   * confirming.
+   */
+  const [mpesaConfirmationMethod, setMpesaConfirmationMethod] = useState<'daraja' | 'sms'>('daraja')
+  const [mpesaSmsInboxPath, setMpesaSmsInboxPath] = useState('')
   const [mpesaConsumerSecretInput, setMpesaConsumerSecretInput] = useState('')
   const [mpesaPasskeyInput, setMpesaPasskeyInput] = useState('')
   const [mpesaConsumerSecretConfigured, setMpesaConsumerSecretConfigured] = useState(false)
@@ -196,6 +208,8 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
       setMpesaShortcode(String(mpesaResult.data.shortcode ?? ''))
       setMpesaEnvironment(mpesaResult.data.environment === 'production' ? 'production' : 'sandbox')
       setMpesaCallbackUrl(String(mpesaResult.data.callbackUrl ?? ''))
+      setMpesaConfirmationMethod(mpesaResult.data.confirmationMethod === 'sms' ? 'sms' : 'daraja')
+      setMpesaSmsInboxPath(String(mpesaResult.data.smsInboxPath ?? ''))
     }
     if (mpesaCredStatusResult.success && mpesaCredStatusResult.data) {
       setMpesaConsumerSecretConfigured(mpesaCredStatusResult.data.consumerSecretConfigured)
@@ -442,7 +456,9 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
               consumerKey,
               shortcode,
               environment: mpesaEnvironment,
-              callbackUrl: callbackUrl || undefined
+              callbackUrl: callbackUrl || undefined,
+              confirmationMethod: mpesaConfirmationMethod,
+              smsInboxPath: mpesaSmsInboxPath.trim() || undefined
             },
             managerId,
             managerPin
@@ -1126,6 +1142,44 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
                       className="w-full h-12 rounded-lg border border-slate-300 px-3 text-lg focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-100"
                     />
                   </div>
+                  <div>
+                    <label className="mb-1 block text-lg font-medium text-slate-600">
+                      How payments are confirmed
+                    </label>
+                    <select
+                      value={mpesaConfirmationMethod}
+                      onChange={(e) =>
+                        setMpesaConfirmationMethod(e.target.value === 'sms' ? 'sms' : 'daraja')
+                      }
+                      aria-label="How payments are confirmed"
+                      className="w-full h-12 rounded-lg border border-slate-300 px-3 text-lg focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-100"
+                    >
+                      <option value="daraja">Send a payment request to the customer</option>
+                      <option value="sms">Read the payment message on this till</option>
+                    </select>
+                    <p className="mt-1 text-base text-slate-500">
+                      Choose reading the message when this till has the payment phone or modem
+                      connected to it.
+                    </p>
+                  </div>
+                  {mpesaConfirmationMethod === 'sms' && (
+                    <div>
+                      <label className="mb-1 block text-lg font-medium text-slate-600">
+                        Where payment messages arrive
+                      </label>
+                      <input
+                        type="text"
+                        value={mpesaSmsInboxPath}
+                        onChange={(e) => setMpesaSmsInboxPath(e.target.value)}
+                        placeholder="C:\\gammu\\inbox"
+                        aria-label="Where payment messages arrive"
+                        className="w-full h-12 rounded-lg border border-slate-300 px-3 text-lg focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-100"
+                      />
+                      <p className="mt-1 text-base text-slate-500">
+                        The folder on this till where the message reader saves each payment message.
+                      </p>
+                    </div>
+                  )}
                 </div>
                 <div className="mt-3 flex items-center gap-3">
                   <button

@@ -1,6 +1,6 @@
 {
   "name": "rubis-pos-desktop",
-  "version": "1.1.0",
+  "version": "2.0.0",
   "description": "Custom Windows POS for RUBIS using Shopify backend",
   "type": "module",
   "main": "./out/main/index.js",

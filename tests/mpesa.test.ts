@@ -9,7 +9,7 @@
  */
 
 import { describe, it, expect } from 'vitest'
-import { MockMpesaProvider } from '../src/main/services/integrations/mpesa.js'
+import { MockMpesaProvider } from '../src/main/services/integrations/mock-mpesa-provider.js'
 
 describe('MockMpesaProvider.initiateStkPush', () => {
   it('resolves successfully for a valid phone number after the simulated delay', async () => {

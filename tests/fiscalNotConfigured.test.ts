@@ -14,11 +14,12 @@ import type { AxiosInstance } from 'axios'
 import { RealFiscalizationProvider } from '../src/main/services/integrations/real-etims-provider.js'
 import type { FiscalInvoiceRequest } from '../src/main/services/integrations/etims.js'
 import {
+  describeDeviceNotAnswering,
   describeNotReady,
-  describeSettingsFailure,
   NOT_CONFIGURED_MESSAGE,
   NOT_CONFIGURED_REASON,
-  SERVER_UNREACHABLE_MESSAGE
+  SERVER_UNREACHABLE_MESSAGE,
+  STATUS_UNREADABLE_MESSAGE
 } from '../src/main/services/integrations/fiscal-connection-test.js'
 
 /** A complete, valid sale — nothing about the request is at fault here. */
@@ -216,9 +217,9 @@ describe('testConnection', () => {
     expect(result.hops.map((hop) => hop.passed)).toEqual([false, undefined, undefined])
   })
 
-  it('names the DEVICE hop, and blames the password, on a Code 31', async () => {
+  it('names the DEVICE hop, and blames the password, on a Code 31 that names the password stage', async () => {
     const get = vi.fn().mockResolvedValue({
-      data: '<Res Code="31"><Err Source="Server" Type="ServTCPAuth"><Message>ServTCPAuth</Message></Err></Res>'
+      data: '<Res Code="31"><Err Source="Server" Type="ServTCPAuth"><Message>Missing password authentication answer </Message></Err></Res>'
     })
     const provider = new RealFiscalizationProvider({
       ...CONFIGURED,
@@ -252,6 +253,129 @@ describe('testConnection', () => {
     expect(result.message).toMatch(/switched on/)
   })
 
+  /**
+   * The phase-98 fix. A `ReadStatus` that fails for a server/connection
+   * reason means the device answered NOTHING, so it belongs to hop 2 —
+   * every one of these used to report hop 3's "the fiscal device
+   * answered but is not ready to file sales", which is false, and which
+   * cost a live investigation hours chasing KRA provisioning
+   * (`docs/phase-97.md`).
+   */
+  describe('a ReadStatus that fails for a connection reason', () => {
+    /** `settings()` always succeeds — only `ReadStatus` is under test. */
+    const settingsOk = (): ReturnType<typeof vi.fn> =>
+      vi.fn().mockResolvedValue({ data: '<Res Code="0"/>' })
+
+    const readStatusFailure = (xml: string): RealFiscalizationProvider =>
+      new RealFiscalizationProvider({
+        ...CONFIGURED,
+        httpClient: makeClient(vi.fn().mockResolvedValue({ data: xml }), settingsOk())
+      })
+
+    const SERVER_CODES: ReadonlyArray<[string, string, RegExp]> = [
+      [
+        '19',
+        '<Res Code="19"><Err Source="Server" Type="ServUndefined"><Message>The Fiscal Printer has open socket. FP refuses new socket connection.</Message></Err></Res>',
+        /session open from an earlier connection/
+      ],
+      [
+        '30',
+        '<Res Code="30"><Err Source="Server" Type="ServSockConnectionFailed"><Message>Socket connect FAILED</Message></Err></Res>',
+        /switched on and on the same network/
+      ],
+      [
+        '31 (first ping)',
+        '<Res Code="31"><Err Source="Server" Type="ServTCPAuth"><Message>Missing first ping answer </Message></Err></Res>',
+        /did not respond to the connection/
+      ],
+      [
+        '31 (password)',
+        '<Res Code="31"><Err Source="Server" Type="ServTCPAuth"><Message>Missing password authentication answer </Message></Err></Res>',
+        /refused the password/
+      ],
+      [
+        '63',
+        '<Res Code="63"><Err Source="Server" Type="ClientInvalidPostFormat"><Message>Invalid post format</Message></Err></Res>',
+        /fault in this app/
+      ]
+    ]
+
+    it.each(SERVER_CODES)(
+      'reports Code %s against the DEVICE hop, never the ready hop',
+      async (_label, xml) => {
+        const result = await readStatusFailure(xml).testConnection()
+
+        expect(result.failedAt).toBe('device')
+        // Hop 3 was never attempted, so it is neither a pass nor a fail.
+        expect(result.hops.map((hop) => hop.passed)).toEqual([true, false, undefined])
+      }
+    )
+
+    it.each(SERVER_CODES)('names the specific cause of Code %s', async (_label, xml, expected) => {
+      const result = await readStatusFailure(xml).testConnection()
+
+      expect(result.message).toMatch(expected)
+    })
+
+    it.each(SERVER_CODES)('never claims the device answered on Code %s', async (_label, xml) => {
+      const result = await readStatusFailure(xml).testConnection()
+
+      expect(result.message).not.toMatch(/device answered/i)
+      expect(result.message).not.toMatch(/contact the device supplier/i)
+    })
+
+    it('tells the two Code 31 stages apart, and defaults to the connection one', async () => {
+      const firstPing = await readStatusFailure(
+        '<Res Code="31"><Err Source="Server" Type="ServTCPAuth"><Message>Missing first ping answer </Message></Err></Res>'
+      ).testConnection()
+      const passwordStage = await readStatusFailure(
+        '<Res Code="31"><Err Source="Server" Type="ServTCPAuth"><Message>Missing password authentication answer </Message></Err></Res>'
+      ).testConnection()
+      // The fallback rule: a Code 31 whose message does not positively
+      // name the password stage must not be reported as a password
+      // problem. A false "wrong password" is the wasted chase this fix
+      // exists to prevent.
+      const unrecognized = await readStatusFailure(
+        '<Res Code="31"><Err Source="Server" Type="ServTCPAuth"><Message></Message></Err></Res>'
+      ).testConnection()
+
+      expect(firstPing.message).not.toBe(passwordStage.message)
+      expect(firstPing.message).not.toMatch(/password/i)
+      expect(passwordStage.message).toMatch(/password/i)
+      expect(unrecognized.message).toBe(firstPing.message)
+    })
+
+    it('names the SERVER hop when ReadStatus comes back with no response envelope', async () => {
+      const provider = new RealFiscalizationProvider({
+        ...CONFIGURED,
+        httpClient: makeClient(
+          vi.fn().mockRejectedValue(
+            Object.assign(new Error('socket hang up'), { isAxiosError: true, request: {} })
+          ),
+          settingsOk()
+        )
+      })
+
+      const result = await provider.testConnection()
+
+      expect(result.failedAt).toBe('server')
+      expect(result.message).toBe(SERVER_UNREACHABLE_MESSAGE)
+    })
+
+    it('names the READY hop when the device answers but refuses the status command', async () => {
+      // A device-level command error: it answered, so hop 2 genuinely
+      // passed, but its readiness was never read — reporting "not ready"
+      // would assert a status nobody has seen.
+      const result = await readStatusFailure(
+        '<Res Code="40"><Err Source="FP" STE1="30" STE2="34"><Message>Syntax error</Message></Err></Res>'
+      ).testConnection()
+
+      expect(result.failedAt).toBe('ready')
+      expect(result.message).toBe(STATUS_UNREADABLE_MESSAGE)
+      expect(result.hops.map((hop) => hop.passed)).toEqual([true, true, false])
+    })
+  })
+
   it('names the READY hop when the device answers but is not paired with TIMS', async () => {
     const get = vi.fn().mockResolvedValue({ data: '<Res Code="0"/>' })
     const post = vi.fn().mockResolvedValue({
@@ -266,6 +390,25 @@ describe('testConnection', () => {
 
     expect(result.failedAt).toBe('ready')
     expect(result.message).toMatch(/not paired with KRA TIMS/)
+    expect(result.hops.map((hop) => hop.passed)).toEqual([true, true, false])
+  })
+
+  it('names the READY hop when the device answers but is not fiscalized', async () => {
+    const get = vi.fn().mockResolvedValue({ data: '<Res Code="0"/>' })
+    const post = vi.fn().mockResolvedValue({
+      data: '<Res Code="0"><Res Name="CU_fiscalized" Value="0"/><Res Name="Paired_with_TIMS" Value="1"/></Res>'
+    })
+    const provider = new RealFiscalizationProvider({
+      ...CONFIGURED,
+      httpClient: makeClient(post, get)
+    })
+
+    const result = await provider.testConnection()
+
+    expect(result.failedAt).toBe('ready')
+    expect(result.message).toMatch(/has not been fiscalized/)
+    // The one case "contact the device supplier" is genuinely right for.
+    expect(result.message).toMatch(/contact the device supplier/)
     expect(result.hops.map((hop) => hop.passed)).toEqual([true, true, false])
   })
 
@@ -311,18 +454,25 @@ describe('every message a branch manager can see', () => {
    * standing requirement for these screens is plain language: no vendor
    * product names, no protocol codes, no command names, no config keys.
    */
+  const notAnswering = (code: string, message = ''): string =>
+    describeDeviceNotAnswering({ code, message })
+
   const MESSAGES = [
     NOT_CONFIGURED_MESSAGE,
     NOT_CONFIGURED_REASON,
     SERVER_UNREACHABLE_MESSAGE,
-    describeSettingsFailure('30'),
-    describeSettingsFailure('31'),
-    describeSettingsFailure('32'),
-    describeSettingsFailure('34'),
-    describeSettingsFailure(undefined),
-    describeNotReady('Fiscal device reports it is not fiscalized (CU_fiscalized=0)'),
-    describeNotReady('Fiscal device reports it is not paired with TIMS (Paired_with_TIMS=0)'),
-    describeNotReady(undefined)
+    STATUS_UNREADABLE_MESSAGE,
+    notAnswering('19'),
+    notAnswering('30'),
+    notAnswering('31'),
+    notAnswering('31', 'Missing password authentication answer '),
+    notAnswering('32'),
+    notAnswering('34'),
+    notAnswering('53'),
+    notAnswering('63'),
+    notAnswering('999'),
+    describeNotReady('not-fiscalized'),
+    describeNotReady('not-paired')
   ]
 
   it.each(MESSAGES)('names no vendor product, protocol code or command: %s', (message) => {
@@ -340,8 +490,38 @@ describe('every message a branch manager can see', () => {
   it('distinguishes the two device-hop causes a branch can actually act on', () => {
     // Wrong password and unreachable device are different jobs for
     // whoever is standing at the till, so they must not share wording.
-    expect(describeSettingsFailure('31')).not.toBe(describeSettingsFailure('30'))
-    expect(describeSettingsFailure('31')).toMatch(/password/i)
-    expect(describeSettingsFailure('30')).toMatch(/switched on|network/i)
+    const password = notAnswering('31', 'Missing password authentication answer ')
+    expect(password).not.toBe(notAnswering('30'))
+    expect(password).toMatch(/password/i)
+    expect(notAnswering('30')).toMatch(/switched on|network/i)
+  })
+
+  it('claims the device answered only where it actually did', () => {
+    // "The fiscal device answered..." is a factual claim. It is true of
+    // the two status-bit messages and of the unreadable-status one, and
+    // false of every message that means nothing came back.
+    const unanswered = ['19', '30', '31', '32', '34', '53', '63', '999'].map((code) =>
+      notAnswering(code)
+    )
+
+    for (const message of unanswered) {
+      expect(message).not.toMatch(/device answered/i)
+    }
+    expect(describeNotReady('not-fiscalized')).toMatch(/device answered/i)
+    expect(describeNotReady('not-paired')).toMatch(/device answered/i)
+    expect(STATUS_UNREADABLE_MESSAGE).toMatch(/device answered/i)
+  })
+
+  it('reserves "contact the device supplier" for a device that reported its own status', () => {
+    // The sentence that misdirected phase-97: it points at KRA
+    // provisioning, which is only the right place to look when the
+    // device answered and said it is not provisioned.
+    const unanswered = ['19', '30', '31', '53', '63'].map((code) => notAnswering(code))
+
+    for (const message of unanswered) {
+      expect(message).not.toMatch(/contact the device supplier/i)
+    }
+    expect(describeNotReady('not-fiscalized')).toMatch(/contact the device supplier/i)
+    expect(describeNotReady('not-paired')).toMatch(/contact the device supplier/i)
   })
 })

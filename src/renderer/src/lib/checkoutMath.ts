@@ -48,7 +48,16 @@ export function calculateChange(total: number, tendered: number): number {
  * payment method and current input state.
  *
  * - `cash`: the tendered amount must cover the total.
- * - `mpesa` / `card`: a non-blank reference number is required.
+ * - `card`: a non-blank reference number is required — the reference is
+ *   the cashier's record of a payment the card terminal already took, so
+ *   there is nothing for this till to confirm.
+ * - `mpesa`: **never**. An M-Pesa sale completes only through a
+ *   confirmed payment, which arrives by way of `PaymentModal`'s `onPaid`
+ *   rather than through this button. A typed reference is not evidence
+ *   that anyone paid, and treating it as sufficient here is what would
+ *   let a cashier complete a sale for a payment that never happened.
+ *   `runCheckout` refuses such a sale regardless; this keeps the screen
+ *   from offering it in the first place.
  *
  * @param {PaymentMethod} method
  * @param {number} total
@@ -64,6 +73,9 @@ export function canCompleteSale(
 ): boolean {
   if (method === 'cash') {
     return tendered >= total
+  }
+  if (method === 'mpesa') {
+    return false
   }
   return (referenceNumber ?? '').trim().length > 0
 }

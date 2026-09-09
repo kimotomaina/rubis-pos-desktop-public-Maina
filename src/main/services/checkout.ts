@@ -49,6 +49,13 @@ import { routeFiscalOutcome, classifyThrownFiscalError } from './fiscal-routing.
 export interface CheckoutDb {
   getStaffById(id: number): StaffRow | undefined
   getOpenShift(): ShiftRow | undefined
+  /** The payment gate's confirmation source on a Daraja till — see {@link RubisDatabase.hasConfirmedStkPayment}. */
+  hasConfirmedStkPayment(reference: string): boolean
+  /** Queues the order and spends the confirmation message that paid for it, in one transaction. */
+  queueOrderClaimingSmsPayment(
+    input: QueueOrderInput,
+    claim: { transactionCode: string; staffId: number }
+  ): { localId: number; queueId: number } | null
   queueOrder(input: QueueOrderInput): { localId: number; queueId: number }
   getOrder(localId: number): OrderRow | undefined
   setOrderFiscalInfo(localId: number, invoiceNumber: string, qrCode: string): void
@@ -63,6 +70,29 @@ export interface CheckoutDb {
   /** Stores the request just attempted, so a later manual resend (phase-76) has it to resubmit. */
   setOrderFiscalRequest(localId: number, request: FiscalInvoiceRequest): void
 }
+
+/**
+ * Shown when an M-Pesa sale is asked to complete without a confirmed
+ * payment behind it.
+ *
+ * Says what is wrong and what to do, because a disabled button with no
+ * reason sends a cashier looking for a way around it. No codes, no
+ * provider names: the only useful instruction is to wait for the
+ * payment to be confirmed.
+ */
+export const UNCONFIRMED_MPESA_MESSAGE =
+  'This M-Pesa payment has not been confirmed yet. Wait for the payment to come through, then complete the sale.'
+
+/**
+ * Shown when the payment a sale is trying to use was already spent on
+ * another sale between the check and the claim.
+ *
+ * Rare, and the whole reason the claim is a conditional write rather
+ * than bookkeeping: two tills, or two rapid checkouts, can both see the
+ * same payment as available before either takes it.
+ */
+export const MPESA_PAYMENT_ALREADY_USED_MESSAGE =
+  'That M-Pesa payment was just used for another sale. Find the customer’s own payment and try again.'
 
 /** Structural slice of {@link MpesaProvider} `runCheckout` depends on. */
 export interface CheckoutMpesaProvider {
@@ -107,8 +137,30 @@ export interface RunCheckoutDeps {
   idGen: () => string
   /** VAT rate applied to every fiscal line and the invoice total (`printerSettings.taxRate` in production). */
   taxRate: number
-  /** Gates the mock-mode M-Pesa manual-code check, exactly as the handler's closed-over flag did. */
-  mockMpesaEnabled: boolean
+  /**
+   * Whether this till's M-Pesa provider can settle, by itself, whether a
+   * reference number corresponds to a payment that really happened.
+   *
+   * A capability, not a mode. `true` for the SMS reader and the
+   * development mock; `false` for Daraja, which has no receipt-lookup
+   * endpoint and is checked against this till's own STK records instead.
+   * Supplied by `resolveMpesaProvider`, never derived here — reading it
+   * as "is this the mock" is what let an unverified M-Pesa sale through
+   * on a Daraja till.
+   */
+  verifyReferenceNumbers: boolean
+  /**
+   * Whether the confirmation a sale uses is a stored record that must be
+   * **spent**, so the next sale cannot use it too.
+   *
+   * `true` only on a message-based till, where received payments sit in
+   * a list a cashier picks from. Supplied by `resolveMpesaProvider`
+   * alongside {@link verifyReferenceNumbers}: the two answer different
+   * questions, and conflating them would either leave a real payment
+   * re-spendable or try to consume a Daraja STK record that has no such
+   * notion.
+   */
+  claimsStoredPayments: boolean
   logger: CheckoutLogger
   /**
    * Gates the per-sale, non-essential chatter (the Shopify sync-tick
@@ -175,7 +227,8 @@ export async function runCheckout(
     engineTick,
     idGen,
     taxRate,
-    mockMpesaEnabled,
+    verifyReferenceNumbers,
+    claimsStoredPayments,
     logger,
     debugLogging
   } = deps
@@ -194,31 +247,53 @@ export async function runCheckout(
     }
 
     /**
-     * When paying by M-Pesa manual code entry (a reference number was
-     * captured at the till rather than via a completed STK Push), the
-     * code is verified before the order is persisted — an unverified
-     * code should never reach the ledger as a completed sale.
+     * The payment gate. No M-Pesa sale reaches the ledger without a real
+     * confirmation, by any route — including a request that never came
+     * from a checkout screen, since the main process must not trust a
+     * value merely because a screen validated it.
+     *
+     * Payment inverts the fiscal rule this file follows everywhere else.
+     * An unfiled sale is recoverable and so fiscalization never blocks;
+     * goods released for a payment that never arrived are not, so every
+     * ambiguous case here resolves to NOT PAID and the sale stops.
+     *
+     * Which confirmation counts depends on what the till's provider can
+     * actually prove:
+     *
+     *   - `verifyReferenceNumbers` (the SMS reader, and the development
+     *     mock): the provider itself settles it, by matching the code
+     *     against a confirmation this till received.
+     *   - otherwise (Daraja): the provider has no receipt-lookup
+     *     endpoint, so the reference is matched against this till's own
+     *     record of Daraja's STK status responses instead. Which means
+     *     Daraja's STK path continues to work exactly as before, and a
+     *     typed reference that never went through it does not.
      */
-    if (mockMpesaEnabled && input.paymentMethod === 'mpesa' && input.referenceNumber) {
-      const verification = await mpesaProvider.verifyTransactionCode({
-        transactionCode: input.referenceNumber,
-        amount: total
-      })
-      if (!verification.success) {
-        return { success: false, error: verification.error ?? 'M-Pesa verification failed' }
+    if (input.paymentMethod === 'mpesa') {
+      const reference = input.referenceNumber?.trim() ?? ''
+      if (!reference) {
+        return { success: false, error: UNCONFIRMED_MPESA_MESSAGE }
       }
-      if (!verification.data?.verified) {
-        return {
-          success: false,
-          error: verification.data?.reason ?? 'M-Pesa transaction code could not be verified'
+
+      if (verifyReferenceNumbers) {
+        const verification = await mpesaProvider.verifyTransactionCode({
+          transactionCode: reference,
+          amount: total
+        })
+        if (!verification.success) {
+          return { success: false, error: verification.error ?? UNCONFIRMED_MPESA_MESSAGE }
         }
+        if (!verification.data?.verified) {
+          return { success: false, error: verification.data?.reason ?? UNCONFIRMED_MPESA_MESSAGE }
+        }
+      } else if (!db.hasConfirmedStkPayment(reference)) {
+        return { success: false, error: UNCONFIRMED_MPESA_MESSAGE }
       }
     }
 
     const openShift = db.getOpenShift()
     const clientOrderUuid = idGen()
-
-    localId = db.queueOrder({
+    const orderInput = {
       items,
       total,
       clientOrderUuid,
@@ -231,7 +306,40 @@ export async function runCheckout(
       shiftId: openShift?.id,
       customerPin: input.customerPin,
       cartDiscount: input.cartDiscount
-    }).localId
+    }
+
+    /**
+     * On a message-based till the confirmation is a stored record, and
+     * the sale has to spend it: the same received payment sits in the
+     * list a cashier picks from, so leaving it unspent would let the next
+     * sale pick it again — a double credit through ordinary use, not
+     * abuse.
+     *
+     * Queueing and claiming happen in one transaction, so the sale and
+     * the spent payment are one fact. Splitting them either way has a
+     * failure that costs money: queue-then-claim can leave a completed
+     * sale whose payment still reads as available, and claim-then-queue
+     * can consume a real payment for a sale that never existed.
+     *
+     * The claim is also the gate, not a note taken after one. The check
+     * above ran before an `await`, and two checkouts can interleave
+     * there; the conditional write inside is what actually settles who
+     * gets the payment.
+     */
+    const smsClaim =
+      claimsStoredPayments && input.paymentMethod === 'mpesa' && input.referenceNumber?.trim()
+        ? { transactionCode: input.referenceNumber.trim(), staffId: staff.id }
+        : null
+
+    if (smsClaim) {
+      const queued = db.queueOrderClaimingSmsPayment(orderInput, smsClaim)
+      if (!queued) {
+        return { success: false, error: MPESA_PAYMENT_ALREADY_USED_MESSAGE }
+      }
+      localId = queued.localId
+    } else {
+      localId = db.queueOrder(orderInput).localId
+    }
 
     if (monitor.isOnline()) {
       void engineTick()

@@ -58,9 +58,19 @@ import type {
   StaffSummary,
   ShiftRow
 } from './services/database.js'
-import { MockMpesaProvider } from './services/integrations/mpesa.js'
+import {
+  MPESA_NOT_CONFIGURED_MESSAGE,
+  resolveMpesaProvider,
+  type MpesaConfirmationMethod
+} from './services/mpesa-provider-factory.js'
+import {
+  SmsMpesaProvider,
+  toUnmatchedPayments,
+  type UnmatchedMpesaPayment
+} from './services/integrations/sms-mpesa-provider.js'
+import { createMpesaSmsInbox, describeInboxHealth } from './services/mpesa-sms-inbox.js'
+import { MPESA_SMS_PARSER_READY, parseMpesaPaymentSms } from './lib/mpesaSms.js'
 import type {
-  MpesaProvider,
   StkPushRequest,
   StkPushResult,
   ManualCodeVerification,
@@ -107,6 +117,7 @@ import {
   configSetSchema,
   mpesaCredentialsSetSchema,
   etimsConfigSaveSchema,
+  mpesaIntegrationConfigSchema,
   etimsPasswordSetSchema,
   etimsIntegrationConfigSchema,
   storeIdentitySetSchema,
@@ -523,7 +534,17 @@ app.whenReady().then(async () => {
    */
   const fiscalDebugLogging = (process.env.FISCAL_DEBUG_LOGGING || '').trim().toLowerCase() === 'true'
 
-  const rawMockMpesa = (process.env.VITE_USE_MOCK_MPESA || 'true').trim().toLowerCase()
+  /**
+   * M-Pesa defaults to REAL when unset, for the same reason eTIMS does
+   * below. The mock's `verifyTransactionCode` approves almost any code,
+   * so a till installed without a `.env` used to complete M-Pesa sales
+   * for payments that never happened — the payment-side twin of printing
+   * `KRA-MOCK-` on a receipt for an unfiled sale. `resolveMpesaProvider`
+   * refuses the mock in a packaged build regardless of what this
+   * resolves to, and `scripts/verify-no-mock-provider.cjs` fails the
+   * build if the mock is in the bundle at all.
+   */
+  const rawMockMpesa = (process.env.VITE_USE_MOCK_MPESA || 'false').trim().toLowerCase()
   /**
    * eTIMS defaults to REAL when unset, unlike M-Pesa. A till installed
    * without a `.env` must not quietly fiscalize against the mock and
@@ -533,7 +554,7 @@ app.whenReady().then(async () => {
    */
   const rawMockEtims = (process.env.VITE_USE_MOCK_ETIMS || 'false').trim().toLowerCase()
   const mockMpesaEnabled =
-    (db.getConfig('mock_mpesa_enabled') ?? (rawMockMpesa !== 'false' ? 'true' : 'false')) === 'true'
+    (db.getConfig('mock_mpesa_enabled') ?? (rawMockMpesa === 'true' ? 'true' : 'false')) === 'true'
   const mockEtimsEnabled =
     (db.getConfig('mock_etims_enabled') ?? (rawMockEtims === 'true' ? 'true' : 'false')) === 'true'
   console.log(
@@ -546,7 +567,15 @@ app.whenReady().then(async () => {
     shortcode?: string
     environment?: 'sandbox' | 'production'
     callbackUrl?: string
+    confirmationMethod?: MpesaConfirmationMethod
+    smsInboxPath?: string
   }>('mpesa')
+  /**
+   * How this till confirms an M-Pesa payment. Defaults to Daraja, so a
+   * till that has never been told otherwise keeps the behaviour it had.
+   */
+  const mpesaConfirmationMethod: MpesaConfirmationMethod =
+    mpesaConfig.confirmationMethod === 'sms' ? 'sms' : 'daraja'
   /**
    * `consumerSecret`/`passkey` are the two Daraja fields that can
    * actually authorize a transaction, so — unlike `consumerKey`/
@@ -565,18 +594,26 @@ app.whenReady().then(async () => {
     (await getSecret(keytar, SECRET_SERVICE_NAME, MPESA_PASSKEY_ACCOUNT)) ??
     process.env.MPESA_PASSKEY ??
     ''
-  const mpesaProvider: MpesaProvider = mockMpesaEnabled
-    ? new MockMpesaProvider()
-    : new DarajaMpesaProvider({
-        consumerKey: mpesaConfig.consumerKey || process.env.MPESA_CONSUMER_KEY || '',
-        consumerSecret: mpesaConsumerSecret,
-        shortcode: mpesaConfig.shortcode || process.env.MPESA_SHORTCODE || '',
-        passkey: mpesaPasskey,
-        environment:
-          mpesaConfig.environment ??
-          (process.env.MPESA_ENVIRONMENT === 'production' ? 'production' : 'sandbox'),
-        callbackUrl: mpesaConfig.callbackUrl ?? process.env.MPESA_CALLBACK_URL
-      })
+  const {
+    provider: mpesaProvider,
+    verifyReferenceNumbers,
+    claimsStoredPayments
+  } = await resolveMpesaProvider({
+    isPackaged: app.isPackaged,
+    mockRequested: mockMpesaEnabled,
+    confirmationMethod: mpesaConfirmationMethod,
+    smsDb: db,
+    darajaOptions: {
+      consumerKey: mpesaConfig.consumerKey || process.env.MPESA_CONSUMER_KEY || '',
+      consumerSecret: mpesaConsumerSecret,
+      shortcode: mpesaConfig.shortcode || process.env.MPESA_SHORTCODE || '',
+      passkey: mpesaPasskey,
+      environment:
+        mpesaConfig.environment ??
+        (process.env.MPESA_ENVIRONMENT === 'production' ? 'production' : 'sandbox'),
+      callbackUrl: mpesaConfig.callbackUrl ?? process.env.MPESA_CALLBACK_URL
+    }
+  })
   /**
    * The device TCP password is resolved from the OS-encrypted vault, not
    * this row — and a legacy plaintext `password` left on the row by an
@@ -711,6 +748,39 @@ app.whenReady().then(async () => {
   monitor.start()
   engine.start()
   fiscalEngine.start()
+
+  /**
+   * The confirmation-message reader runs only on a till that confirms
+   * payments that way. A Daraja or mock till has no folder to watch, and
+   * starting a poller for one would be a timer doing nothing every few
+   * seconds forever.
+   *
+   * `null` on every other till, which is also what
+   * `mpesa-sms:list-unmatched` checks before answering.
+   */
+  const mpesaSmsInbox =
+    mpesaConfirmationMethod === 'sms'
+      ? createMpesaSmsInbox({
+          inboxPath: mpesaConfig.smsInboxPath ?? '',
+          db,
+          parse: parseMpesaPaymentSms,
+          parserReady: MPESA_SMS_PARSER_READY,
+          logger: console,
+          debugLogging: fiscalDebugLogging
+        })
+      : null
+
+  if (mpesaSmsInbox) {
+    if (!MPESA_SMS_PARSER_READY) {
+      console.warn(
+        '[rubis-pos] M-Pesa by message is selected, but no confirmation message can be ' +
+          'recognised yet — the message format is still being settled against real samples. ' +
+          'No M-Pesa payment can be confirmed on this till until it is. The payment screen ' +
+          'reports this to the cashier.'
+      )
+    }
+    mpesaSmsInbox.start()
+  }
 
   /**
    * M-Pesa (Daraja sandbox) / fiscal device / printer reachability —
@@ -869,7 +939,8 @@ app.whenReady().then(async () => {
           engineTick: () => engine.tick(),
           idGen: randomUUID,
           taxRate: printerSettings.taxRate,
-          mockMpesaEnabled,
+          verifyReferenceNumbers,
+          claimsStoredPayments,
           logger: console,
           debugLogging: fiscalDebugLogging
         },
@@ -888,6 +959,56 @@ app.whenReady().then(async () => {
     'integrations:mpesa-stk-push',
     (_event, request: StkPushRequest): Promise<ServiceResult<StkPushResult>> =>
       mpesaProvider.initiateStkPush(request)
+  )
+
+  /**
+   * IPC handler reporting what this till's M-Pesa provider can actually
+   * do, so a screen never offers a way to pay that cannot end in a
+   * confirmed payment.
+   *
+   * Specifically: a Daraja till cannot check a typed transaction code
+   * against Safaricom, so its Manual Code tab could only ever dead-end
+   * on an error. Showing it anyway leaves what looks like a second way
+   * to complete a sale sitting beside the one that works, which is how a
+   * cashier ends up hunting for a way around the gate.
+   */
+  /**
+   * The cashier's "pick the matching payment" list: recent M-Pesa
+   * confirmations this till received that no sale has spent yet.
+   *
+   * Answers with the inbox's health alongside the list, so an empty list
+   * is never ambiguous. "No payments yet" and "nothing is being read at
+   * all" look identical otherwise, and only one of them means wait.
+   */
+  ipcMain.handle(
+    'mpesa-sms:list-unmatched',
+    (): ServiceResult<{ payments: UnmatchedMpesaPayment[]; health: string | null }> => {
+      if (!mpesaSmsInbox || !(mpesaProvider instanceof SmsMpesaProvider)) {
+        return { success: false, error: 'This till does not confirm M-Pesa payments by message.' }
+      }
+      try {
+        return {
+          success: true,
+          data: {
+            payments: toUnmatchedPayments(mpesaProvider.listRecentUnmatched()),
+            health: describeInboxHealth(mpesaSmsInbox.getStatus())
+          }
+        }
+      } catch (err) {
+        return {
+          success: false,
+          error: err instanceof Error ? err.message : 'Could not read recent M-Pesa payments'
+        }
+      }
+    }
+  )
+
+  ipcMain.handle(
+    'integrations:mpesa-capabilities',
+    (): ServiceResult<{ manualCodeSupported: boolean }> => ({
+      success: true,
+      data: { manualCodeSupported: verifyReferenceNumbers }
+    })
   )
 
   /**
@@ -1059,10 +1180,17 @@ app.whenReady().then(async () => {
    * the mock has no credentials to check.
    */
   ipcMain.handle('config:test-mpesa', async (): Promise<ServiceResult<void>> => {
+    // Branch on what was actually built, not on what the config asked
+    // for: `resolveMpesaProvider` refuses the mock in a packaged build
+    // and substitutes a refusing provider when credentials are missing,
+    // so an unchecked cast here could call a method that is not there.
+    if (mpesaProvider instanceof DarajaMpesaProvider) {
+      return mpesaProvider.testCredentials()
+    }
     if (mockMpesaEnabled) {
       return { success: true }
     }
-    return (mpesaProvider as DarajaMpesaProvider).testCredentials()
+    return { success: false, error: MPESA_NOT_CONFIGURED_MESSAGE }
   })
 
   /**
@@ -1168,6 +1296,12 @@ app.whenReady().then(async () => {
         const etimsValidation = validate(etimsIntegrationConfigSchema, validation.data.config)
         if (!etimsValidation.success) {
           return { success: false, error: etimsValidation.error }
+        }
+      }
+      if (validation.data.provider === 'mpesa') {
+        const mpesaValidation = validate(mpesaIntegrationConfigSchema, validation.data.config)
+        if (!mpesaValidation.success) {
+          return { success: false, error: mpesaValidation.error }
         }
       }
       try {

@@ -20,7 +20,7 @@ import { RubisDatabase } from '../src/main/services/database.js'
 import type { CheckoutRequest } from '../src/main/services/database.js'
 import { hashPin } from '../src/main/services/auth.js'
 import { createFiscalEngine } from '../src/main/services/fiscal-engine.js'
-import { runCheckout } from '../src/main/services/checkout.js'
+import { runCheckout, UNCONFIRMED_MPESA_MESSAGE } from '../src/main/services/checkout.js'
 import type { CheckoutDb, CheckoutLogger, RunCheckoutDeps } from '../src/main/services/checkout.js'
 import type { FiscalSubmitOutcome } from '../src/main/services/integrations/etims.js'
 import type { CartItem } from '../src/renderer/src/types/shopify.js'
@@ -79,7 +79,8 @@ function makeDeps(db: CheckoutDb, overrides: Partial<RunCheckoutDeps> = {}): Run
     engineTick: vi.fn().mockResolvedValue(undefined),
     idGen: () => `uuid-${++uuidCounter}`,
     taxRate: 0.16,
-    mockMpesaEnabled: false,
+    verifyReferenceNumbers: false,
+    claimsStoredPayments: false,
     logger: silentLogger,
     debugLogging: false,
     ...overrides
@@ -167,6 +168,8 @@ describe('runCheckout — success (device accepts)', () => {
     const syncedDb: CheckoutDb = {
       getStaffById: db.getStaffById.bind(db),
       getOpenShift: db.getOpenShift.bind(db),
+      hasConfirmedStkPayment: db.hasConfirmedStkPayment.bind(db),
+      queueOrderClaimingSmsPayment: db.queueOrderClaimingSmsPayment.bind(db),
       queueOrder: db.queueOrder.bind(db),
       getOrder: (localId) => ({ ...db.getOrder(localId)!, status: 'synced', shopify_order_id: 'gid://shopify/Order/9' }),
       setOrderFiscalInfo: db.setOrderFiscalInfo.bind(db),
@@ -514,7 +517,7 @@ describe('runCheckout — pre-order rejections create no order and attempt no fi
     const deps = makeDeps(db, {
       fiscalizationProvider: { submitInvoice },
       mpesaProvider: { verifyTransactionCode },
-      mockMpesaEnabled: true
+      verifyReferenceNumbers: true
     })
 
     const result = await runCheckout(
@@ -537,7 +540,7 @@ describe('runCheckout — pre-order rejections create no order and attempt no fi
     const deps = makeDeps(db, {
       fiscalizationProvider: { submitInvoice },
       mpesaProvider: { verifyTransactionCode },
-      mockMpesaEnabled: true
+      verifyReferenceNumbers: true
     })
 
     const result = await runCheckout(
@@ -550,18 +553,23 @@ describe('runCheckout — pre-order rejections create no order and attempt no fi
     expect(submitInvoice).not.toHaveBeenCalled()
   })
 
-  it('the M-Pesa manual code check is skipped (and checkout proceeds) when mockMpesaEnabled is false', async () => {
+  /**
+   * This test used to assert the opposite: that a provider which cannot
+   * verify a reference simply skipped the check and let the sale
+   * through. That was the loophole (phase-102) — on a Daraja till any
+   * typed string completed an M-Pesa sale. A provider that cannot verify
+   * now means the sale is checked against this till's own STK records
+   * instead, and blocked when there are none.
+   */
+  it('an unverifiable reference does not complete a sale when the provider cannot verify it', async () => {
     const db = freshDb()
     const staffId = seedStaff(db)
-    const submitInvoice = vi.fn().mockResolvedValue({
-      ok: true,
-      data: { invoiceNumber: 'KRA-MPESA', qrCode: '', fiscalizedAt: '2026-01-01T00:00:00.000Z' }
-    })
+    const submitInvoice = vi.fn()
     const verifyTransactionCode = vi.fn()
     const deps = makeDeps(db, {
       fiscalizationProvider: { submitInvoice },
       mpesaProvider: { verifyTransactionCode },
-      mockMpesaEnabled: false
+      verifyReferenceNumbers: false
     })
 
     const result = await runCheckout(
@@ -569,9 +577,11 @@ describe('runCheckout — pre-order rejections create no order and attempt no fi
       makeInput(staffId, { paymentMethod: 'mpesa', referenceNumber: 'QDF73H' })
     )
 
-    expect(result.success).toBe(true)
+    expect(result).toEqual({ success: false, error: UNCONFIRMED_MPESA_MESSAGE })
+    expect(db.getOrders()).toHaveLength(0)
+    expect(submitInvoice).not.toHaveBeenCalled()
+    // Not asked either: Daraja's stub would only have refused.
     expect(verifyTransactionCode).not.toHaveBeenCalled()
-    expect(db.getOrders()).toHaveLength(1)
   })
 })
 
@@ -582,6 +592,8 @@ describe('runCheckout — outer-catch path (a dependency throws outside the fisc
     const throwingDb: CheckoutDb = {
       getStaffById: db.getStaffById.bind(db),
       getOpenShift: db.getOpenShift.bind(db),
+      hasConfirmedStkPayment: db.hasConfirmedStkPayment.bind(db),
+      queueOrderClaimingSmsPayment: db.queueOrderClaimingSmsPayment.bind(db),
       queueOrder: () => {
         throw new Error('disk full')
       },
@@ -615,6 +627,8 @@ describe('runCheckout — outer-catch path (a dependency throws outside the fisc
     const throwingDb: CheckoutDb = {
       getStaffById: db.getStaffById.bind(db),
       getOpenShift: db.getOpenShift.bind(db),
+      hasConfirmedStkPayment: db.hasConfirmedStkPayment.bind(db),
+      queueOrderClaimingSmsPayment: db.queueOrderClaimingSmsPayment.bind(db),
       queueOrder: db.queueOrder.bind(db),
       getOrder: () => {
         throw new Error('read-back exploded')

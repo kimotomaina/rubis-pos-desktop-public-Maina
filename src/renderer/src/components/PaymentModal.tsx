@@ -87,6 +87,36 @@ export default function PaymentModal({ total, onPaid, onCancel }: PaymentModalPr
   const [verifying, setVerifying] = useState(false)
   const [verifyError, setVerifyError] = useState<string | null>(null)
 
+  /**
+   * Whether this till can actually confirm a typed transaction code.
+   *
+   * Starts `false` and is only switched on once the main process says
+   * so. A Daraja till cannot check a code against Safaricom, so its
+   * Manual Code tab could only ever dead-end on an error — and a route
+   * that looks like a way to complete a sale but is not is exactly what
+   * sends a cashier hunting for a way around the payment gate. Failing
+   * closed also means a lost reply hides the tab rather than offering
+   * one that does not work.
+   */
+  const [manualCodeSupported, setManualCodeSupported] = useState(false)
+
+  useEffect(() => {
+    let cancelled = false
+    void window.api
+      .getMpesaCapabilities()
+      .then((result) => {
+        if (!cancelled && result.success && result.data) {
+          setManualCodeSupported(result.data.manualCodeSupported)
+        }
+      })
+      .catch(() => {
+        // Fail closed: leave the tab hidden.
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
   const pollerRef = useRef<MpesaPaymentPoller | null>(null)
 
   /** Stops and discards any in-flight poller. Idempotent. */
@@ -308,26 +338,28 @@ export default function PaymentModal({ total, onPaid, onCancel }: PaymentModalPr
         ← Change payment method
       </button>
 
-      <div className="mb-4 flex rounded-lg bg-slate-100 p-1">
-        <button
-          type="button"
-          onClick={() => setTab('stk')}
-          className={`flex-1 rounded-md py-2 text-base font-semibold transition ${
-            tab === 'stk' ? 'bg-white text-rose-700 shadow-sm' : 'text-slate-500'
-          }`}
-        >
-          STK Push
-        </button>
-        <button
-          type="button"
-          onClick={() => setTab('manual')}
-          className={`flex-1 rounded-md py-2 text-base font-semibold transition ${
-            tab === 'manual' ? 'bg-white text-rose-700 shadow-sm' : 'text-slate-500'
-          }`}
-        >
-          Manual Code
-        </button>
-      </div>
+      {manualCodeSupported && (
+        <div className="mb-4 flex rounded-lg bg-slate-100 p-1">
+          <button
+            type="button"
+            onClick={() => setTab('stk')}
+            className={`flex-1 rounded-md py-2 text-base font-semibold transition ${
+              tab === 'stk' ? 'bg-white text-rose-700 shadow-sm' : 'text-slate-500'
+            }`}
+          >
+            STK Push
+          </button>
+          <button
+            type="button"
+            onClick={() => setTab('manual')}
+            className={`flex-1 rounded-md py-2 text-base font-semibold transition ${
+              tab === 'manual' ? 'bg-white text-rose-700 shadow-sm' : 'text-slate-500'
+            }`}
+          >
+            Manual Code
+          </button>
+        </div>
+      )}
 
       <p className="mb-4 text-base text-slate-500">
         Charging <span className="font-semibold text-slate-800">{formatCurrency(total)}</span>
@@ -384,7 +416,7 @@ export default function PaymentModal({ total, onPaid, onCancel }: PaymentModalPr
         </div>
       )}
 
-      {tab === 'manual' && (
+      {tab === 'manual' && manualCodeSupported && (
         <div>
           <label className="mb-1 block text-base font-medium text-slate-600">
             M-Pesa Transaction Code

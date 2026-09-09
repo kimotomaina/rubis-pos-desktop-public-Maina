@@ -58,12 +58,15 @@ import {
 import {
   connectionTestFailed,
   connectionTestPassed,
+  describeDeviceNotAnswering,
   describeNotReady,
-  describeSettingsFailure,
   NOT_CONFIGURED_MESSAGE,
   NOT_CONFIGURED_REASON,
   SERVER_UNREACHABLE_MESSAGE,
-  type FiscalConnectionTestResult
+  STATUS_UNREADABLE_MESSAGE,
+  type FiscalConnectionTestResult,
+  type FiscalNotReadyReason,
+  type FiscalServerFailure
 } from './fiscal-connection-test.js'
 import { extractInvoiceNumberFromXml, extractQrCodeFromXml } from './xml-utils.js'
 import { sanitizeFiscalText } from './fiscal-sanitize.js'
@@ -247,6 +250,16 @@ export interface FiscalDeviceErrorInfo {
  * re-established) — so the caller should queue-and-retry, never surface
  * them as "fix your data and resubmit."
  *
+ * **Code 31 covers two stages, not one.** The server returns it both when
+ * the password was refused (`<Message>Missing password authentication
+ * answer</Message>`) and when the device never answered the initial ping,
+ * before any password is presented (`<Message>Missing first ping
+ * answer</Message>` — the only variant ever observed live, see
+ * `docs/phase-97.md` §5). The code alone cannot tell them apart, so the
+ * message here names both possibilities rather than asserting the
+ * password one. Where the raw `<Message>` is available — the connection
+ * test — {@link describeDeviceNotAnswering} does separate them.
+ *
  * @param {string} code
  * @returns {FiscalDeviceErrorInfo | undefined} `undefined` when `code` is not a known server code
  */
@@ -266,7 +279,7 @@ export function mapFiscalServerError(code: string): FiscalDeviceErrorInfo | unde
     case '31':
       return {
         message:
-          'Fiscal device rejected the TCP password — check the device password in Admin → Integrations',
+          'Fiscal device session could not be opened — either the device did not answer, or it rejected the TCP password. Check the device is powered on and reachable, and the device password in Admin → Integrations',
         retryable: true
       }
     case RES_CODE_SETTINGS_MISSING:
@@ -331,7 +344,28 @@ export function mapFiscalDeviceError(code: string, message: string): FiscalDevic
  * {@link mapFiscalDeviceError}/the open-receipt case, so a caller can act
  * on it without re-deriving it from `code` or `error` text.
  */
-type DeviceResult = ServiceResult<Record<string, string>> & { code?: string; retryable?: boolean }
+type DeviceResult = ServiceResult<Record<string, string>> & {
+  code?: string
+  retryable?: boolean
+  /**
+   * Set when the failure came from the fiscal **server** itself
+   * (`<Err Source="Server">`): the raw code and the server's own
+   * `<Message>`. Read only by the connection test's reporting path —
+   * filing and routing continue to act on `code`/`retryable` alone.
+   *
+   * The raw message has to travel with the code because `error` above is
+   * already a rewritten sentence, and the rewrite loses the one detail
+   * that separates Code 31's two stages.
+   */
+  serverFailure?: FiscalServerFailure
+  /**
+   * Set when `ReadStatus` succeeded and a status bit says the device
+   * cannot file. A typed marker rather than a phrase to match on, so the
+   * genuine not-ready case can never be confused with a device that
+   * never answered.
+   */
+  notReady?: FiscalNotReadyReason
+}
 
 /**
  * Interprets a parsed response envelope. `<Res Code="0">` is success; any
@@ -367,13 +401,16 @@ function checkDeviceResponse(result: ServiceResult<Record<string, string>>): Dev
   if (!code || code === RES_CODE_OK) return result
 
   const rawMessage = data.Message ?? 'Unknown fiscal error'
+  const serverFailure =
+    data.errSource === 'Server' ? { code, message: rawMessage } : undefined
   const serverError = mapFiscalServerError(code)
   if (serverError && (data.errSource === 'Server' || data.errSource === undefined)) {
     return {
       success: false,
       error: `Fiscal server error (Code ${code}): ${serverError.message}`,
       code,
-      retryable: serverError.retryable
+      retryable: serverError.retryable,
+      serverFailure: serverFailure ?? { code, message: rawMessage }
     }
   }
 
@@ -414,7 +451,11 @@ function checkDeviceResponse(result: ServiceResult<Record<string, string>>): Dev
     success: false,
     error: `Fiscal device error (Code ${code}): ${mapped.message}`,
     code,
-    retryable: mapped.retryable
+    retryable: mapped.retryable,
+    // Server codes with no entry in `mapFiscalServerError` (32, 34) land
+    // here; tagging them keeps the connection test reporting them as the
+    // device not answering, which is what they mean.
+    serverFailure
   }
 }
 
@@ -619,6 +660,14 @@ export class RealFiscalizationProvider implements FiscalizationProvider {
    * Clears the cached handshake first: a "test" that reported a session
    * opened minutes ago under different settings would not be a test.
    *
+   * A `ReadStatus` failure is attributed to the hop it actually belongs
+   * to, which is the point of the four explicit branches below. Until
+   * phase-98 every one of them was reported as hop 3 with "the fiscal
+   * device answered but is not ready to file sales" — a sentence that is
+   * false whenever nothing answered, and one that sent a live
+   * investigation after KRA provisioning while the real fault was that
+   * the session never opened (`docs/phase-97.md`).
+   *
    * @returns {Promise<FiscalConnectionTestResult>}
    */
   async testConnection(): Promise<FiscalConnectionTestResult> {
@@ -633,15 +682,36 @@ export class RealFiscalizationProvider implements FiscalizationProvider {
       // itself was unreachable, rather than the device behind it.
       return settings.code === undefined
         ? connectionTestFailed('server', SERVER_UNREACHABLE_MESSAGE)
-        : connectionTestFailed('device', describeSettingsFailure(settings.code))
+        : connectionTestFailed(
+            'device',
+            describeDeviceNotAnswering(
+              settings.serverFailure ?? { code: settings.code, message: '' }
+            )
+          )
     }
 
     const status = await this.readStatus()
-    if (!status.success) {
-      return connectionTestFailed('ready', describeNotReady(status.error))
+    if (status.success) {
+      return connectionTestPassed()
     }
-
-    return connectionTestPassed()
+    if (status.notReady) {
+      // The device answered and reported its own status. The only case
+      // where "contact the device supplier" is the right advice.
+      return connectionTestFailed('ready', describeNotReady(status.notReady))
+    }
+    if (status.serverFailure) {
+      // The session never opened, so the device answered nothing —
+      // hop 2, and hop 3 stays unattempted rather than showing a pass it
+      // did not earn.
+      return connectionTestFailed('device', describeDeviceNotAnswering(status.serverFailure))
+    }
+    if (status.code === undefined) {
+      // No `<Res>` at all: same rule as the handshake above.
+      return connectionTestFailed('server', SERVER_UNREACHABLE_MESSAGE)
+    }
+    // A device-level command error: it answered, it just refused to
+    // report its status, so readiness is unknown rather than bad.
+    return connectionTestFailed('ready', STATUS_UNREADABLE_MESSAGE)
   }
 
   async submitInvoice(request: FiscalInvoiceRequest): Promise<FiscalSubmitOutcome> {
@@ -1130,12 +1200,17 @@ export class RealFiscalizationProvider implements FiscalizationProvider {
       return { success: true, data }
     }
     if (fiscalized !== undefined && fiscalized !== '1') {
-      return { success: false, error: 'Fiscal device reports it is not fiscalized (CU_fiscalized=0)' }
+      return {
+        success: false,
+        error: 'Fiscal device reports it is not fiscalized (CU_fiscalized=0)',
+        notReady: 'not-fiscalized'
+      }
     }
     if (paired !== undefined && paired !== '1') {
       return {
         success: false,
-        error: 'Fiscal device reports it is not paired with TIMS (Paired_with_TIMS=0)'
+        error: 'Fiscal device reports it is not paired with TIMS (Paired_with_TIMS=0)',
+        notReady: 'not-paired'
       }
     }
     return { success: true, data }

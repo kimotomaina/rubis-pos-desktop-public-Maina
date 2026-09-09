@@ -27,6 +27,7 @@ import {
   etimsConfigSaveSchema,
   etimsPasswordSetSchema,
   etimsIntegrationConfigSchema,
+  mpesaIntegrationConfigSchema,
   storeIdentitySetSchema,
   correctPinAndResendSchema,
   resendFiscalizationSchema
@@ -660,5 +661,60 @@ describe('validate()', () => {
       expect(result.error).toContain('pin')
       expect(result.error).toContain(';')
     }
+  })
+})
+
+describe('mpesaIntegrationConfigSchema', () => {
+  /**
+   * Applied by `integrations:set-config` the way the eTIMS one is: the
+   * generic envelope accepts any record, and the main process must not
+   * trust a value because a screen validated it.
+   */
+  it('accepts a Daraja till, which needs no inbox folder', () => {
+    const result = validate(mpesaIntegrationConfigSchema, {
+      consumerKey: 'key',
+      shortcode: '174379',
+      environment: 'production',
+      confirmationMethod: 'daraja'
+    })
+
+    expect(result.success).toBe(true)
+  })
+
+  it('accepts a message-based till with a folder', () => {
+    const result = validate(mpesaIntegrationConfigSchema, {
+      confirmationMethod: 'sms',
+      smsInboxPath: 'C:\gammu\inbox'
+    })
+
+    expect(result.success).toBe(true)
+  })
+
+  it('rejects a message-based till with no folder', () => {
+    // Otherwise a till selects a method it cannot perform, and the
+    // symptom is payments that never appear.
+    const result = validate(mpesaIntegrationConfigSchema, { confirmationMethod: 'sms' })
+
+    expect(result.success).toBe(false)
+    expect(result.success === false && result.error).toMatch(/folder where M-Pesa messages arrive/)
+  })
+
+  it('rejects a message-based till whose folder is only whitespace', () => {
+    const result = validate(mpesaIntegrationConfigSchema, {
+      confirmationMethod: 'sms',
+      smsInboxPath: '   '
+    })
+
+    expect(result.success).toBe(false)
+  })
+
+  it('rejects a confirmation method it does not know', () => {
+    const result = validate(mpesaIntegrationConfigSchema, { confirmationMethod: 'carrier-pigeon' })
+
+    expect(result.success).toBe(false)
+  })
+
+  it('accepts a row with no method at all, which means Daraja', () => {
+    expect(validate(mpesaIntegrationConfigSchema, { consumerKey: 'key' }).success).toBe(true)
   })
 })

@@ -383,6 +383,38 @@ export const SCHEMA = {
     updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
   )`,
   mpesaTransactionsCheckoutRequestIndex: `CREATE INDEX IF NOT EXISTS idx_mpesa_transactions_checkout_request_id ON mpesa_transactions (checkout_request_id)`,
+  /**
+   * M-Pesa confirmation messages read off the modem, and whether each
+   * has already paid for a sale.
+   *
+   * `transaction_code` is `UNIQUE` and that is the whole point: it is
+   * what stops one payment being spent twice. The inbox folder is read
+   * every few seconds and gammu's files are never deleted, so the same
+   * message is parsed over and over — dedup has to live in the database,
+   * not in a set in memory that a restart would empty. An emptied set
+   * would let an already-spent payment be approved a second time.
+   *
+   * `raw_text` keeps the message verbatim. This is money: the parsed
+   * fields are an interpretation, and the original has to survive for
+   * anyone who later needs to check that interpretation.
+   */
+  mpesaSmsMessages: `CREATE TABLE IF NOT EXISTS mpesa_sms_messages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    transaction_code TEXT NOT NULL UNIQUE,
+    amount REAL NOT NULL,
+    payer_name TEXT,
+    payer_alias TEXT,
+    masked_phone TEXT,
+    account_reference TEXT,
+    occurred_at TEXT NOT NULL,
+    source_file TEXT NOT NULL,
+    raw_text TEXT NOT NULL,
+    matched_order_local_id INTEGER,
+    approved_by_staff_id INTEGER,
+    approved_at TEXT,
+    created_at TEXT NOT NULL
+  )`,
+  mpesaSmsMessagesUnmatchedIndex: `CREATE INDEX IF NOT EXISTS idx_mpesa_sms_messages_unmatched ON mpesa_sms_messages (matched_order_local_id, created_at)`,
   appConfigurations: `CREATE TABLE IF NOT EXISTS app_configurations (
     key TEXT PRIMARY KEY,
     value TEXT,
@@ -471,6 +503,51 @@ export interface MpesaTransactionRow {
   mpesa_receipt_number: string | null
   created_at: string
   updated_at: string
+}
+
+/**
+ * Thrown inside {@link RubisDatabase.queueOrderClaimingSmsPayment}'s
+ * transaction to roll the order back when the payment was already spent.
+ * Never escapes that method — it is a control signal, not an error the
+ * caller handles.
+ */
+class SmsPaymentAlreadyClaimedError extends Error {}
+
+/** Row shape of the `mpesa_sms_messages` table. */
+export interface MpesaSmsMessageRow {
+  id: number
+  transaction_code: string
+  amount: number
+  payer_name: string | null
+  payer_alias: string | null
+  masked_phone: string | null
+  account_reference: string | null
+  /** ISO-8601, as stated by the message itself. */
+  occurred_at: string
+  /** The inbox file, or files, this was read from. */
+  source_file: string
+  /** The message verbatim. */
+  raw_text: string
+  /** The sale this payment has already paid for. `null` means still available. */
+  matched_order_local_id: number | null
+  approved_by_staff_id: number | null
+  approved_at: string | null
+  created_at: string
+}
+
+/** Shape passed into {@link RubisDatabase.insertMpesaSmsMessage}. */
+export interface InsertMpesaSmsMessageInput {
+  transactionCode: string
+  amount: number
+  payerName: string | null
+  payerAlias: string | null
+  maskedPhone: string | null
+  accountReference: string | null
+  occurredAt: string
+  sourceFile: string
+  rawText: string
+  /** ISO-8601 timestamp of when this till read the message. */
+  createdAt: string
 }
 
 /**
@@ -568,6 +645,8 @@ export class RubisDatabase {
     connection.exec(SCHEMA.printers)
     connection.exec(SCHEMA.mpesaTransactions)
     connection.exec(SCHEMA.mpesaTransactionsCheckoutRequestIndex)
+    connection.exec(SCHEMA.mpesaSmsMessages)
+    connection.exec(SCHEMA.mpesaSmsMessagesUnmatchedIndex)
     connection.exec(SCHEMA.appConfigurations)
     migrateOrdersFiscalColumns(connection)
     connection.exec(SCHEMA.fiscalInvoiceIndex)
@@ -1520,6 +1599,81 @@ export class RubisDatabase {
   }
 
   /**
+   * Records one M-Pesa confirmation message read off the modem.
+   *
+   * Deliberately idempotent: the inbox folder is re-read every few
+   * seconds and its files are never deleted, so the overwhelmingly
+   * common case is a message this till has already stored.
+   * `ON CONFLICT DO NOTHING` on the unique transaction code makes that
+   * free, and makes it impossible for one payment to become two
+   * approvable rows however many times its message is read.
+   *
+   * A conflict never overwrites the stored row. If the same code somehow
+   * arrives with different details, the first reading wins and stays
+   * beside its `raw_text`, rather than a later re-read silently
+   * rewriting a payment a cashier may already have approved.
+   *
+   * @param {InsertMpesaSmsMessageInput} data
+   * @returns {{ inserted: boolean }} `false` when this code was already stored
+   */
+  insertMpesaSmsMessage(data: InsertMpesaSmsMessageInput): { inserted: boolean } {
+    const info = this.conn
+      .prepare(
+        'INSERT INTO mpesa_sms_messages (transaction_code, amount, payer_name, payer_alias, masked_phone, account_reference, occurred_at, source_file, raw_text, created_at) ' +
+          'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(transaction_code) DO NOTHING'
+      )
+      .run(
+        data.transactionCode,
+        data.amount,
+        data.payerName,
+        data.payerAlias,
+        data.maskedPhone,
+        data.accountReference,
+        data.occurredAt,
+        data.sourceFile,
+        data.rawText,
+        data.createdAt
+      )
+    return { inserted: info.changes > 0 }
+  }
+
+  /**
+   * Looks up one confirmation message by its transaction code — the
+   * cashier's type-or-scan flow, and the code lookup the SMS payment
+   * provider verifies against.
+   *
+   * @param {string} transactionCode compared case-insensitively, since a cashier types it
+   * @returns {MpesaSmsMessageRow | undefined}
+   */
+  getMpesaSmsMessageByCode(transactionCode: string): MpesaSmsMessageRow | undefined {
+    return this.conn
+      .prepare(
+        'SELECT id, transaction_code, amount, payer_name, payer_alias, masked_phone, account_reference, occurred_at, source_file, raw_text, matched_order_local_id, approved_by_staff_id, approved_at, created_at FROM mpesa_sms_messages WHERE transaction_code = ? COLLATE NOCASE'
+      )
+      .get(transactionCode.trim()) as MpesaSmsMessageRow | undefined
+  }
+
+  /**
+   * Returns recent confirmation messages that have not yet paid for a
+   * sale, newest first — the list the cashier picks from.
+   *
+   * Matched messages are excluded outright rather than shown greyed:
+   * a payment that has already been spent is not a candidate for this
+   * sale, and offering it invites a double-credit.
+   *
+   * @param {string} since ISO-8601 lower bound on `created_at`
+   * @param {number} [limit=20]
+   * @returns {MpesaSmsMessageRow[]}
+   */
+  listUnmatchedMpesaSmsMessages(since: string, limit = 20): MpesaSmsMessageRow[] {
+    return this.conn
+      .prepare(
+        'SELECT id, transaction_code, amount, payer_name, payer_alias, masked_phone, account_reference, occurred_at, source_file, raw_text, matched_order_local_id, approved_by_staff_id, approved_at, created_at FROM mpesa_sms_messages WHERE matched_order_local_id IS NULL AND created_at >= ? ORDER BY created_at DESC LIMIT ?'
+      )
+      .all(since, limit) as MpesaSmsMessageRow[]
+  }
+
+  /**
    * Returns recent M-Pesa transactions, newest first, for the M-Pesa
    * Logs screen.
    *
@@ -1532,6 +1686,96 @@ export class RubisDatabase {
         'SELECT id, order_local_id, checkout_request_id, merchant_request_id, phone_number, amount, status, mpesa_receipt_number, created_at, updated_at FROM mpesa_transactions ORDER BY created_at DESC LIMIT ?'
       )
       .all(limit) as MpesaTransactionRow[]
+  }
+
+  /**
+   * Queues an order and, in the **same transaction**, claims the M-Pesa
+   * confirmation message that paid for it.
+   *
+   * The two facts have to land together. If the order were queued first
+   * and the claim written after, a failure in between would leave a
+   * completed sale whose payment still reads as unspent — free for the
+   * next cashier to pick off the list and spend again. Claiming first
+   * and queueing after has the mirror problem: a real payment consumed
+   * by no sale. One transaction makes both true or neither.
+   *
+   * The claim is also the real gate, not a bookkeeping step after one.
+   * `verifyTransactionCode` checked availability moments earlier, but
+   * two checkouts can interleave across an `await` in between; the
+   * conditional `UPDATE` here is what actually settles who gets the
+   * payment, and the loser's order is rolled back rather than written.
+   *
+   * Idempotent: re-running with the same `localId` re-claims cleanly, so
+   * a retry cannot double-mark or un-mark. A claim for a *different*
+   * sale fails.
+   *
+   * @param {QueueOrderInput} input
+   * @param {{ transactionCode: string; staffId: number }} claim
+   * @returns {{ localId: number; queueId: number } | null} `null` when another sale already used that payment
+   */
+  queueOrderClaimingSmsPayment(
+    input: QueueOrderInput,
+    claim: { transactionCode: string; staffId: number }
+  ): { localId: number; queueId: number } | null {
+    const claimStatement = this.conn.prepare(
+      'UPDATE mpesa_sms_messages SET matched_order_local_id = ?, approved_by_staff_id = ?, approved_at = ? ' +
+        'WHERE transaction_code = ? COLLATE NOCASE AND (matched_order_local_id IS NULL OR matched_order_local_id = ?)'
+    )
+
+    const run = this.conn.transaction(() => {
+      const queued = this.queueOrder(input)
+      const info = claimStatement.run(
+        queued.localId,
+        claim.staffId,
+        new Date().toISOString(),
+        claim.transactionCode.trim(),
+        queued.localId
+      )
+      if (info.changes === 0) {
+        // Rolls the order back with it: no sale is recorded for a
+        // payment this till could not claim.
+        throw new SmsPaymentAlreadyClaimedError()
+      }
+      return queued
+    })
+
+    try {
+      return run()
+    } catch (error) {
+      if (error instanceof SmsPaymentAlreadyClaimedError) return null
+      throw error
+    }
+  }
+
+  /**
+   * Whether this till's own record shows the given reference as a
+   * completed STK Push payment.
+   *
+   * The payment gate for a Daraja till. Daraja has no receipt-lookup
+   * endpoint, so a reference cannot be checked against Safaricom at
+   * checkout time — but it can be checked against what this process
+   * already wrote down: `mpesa:query-status` persists `status` and
+   * `mpesa_receipt_number` straight from Daraja's own status response.
+   * Matching against that is a real confirmation, sourced from
+   * Safaricom, rather than trusting a string the renderer sent.
+   *
+   * Both identifiers are accepted because `PaymentModal` falls back to
+   * the `checkoutRequestId` when a successful status query carries no
+   * receipt number.
+   *
+   * @param {string} reference the receipt number or checkout request id
+   * @returns {boolean}
+   */
+  hasConfirmedStkPayment(reference: string): boolean {
+    const trimmed = reference.trim()
+    if (!trimmed) return false
+
+    const row = this.conn
+      .prepare(
+        "SELECT 1 AS found FROM mpesa_transactions WHERE status = 'success' AND (mpesa_receipt_number = ? COLLATE NOCASE OR checkout_request_id = ? COLLATE NOCASE) LIMIT 1"
+      )
+      .get(trimmed, trimmed) as { found: number } | undefined
+    return row !== undefined
   }
 
   /**

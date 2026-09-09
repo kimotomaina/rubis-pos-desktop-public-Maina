@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
- * Post-`build` guard: asserts the mock fiscalization provider is not in
- * the production main-process bundle.
+ * Post-`build` guard: asserts neither mock provider is in the
+ * production main-process bundle.
  *
  * `resolveFiscalizationProvider` reaches `mock-etims-provider.ts` only
  * through a dynamic import inside an `import.meta.env.DEV` branch, which
@@ -10,12 +10,18 @@
  * invoice numbers and print them on receipts for sales that were never
  * filed with KRA, breaching Rule 2. This turns a silent bundler
  * regression into a failed build.
+ *
+ * The same applies to `mock-mpesa-provider.ts`, reached only through
+ * `resolveMpesaProvider`'s dev-only dynamic import. Its
+ * `verifyTransactionCode` approves almost any transaction code, so a
+ * shipped M-Pesa mock lets a till complete sales for payments that never
+ * happened — the payment-side twin of the same breach.
  */
 const fs = require('fs')
 const path = require('path')
 
-/** Strings that only exist in the mock provider's compiled output. */
-const FORBIDDEN = ['KRA-MOCK-', 'MockFiscalizationProvider']
+/** Strings that only exist in a mock provider's compiled output. */
+const FORBIDDEN = ['KRA-MOCK-', 'MockFiscalizationProvider', 'MockMpesaProvider']
 
 const BUNDLE_DIR = path.join(__dirname, '..', 'out', 'main')
 
@@ -47,13 +53,15 @@ for (const filePath of bundleFiles) {
 
 if (hits.length > 0) {
   console.error(
-    '\n✖ The mock fiscalization provider reached the production bundle:\n' +
+    '\n✖ A mock provider reached the production bundle:\n' +
       hits.map((hit) => `    ${hit}\n`).join('') +
-      '\n  A shipped mock can print a fiscal receipt for a sale that was never filed.\n' +
+      '\n  A shipped mock can print a fiscal receipt for a sale that was never filed,\n' +
+      '  or confirm an M-Pesa payment that never happened.\n' +
       '  Check that the only path to mock-etims-provider.ts is the dynamic import\n' +
-      '  inside the import.meta.env.DEV branch in fiscal-provider-factory.ts.\n'
+      '  inside the import.meta.env.DEV branch in fiscal-provider-factory.ts, and\n' +
+      '  likewise for mock-mpesa-provider.ts in mpesa-provider-factory.ts.\n'
   )
   process.exit(1)
 }
 
-console.log('✓ Confirmed: the mock fiscalization provider is not in out/main.')
+console.log('✓ Confirmed: neither mock provider is in out/main.')

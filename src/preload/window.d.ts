@@ -37,6 +37,7 @@ import type {
   ManualCodeVerificationResult,
   StkPushStatusResult
 } from '../main/services/integrations/mpesa.js'
+import type { UnmatchedMpesaPayment } from '../main/services/integrations/sms-mpesa-provider.js'
 
 /** Payload of the `network:status` broadcast / `network:get-status` invoke. */
 export interface NetworkStatusPayload {
@@ -151,6 +152,12 @@ export interface PosApi {
   onUpdateStatus: (callback: (status: UpdateStatus) => void) => () => void
   /** Initiates an M-Pesa STK Push prompt to the customer's phone. */
   initiateMpesaStkPush: (request: StkPushRequest) => Promise<ServiceResult<StkPushResult>>
+  /** Reports what this till's M-Pesa provider can confirm, so a screen offers no dead-end route. */
+  getMpesaCapabilities: () => Promise<ServiceResult<{ manualCodeSupported: boolean }>>
+  /** Recent M-Pesa payments received by message that no sale has used yet, plus the reader's health. */
+  listUnmatchedMpesaPayments: () => Promise<
+    ServiceResult<{ payments: UnmatchedMpesaPayment[]; health: string | null }>
+  >
   /** Verifies a manually entered M-Pesa transaction code. */
   verifyMpesaCode: (
     request: ManualCodeVerification

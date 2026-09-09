@@ -125,7 +125,8 @@ async function attemptFiscalization(params: {
       engineTick: vi.fn().mockResolvedValue(undefined),
       idGen: () => params.clientOrderUuid,
       taxRate: 0.16,
-      mockMpesaEnabled: false,
+      verifyReferenceNumbers: false,
+      claimsStoredPayments: false,
       logger: { log: () => {}, warn: () => {}, error: () => {} },
       debugLogging: false
     },

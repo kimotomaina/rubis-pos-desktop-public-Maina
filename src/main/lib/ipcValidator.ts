@@ -299,6 +299,35 @@ const etimsConnectionFields = {
  * re-authorization: this runs before any staff has necessarily
  * unblocked the till, mirroring `config:save`'s pre-login write.
  */
+/**
+ * The `mpesa` integration row's own shape, applied by
+ * `integrations:set-config` the way `etimsIntegrationConfigSchema` is —
+ * the generic envelope accepts any record, and the main process must not
+ * trust a value merely because a screen validated it.
+ *
+ * `smsInboxPath` is required when, and only when, the till confirms
+ * payments from messages: it is the folder the reader watches, and a
+ * blank one would leave a till selecting a method it cannot perform. It
+ * is a folder path, not a credential, so it stays on the row rather than
+ * in the vault.
+ */
+export const mpesaIntegrationConfigSchema = z
+  .object({
+    consumerKey: z.string().optional(),
+    shortcode: z.string().optional(),
+    environment: z.enum(['sandbox', 'production']).optional(),
+    callbackUrl: z.string().optional(),
+    confirmationMethod: z.enum(['daraja', 'sms']).optional(),
+    smsInboxPath: z.string().optional()
+  })
+  .refine(
+    (data) => data.confirmationMethod !== 'sms' || Boolean(data.smsInboxPath?.trim()),
+    {
+      message: 'Enter the folder where M-Pesa messages arrive.',
+      path: ['smsInboxPath']
+    }
+  )
+
 export const etimsConfigSaveSchema = z.object({
   ...etimsConnectionFields,
   password: z.string().trim().min(1, 'Enter the fiscal device password')
