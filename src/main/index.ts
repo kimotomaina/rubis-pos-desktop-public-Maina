@@ -77,6 +77,8 @@ import { DEMO_PRODUCTS } from './services/demoData.js'
 import type {
   CheckoutReceipt,
   FiscalResendResult,
+  ManualMpesaApproval,
+  MpesaPaymentRow,
   StaffSummary,
   ShiftRow
 } from './services/database.js'
@@ -145,6 +147,7 @@ import {
   storeIdentitySetSchema,
   correctPinAndResendSchema,
   resendFiscalizationSchema,
+  reconcileMpesaPaymentSchema,
   stockTakeOpenSchema,
   stockTakeSessionIdSchema,
   stockTakeCountSchema,
@@ -598,6 +601,7 @@ app.whenReady().then(async () => {
     callbackUrl?: string
     confirmationMethod?: MpesaConfirmationMethod
     smsInboxPath?: string
+    manualEntryEnabled?: boolean
   }>('mpesa')
   /**
    * How this till confirms an M-Pesa payment. Defaults to Daraja, so a
@@ -626,11 +630,13 @@ app.whenReady().then(async () => {
   const {
     provider: mpesaProvider,
     verifyReferenceNumbers,
-    claimsStoredPayments
+    claimsStoredPayments,
+    manualEntryEnabled
   } = await resolveMpesaProvider({
     isPackaged: app.isPackaged,
     mockRequested: mockMpesaEnabled,
     confirmationMethod: mpesaConfirmationMethod,
+    manualEntryEnabled: mpesaConfig.manualEntryEnabled === true,
     smsDb: db,
     darajaOptions: {
       consumerKey: mpesaConfig.consumerKey || process.env.MPESA_CONSUMER_KEY || '',
@@ -958,6 +964,31 @@ app.whenReady().then(async () => {
       if (!validation.success) {
         return { success: false, error: validation.error }
       }
+
+      /**
+       * A manually entered M-Pesa code completes a sale nobody confirmed,
+       * so the manager's PIN is re-verified here — in the main process,
+       * against the staff table — before `runCheckout` is told an
+       * approval exists at all.
+       *
+       * The PIN itself goes no further: `mpesaManual` is stripped and
+       * replaced with the **verified** approver's id. `runCheckout`
+       * therefore cannot be handed an approval that was never checked,
+       * and the renderer never gets to name who approved anything.
+       */
+      const { mpesaManual, ...checkoutInput } = validation.data
+      let manualApproval: ManualMpesaApproval | undefined
+      if (mpesaManual) {
+        const authz = requireAdminPin(db, mpesaManual.managerId, mpesaManual.managerPin)
+        if (!authz.success) {
+          return { success: false, error: authz.error }
+        }
+        manualApproval = {
+          approvedByStaffId: mpesaManual.managerId,
+          acknowledgedUnverified: mpesaManual.confirmUnverified
+        }
+      }
+
       return runCheckout(
         {
           db,
@@ -970,13 +1001,84 @@ app.whenReady().then(async () => {
           taxRate: printerSettings.taxRate,
           verifyReferenceNumbers,
           claimsStoredPayments,
+          manualEntryEnabled,
           logger: console,
           debugLogging: fiscalDebugLogging
         },
-        validation.data
+        {
+          ...checkoutInput,
+          referenceNumber: mpesaManual ? mpesaManual.code : checkoutInput.referenceNumber,
+          manualApproval
+        }
       )
     }
   )
+
+  /**
+   * IPC handler returning the unified payment record — every M-Pesa
+   * payment that settled a sale, whichever mode took it.
+   */
+  ipcMain.handle('mpesa:list-payments', (): ServiceResult<MpesaPaymentRow[]> => {
+    try {
+      return { success: true, data: db.listMpesaPayments() }
+    } catch (err) {
+      return {
+        success: false,
+        error: err instanceof Error ? err.message : 'Failed to load M-Pesa payments'
+      }
+    }
+  })
+
+  /**
+   * IPC handler returning manually entered payments nobody has checked
+   * against the M-Pesa statement yet.
+   *
+   * This queue is the control that justifies allowing an unverified
+   * payment at all — a record marked "pending reconciliation" that no
+   * screen ever shows would be a silent pass, not a safeguard.
+   */
+  ipcMain.handle('mpesa:list-unreconciled', (): ServiceResult<MpesaPaymentRow[]> => {
+    try {
+      return { success: true, data: db.listUnreconciledMpesaPayments() }
+    } catch (err) {
+      return {
+        success: false,
+        error: err instanceof Error ? err.message : 'Failed to load unreconciled payments'
+      }
+    }
+  })
+
+  /**
+   * IPC handler marking one manual payment as checked against the
+   * statement. Requires a re-verified admin Manager PIN, and records
+   * that manager as the one who signed it off.
+   */
+  ipcMain.handle('mpesa:reconcile', (_event, request: unknown): ServiceResult<void> => {
+    const validation = validate(reconcileMpesaPaymentSchema, request)
+    if (!validation.success) {
+      return { success: false, error: validation.error }
+    }
+    const authz = requireAdminPin(db, validation.data.managerId, validation.data.managerPin)
+    if (!authz.success) {
+      return authz
+    }
+    try {
+      const marked = db.markMpesaPaymentReconciled(
+        validation.data.paymentId,
+        validation.data.managerId,
+        validation.data.note?.trim() || null
+      )
+      if (!marked) {
+        return { success: false, error: 'That payment was not found, or has already been reconciled.' }
+      }
+      return { success: true }
+    } catch (err) {
+      return {
+        success: false,
+        error: err instanceof Error ? err.message : 'Failed to reconcile that payment'
+      }
+    }
+  })
 
   /**
    * IPC handler that initiates an M-Pesa STK Push prompt (the "online"
@@ -1034,9 +1136,9 @@ app.whenReady().then(async () => {
 
   ipcMain.handle(
     'integrations:mpesa-capabilities',
-    (): ServiceResult<{ manualCodeSupported: boolean }> => ({
+    (): ServiceResult<{ manualCodeSupported: boolean; manualEntryEnabled: boolean }> => ({
       success: true,
-      data: { manualCodeSupported: verifyReferenceNumbers }
+      data: { manualCodeSupported: verifyReferenceNumbers, manualEntryEnabled }
     })
   )
 

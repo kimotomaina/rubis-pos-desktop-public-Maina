@@ -234,6 +234,64 @@ export interface CheckoutRequest {
   /** Customer's company/trading name, when captured for a B2B eTIMS invoice. */
   companyName?: string
   cartDiscount?: Discount
+  /**
+   * Set **only by the `orders:checkout` IPC handler**, after it has
+   * re-verified a manager's PIN, when this sale is being completed on a
+   * manually entered M-Pesa code.
+   *
+   * There is no field for this on `checkoutRequestSchema`, so a renderer
+   * cannot supply it — the same structural guarantee the stock-take
+   * commit gets by having no `locationId` in its payload. An authorizing
+   * manager is something the main process establishes, never something a
+   * caller asserts.
+   */
+  manualApproval?: ManualMpesaApproval
+}
+
+/**
+ * A manually entered M-Pesa code, as the renderer sends it.
+ *
+ * The manager's credentials travel with it because the main process,
+ * not the payment screen, is what decides whether this sale may
+ * complete — a `contextBridge`-exposed API means a renderer-side modal
+ * is never a gate.
+ */
+export interface ManualMpesaEntry {
+  /** The 10-character code the cashier read off the customer's message. */
+  code: string
+  /** The authorizing manager — their PIN is re-verified in the main process. */
+  managerId: number
+  managerPin: string
+  /** Must be `true`: the cashier's acknowledgement that nobody confirmed this payment. */
+  confirmUnverified: true
+}
+
+/**
+ * What the renderer may send to `orders:checkout`.
+ *
+ * `manualApproval` is deliberately absent — that is established in the
+ * main process from a re-verified PIN, never asserted by a caller.
+ */
+export type CheckoutIpcRequest = Omit<CheckoutRequest, 'manualApproval'> & {
+  mpesaManual?: ManualMpesaEntry
+}
+
+/**
+ * A manager's verified authorization for one manually entered M-Pesa
+ * payment.
+ *
+ * `approvedByStaffId` is the id whose PIN `requireAdminPin` just checked
+ * in the main process — not a number from the payload.
+ */
+export interface ManualMpesaApproval {
+  approvedByStaffId: number
+  /**
+   * The cashier's explicit acknowledgement that this records an
+   * **unverified** payment. Carried through rather than assumed so the
+   * gate can refuse a request that skipped the acknowledgement, however
+   * it reached the main process.
+   */
+  acknowledgedUnverified: boolean
 }
 
 /** Base delay for exponential backoff between sync attempts. */
@@ -493,7 +551,53 @@ export const SCHEMA = {
     commit_error TEXT,
     UNIQUE (session_id, variant_id)
   )`,
-  stockTakeItemsSessionIndex: `CREATE INDEX IF NOT EXISTS idx_stock_take_items_session ON stock_take_items (session_id)`
+  stockTakeItemsSessionIndex: `CREATE INDEX IF NOT EXISTS idx_stock_take_items_session ON stock_take_items (session_id)`,
+  /**
+   * One row per M-Pesa payment that **settled a sale**, across all three
+   * modes.
+   *
+   * Distinct from the two tables beside it, and deliberately additive to
+   * them: `mpesa_transactions` records *an STK attempt this till made*
+   * and `mpesa_sms_messages` records *a message this till received*.
+   * Neither is a record of a payment that paid for something, and
+   * neither reliably names the sale — `mpesa_transactions.order_local_id`
+   * has never once been populated, because both its callers run before
+   * the order exists. Hence `order_local_id NOT NULL` here: an attempt
+   * is not a payment, and a payment nobody can trace to a sale is not an
+   * audit trail.
+   *
+   * `verification_status` is the point of the table. It is set in
+   * `checkout.ts` from **which gate branch actually ran**, never from
+   * anything the renderer sent, and `manual_unverified` is a first-class
+   * value rather than an absence — a manually entered code completes a
+   * sale but has been confirmed by nobody, and the record has to say so
+   * in as many words. See `docs/phase-120.md` §5.
+   *
+   * `UNIQUE (mode, reference)` follows `mpesa_sms_messages.transaction_code`:
+   * dedup belongs in the database, not in memory a restart would empty.
+   * It is enforced strictly for manual entry (a repeated code is refused)
+   * and permissively for the two confirming modes, which must keep
+   * behaving exactly as they did — see
+   * {@link RubisDatabase.queueOrderRecordingMpesaPayment}.
+   */
+  mpesaPayments: `CREATE TABLE IF NOT EXISTS mpesa_payments (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    order_local_id INTEGER NOT NULL,
+    mode TEXT NOT NULL CHECK (mode IN ('daraja', 'sms', 'manual')),
+    verification_status TEXT NOT NULL CHECK (verification_status IN ('confirmed', 'matched', 'manual_unverified')),
+    reference TEXT NOT NULL,
+    amount REAL NOT NULL,
+    entered_by_staff_id INTEGER NOT NULL,
+    approved_by_staff_id INTEGER,
+    reconciled_at TEXT,
+    reconciled_by_staff_id INTEGER,
+    reconciliation_note TEXT,
+    source_transaction_id INTEGER,
+    source_sms_message_id INTEGER,
+    created_at TEXT NOT NULL,
+    UNIQUE (mode, reference)
+  )`,
+  mpesaPaymentsUnreconciledIndex: `CREATE INDEX IF NOT EXISTS idx_mpesa_payments_unreconciled ON mpesa_payments (verification_status, reconciled_at)`
 } as const
 
 /** Options accepted by {@link createDatabase}. */
@@ -577,12 +681,14 @@ export interface MpesaTransactionRow {
 }
 
 /**
- * Thrown inside {@link RubisDatabase.queueOrderClaimingSmsPayment}'s
- * transaction to roll the order back when the payment was already spent.
- * Never escapes that method — it is a control signal, not an error the
- * caller handles.
+ * Thrown inside an order-and-payment transaction to roll the order back
+ * when the payment it depends on cannot be taken — already spent on
+ * another sale, or already recorded under the same code.
+ *
+ * Never escapes the method that throws it: a control signal, not an
+ * error the caller handles.
  */
-class SmsPaymentAlreadyClaimedError extends Error {}
+class PaymentUnavailableError extends Error {}
 
 /** Row shape of the `mpesa_sms_messages` table. */
 export interface MpesaSmsMessageRow {
@@ -667,6 +773,54 @@ export interface LogMpesaTransactionInput {
   amount: number
   /** Initial status. Defaults to `'pending'` — pass `'failed'` when logging a rejected STK Push attempt. */
   status?: MpesaTransactionStatus
+}
+
+/** How an M-Pesa payment was taken. */
+export type MpesaPaymentMode = 'daraja' | 'sms' | 'manual'
+
+/**
+ * How well a payment is actually proven.
+ *
+ * `confirmed` — this till's own record of Daraja's STK status response.
+ * `matched` — a confirmation message Safaricom sent to this till's SIM.
+ * `manual_unverified` — **nobody confirmed it.** A cashier typed a code
+ * and a manager authorized completing the sale on it. It is not a lesser
+ * shade of confirmed; it is the absence of confirmation, recorded.
+ */
+export type MpesaVerificationStatus = 'confirmed' | 'matched' | 'manual_unverified'
+
+/** Row shape of the `mpesa_payments` table. */
+export interface MpesaPaymentRow {
+  id: number
+  order_local_id: number
+  mode: MpesaPaymentMode
+  verification_status: MpesaVerificationStatus
+  reference: string
+  amount: number
+  entered_by_staff_id: number
+  approved_by_staff_id: number | null
+  reconciled_at: string | null
+  reconciled_by_staff_id: number | null
+  reconciliation_note: string | null
+  source_transaction_id: number | null
+  source_sms_message_id: number | null
+  created_at: string
+}
+
+/**
+ * Shape passed into the order-and-payment transactions.
+ *
+ * Deliberately carries no `orderLocalId`: the order row does not exist
+ * until the transaction that writes it, and the id is filled in there.
+ * A caller cannot therefore attach a payment to the wrong sale.
+ */
+export interface RecordMpesaPaymentInput {
+  mode: MpesaPaymentMode
+  verificationStatus: MpesaVerificationStatus
+  reference: string
+  amount: number
+  enteredByStaffId: number
+  approvedByStaffId?: number | null
 }
 
 /** Outcome of recording a failed sync attempt. */
@@ -819,6 +973,8 @@ export class RubisDatabase {
     connection.exec(SCHEMA.stockTakeSessions)
     connection.exec(SCHEMA.stockTakeItems)
     connection.exec(SCHEMA.stockTakeItemsSessionIndex)
+    connection.exec(SCHEMA.mpesaPayments)
+    connection.exec(SCHEMA.mpesaPaymentsUnreconciledIndex)
     migrateOrdersFiscalColumns(connection)
     connection.exec(SCHEMA.fiscalInvoiceIndex)
     this.connection = connection
@@ -1881,11 +2037,13 @@ export class RubisDatabase {
    *
    * @param {QueueOrderInput} input
    * @param {{ transactionCode: string; staffId: number }} claim
+   * @param {RecordMpesaPaymentInput} [payment] — the unified payment record, written in the same transaction
    * @returns {{ localId: number; queueId: number } | null} `null` when another sale already used that payment
    */
   queueOrderClaimingSmsPayment(
     input: QueueOrderInput,
-    claim: { transactionCode: string; staffId: number }
+    claim: { transactionCode: string; staffId: number },
+    payment?: RecordMpesaPaymentInput
   ): { localId: number; queueId: number } | null {
     const claimStatement = this.conn.prepare(
       'UPDATE mpesa_sms_messages SET matched_order_local_id = ?, approved_by_staff_id = ?, approved_at = ? ' +
@@ -1904,7 +2062,107 @@ export class RubisDatabase {
       if (info.changes === 0) {
         // Rolls the order back with it: no sale is recorded for a
         // payment this till could not claim.
-        throw new SmsPaymentAlreadyClaimedError()
+        throw new PaymentUnavailableError()
+      }
+      if (payment) this.insertMpesaPayment(queued.localId, payment)
+      return queued
+    })
+
+    try {
+      return run()
+    } catch (error) {
+      if (error instanceof PaymentUnavailableError) return null
+      throw error
+    }
+  }
+
+  /**
+   * Writes one `mpesa_payments` row against an order id.
+   *
+   * `ON CONFLICT DO NOTHING` rather than a hard failure, and the caller
+   * decides whether that silence matters. A confirming mode must not
+   * have its sale aborted by a bookkeeping row — and a duplicate there
+   * means the pre-existing Daraja re-use residual
+   * (`docs/phase-120.md` §10.2) has fired, which this change records but
+   * does not attempt to fix. Manual entry treats the same conflict as
+   * fatal, because for manual a repeated code is the abuse case rather
+   * than a symptom.
+   *
+   * Private to the transactions below: a payment row may only be written
+   * together with the sale it settled.
+   *
+   * @param {number} orderLocalId
+   * @param {RecordMpesaPaymentInput} payment
+   * @returns {boolean} `false` when `(mode, reference)` was already recorded
+   */
+  private insertMpesaPayment(orderLocalId: number, payment: RecordMpesaPaymentInput): boolean {
+    const info = this.conn
+      .prepare(
+        'INSERT INTO mpesa_payments (order_local_id, mode, verification_status, reference, amount, entered_by_staff_id, approved_by_staff_id, created_at) ' +
+          'VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (mode, reference) DO NOTHING'
+      )
+      .run(
+        orderLocalId,
+        payment.mode,
+        payment.verificationStatus,
+        payment.reference,
+        payment.amount,
+        payment.enteredByStaffId,
+        payment.approvedByStaffId ?? null,
+        new Date().toISOString()
+      )
+    return info.changes > 0
+  }
+
+  /**
+   * Queues an order and records the payment that settled it, in one
+   * transaction — the confirming modes' path (Daraja, and a message-based
+   * till that is not claiming a stored payment).
+   *
+   * A duplicate `(mode, reference)` is tolerated here; see
+   * {@link RubisDatabase.insertMpesaPayment}.
+   *
+   * @param {QueueOrderInput} input
+   * @param {RecordMpesaPaymentInput} payment
+   * @returns {{ localId: number; queueId: number }}
+   */
+  queueOrderRecordingMpesaPayment(
+    input: QueueOrderInput,
+    payment: RecordMpesaPaymentInput
+  ): { localId: number; queueId: number } {
+    const run = this.conn.transaction(() => {
+      const queued = this.queueOrder(input)
+      this.insertMpesaPayment(queued.localId, payment)
+      return queued
+    })
+    return run()
+  }
+
+  /**
+   * Queues an order and records a **manually entered, unverified**
+   * M-Pesa payment, in one transaction.
+   *
+   * The same atomicity argument as the SMS claim above: an unverified
+   * sale whose payment record failed to write would be indistinguishable
+   * from a confirmed one, which is the single thing this whole path must
+   * never allow. Either both rows exist or neither does.
+   *
+   * Unlike the confirming modes, a duplicate code is **refused** and the
+   * order rolled back with it. Nobody confirmed this payment, so a code
+   * already used on another sale is the case most worth stopping.
+   *
+   * @param {QueueOrderInput} input
+   * @param {RecordMpesaPaymentInput} payment
+   * @returns {{ localId: number; queueId: number } | null} `null` when that code was already recorded
+   */
+  queueOrderRecordingManualPayment(
+    input: QueueOrderInput,
+    payment: RecordMpesaPaymentInput
+  ): { localId: number; queueId: number } | null {
+    const run = this.conn.transaction(() => {
+      const queued = this.queueOrder(input)
+      if (!this.insertMpesaPayment(queued.localId, payment)) {
+        throw new PaymentUnavailableError()
       }
       return queued
     })
@@ -1912,9 +2170,92 @@ export class RubisDatabase {
     try {
       return run()
     } catch (error) {
-      if (error instanceof SmsPaymentAlreadyClaimedError) return null
+      if (error instanceof PaymentUnavailableError) return null
       throw error
     }
+  }
+
+  /**
+   * Whether this reference has already settled a sale, **in any mode**.
+   *
+   * The manual route's cross-mode guard. `UNIQUE (mode, reference)`
+   * alone would let the same M-Pesa code be typed in manually after it
+   * had already been confirmed by Daraja or matched from a message, and
+   * pay for a second sale — the codes are the same payment, so they must
+   * not both settle.
+   *
+   * Used only by manual entry. The confirming modes keep the behaviour
+   * they had, including the pre-existing Daraja re-use residual
+   * (`docs/phase-120.md` §10.2), which this change records but does not
+   * attempt to fix.
+   *
+   * @param {string} reference
+   * @returns {boolean}
+   */
+  hasRecordedMpesaPayment(reference: string): boolean {
+    const trimmed = reference.trim()
+    if (!trimmed) return false
+    const row = this.conn
+      .prepare('SELECT 1 AS found FROM mpesa_payments WHERE reference = ? COLLATE NOCASE LIMIT 1')
+      .get(trimmed) as { found: number } | undefined
+    return row !== undefined
+  }
+
+  /**
+   * Returns recent unified payment records, newest first.
+   *
+   * @param {number} [limit=100]
+   * @returns {MpesaPaymentRow[]}
+   */
+  listMpesaPayments(limit = 100): MpesaPaymentRow[] {
+    return this.conn
+      .prepare('SELECT * FROM mpesa_payments ORDER BY id DESC LIMIT ?')
+      .all(limit) as MpesaPaymentRow[]
+  }
+
+  /**
+   * Returns every manually entered payment nobody has yet checked
+   * against the M-Pesa statement — the reconciliation queue.
+   *
+   * Only `manual_unverified` rows appear: a Daraja or message-confirmed
+   * payment was proven when it was taken and has nothing to reconcile.
+   *
+   * @returns {MpesaPaymentRow[]}
+   */
+  listUnreconciledMpesaPayments(): MpesaPaymentRow[] {
+    return this.conn
+      .prepare(
+        "SELECT * FROM mpesa_payments WHERE verification_status = 'manual_unverified' AND reconciled_at IS NULL ORDER BY id ASC"
+      )
+      .all() as MpesaPaymentRow[]
+  }
+
+  /**
+   * Marks one manual payment as checked against the M-Pesa statement.
+   *
+   * Deliberately does **not** change `verification_status`. The sale
+   * completed on an unverified code and that stays true for ever;
+   * reconciliation records that somebody later looked, not that the
+   * original payment was confirmed at the till. Rewriting the status
+   * would erase the only evidence that this sale took the exception
+   * route.
+   *
+   * @param {number} paymentId
+   * @param {number} reconciledByStaffId — the manager whose PIN was re-verified
+   * @param {string | null} note
+   * @returns {boolean} `false` when the row is absent or already reconciled
+   */
+  markMpesaPaymentReconciled(
+    paymentId: number,
+    reconciledByStaffId: number,
+    note: string | null
+  ): boolean {
+    const info = this.conn
+      .prepare(
+        'UPDATE mpesa_payments SET reconciled_at = ?, reconciled_by_staff_id = ?, reconciliation_note = ? WHERE id = ? AND reconciled_at IS NULL'
+      )
+      .run(new Date().toISOString(), reconciledByStaffId, note, paymentId)
+    return info.changes > 0
   }
 
   /**

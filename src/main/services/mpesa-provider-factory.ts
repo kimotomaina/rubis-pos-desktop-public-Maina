@@ -103,6 +103,16 @@ export interface ResolveMpesaProviderOptions {
   confirmationMethod?: MpesaConfirmationMethod
   /** Constructor options forwarded to {@link DarajaMpesaProvider}. */
   darajaOptions: DarajaMpesaProviderOptions
+  /**
+   * Whether this till may also complete a sale on a manually entered,
+   * unconfirmed code.
+   *
+   * Orthogonal to {@link confirmationMethod}, deliberately: it is a
+   * fallback permitted *alongside* a confirming method, not a way of
+   * confirming. Defaults to off — the exception has to be switched on by
+   * an administrator who read what it does.
+   */
+  manualEntryEnabled?: boolean
   /** Database surface the SMS provider reads. Required when the method is `'sms'`. */
   smsDb?: SmsMpesaProviderDb
   /** Defaults to `console`. */
@@ -136,6 +146,21 @@ export interface ResolvedMpesaProvider {
    * records and the mock's fabrications are not claimed.
    */
   claimsStoredPayments: boolean
+  /**
+   * Whether the till may complete a sale on a manually entered code that
+   * nobody confirmed.
+   *
+   * Passed straight through from config rather than inferred from the
+   * provider: no provider *supports* manual entry, because manual entry
+   * asks nothing of a provider. It is a policy the store opted into, and
+   * every other control around it — the manager PIN, the format check,
+   * the acknowledgement, the unverified record — lives in `checkout.ts`.
+   *
+   * Reported separately from {@link verifyReferenceNumbers}, which stays
+   * exactly what it always was: *can the provider settle whether this
+   * payment happened*. Manual never makes that true.
+   */
+  manualEntryEnabled: boolean
 }
 
 /**
@@ -148,6 +173,7 @@ export async function resolveMpesaProvider(
   options: ResolveMpesaProviderOptions
 ): Promise<ResolvedMpesaProvider> {
   const logger = options.logger ?? console
+  const manualEntryEnabled = options.manualEntryEnabled === true
 
   if (options.mockRequested && options.isPackaged) {
     logger.warn(
@@ -163,7 +189,12 @@ export async function resolveMpesaProvider(
       '[rubis-pos] Using MockMpesaProvider — transaction codes are approved without ' +
         'contacting Safaricom and no real payment is confirmed. Development only.'
     )
-    return { provider: new MockMpesaProvider(), verifyReferenceNumbers: true, claimsStoredPayments: false }
+    return {
+      provider: new MockMpesaProvider(),
+      verifyReferenceNumbers: true,
+      claimsStoredPayments: false,
+      manualEntryEnabled
+    }
   }
 
   if (options.confirmationMethod === 'sms') {
@@ -177,7 +208,8 @@ export async function resolveMpesaProvider(
       return {
         provider: new UnconfiguredMpesaProvider(),
         verifyReferenceNumbers: true,
-        claimsStoredPayments: false
+        claimsStoredPayments: false,
+        manualEntryEnabled
       }
     }
     // Real confirmations, from messages Safaricom sent to this till's own
@@ -185,7 +217,8 @@ export async function resolveMpesaProvider(
     return {
       provider: new SmsMpesaProvider({ db: options.smsDb }),
       verifyReferenceNumbers: true,
-      claimsStoredPayments: true
+      claimsStoredPayments: true,
+      manualEntryEnabled
     }
   }
 
@@ -199,13 +232,15 @@ export async function resolveMpesaProvider(
     return {
       provider: new UnconfiguredMpesaProvider(),
       verifyReferenceNumbers: true,
-      claimsStoredPayments: false
+      claimsStoredPayments: false,
+      manualEntryEnabled
     }
   }
 
   return {
     provider: new DarajaMpesaProvider(options.darajaOptions),
     verifyReferenceNumbers: false,
-    claimsStoredPayments: false
+    claimsStoredPayments: false,
+    manualEntryEnabled
   }
 }

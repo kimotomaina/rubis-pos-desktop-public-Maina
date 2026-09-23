@@ -9,6 +9,7 @@ import { LockIcon } from './icons'
 import MpesaLogsPage from '../pages/MpesaLogsPage'
 import NeedsAttentionPage from '../pages/NeedsAttentionPage'
 import StockTakePage from '../pages/StockTakePage'
+import MpesaReconciliationPage from '../pages/MpesaReconciliationPage'
 import RestartCountdownModal from './RestartCountdownModal'
 import type { DailySummary, ZReport } from '../../../main/services/reports.js'
 import type {
@@ -102,6 +103,7 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
     | 'mpesaLogs'
     | 'needsAttention'
     | 'stockTake'
+    | 'mpesaReconciliation'
     | 'system'
   >(initialTab ?? 'overview')
   const [mpesaConsumerKey, setMpesaConsumerKey] = useState('')
@@ -120,6 +122,12 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
    */
   const [mpesaConfirmationMethod, setMpesaConfirmationMethod] = useState<'daraja' | 'sms'>('daraja')
   const [mpesaSmsInboxPath, setMpesaSmsInboxPath] = useState('')
+  /**
+   * Whether this till may complete a sale on a manually entered code
+   * nobody confirmed. A fallback permitted alongside the confirming
+   * method above, never instead of one.
+   */
+  const [mpesaManualEntryEnabled, setMpesaManualEntryEnabled] = useState(false)
   const [mpesaConsumerSecretInput, setMpesaConsumerSecretInput] = useState('')
   const [mpesaPasskeyInput, setMpesaPasskeyInput] = useState('')
   const [mpesaConsumerSecretConfigured, setMpesaConsumerSecretConfigured] = useState(false)
@@ -217,6 +225,7 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
       setMpesaCallbackUrl(String(mpesaResult.data.callbackUrl ?? ''))
       setMpesaConfirmationMethod(mpesaResult.data.confirmationMethod === 'sms' ? 'sms' : 'daraja')
       setMpesaSmsInboxPath(String(mpesaResult.data.smsInboxPath ?? ''))
+      setMpesaManualEntryEnabled(mpesaResult.data.manualEntryEnabled === true)
     }
     if (mpesaCredStatusResult.success && mpesaCredStatusResult.data) {
       setMpesaConsumerSecretConfigured(mpesaCredStatusResult.data.consumerSecretConfigured)
@@ -465,7 +474,8 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
               environment: mpesaEnvironment,
               callbackUrl: callbackUrl || undefined,
               confirmationMethod: mpesaConfirmationMethod,
-              smsInboxPath: mpesaSmsInboxPath.trim() || undefined
+              smsInboxPath: mpesaSmsInboxPath.trim() || undefined,
+              manualEntryEnabled: mpesaManualEntryEnabled
             },
             managerId,
             managerPin
@@ -849,6 +859,15 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
         </button>
         <button
           type="button"
+          onClick={() => setActiveTab('mpesaReconciliation')}
+          className={`flex h-14 min-w-32 flex-1 items-center justify-center rounded-md px-6 text-lg font-semibold transition ${
+            activeTab === 'mpesaReconciliation' ? 'bg-white text-rose-700 shadow-sm' : 'text-slate-500'
+          }`}
+        >
+          Reconciliation
+        </button>
+        <button
+          type="button"
           onClick={() => setActiveTab('system')}
           className={`flex h-14 min-w-32 flex-1 items-center justify-center rounded-md px-6 text-lg font-semibold transition ${
             activeTab === 'system' ? 'bg-white text-rose-700 shadow-sm' : 'text-slate-500'
@@ -863,6 +882,8 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
       {activeTab === 'needsAttention' && <NeedsAttentionPage />}
 
       {activeTab === 'stockTake' && <StockTakePage />}
+
+      {activeTab === 'mpesaReconciliation' && <MpesaReconciliationPage />}
 
       {activeTab === 'system' && (
         <section className="rounded-xl border border-slate-200 bg-white p-4">
@@ -1198,6 +1219,32 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
                       </p>
                     </div>
                   )}
+                  {/*
+                    Deliberately not an option inside the select above. This
+                    permits an exception alongside whichever method confirms
+                    payments; it is not a way of confirming one, and offering
+                    it as a third choice would make it the setting a shop
+                    with a flaky modem quietly settles on.
+                  */}
+                  <div className="rounded-lg border-2 border-amber-300 bg-amber-50/60 p-3">
+                    <label className="flex items-start gap-2 text-lg font-medium text-amber-900">
+                      <input
+                        type="checkbox"
+                        checked={mpesaManualEntryEnabled}
+                        onChange={(e) => setMpesaManualEntryEnabled(e.target.checked)}
+                        aria-label="Allow recording unverified M-Pesa payments"
+                        className="mt-1 h-5 w-5"
+                      />
+                      Allow recording unverified M-Pesa payments
+                    </label>
+                    <p className="mt-1 text-base text-amber-900/80">
+                      Lets a cashier complete a sale by typing the customer&rsquo;s M-Pesa code when
+                      the confirmation has not reached this till. <strong>Nothing checks that the
+                      payment really happened.</strong> Each one needs a manager&rsquo;s PIN, is
+                      recorded as unverified, and stays on the Reconciliation tab until someone
+                      matches it to the M-Pesa statement. Takes effect after a restart.
+                    </p>
+                  </div>
                 </div>
                 <div className="mt-3 flex items-center gap-3">
                   <button

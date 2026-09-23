@@ -169,7 +169,10 @@ describe('runCheckout — success (device accepts)', () => {
       getStaffById: db.getStaffById.bind(db),
       getOpenShift: db.getOpenShift.bind(db),
       hasConfirmedStkPayment: db.hasConfirmedStkPayment.bind(db),
+      hasRecordedMpesaPayment: db.hasRecordedMpesaPayment.bind(db),
       queueOrderClaimingSmsPayment: db.queueOrderClaimingSmsPayment.bind(db),
+      queueOrderRecordingMpesaPayment: db.queueOrderRecordingMpesaPayment.bind(db),
+      queueOrderRecordingManualPayment: db.queueOrderRecordingManualPayment.bind(db),
       queueOrder: db.queueOrder.bind(db),
       getOrder: (localId) => ({ ...db.getOrder(localId)!, status: 'synced', shopify_order_id: 'gid://shopify/Order/9' }),
       setOrderFiscalInfo: db.setOrderFiscalInfo.bind(db),
@@ -593,7 +596,10 @@ describe('runCheckout — outer-catch path (a dependency throws outside the fisc
       getStaffById: db.getStaffById.bind(db),
       getOpenShift: db.getOpenShift.bind(db),
       hasConfirmedStkPayment: db.hasConfirmedStkPayment.bind(db),
+      hasRecordedMpesaPayment: db.hasRecordedMpesaPayment.bind(db),
       queueOrderClaimingSmsPayment: db.queueOrderClaimingSmsPayment.bind(db),
+      queueOrderRecordingMpesaPayment: db.queueOrderRecordingMpesaPayment.bind(db),
+      queueOrderRecordingManualPayment: db.queueOrderRecordingManualPayment.bind(db),
       queueOrder: () => {
         throw new Error('disk full')
       },
@@ -628,7 +634,10 @@ describe('runCheckout — outer-catch path (a dependency throws outside the fisc
       getStaffById: db.getStaffById.bind(db),
       getOpenShift: db.getOpenShift.bind(db),
       hasConfirmedStkPayment: db.hasConfirmedStkPayment.bind(db),
+      hasRecordedMpesaPayment: db.hasRecordedMpesaPayment.bind(db),
       queueOrderClaimingSmsPayment: db.queueOrderClaimingSmsPayment.bind(db),
+      queueOrderRecordingMpesaPayment: db.queueOrderRecordingMpesaPayment.bind(db),
+      queueOrderRecordingManualPayment: db.queueOrderRecordingManualPayment.bind(db),
       queueOrder: db.queueOrder.bind(db),
       getOrder: () => {
         throw new Error('read-back exploded')

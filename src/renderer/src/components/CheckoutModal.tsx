@@ -5,6 +5,7 @@ import { calculateChange, canCompleteSale } from '../lib/checkoutMath'
 import { formatCurrency } from '../lib/currency'
 import { isValidKraPinFormat, KRA_PIN_MAX_LENGTH } from '../lib/kraPin'
 import PaymentModal from './PaymentModal'
+import type { ManualMpesaEntryInput } from './PaymentModal'
 import type { PaymentMethod } from '../../../main/services/database.js'
 import { CloseIcon } from './icons'
 import VirtualNumpad from './VirtualNumpad'
@@ -96,7 +97,7 @@ export default function CheckoutModal({ onClose }: CheckoutModalProps) {
    * immediately rather than waiting for a separate "Complete Sale"
    * tap, since the payment step already required explicit confirmation.
    */
-  const handleMpesaPaid = (mpesaReference: string) => {
+  const handleMpesaPaid = (mpesaReference: string, manual?: ManualMpesaEntryInput) => {
     if (!currentStaff) return
     setReferenceNumber(mpesaReference)
     void checkout({
@@ -106,7 +107,8 @@ export default function CheckoutModal({ onClose }: CheckoutModalProps) {
       changeDue: 0,
       referenceNumber: mpesaReference,
       customerPin: trimmedCustomerPin || undefined,
-      companyName: trimmedCompanyName || undefined
+      companyName: trimmedCompanyName || undefined,
+      mpesaManual: manual
     })
   }
 

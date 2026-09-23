@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { formatCurrency } from '../lib/currency'
+import ManagerPinModal from './ManagerPinModal'
 import {
   createMpesaPaymentPoller,
   MPESA_POLL_TIMEOUT_MS,
@@ -7,7 +8,10 @@ import {
 } from '../lib/mpesaPaymentPoller'
 
 /** Which M-Pesa flow tab is active. Hidden once an STK Push is in flight or has failed. */
-type PaymentTab = 'stk' | 'manual'
+type PaymentTab = 'stk' | 'manual' | 'unverified'
+
+/** The shape of a Safaricom confirmation code, mirrored from `checkout.ts`. */
+export const MANUAL_CODE_PATTERN = /^[A-Z0-9]{10}$/
 
 /**
  * STK Push sub-flow state — `'form'` is the phone-number entry screen,
@@ -19,11 +23,30 @@ type StkPhase =
   | { kind: 'waiting'; checkoutRequestId: string; msRemaining: number }
   | { kind: 'failed'; reason: string }
 
+/**
+ * A manually entered code plus the manager authorizing the sale on it.
+ *
+ * Passed straight through to `orders:checkout`, where the PIN is
+ * re-verified in the main process. Nothing decided here is trusted.
+ */
+export interface ManualMpesaEntryInput {
+  code: string
+  managerId: number
+  managerPin: string
+  confirmUnverified: true
+}
+
 interface PaymentModalProps {
   /** Amount to charge, shown to the cashier and sent to the mock provider. */
   total: number
-  /** Called once a payment is confirmed, with the reference number to record on the order. */
-  onPaid: (referenceNumber: string) => void
+  /**
+   * Called once a payment is confirmed, with the reference number to
+   * record on the order.
+   *
+   * `manual` is present only on the unverified route, and its presence
+   * is what tells the caller this sale was **not** confirmed by anyone.
+   */
+  onPaid: (referenceNumber: string, manual?: ManualMpesaEntryInput) => void
   /** Called when the cashier backs out to pick a different payment method. */
   onCancel: () => void
 }
@@ -100,6 +123,18 @@ export default function PaymentModal({ total, onPaid, onCancel }: PaymentModalPr
    */
   const [manualCodeSupported, setManualCodeSupported] = useState(false)
 
+  /**
+   * Whether an administrator has allowed this till to complete a sale on
+   * a code nobody confirmed. Fails closed for the same reason as
+   * {@link manualCodeSupported}: a lost reply hides the route.
+   */
+  const [manualEntryEnabled, setManualEntryEnabled] = useState(false)
+
+  const [unverifiedCode, setUnverifiedCode] = useState('')
+  const [acknowledged, setAcknowledged] = useState(false)
+  const [unverifiedError, setUnverifiedError] = useState<string | null>(null)
+  const [collectingManagerPin, setCollectingManagerPin] = useState(false)
+
   useEffect(() => {
     let cancelled = false
     void window.api
@@ -107,6 +142,7 @@ export default function PaymentModal({ total, onPaid, onCancel }: PaymentModalPr
       .then((result) => {
         if (!cancelled && result.success && result.data) {
           setManualCodeSupported(result.data.manualCodeSupported)
+          setManualEntryEnabled(result.data.manualEntryEnabled)
         }
       })
       .catch(() => {
@@ -218,6 +254,44 @@ export default function PaymentModal({ total, onPaid, onCancel }: PaymentModalPr
     } finally {
       setStkLoading(false)
     }
+  }
+
+  /**
+   * Validates the typed code and the acknowledgement, then asks for a
+   * manager's PIN.
+   *
+   * Both checks are repeated in the main process. These exist to tell
+   * the cashier what is wrong before a manager is called over, not to
+   * decide anything.
+   */
+  const handleUnverifiedContinue = () => {
+    setUnverifiedError(null)
+    if (!MANUAL_CODE_PATTERN.test(unverifiedCode)) {
+      setUnverifiedError(
+        'Enter the 10-character M-Pesa code from the customer’s message.'
+      )
+      return
+    }
+    if (!acknowledged) {
+      setUnverifiedError('Tick the box to confirm this payment has not been verified.')
+      return
+    }
+    setCollectingManagerPin(true)
+  }
+
+  /**
+   * Hands the code and the manager's credentials up to the caller, which
+   * sends them to `orders:checkout`. The PIN is re-verified there — this
+   * modal's own check is a courtesy, never the gate.
+   */
+  const handleUnverifiedAuthorized = (managerId: number, managerPin: string) => {
+    setCollectingManagerPin(false)
+    onPaid(unverifiedCode, {
+      code: unverifiedCode,
+      managerId,
+      managerPin,
+      confirmUnverified: true
+    })
   }
 
   /** Cashier cancels while waiting for confirmation — stops polling and returns to the cart. */
@@ -338,7 +412,7 @@ export default function PaymentModal({ total, onPaid, onCancel }: PaymentModalPr
         ← Change payment method
       </button>
 
-      {manualCodeSupported && (
+      {(manualCodeSupported || manualEntryEnabled) && (
         <div className="mb-4 flex rounded-lg bg-slate-100 p-1">
           <button
             type="button"
@@ -349,15 +423,34 @@ export default function PaymentModal({ total, onPaid, onCancel }: PaymentModalPr
           >
             STK Push
           </button>
-          <button
-            type="button"
-            onClick={() => setTab('manual')}
-            className={`flex-1 rounded-md py-2 text-base font-semibold transition ${
-              tab === 'manual' ? 'bg-white text-rose-700 shadow-sm' : 'text-slate-500'
-            }`}
-          >
-            Manual Code
-          </button>
+          {manualCodeSupported && (
+            <button
+              type="button"
+              onClick={() => setTab('manual')}
+              className={`flex-1 rounded-md py-2 text-base font-semibold transition ${
+                tab === 'manual' ? 'bg-white text-rose-700 shadow-sm' : 'text-slate-500'
+              }`}
+            >
+              Manual Code
+            </button>
+          )}
+          {/*
+            Styled apart from the confirming routes on purpose. This tab
+            completes a sale nobody has checked, and a cashier should never
+            reach it by accident or mistake it for the verified one beside
+            it. The amber carries through to the panel and the button.
+          */}
+          {manualEntryEnabled && (
+            <button
+              type="button"
+              onClick={() => setTab('unverified')}
+              className={`flex-1 rounded-md py-2 text-base font-semibold transition ${
+                tab === 'unverified' ? 'bg-amber-100 text-amber-900 shadow-sm' : 'text-amber-700'
+              }`}
+            >
+              Unverified
+            </button>
+          )}
         </div>
       )}
 
@@ -445,6 +538,66 @@ export default function PaymentModal({ total, onPaid, onCancel }: PaymentModalPr
           >
             {verifying ? 'Verifying…' : 'Verify & Pay'}
           </button>
+        </div>
+      )}
+
+      {tab === 'unverified' && manualEntryEnabled && (
+        <div className="rounded-xl border-2 border-amber-400 bg-amber-50/60 p-3">
+          <p className="text-lg font-semibold text-amber-900">
+            This records a payment nobody has confirmed.
+          </p>
+          <p className="mt-1 text-base text-amber-900/80">
+            Use this only when the customer has paid but the confirmation has not reached this
+            till. The sale will complete and be listed for a manager to check against the M-Pesa
+            statement later.
+          </p>
+
+          <label className="mb-1 mt-3 block text-base font-medium text-slate-700">
+            M-Pesa code from the customer&rsquo;s message
+          </label>
+          <input
+            type="text"
+            value={unverifiedCode}
+            onChange={(e) =>
+              setUnverifiedCode(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, ''))
+            }
+            placeholder="e.g. QDF73HK9LM"
+            maxLength={10}
+            className="w-full rounded-lg border border-amber-400 bg-white px-3 py-3 text-xl uppercase tracking-wide focus:border-amber-500 focus:outline-none"
+          />
+
+          <label className="mt-3 flex items-start gap-2 text-base text-amber-900">
+            <input
+              type="checkbox"
+              checked={acknowledged}
+              onChange={(e) => setAcknowledged(e.target.checked)}
+              className="mt-1 h-5 w-5"
+            />
+            I confirm this payment has not been verified, and this sale will be recorded as
+            unverified.
+          </label>
+
+          {unverifiedError && (
+            <p className="mt-3 rounded-lg bg-rose-50 px-3 py-2 text-base font-medium text-rose-700">
+              {unverifiedError}
+            </p>
+          )}
+
+          <button
+            type="button"
+            onClick={handleUnverifiedContinue}
+            className="mt-4 w-full rounded-xl border-2 border-amber-600 bg-white py-4 text-xl font-semibold text-amber-900 transition active:scale-95"
+          >
+            Continue &mdash; needs a manager&rsquo;s PIN
+          </button>
+
+          {collectingManagerPin && (
+            <ManagerPinModal
+              title={`Authorize an UNVERIFIED M-Pesa payment of ${formatCurrency(total)}`}
+              onAuthorized={handleUnverifiedAuthorized}
+              onCancel={() => setCollectingManagerPin(false)}
+            />
+          )}
         </div>
       )}
     </div>

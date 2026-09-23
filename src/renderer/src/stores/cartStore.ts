@@ -15,7 +15,12 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import type { CartItem, Discount } from '../types/shopify.js'
-import type { CheckoutReceipt, FiscalResendResult, PaymentMethod } from '../../../main/services/database.js'
+import type {
+  CheckoutReceipt,
+  FiscalResendResult,
+  ManualMpesaEntry,
+  PaymentMethod
+} from '../../../main/services/database.js'
 import { calculateCartTotal, calculateSubtotal, validatePriceOverride } from '../lib/checkoutMath.js'
 
 /** Lifecycle of the most recent checkout submission. */
@@ -39,6 +44,13 @@ export interface CheckoutParams {
   companyName?: string
   /** Cart-level discount to persist with the order. */
   cartDiscount?: Discount
+  /**
+   * Present only when this M-Pesa sale is being completed on a manually
+   * entered code nobody confirmed. Carries the authorizing manager's
+   * credentials, which the main process re-verifies before the sale is
+   * allowed through.
+   */
+  mpesaManual?: ManualMpesaEntry
 }
 
 /**

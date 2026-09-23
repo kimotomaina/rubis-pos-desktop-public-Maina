@@ -51,7 +51,35 @@ export const checkoutRequestSchema = z.object({
   shiftId: z.number().int().positive().optional(),
   customerPin: z.string().optional(),
   companyName: z.string().optional(),
-  cartDiscount: discountSchema.optional()
+  cartDiscount: discountSchema.optional(),
+  /**
+   * Present only when the cashier is completing an M-Pesa sale on a
+   * manually entered code that nobody has confirmed.
+   *
+   * What is **not** here is the point. There is no `verificationStatus`,
+   * no `enteredByStaffId` and no `approvedByStaffId` field anywhere on
+   * this payload, so a renderer cannot claim a payment was confirmed,
+   * nor attribute it to someone who did not authorize it. The handler
+   * derives all three: the status from which gate branch runs, the
+   * cashier from the authenticated `staffId`, and the approver from the
+   * id whose PIN `requireAdminPin` just re-verified.
+   *
+   * `confirmUnverified` must be literally `true`. The exception has to
+   * be taken deliberately, never as a side effect of opening a screen —
+   * the same shape as the stock-take commit's confirmation.
+   */
+  mpesaManual: z
+    .object({
+      code: z
+        .string()
+        .regex(/^[A-Z0-9]{10}$/, 'Enter the 10-character M-Pesa code from the customer’s message'),
+      managerId: z.number().int().positive(),
+      managerPin: z.string().min(1, 'Manager PIN is required'),
+      confirmUnverified: z.literal(true, {
+        message: 'An unverified M-Pesa payment must be explicitly confirmed'
+      })
+    })
+    .optional()
 })
 
 /** `orders:void` request payload — a single local order id. */
@@ -238,6 +266,20 @@ export const stockTakeOpenSchema = z.object({
   staffId: z.number().int().positive()
 })
 
+/**
+ * `mpesa:reconcile` request payload — a manager marking one manually
+ * entered payment as checked against the M-Pesa statement.
+ *
+ * Manager re-authorization required: reconciliation is the control that
+ * justifies allowing unverified payments at all, so signing one off is a
+ * privileged act, not a checkbox. The reconciling staff id is taken from
+ * the verified `managerId`, never from a field here.
+ */
+export const reconcileMpesaPaymentSchema = managerAuthzSchema.extend({
+  paymentId: z.number().int().positive(),
+  note: z.string().max(500, 'Keep the note under 500 characters').optional()
+})
+
 /** `stocktake:get` / `stocktake:submit` request payload. */
 export const stockTakeSessionIdSchema = z.object({
   sessionId: z.number().int().positive()
@@ -393,7 +435,15 @@ export const mpesaIntegrationConfigSchema = z
     environment: z.enum(['sandbox', 'production']).optional(),
     callbackUrl: z.string().optional(),
     confirmationMethod: z.enum(['daraja', 'sms']).optional(),
-    smsInboxPath: z.string().optional()
+    smsInboxPath: z.string().optional(),
+    /**
+     * Permits completing a sale on a manually entered, unconfirmed
+     * M-Pesa code — **alongside** whichever confirming method is set
+     * above, never instead of one. Manual is deliberately absent from
+     * `confirmationMethod`'s enum: it confirms nothing, so it is not a
+     * way of confirming. See `docs/phase-120.md` §7.3.
+     */
+    manualEntryEnabled: z.boolean().optional()
   })
   .refine(
     (data) => data.confirmationMethod !== 'sms' || Boolean(data.smsInboxPath?.trim()),

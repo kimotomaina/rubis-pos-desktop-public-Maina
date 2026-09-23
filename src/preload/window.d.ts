@@ -13,8 +13,9 @@ import type { ServiceResult } from '../main/services/shopify-types.js'
 import type { FiscalConnectionTestResult } from '../main/services/integrations/fiscal-connection-test.js'
 import type { ProductSummary } from '../renderer/src/types/shopify.js'
 import type {
+  CheckoutIpcRequest,
   CheckoutReceipt,
-  CheckoutRequest,
+  MpesaPaymentRow,
   FiscalResendResult,
   OrderRow,
   StaffSummary,
@@ -82,7 +83,7 @@ export interface PosApi {
   getCachedProducts: () => Promise<ServiceResult<ProductSummary[]>>
   /** Persists the cart as an order; immediate sync when online. */
   checkout: (
-    request: CheckoutRequest
+    request: CheckoutIpcRequest
   ) => Promise<ServiceResult<CheckoutReceipt>>
   /** Reads the current main-process connectivity state. */
   getNetworkStatus: () => Promise<NetworkStatusPayload>
@@ -159,7 +160,20 @@ export interface PosApi {
   /** Initiates an M-Pesa STK Push prompt to the customer's phone. */
   initiateMpesaStkPush: (request: StkPushRequest) => Promise<ServiceResult<StkPushResult>>
   /** Reports what this till's M-Pesa provider can confirm, so a screen offers no dead-end route. */
-  getMpesaCapabilities: () => Promise<ServiceResult<{ manualCodeSupported: boolean }>>
+  getMpesaCapabilities: () => Promise<
+    ServiceResult<{ manualCodeSupported: boolean; manualEntryEnabled: boolean }>
+  >
+  /** Every M-Pesa payment that settled a sale, across all three modes. */
+  listMpesaPayments: () => Promise<ServiceResult<MpesaPaymentRow[]>>
+  /** Manually entered payments not yet checked against the M-Pesa statement. */
+  listUnreconciledMpesaPayments: () => Promise<ServiceResult<MpesaPaymentRow[]>>
+  /** Marks one manual payment as reconciled. Requires a re-verified admin Manager PIN. */
+  reconcileMpesaPayment: (
+    paymentId: number,
+    managerId: number,
+    managerPin: string,
+    note?: string
+  ) => Promise<ServiceResult<void>>
   /** Recent M-Pesa payments received by message that no sale has used yet, plus the reader's health. */
   listUnmatchedMpesaPayments: () => Promise<
     ServiceResult<{ payments: UnmatchedMpesaPayment[]; health: string | null }>

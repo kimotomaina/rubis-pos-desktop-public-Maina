@@ -26,8 +26,11 @@ import type {
   CheckoutReceipt,
   CheckoutRequest,
   FiscalStatus,
+  MpesaPaymentMode,
+  MpesaVerificationStatus,
   OrderRow,
   QueueOrderInput,
+  RecordMpesaPaymentInput,
   ShiftRow,
   StaffRow
 } from './database.js'
@@ -51,10 +54,23 @@ export interface CheckoutDb {
   getOpenShift(): ShiftRow | undefined
   /** The payment gate's confirmation source on a Daraja till — see {@link RubisDatabase.hasConfirmedStkPayment}. */
   hasConfirmedStkPayment(reference: string): boolean
+  /** Whether this reference already settled a sale in any mode — the manual route's cross-mode guard. */
+  hasRecordedMpesaPayment(reference: string): boolean
   /** Queues the order and spends the confirmation message that paid for it, in one transaction. */
   queueOrderClaimingSmsPayment(
     input: QueueOrderInput,
-    claim: { transactionCode: string; staffId: number }
+    claim: { transactionCode: string; staffId: number },
+    payment?: RecordMpesaPaymentInput
+  ): { localId: number; queueId: number } | null
+  /** Queues the order and records the confirmed payment that settled it, in one transaction. */
+  queueOrderRecordingMpesaPayment(
+    input: QueueOrderInput,
+    payment: RecordMpesaPaymentInput
+  ): { localId: number; queueId: number }
+  /** Queues the order and records a manually entered, unverified payment, in one transaction. */
+  queueOrderRecordingManualPayment(
+    input: QueueOrderInput,
+    payment: RecordMpesaPaymentInput
   ): { localId: number; queueId: number } | null
   queueOrder(input: QueueOrderInput): { localId: number; queueId: number }
   getOrder(localId: number): OrderRow | undefined
@@ -93,6 +109,34 @@ export const UNCONFIRMED_MPESA_MESSAGE =
  */
 export const MPESA_PAYMENT_ALREADY_USED_MESSAGE =
   'That M-Pesa payment was just used for another sale. Find the customer’s own payment and try again.'
+
+/**
+ * The shape of a Safaricom confirmation code: ten uppercase
+ * alphanumerics.
+ *
+ * An allowlist, not a denylist, and checked here in the main process as
+ * well as in `checkoutRequestSchema` — the renderer's copy is a courtesy
+ * to the cashier, this one is the control. It stops a blank, a single
+ * letter, or keyboard mashing from becoming a recorded payment. It
+ * proves nothing about whether money moved, and is not asked to.
+ */
+export const MPESA_MANUAL_CODE_PATTERN = /^[A-Z0-9]{10}$/
+
+/** Shown when a manual code is not shaped like an M-Pesa code at all. */
+export const MPESA_MANUAL_CODE_INVALID_MESSAGE =
+  'That is not an M-Pesa code. Enter the 10-character code from the customer’s confirmation message.'
+
+/** Shown when manual entry is attempted on a till that has not been allowed it. */
+export const MPESA_MANUAL_NOT_ENABLED_MESSAGE =
+  'Recording an unverified M-Pesa payment is not switched on for this till. Ask an administrator to enable it in Admin > Integrations.'
+
+/** Shown when the unverified-payment acknowledgement is missing. */
+export const MPESA_MANUAL_NOT_ACKNOWLEDGED_MESSAGE =
+  'This records a payment nobody has confirmed. Confirm that explicitly before completing the sale.'
+
+/** Shown when a manual code has already been recorded against another sale. */
+export const MPESA_MANUAL_CODE_ALREADY_USED_MESSAGE =
+  'That M-Pesa code has already been recorded against another sale. Check the customer’s message and try again.'
 
 /** Structural slice of {@link MpesaProvider} `runCheckout` depends on. */
 export interface CheckoutMpesaProvider {
@@ -161,6 +205,22 @@ export interface RunCheckoutDeps {
    * notion.
    */
   claimsStoredPayments: boolean
+  /**
+   * Whether this till may complete a sale on a manually entered code
+   * that nobody has confirmed.
+   *
+   * A **fallback permitted alongside** whichever confirming mode the
+   * till runs, never a mode of its own — see `docs/phase-120.md` §7.3.
+   * Manual entry is the only route that works with no credentials, no
+   * modem and no internet; made selectable as *the* mode it would become
+   * the path of least resistance for any shop with a flaky setup, and
+   * phase-102's hole would reopen by configuration rather than by code.
+   *
+   * Optional, defaulting to off. An omitted flag must mean "not
+   * allowed", so no caller can enable the exception by forgetting about
+   * it.
+   */
+  manualEntryEnabled?: boolean
   logger: CheckoutLogger
   /**
    * Gates the per-sale, non-essential chatter (the Shopify sync-tick
@@ -170,6 +230,36 @@ export interface RunCheckoutDeps {
    * when tracing a live issue.
    */
   debugLogging: boolean
+}
+
+/**
+ * Builds a payment record for one of the two confirming modes.
+ *
+ * Both take the same fields; the mode and status differ, and they are
+ * derived from **which gate branch ran**, never from anything the
+ * renderer sent. That is the whole guarantee: a compromised renderer
+ * cannot make a manual payment read as `confirmed`, because it has no
+ * say in either value.
+ *
+ * The development mock (`verifyReferenceNumbers` true, no stored payment
+ * to claim) records as `sms`/`matched`. It cannot reach a packaged
+ * build, so that inaccuracy stays in development.
+ *
+ * @param {MpesaPaymentMode} mode
+ * @param {MpesaVerificationStatus} verificationStatus
+ * @param {string} reference
+ * @param {number} amount
+ * @param {number} enteredByStaffId
+ * @returns {RecordMpesaPaymentInput}
+ */
+function settledBy(
+  mode: MpesaPaymentMode,
+  verificationStatus: MpesaVerificationStatus,
+  reference: string,
+  amount: number,
+  enteredByStaffId: number
+): RecordMpesaPaymentInput {
+  return { mode, verificationStatus, reference, amount, enteredByStaffId, approvedByStaffId: null }
 }
 
 /** Builds the fiscal invoice request from a checkout, identically on the happy path and the exception-fallback rebuild. */
@@ -229,6 +319,7 @@ export async function runCheckout(
     taxRate,
     verifyReferenceNumbers,
     claimsStoredPayments,
+    manualEntryEnabled,
     logger,
     debugLogging
   } = deps
@@ -237,6 +328,13 @@ export async function runCheckout(
   // when the throw happens after the order was queued — logging only,
   // never read for control flow.
   let localId: number | undefined
+
+  /**
+   * The unified payment record this sale will write, decided by the gate
+   * below and written in the same transaction as the order. `null` for a
+   * cash or card sale, which settle no M-Pesa payment.
+   */
+  let mpesaSettlement: RecordMpesaPaymentInput | null = null
 
   try {
     const { items, total } = input
@@ -268,6 +366,22 @@ export async function runCheckout(
      *     record of Daraja's STK status responses instead. Which means
      *     Daraja's STK path continues to work exactly as before, and a
      *     typed reference that never went through it does not.
+     *
+     * A third outcome was added in phase-121: a **manually entered code,
+     * completed on a manager's authority and recorded as confirmed by
+     * nobody.** It bends this rule's letter — the gate no longer only
+     * confirms or refuses — while keeping its purpose exactly: the point
+     * was never that every sale is proven, it was that nobody is ever
+     * misled about whether a sale was proven. A manual payment is an
+     * exception an operator opens deliberately, by name, that the record
+     * describes as open for ever. It is reached only when an
+     * administrator switched it on, only with a manager's re-verified
+     * PIN, and only with the cashier's explicit acknowledgement.
+     *
+     * `verifyTransactionCode` is **never** called on this branch. Routing
+     * manual through the provider would make an unverified payment
+     * indistinguishable from a verified one right here, which is the
+     * precise regression phase-102 exists to prevent.
      */
     if (input.paymentMethod === 'mpesa') {
       const reference = input.referenceNumber?.trim() ?? ''
@@ -275,7 +389,32 @@ export async function runCheckout(
         return { success: false, error: UNCONFIRMED_MPESA_MESSAGE }
       }
 
-      if (verifyReferenceNumbers) {
+      if (input.manualApproval) {
+        if (!manualEntryEnabled) {
+          return { success: false, error: MPESA_MANUAL_NOT_ENABLED_MESSAGE }
+        }
+        if (!MPESA_MANUAL_CODE_PATTERN.test(reference)) {
+          return { success: false, error: MPESA_MANUAL_CODE_INVALID_MESSAGE }
+        }
+        if (!input.manualApproval.acknowledgedUnverified) {
+          return { success: false, error: MPESA_MANUAL_NOT_ACKNOWLEDGED_MESSAGE }
+        }
+        // Across every mode, not just previous manual entries: the same
+        // M-Pesa code confirmed by Daraja or matched from a message is
+        // the same payment, and must not settle a second sale because
+        // somebody typed it in by hand.
+        if (db.hasRecordedMpesaPayment(reference)) {
+          return { success: false, error: MPESA_MANUAL_CODE_ALREADY_USED_MESSAGE }
+        }
+        mpesaSettlement = {
+          mode: 'manual',
+          verificationStatus: 'manual_unverified',
+          reference,
+          amount: total,
+          enteredByStaffId: staff.id,
+          approvedByStaffId: input.manualApproval.approvedByStaffId
+        }
+      } else if (verifyReferenceNumbers) {
         const verification = await mpesaProvider.verifyTransactionCode({
           transactionCode: reference,
           amount: total
@@ -286,8 +425,11 @@ export async function runCheckout(
         if (!verification.data?.verified) {
           return { success: false, error: verification.data?.reason ?? UNCONFIRMED_MPESA_MESSAGE }
         }
+        mpesaSettlement = settledBy('sms', 'matched', reference, total, staff.id)
       } else if (!db.hasConfirmedStkPayment(reference)) {
         return { success: false, error: UNCONFIRMED_MPESA_MESSAGE }
+      } else {
+        mpesaSettlement = settledBy('daraja', 'confirmed', reference, total, staff.id)
       }
     }
 
@@ -331,12 +473,27 @@ export async function runCheckout(
         ? { transactionCode: input.referenceNumber.trim(), staffId: staff.id }
         : null
 
-    if (smsClaim) {
-      const queued = db.queueOrderClaimingSmsPayment(orderInput, smsClaim)
+    /**
+     * The sale and its payment record are written together, whichever
+     * route got here. Either both rows exist or neither does — an
+     * unverified sale whose payment record failed to write would be
+     * indistinguishable from a confirmed one, and a confirmed sale with
+     * no payment row is the untraceable state this table exists to end.
+     */
+    if (mpesaSettlement?.mode === 'manual') {
+      const queued = db.queueOrderRecordingManualPayment(orderInput, mpesaSettlement)
+      if (!queued) {
+        return { success: false, error: MPESA_MANUAL_CODE_ALREADY_USED_MESSAGE }
+      }
+      localId = queued.localId
+    } else if (smsClaim) {
+      const queued = db.queueOrderClaimingSmsPayment(orderInput, smsClaim, mpesaSettlement ?? undefined)
       if (!queued) {
         return { success: false, error: MPESA_PAYMENT_ALREADY_USED_MESSAGE }
       }
       localId = queued.localId
+    } else if (mpesaSettlement) {
+      localId = db.queueOrderRecordingMpesaPayment(orderInput, mpesaSettlement).localId
     } else {
       localId = db.queueOrder(orderInput).localId
     }

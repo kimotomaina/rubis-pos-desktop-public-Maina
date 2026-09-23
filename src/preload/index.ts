@@ -3,8 +3,9 @@ import { electronAPI } from '@electron-toolkit/preload'
 import type { ServiceResult } from '../main/services/shopify-types.js'
 import type { ProductSummary } from '../renderer/src/types/shopify.js'
 import type {
+  CheckoutIpcRequest,
   CheckoutReceipt,
-  CheckoutRequest,
+  MpesaPaymentRow,
   FiscalResendResult,
   OrderRow,
   StaffSummary,
@@ -106,11 +107,11 @@ const api = {
    * Persists the current cart as an order and attempts immediate sync
    * when connectivity allows.
    *
-   * @param {CheckoutRequest} request
+   * @param {CheckoutIpcRequest} request
    * @returns {Promise<ServiceResult<CheckoutReceipt>>}
    */
   checkout: (
-    request: CheckoutRequest
+    request: CheckoutIpcRequest
   ): Promise<ServiceResult<CheckoutReceipt>> =>
     ipcRenderer.invoke('orders:checkout', request),
 
@@ -450,8 +451,44 @@ const api = {
    *
    * @returns {Promise<ServiceResult<{ manualCodeSupported: boolean }>>}
    */
-  getMpesaCapabilities: (): Promise<ServiceResult<{ manualCodeSupported: boolean }>> =>
-    ipcRenderer.invoke('integrations:mpesa-capabilities'),
+  getMpesaCapabilities: (): Promise<
+    ServiceResult<{ manualCodeSupported: boolean; manualEntryEnabled: boolean }>
+  > => ipcRenderer.invoke('integrations:mpesa-capabilities'),
+
+  /**
+   * Every M-Pesa payment that settled a sale, across all three modes.
+   *
+   * @returns {Promise<ServiceResult<MpesaPaymentRow[]>>}
+   */
+  listMpesaPayments: (): Promise<ServiceResult<MpesaPaymentRow[]>> =>
+    ipcRenderer.invoke('mpesa:list-payments'),
+
+  /**
+   * Manually entered payments nobody has yet checked against the M-Pesa
+   * statement — the reconciliation queue.
+   *
+   * @returns {Promise<ServiceResult<MpesaPaymentRow[]>>}
+   */
+  listUnreconciledMpesaPayments: (): Promise<ServiceResult<MpesaPaymentRow[]>> =>
+    ipcRenderer.invoke('mpesa:list-unreconciled'),
+
+  /**
+   * Marks one manual payment as checked against the statement. Requires
+   * a re-verified admin Manager PIN.
+   *
+   * @param {number} paymentId
+   * @param {number} managerId
+   * @param {string} managerPin
+   * @param {string} [note]
+   * @returns {Promise<ServiceResult<void>>}
+   */
+  reconcileMpesaPayment: (
+    paymentId: number,
+    managerId: number,
+    managerPin: string,
+    note?: string
+  ): Promise<ServiceResult<void>> =>
+    ipcRenderer.invoke('mpesa:reconcile', { paymentId, managerId, managerPin, note }),
 
   /**
    * Verifies a manually entered M-Pesa transaction code against

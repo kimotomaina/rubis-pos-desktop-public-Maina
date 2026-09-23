@@ -6,6 +6,7 @@ import { formatCurrency } from '../lib/currency.js'
 import { isValidKraPinFormat, KRA_PIN_MAX_LENGTH } from '../lib/kraPin.js'
 import { useKeyboardStore } from '../stores/keyboardStore.js'
 import PaymentModal from './PaymentModal.js'
+import type { ManualMpesaEntryInput } from './PaymentModal.js'
 import VirtualNumpad from './VirtualNumpad.js'
 import type { PaymentMethod } from '../../../main/services/database.js'
 import type { Discount } from '../types/shopify.js'
@@ -134,7 +135,7 @@ export default function PosCheckoutPanel({ requestManagerPin }: PosCheckoutPanel
    * Called by the embedded `PaymentModal` once Daraja actually confirms
    * the M-Pesa payment — never on mere STK Push acceptance.
    */
-  const handleMpesaPaid = (referenceNumber: string) => {
+  const handleMpesaPaid = (referenceNumber: string, manual?: ManualMpesaEntryInput) => {
     if (!currentStaff) return
     void checkout({
       staffId: currentStaff.id,
@@ -143,7 +144,8 @@ export default function PosCheckoutPanel({ requestManagerPin }: PosCheckoutPanel
       changeDue: 0,
       referenceNumber,
       customerPin: trimmedCustomerPin || undefined,
-      companyName: trimmedCompanyName || undefined
+      companyName: trimmedCompanyName || undefined,
+      mpesaManual: manual
     })
   }
 
