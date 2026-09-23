@@ -13,6 +13,14 @@
 import type { RubisDatabase } from './database.js'
 import type { ServiceResult } from './shopify-types.js'
 
+/**
+ * The `orders:void` channel's only answer since phase-131. Void was
+ * removed from the till: a sale may already be filed with KRA, and the
+ * till cannot issue the credit note that would reverse it.
+ */
+export const VOID_DISABLED_MESSAGE =
+  'Sales cannot be voided on this till. A filed sale needs a credit note.'
+
 /** Outcome of a successful void. */
 export interface VoidResult {
   localId: number

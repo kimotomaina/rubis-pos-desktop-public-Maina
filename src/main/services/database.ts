@@ -1536,6 +1536,7 @@ export class RubisDatabase {
    * {@link STUCK_WAITING_THRESHOLD_MS}'s doc for why this is keyed off
    * the sale's own age rather than the retry queue's bookkeeping.
    * Oldest first, so the sale that's waited longest surfaces first.
+   * Voided orders are excluded — they must never be filed (phase-131).
    * `now`/`stuckWaitingThresholdMs` are explicit parameters (not read
    * from `Date.now()` internally) so tests can drive the threshold
    * deterministically, matching {@link getPendingFiscalQueue}'s own
@@ -1553,8 +1554,9 @@ export class RubisDatabase {
                 o.fiscal_status, o.fiscal_error_reason, o.fiscal_error_kind, o.fiscal_data_issue
          FROM orders o
          LEFT JOIN staff s ON s.id = o.staff_id
-         WHERE o.fiscal_status = 'needs_fixing'
-            OR (o.fiscal_status = 'waiting' AND o.created_at <= ?)
+         WHERE (o.fiscal_status = 'needs_fixing'
+            OR (o.fiscal_status = 'waiting' AND o.created_at <= ?))
+           AND o.status != 'voided'
          ORDER BY o.created_at ASC, o.local_id ASC`
       )
       .all(cutoff) as NeedsAttentionRow[]
@@ -1564,13 +1566,16 @@ export class RubisDatabase {
    * The Rule-3 safety-net number: every completed sale not yet filed
    * with eTIMS, `waiting` or `needs_fixing`, regardless of how long —
    * unlike {@link getOrdersNeedingAttention}, not gated on the stuck
-   * threshold, so this always reflects the true total.
+   * threshold, so this always reflects the true total. Voided orders are
+   * excluded, so a historical void can never hold the count above zero.
    *
    * @returns {number}
    */
   getUnfiledOrderCount(): number {
     const row = this.conn
-      .prepare(`SELECT COUNT(*) as count FROM orders WHERE fiscal_status IN ('waiting', 'needs_fixing')`)
+      .prepare(
+        `SELECT COUNT(*) as count FROM orders WHERE fiscal_status IN ('waiting', 'needs_fixing') AND status != 'voided'`
+      )
       .get() as { count: number }
     return row.count
   }

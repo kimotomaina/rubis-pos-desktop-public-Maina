@@ -5,8 +5,11 @@
  * Part C), so Rule 1 (never file a tax invoice twice) holds no matter
  * which caller resubmits, including a race between the two.
  *
- * Two, complementary safeguards:
+ * Three, complementary safeguards:
  *
+ *   0. A voided order is refused outright, with no device call and
+ *      before any other check (phase-131) — a sale that no longer
+ *      exists must never be filed, whatever its fiscal state.
  *   1. Before making any device call, re-check the order's CURRENT
  *      `fiscal_status`. If it's already `'fiscalized'` — because the
  *      other caller won a race, or this is a resend of an
@@ -27,8 +30,13 @@ import type { FiscalFailureKind, FiscalInvoiceRequest, FiscalSubmitOutcome } fro
 import type { Logger } from './logger.js'
 import { routeFiscalOutcome } from './fiscal-routing.js'
 
+/** Why a voided sale is never resubmitted to the fiscal device. */
+export const VOIDED_ORDER_NOT_FILED_REASON = 'This sale was voided and will not be filed with KRA.'
+
 /** The order fields `attemptFiscalRetry` needs to read before resubmitting. */
 export interface FiscalRetryOrder {
+  /** The order's lifecycle status. Optional so fakes that predate the void guard still fit. */
+  status?: string
   fiscal_status: FiscalStatus | null
   fiscal_invoice_number: string | null
   fiscal_qr_code: string | null
@@ -60,6 +68,16 @@ export async function attemptFiscalRetry(
   request: FiscalInvoiceRequest
 ): Promise<FiscalSubmitOutcome> {
   const order = deps.db.getOrder(localId)
+  // Before the fiscalized short-circuit: a voided sale is refused whatever
+  // its fiscal state, so no resubmission route can ever file it.
+  if (order?.status === 'voided') {
+    return {
+      ok: false,
+      reason: VOIDED_ORDER_NOT_FILED_REASON,
+      kind: 'system',
+      retryable: false
+    }
+  }
   if (order?.fiscal_status === 'fiscalized') {
     return {
       ok: true,

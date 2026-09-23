@@ -119,11 +119,10 @@ import {
   mockDisconnectedResult
 } from './services/connectivityMonitor.js'
 import type { FiscalEndpointPaths } from './services/integrations/real-etims-provider.js'
-import { voidLocalOrder } from './services/voids.js'
+import { VOID_DISABLED_MESSAGE } from './services/voids.js'
 import {
   validate,
   checkoutRequestSchema,
-  voidOrderSchema,
   loginRequestSchema,
   staffCreateSchema,
   staffResetPinSchema,
@@ -2079,28 +2078,16 @@ app.whenReady().then(async () => {
   )
 
   /**
-   * IPC handler that voids a local `pending_sync` order —
-   * reverses inventory, marks the order `voided`, and drops it from
-   * the sync queue. Manager PIN authorization is enforced in the
-   * renderer before this channel is invoked (see PaymentModal/
-   * OrderHistory's use of `auth:login`); the main process itself does
-   * not re-check role here, matching how `shifts:*` trusts the caller
-   * has already gated the action in the UI.
+   * Refuses every void (phase-131). Void was removed from the till
+   * because a sale may already be filed with KRA and the till cannot
+   * issue the credit note that would reverse it. The channel stays
+   * registered so a stale renderer gets a plain refusal, not a
+   * missing-handler error.
    */
-  ipcMain.handle(
-    'orders:void',
-    (_event, request: unknown): ServiceResult<{ localId: number; voidedAt: string }> => {
-      const validation = validate(voidOrderSchema, request)
-      if (!validation.success) {
-        return { success: false, error: validation.error }
-      }
-      try {
-        return voidLocalOrder(db, validation.data)
-      } catch (err) {
-        return { success: false, error: err instanceof Error ? err.message : 'Failed to void order' }
-      }
-    }
-  )
+  ipcMain.handle('orders:void', (): ServiceResult<never> => ({
+    success: false,
+    error: VOID_DISABLED_MESSAGE
+  }))
 
   /**
    * Lets the renderer read connectivity synchronously at startup,

@@ -33,11 +33,6 @@ type OrderStatus = 'synced' | 'pending_sync' | 'failed' | 'voided'
 interface OrderHistoryProps {
   onRetry: (localId: number) => void
   onPrint: (localId: number) => void
-  /** Opens the Manager PIN gate; calls `onAuthorized` once verified. */
-  requestManagerPin: (
-    title: string,
-    onAuthorized: (managerId: number, managerPin: string) => void
-  ) => void
 }
 
 /**
@@ -47,12 +42,10 @@ interface OrderHistoryProps {
  * @param {OrderHistoryProps} props
  * @returns {JSX.Element}
  */
-export default function OrderHistory({ onRetry, onPrint, requestManagerPin }: OrderHistoryProps) {
+export default function OrderHistory({ onRetry, onPrint }: OrderHistoryProps) {
   const [orders, setOrders] = useState<OrderRow[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [voidError, setVoidError] = useState<string | null>(null)
-  const [voidingId, setVoidingId] = useState<number | null>(null)
   const [expandedOrderId, setExpandedOrderId] = useState<number | null>(null)
 
   const fetchOrders = async () => {
@@ -75,26 +68,6 @@ export default function OrderHistory({ onRetry, onPrint, requestManagerPin }: Or
   useEffect(() => {
     void fetchOrders()
   }, [])
-
-  const handleVoid = (localId: number) => {
-    requestManagerPin(`Void order #${localId}`, () => {
-      void (async () => {
-        setVoidError(null)
-        setVoidingId(localId)
-        try {
-          const result = await window.api.voidOrder(localId)
-          if (!result.success) {
-            setVoidError(result.error ?? `Failed to void order #${localId}`)
-          }
-          await fetchOrders()
-        } catch (err) {
-          setVoidError(err instanceof Error ? err.message : `Failed to void order #${localId}`)
-        } finally {
-          setVoidingId(null)
-        }
-      })()
-    })
-  }
 
   const toggleExpanded = (localId: number) => {
     setExpandedOrderId((prev) => (prev === localId ? null : localId))
@@ -182,11 +155,6 @@ export default function OrderHistory({ onRetry, onPrint, requestManagerPin }: Or
 
   return (
     <div className="space-y-3">
-      {voidError && (
-        <p className="rounded-lg bg-rose-50 px-3 py-2 text-base font-medium text-rose-700">
-          {voidError}
-        </p>
-      )}
       {orders.map((order) => {
         const isExpanded = expandedOrderId === order.local_id
         return (
@@ -227,19 +195,6 @@ export default function OrderHistory({ onRetry, onPrint, requestManagerPin }: Or
                     className="h-11 rounded-md bg-rose-600 px-4 text-base font-medium text-white hover:bg-rose-700"
                   >
                     Retry Sync
-                  </button>
-                )}
-                {order.status === 'pending_sync' && (
-                  <button
-                    type="button"
-                    disabled={voidingId === order.local_id}
-                    onClick={(e) => {
-                      e.stopPropagation()
-                      handleVoid(order.local_id)
-                    }}
-                    className="h-11 rounded-md border border-rose-300 px-4 text-base font-medium text-rose-700 hover:bg-rose-50 disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    {voidingId === order.local_id ? 'Voiding…' : 'Void'}
                   </button>
                 )}
                 <span className="pl-1 text-sm text-slate-400" aria-hidden="true">

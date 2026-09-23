@@ -652,19 +652,6 @@ const api = {
     ipcRenderer.invoke('integrations:set-config', { provider, config, managerId, managerPin }),
 
   /**
-   * Voids a local `pending_sync` order — reverses inventory and marks
-   * it `voided`. Manager PIN authorization happens in the
-   * renderer before this is called.
-   *
-   * @param {number} localId
-   * @returns {Promise<ServiceResult<{ localId: number; voidedAt: string }>>}
-   */
-  voidOrder: (
-    localId: number
-  ): Promise<ServiceResult<{ localId: number; voidedAt: string }>> =>
-    ipcRenderer.invoke('orders:void', localId),
-
-  /**
    * Lists every configured printer (Admin screen
    * Peripherals tab).
    *

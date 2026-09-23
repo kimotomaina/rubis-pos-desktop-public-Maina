@@ -230,8 +230,6 @@ export interface PosApi {
     managerId: number,
     managerPin: string
   ) => Promise<ServiceResult<void>>
-  /** Voids a local `pending_sync` order. */
-  voidOrder: (localId: number) => Promise<ServiceResult<{ localId: number; voidedAt: string }>>
   /** Lists every configured printer. */
   getPrinters: () => Promise<ServiceResult<PrinterConfig[]>>
   /** Upserts a printer configuration. Requires a re-verified admin Manager PIN. */
