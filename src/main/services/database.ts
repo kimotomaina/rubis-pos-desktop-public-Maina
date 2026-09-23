@@ -422,7 +422,78 @@ export const SCHEMA = {
     requires_restart INTEGER NOT NULL DEFAULT 0,
     category TEXT NOT NULL DEFAULT 'general' CHECK (category IN ('shopify', 'mpesa', 'etims', 'printer', 'general')),
     last_updated DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
-  )`
+  )`,
+  /**
+   * One physical stock take. **History, never stock** — see the file
+   * header of `stock-take.ts`. Nothing here is a live quantity and
+   * nothing here may be read as one.
+   *
+   * `session_uuid` is `UNIQUE` and does double duty: it is the
+   * `referenceDocumentUri` Shopify records against the adjustment, and
+   * the seed of the `@idempotent` key the mutation carries.
+   *
+   * `committed_reference_uri` is `UNIQUE` and is the layer of
+   * idempotency this app owns. Shopify forgets an idempotency key after
+   * 24 hours; this column refuses a second commit of the same session
+   * for ever. Same reasoning as `mpesa_sms_messages.transaction_code`:
+   * dedup lives in the database, not in memory a restart would empty.
+   *
+   * `opening_levels_json` is the verbatim location-scoped read taken at
+   * `opened_at`, frozen. It exists so a count started online can be
+   * continued offline and so an auditor can see what Shopify claimed
+   * when the counter started disagreeing with it. It is read for
+   * exactly one purpose — stamping a newly counted row's
+   * `system_snapshot_qty` — and never as current stock.
+   */
+  stockTakeSessions: `CREATE TABLE IF NOT EXISTS stock_take_sessions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_uuid TEXT NOT NULL UNIQUE,
+    location_id TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'counting', 'awaiting_approval', 'committed', 'abandoned')),
+    opened_at TEXT NOT NULL,
+    committed_at TEXT,
+    counted_by_staff_id INTEGER NOT NULL,
+    approved_by_staff_id INTEGER,
+    second_approver_staff_id INTEGER,
+    opening_levels_json TEXT NOT NULL,
+    shopify_response_json TEXT,
+    committed_reference_uri TEXT UNIQUE
+  )`,
+  /**
+   * One counted variant within a stock take. A row exists **because it
+   * was counted** — `counted_qty` is `NOT NULL` and there is no
+   * "uncounted" state. That is what makes this build's subset-per-session
+   * scope structurally safe: an item nobody scanned has no row, so it
+   * can never be mistaken for a shelf counted as empty and pushed as a
+   * negative delta.
+   *
+   * `inventory_item_id` lives here rather than on `products` on purpose:
+   * the variant → inventory-item mapping belongs to the session about to
+   * commit and dies with it, instead of becoming a permanent local
+   * shadow of Shopify's inventory model.
+   *
+   * `system_snapshot_qty`, `fresh_qty_at_commit` and `delta_pushed` are
+   * all stored so the arithmetic is independently auditable without
+   * trusting this app's code.
+   */
+  stockTakeItems: `CREATE TABLE IF NOT EXISTS stock_take_items (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id INTEGER NOT NULL,
+    variant_id TEXT NOT NULL,
+    inventory_item_id TEXT NOT NULL,
+    variant_label TEXT NOT NULL DEFAULT '',
+    unit_price_at_count REAL NOT NULL DEFAULT 0,
+    system_snapshot_qty INTEGER NOT NULL,
+    snapshot_taken_at TEXT NOT NULL,
+    counted_qty INTEGER NOT NULL,
+    variance INTEGER NOT NULL,
+    fresh_qty_at_commit INTEGER,
+    delta_pushed INTEGER,
+    commit_status TEXT CHECK (commit_status IN ('applied', 'rejected', 'skipped')),
+    commit_error TEXT,
+    UNIQUE (session_id, variant_id)
+  )`,
+  stockTakeItemsSessionIndex: `CREATE INDEX IF NOT EXISTS idx_stock_take_items_session ON stock_take_items (session_id)`
 } as const
 
 /** Options accepted by {@link createDatabase}. */
@@ -606,6 +677,103 @@ export interface SyncFailureResult {
   attempts: number
 }
 
+/** Lifecycle state of a stock-take session. */
+export type StockTakeStatus =
+  | 'open'
+  | 'counting'
+  | 'awaiting_approval'
+  | 'committed'
+  | 'abandoned'
+
+/** Per-item outcome of a stock-take commit. */
+export type StockTakeCommitStatus = 'applied' | 'rejected' | 'skipped'
+
+/** Raw `stock_take_sessions` row. */
+export interface StockTakeSessionRow {
+  id: number
+  session_uuid: string
+  location_id: string
+  status: StockTakeStatus
+  opened_at: string
+  committed_at: string | null
+  counted_by_staff_id: number
+  approved_by_staff_id: number | null
+  second_approver_staff_id: number | null
+  opening_levels_json: string
+  shopify_response_json: string | null
+  committed_reference_uri: string | null
+}
+
+/** Raw `stock_take_items` row. */
+export interface StockTakeItemRow {
+  id: number
+  session_id: number
+  variant_id: string
+  inventory_item_id: string
+  variant_label: string
+  unit_price_at_count: number
+  system_snapshot_qty: number
+  snapshot_taken_at: string
+  counted_qty: number
+  variance: number
+  fresh_qty_at_commit: number | null
+  delta_pushed: number | null
+  commit_status: StockTakeCommitStatus | null
+  commit_error: string | null
+}
+
+/**
+ * One variant's frozen opening observation, as held in
+ * `stock_take_sessions.opening_levels_json`.
+ *
+ * Audit reference only — see the `stockTakeSessions` schema comment.
+ */
+export interface StockTakeOpeningLevel {
+  inventoryItemId: string
+  systemSnapshotQty: number
+}
+
+/** Shape passed into {@link RubisDatabase.createStockTakeSession}. */
+export interface CreateStockTakeSessionInput {
+  sessionUuid: string
+  locationId: string
+  countedByStaffId: number
+  openedAt: string
+  openingLevels: Record<string, StockTakeOpeningLevel>
+}
+
+/** Shape passed into {@link RubisDatabase.recordStockTakeCount}. */
+export interface RecordStockTakeCountInput {
+  sessionId: number
+  variantId: string
+  inventoryItemId: string
+  variantLabel: string
+  unitPriceAtCount: number
+  systemSnapshotQty: number
+  snapshotTakenAt: string
+  countedQty: number
+}
+
+/** One item's commit outcome, written by {@link RubisDatabase.commitStockTakeSession}. */
+export interface StockTakeItemOutcome {
+  variantId: string
+  freshQtyAtCommit: number | null
+  deltaPushed: number | null
+  commitStatus: StockTakeCommitStatus
+  commitError: string | null
+}
+
+/** Shape passed into {@link RubisDatabase.commitStockTakeSession}. */
+export interface CommitStockTakeSessionInput {
+  sessionId: number
+  committedAt: string
+  committedReferenceUri: string
+  approvedByStaffId: number
+  secondApproverStaffId: number | null
+  shopifyResponseJson: string
+  outcomes: StockTakeItemOutcome[]
+}
+
 /**
  * Thin, typed wrapper around the better-sqlite3 connection.
  *
@@ -648,6 +816,9 @@ export class RubisDatabase {
     connection.exec(SCHEMA.mpesaSmsMessages)
     connection.exec(SCHEMA.mpesaSmsMessagesUnmatchedIndex)
     connection.exec(SCHEMA.appConfigurations)
+    connection.exec(SCHEMA.stockTakeSessions)
+    connection.exec(SCHEMA.stockTakeItems)
+    connection.exec(SCHEMA.stockTakeItemsSessionIndex)
     migrateOrdersFiscalColumns(connection)
     connection.exec(SCHEMA.fiscalInvoiceIndex)
     this.connection = connection
@@ -1286,18 +1457,24 @@ export class RubisDatabase {
   }
 
   /**
-   * Voids a local `pending_sync` order: reverses each line item's
-   * quantity back into the cached `products` inventory, marks the
-   * order `voided`, and removes any outstanding `sync_queue` entries
-   * (both `'order'` and `'etims_invoice'`) so a voided sale is never
-   * pushed to Shopify or retried for fiscalization after the fact.
+   * Voids a local `pending_sync` order: marks the order `voided` and
+   * removes any outstanding `sync_queue` entries (both `'order'` and
+   * `'etims_invoice'`) so a voided sale is never pushed to Shopify or
+   * retried for fiscalization after the fact.
+   *
+   * Deliberately does **not** touch `products.inventory_quantity`.
+   * Shopify is the only source of truth for stock: a `pending_sync`
+   * order has not reached Shopify, so Shopify's quantity was never
+   * decremented and there is nothing to reverse. The increment this
+   * method used to run had no matching decrement anywhere in the app
+   * (a sale leaves the cache alone — `orderCreate`'s
+   * `inventoryBehaviour` makes Shopify do the arithmetic), so it only
+   * ever inflated the cached figure above Shopify's until the next
+   * `products:fetch` overwrote it.
    *
    * Restricted to `pending_sync` orders — see `voids.ts` for the
    * caller-facing validation and {@link RubisDatabase.getOrder} for
-   * reading the order first. Inventory reversal is best-effort: a
-   * variant no longer in the local cache is silently skipped rather
-   * than failing the void (the sale is still reversed; the cache will
-   * self-correct on the next `products:fetch`).
+   * reading the order first.
    *
    * @param {number} localId
    * @returns {{ voidedAt: string }}
@@ -1314,12 +1491,8 @@ export class RubisDatabase {
       )
     }
 
-    const payload = JSON.parse(order.payload_json) as OfflineOrderPayload
     const voidedAt = new Date().toISOString()
 
-    const incrementInventory = this.conn.prepare(
-      'UPDATE products SET inventory_quantity = inventory_quantity + ? WHERE variant_id = ?'
-    )
     const markVoided = this.conn.prepare('UPDATE orders SET status = ? WHERE local_id = ?')
     const clearQueue = this.conn.prepare(
       "DELETE FROM sync_queue WHERE entity_type = 'order' AND entity_id = ?"
@@ -1329,9 +1502,6 @@ export class RubisDatabase {
     )
 
     const settle = this.conn.transaction(() => {
-      for (const line of payload.lineItems) {
-        incrementInventory.run(line.quantity, line.variantId)
-      }
       markVoided.run('voided', localId)
       clearQueue.run(localId)
       clearFiscalQueue.run(localId)
@@ -1893,6 +2063,216 @@ export class RubisDatabase {
       encrypted: row.encrypted === 1,
       requires_restart: row.requires_restart === 1
     }))
+  }
+
+  /**
+   * Opens a stock-take session with its frozen opening observation.
+   *
+   * @param {CreateStockTakeSessionInput} input
+   * @returns {{ sessionId: number }}
+   */
+  createStockTakeSession(input: CreateStockTakeSessionInput): { sessionId: number } {
+    const info = this.conn
+      .prepare(
+        'INSERT INTO stock_take_sessions (session_uuid, location_id, status, opened_at, counted_by_staff_id, opening_levels_json) VALUES (?, ?, ?, ?, ?, ?)'
+      )
+      .run(
+        input.sessionUuid,
+        input.locationId,
+        'open',
+        input.openedAt,
+        input.countedByStaffId,
+        JSON.stringify(input.openingLevels)
+      )
+    return { sessionId: Number(info.lastInsertRowid) }
+  }
+
+  /**
+   * Returns the one session that is still being worked on, if any.
+   *
+   * A till runs at most one stock take at a time: two concurrent
+   * sessions would each snapshot the same shelf and each push a delta
+   * for it, double-correcting the variance.
+   *
+   * @returns {StockTakeSessionRow | undefined}
+   */
+  getActiveStockTakeSession(): StockTakeSessionRow | undefined {
+    return this.conn
+      .prepare(
+        "SELECT * FROM stock_take_sessions WHERE status IN ('open', 'counting', 'awaiting_approval') ORDER BY id DESC LIMIT 1"
+      )
+      .get() as StockTakeSessionRow | undefined
+  }
+
+  /**
+   * Reads one stock-take session by local id.
+   *
+   * @param {number} sessionId
+   * @returns {StockTakeSessionRow | undefined}
+   */
+  getStockTakeSession(sessionId: number): StockTakeSessionRow | undefined {
+    return this.conn
+      .prepare('SELECT * FROM stock_take_sessions WHERE id = ?')
+      .get(sessionId) as StockTakeSessionRow | undefined
+  }
+
+  /**
+   * Returns stock-take sessions, newest first.
+   *
+   * @param {number} [limit=20]
+   * @returns {StockTakeSessionRow[]}
+   */
+  listStockTakeSessions(limit = 20): StockTakeSessionRow[] {
+    return this.conn
+      .prepare('SELECT * FROM stock_take_sessions ORDER BY id DESC LIMIT ?')
+      .all(limit) as StockTakeSessionRow[]
+  }
+
+  /**
+   * Returns one session's counted items, in scan order.
+   *
+   * @param {number} sessionId
+   * @returns {StockTakeItemRow[]}
+   */
+  getStockTakeItems(sessionId: number): StockTakeItemRow[] {
+    return this.conn
+      .prepare('SELECT * FROM stock_take_items WHERE session_id = ? ORDER BY id ASC')
+      .all(sessionId) as StockTakeItemRow[]
+  }
+
+  /**
+   * Records (or corrects) one counted variant and moves the session to
+   * `counting`.
+   *
+   * Re-counting the same variant replaces the row rather than adding a
+   * second one — a recount before close is a correction, not a new
+   * fact. Once the session closes nothing here is writable again;
+   * corrections are a whole new session.
+   *
+   * @param {RecordStockTakeCountInput} input
+   */
+  recordStockTakeCount(input: RecordStockTakeCountInput): void {
+    const upsert = this.conn.prepare(
+      `INSERT INTO stock_take_items (session_id, variant_id, inventory_item_id, variant_label, unit_price_at_count, system_snapshot_qty, snapshot_taken_at, counted_qty, variance)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT (session_id, variant_id) DO UPDATE SET
+         counted_qty = excluded.counted_qty,
+         variance = excluded.variance,
+         unit_price_at_count = excluded.unit_price_at_count,
+         variant_label = excluded.variant_label`
+    )
+    const touchStatus = this.conn.prepare(
+      "UPDATE stock_take_sessions SET status = 'counting' WHERE id = ? AND status = 'open'"
+    )
+    const settle = this.conn.transaction(() => {
+      upsert.run(
+        input.sessionId,
+        input.variantId,
+        input.inventoryItemId,
+        input.variantLabel,
+        input.unitPriceAtCount,
+        input.systemSnapshotQty,
+        input.snapshotTakenAt,
+        input.countedQty,
+        input.countedQty - input.systemSnapshotQty
+      )
+      touchStatus.run(input.sessionId)
+    })
+    settle()
+  }
+
+  /**
+   * Drops one counted row from an uncommitted session — a mis-scan
+   * removed before the count is submitted.
+   *
+   * @param {number} sessionId
+   * @param {string} variantId
+   */
+  removeStockTakeCount(sessionId: number, variantId: string): void {
+    this.conn
+      .prepare('DELETE FROM stock_take_items WHERE session_id = ? AND variant_id = ?')
+      .run(sessionId, variantId)
+  }
+
+  /**
+   * Moves a session between its pre-commit states.
+   *
+   * Never reaches `committed` — that transition belongs to
+   * {@link RubisDatabase.commitStockTakeSession}, which writes the
+   * reference uri in the same transaction.
+   *
+   * @param {number} sessionId
+   * @param {Exclude<StockTakeStatus, 'committed'>} status
+   */
+  setStockTakeStatus(sessionId: number, status: Exclude<StockTakeStatus, 'committed'>): void {
+    this.conn
+      .prepare("UPDATE stock_take_sessions SET status = ? WHERE id = ? AND status != 'committed'")
+      .run(status, sessionId)
+  }
+
+  /**
+   * Closes a session as committed and records what Shopify did.
+   *
+   * One transaction, and `committed_reference_uri` is `UNIQUE`: a
+   * second commit of the same session fails at the database rather
+   * than at a check some later caller might forget to run.
+   *
+   * @param {CommitStockTakeSessionInput} input
+   * @throws if the session was already committed (uniqueness violation)
+   */
+  commitStockTakeSession(input: CommitStockTakeSessionInput): void {
+    const closeSession = this.conn.prepare(
+      `UPDATE stock_take_sessions
+       SET status = 'committed', committed_at = ?, committed_reference_uri = ?,
+           approved_by_staff_id = ?, second_approver_staff_id = ?, shopify_response_json = ?
+       WHERE id = ? AND status != 'committed'`
+    )
+    const recordOutcome = this.conn.prepare(
+      'UPDATE stock_take_items SET fresh_qty_at_commit = ?, delta_pushed = ?, commit_status = ?, commit_error = ? WHERE session_id = ? AND variant_id = ?'
+    )
+    const settle = this.conn.transaction(() => {
+      const info = closeSession.run(
+        input.committedAt,
+        input.committedReferenceUri,
+        input.approvedByStaffId,
+        input.secondApproverStaffId,
+        input.shopifyResponseJson,
+        input.sessionId
+      )
+      if (info.changes === 0) {
+        throw new Error(`Stock take ${input.sessionId} has already been committed`)
+      }
+      for (const outcome of input.outcomes) {
+        recordOutcome.run(
+          outcome.freshQtyAtCommit,
+          outcome.deltaPushed,
+          outcome.commitStatus,
+          outcome.commitError,
+          input.sessionId,
+          outcome.variantId
+        )
+      }
+    })
+    settle()
+  }
+
+  /**
+   * Reads one variant's cached selling price, used to value a counted
+   * variance in shillings.
+   *
+   * Read server-side rather than taken from the renderer so the figure
+   * the variance threshold is judged against cannot be understated by
+   * the caller. Price is not stock — reading it implies nothing about
+   * the cached quantity, which the stock take never touches.
+   *
+   * @param {string} variantId
+   * @returns {number | undefined}
+   */
+  getCachedVariantPrice(variantId: string): number | undefined {
+    const row = this.conn
+      .prepare('SELECT price FROM products WHERE variant_id = ?')
+      .get(variantId) as { price: number } | undefined
+    return row?.price
   }
 
   /** Closes the underlying connection. Further calls will throw. */

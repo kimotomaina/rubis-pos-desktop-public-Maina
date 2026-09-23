@@ -174,11 +174,14 @@ export interface FiscalInvoiceResult {
  *   - `'data'`      — the device rejected the sale's own data (wrong PIN,
  *     unknown item, invalid HS code, an amount that doesn't fit, …).
  *     Resubmitting the identical data will fail again the same way.
- *   - `'system'`    — this build's own bug or an anomalous device
- *     response shape (a malformed request the server rejected outright,
- *     a receipt that closed without an invoice number, a device that
- *     reports itself unfiscalized/unpaired). Not the cashier's fault and
- *     not the customer's data, but also not something retrying fixes.
+ *   - `'system'`    — this build's own bug, an anomalous device response
+ *     shape (a malformed request the server rejected outright, a receipt
+ *     that closed without an invoice number, a device that reports itself
+ *     unfiscalized/unpaired), or a resend the connected device's protocol
+ *     definitions cannot confirm is safe (see
+ *     `real-etims-provider.ts#verifyAlreadyFiled`). Not the cashier's
+ *     fault and not the customer's data, but also not something an
+ *     automatic retry fixes — a person has to look at it.
  *   - `'technical'` — a transient/technical condition (device
  *     unreachable, wrong TCP password, busy socket, dropped session, an
  *     already-open receipt) that heals on its own or once configuration

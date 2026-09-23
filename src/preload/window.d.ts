@@ -27,6 +27,12 @@ import type {
   AppConfigCategory,
   NeedsAttentionRow
 } from '../main/services/database.js'
+import type {
+  StockTakeCommitSummary,
+  StockTakePreview,
+  StockTakeSessionView,
+  StockTakeSettings
+} from '../main/services/stock-take.js'
 import type { ReceiptPrintResult } from '../main/services/printer.js'
 import type { ZReport, DailySummary } from '../main/services/reports.js'
 import type { UpdateStatus } from '../main/services/updater.js'
@@ -295,6 +301,50 @@ export interface PosApi {
   /** Saves the store name and KRA PIN printed on every receipt. Requires a re-verified admin Manager PIN. */
   setStoreIdentity: (
     identity: { storeName: string; storeKraPin: string },
+    managerId: number,
+    managerPin: string
+  ) => Promise<ServiceResult<void>>
+  /** Opens a stock-take session against a fresh Shopify read. Online-only. */
+  openStockTake: (staffId: number) => Promise<ServiceResult<StockTakeSessionView>>
+  /** Returns the stock take this till is currently working on, or null. */
+  getActiveStockTake: () => Promise<ServiceResult<StockTakeSessionView | null>>
+  /** Records one counted variant. Works offline. */
+  recordStockTakeCount: (count: {
+    sessionId: number
+    variantId: string
+    variantLabel: string
+    countedQty: number
+  }) => Promise<ServiceResult<StockTakeSessionView>>
+  /** Drops one mis-scanned row from a session still being counted. */
+  removeStockTakeCount: (
+    sessionId: number,
+    variantId: string
+  ) => Promise<ServiceResult<StockTakeSessionView>>
+  /** Submits a counted session for manager approval. */
+  submitStockTake: (sessionId: number) => Promise<ServiceResult<StockTakeSessionView>>
+  /** Discards an uncommitted session. Requires a re-verified admin Manager PIN. */
+  abandonStockTake: (
+    sessionId: number,
+    managerId: number,
+    managerPin: string
+  ) => Promise<ServiceResult<void>>
+  /** Re-reads Shopify and returns what pushing this session would do. Online-only. */
+  previewStockTake: (sessionId: number) => Promise<ServiceResult<StockTakePreview>>
+  /** Pushes an approved stock take to Shopify. Requires a re-verified admin Manager PIN. */
+  commitStockTake: (request: {
+    sessionId: number
+    managerId: number
+    managerPin: string
+    secondApproverId?: number
+    secondApproverPin?: string
+  }) => Promise<ServiceResult<StockTakeCommitSummary>>
+  /** Returns recent stock takes for the back-office history list. */
+  listStockTakes: () => Promise<ServiceResult<StockTakeSessionView[]>>
+  /** Reads the stock-take approval policy. */
+  getStockTakeSettings: () => Promise<ServiceResult<StockTakeSettings>>
+  /** Saves the stock-take approval policy. Requires a re-verified admin Manager PIN. */
+  saveStockTakeSettings: (
+    settings: StockTakeSettings,
     managerId: number,
     managerPin: string
   ) => Promise<ServiceResult<void>>

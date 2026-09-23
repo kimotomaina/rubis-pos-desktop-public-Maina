@@ -14,6 +14,8 @@ import { describe, it, expect, vi } from 'vitest'
 import type { AxiosInstance } from 'axios'
 import {
   buildSettingsCommand,
+  shouldSendKeepPortOpenZero,
+  KEEP_PORT_OPEN_ZERO_ENV,
   checkDefVersion,
   closeDeviceConnection,
   createFiscalHttpClient,
@@ -105,6 +107,35 @@ describe('buildSettingsCommand', () => {
     expect(buildSettingsCommand('192.168.1.50', '8000', '')).toBe(
       'settings(ip=192.168.1.50,port=8000,tcp=1)'
     )
+  })
+})
+
+describe('buildSettingsCommand — the keepPortOpen=0 experiment (phase-115)', () => {
+  it('appends keepPortOpen=0 after tcp=1 when the experiment is on', () => {
+    expect(buildSettingsCommand('154.79.253.237', '8000', 'Password', true)).toBe(
+      'settings(ip=154.79.253.237,port=8000,password=Password,tcp=1,keepPortOpen=0)'
+    )
+  })
+
+  it('changes nothing else about the command shape', () => {
+    const off = buildSettingsCommand('154.79.253.237', '8000', 'Password', false)
+    const on = buildSettingsCommand('154.79.253.237', '8000', 'Password', true)
+    expect(on).toBe(`${off.slice(0, -1)},keepPortOpen=0)`)
+  })
+
+  it('defaults to OFF, so the shipped string stays the vendor TCP form', () => {
+    expect(buildSettingsCommand('154.79.253.237', '8000', 'Password', false)).toBe(
+      buildSettingsCommand('154.79.253.237', '8000', 'Password')
+    )
+    expect(buildSettingsCommand('154.79.253.237', '8000', 'Password')).not.toContain('keepPortOpen')
+  })
+
+  it('reads the experiment flag only from an exact "true"', () => {
+    expect(shouldSendKeepPortOpenZero({})).toBe(false)
+    expect(shouldSendKeepPortOpenZero({ [KEEP_PORT_OPEN_ZERO_ENV]: '1' })).toBe(false)
+    expect(shouldSendKeepPortOpenZero({ [KEEP_PORT_OPEN_ZERO_ENV]: 'false' })).toBe(false)
+    expect(shouldSendKeepPortOpenZero({ [KEEP_PORT_OPEN_ZERO_ENV]: 'true' })).toBe(true)
+    expect(shouldSendKeepPortOpenZero({ [KEEP_PORT_OPEN_ZERO_ENV]: ' TRUE ' })).toBe(true)
   })
 })
 

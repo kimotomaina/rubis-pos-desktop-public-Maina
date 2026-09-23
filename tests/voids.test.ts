@@ -126,18 +126,13 @@ const pendingOrderRow = (overrides: Partial<OrderRow> = {}): OrderRow => ({
 })
 
 describe('RubisDatabase.voidOrder', () => {
-  it('increments inventory for every line item, marks the order voided, and clears its sync-queue entry', () => {
+  it('marks the order voided and clears its sync-queue entries', () => {
     const { fake, db } = freshDb()
     fake.queueGetResult('FROM orders WHERE local_id', pendingOrderRow())
 
     const result = db.voidOrder(7)
 
     expect(result.voidedAt).toEqual(expect.any(String))
-
-    const increments = fake.callsFor('run', 'UPDATE products SET inventory_quantity')
-    expect(increments).toHaveLength(2)
-    expect(increments[0].params).toEqual([2, 'variant-1'])
-    expect(increments[1].params).toEqual([1, 'variant-2'])
 
     const statusUpdate = fake.callsFor('run', 'UPDATE orders SET status')
     expect(statusUpdate).toHaveLength(1)
@@ -149,6 +144,24 @@ describe('RubisDatabase.voidOrder', () => {
     expect(queueClear[0].params).toEqual([7])
     expect(queueClear[1].sql).toContain("entity_type = 'etims_invoice'")
     expect(queueClear[1].params).toEqual([7])
+  })
+
+  /**
+   * Shopify is the only source of truth for stock. A `pending_sync`
+   * order never reached Shopify, so Shopify's quantity was never
+   * decremented and a void has nothing to reverse. The increment this
+   * used to run had no matching decrement anywhere, so it only
+   * inflated the cached figure the stock take reports variance
+   * against — see phase-118.
+   */
+  it('never writes to the cached products inventory', () => {
+    const { fake, db } = freshDb()
+    fake.queueGetResult('FROM orders WHERE local_id', pendingOrderRow())
+
+    db.voidOrder(7)
+
+    expect(fake.callsFor('run', 'UPDATE products')).toHaveLength(0)
+    expect(fake.callsFor('run', 'inventory_quantity')).toHaveLength(0)
   })
 
   it('throws when the order does not exist', () => {

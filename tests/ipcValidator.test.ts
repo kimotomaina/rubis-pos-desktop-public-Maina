@@ -18,6 +18,10 @@ import {
   integrationsSetConfigSchema,
   printerSaveSchema,
   printerDeleteSchema,
+  stockTakeOpenSchema,
+  stockTakeCountSchema,
+  stockTakeCommitSchema,
+  stockTakeSettingsSchema,
   printerTestSchema,
   shopifySetStoreUrlSchema,
   configValidateSchema,
@@ -716,5 +720,76 @@ describe('mpesaIntegrationConfigSchema', () => {
 
   it('accepts a row with no method at all, which means Daraja', () => {
     expect(validate(mpesaIntegrationConfigSchema, { consumerKey: 'key' }).success).toBe(true)
+  })
+})
+
+describe('stock take schemas', () => {
+  const commit = {
+    sessionId: 1,
+    managerId: 2,
+    managerPin: '2222',
+    confirm: true as const
+  }
+
+  it('accepts a well-formed commit', () => {
+    expect(validate(stockTakeCommitSchema, commit).success).toBe(true)
+  })
+
+  /**
+   * The strongest location guarantee is that there is no field to
+   * supply — not that a supplied one would be rejected.
+   */
+  it('has no locationId field to spoof on any stock-take payload', () => {
+    expect(Object.keys(stockTakeCommitSchema.shape)).not.toContain('locationId')
+    expect(Object.keys(stockTakeOpenSchema.shape)).not.toContain('locationId')
+    expect(Object.keys(stockTakeCountSchema.shape)).not.toContain('locationId')
+  })
+
+  it('refuses a commit that was not explicitly confirmed', () => {
+    expect(validate(stockTakeCommitSchema, { ...commit, confirm: false }).success).toBe(false)
+    const { confirm: _confirm, ...withoutConfirm } = commit
+    expect(validate(stockTakeCommitSchema, withoutConfirm).success).toBe(false)
+  })
+
+  it('refuses a commit with no manager credentials', () => {
+    const { managerId: _id, managerPin: _pin, ...anonymous } = commit
+    expect(validate(stockTakeCommitSchema, anonymous).success).toBe(false)
+  })
+
+  it('accepts an optional second approver', () => {
+    const result = validate(stockTakeCommitSchema, {
+      ...commit,
+      secondApproverId: 3,
+      secondApproverPin: '3333'
+    })
+    expect(result.success).toBe(true)
+  })
+
+  it('refuses a negative or fractional counted quantity', () => {
+    const base = { sessionId: 1, variantId: 'v1', variantLabel: 'Mug' }
+    expect(validate(stockTakeCountSchema, { ...base, countedQty: 0 }).success).toBe(true)
+    expect(validate(stockTakeCountSchema, { ...base, countedQty: -1 }).success).toBe(false)
+    expect(validate(stockTakeCountSchema, { ...base, countedQty: 1.5 }).success).toBe(false)
+  })
+
+  it('takes no unit price from the caller, so a variance cannot be undervalued', () => {
+    expect(Object.keys(stockTakeCountSchema.shape)).not.toContain('unitPrice')
+    expect(Object.keys(stockTakeCountSchema.shape)).not.toContain('unitPriceAtCount')
+  })
+
+  it('refuses a policy with a negative threshold or a zero expiry', () => {
+    const base = { managerId: 2, managerPin: '2222', allowSelfApproval: false }
+    expect(
+      validate(stockTakeSettingsSchema, { ...base, varianceThresholdKes: 0, expiryHours: 12 })
+        .success
+    ).toBe(true)
+    expect(
+      validate(stockTakeSettingsSchema, { ...base, varianceThresholdKes: -1, expiryHours: 12 })
+        .success
+    ).toBe(false)
+    expect(
+      validate(stockTakeSettingsSchema, { ...base, varianceThresholdKes: 0, expiryHours: 0 })
+        .success
+    ).toBe(false)
   })
 })

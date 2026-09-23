@@ -74,6 +74,8 @@ export interface ShopifyGraphQLResponse {
 export interface ShopifyInventoryLevel {
   quantities: Array<{ name: string; quantity: number }>
   item: {
+    /** The inventory item's own id — what an inventory adjustment is keyed by. */
+    id: string
     variant: {
       id: string
     }

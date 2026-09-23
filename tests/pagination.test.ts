@@ -49,7 +49,12 @@ function inventoryLevelsResponse(
             pageInfo: { hasNextPage, endCursor },
             nodes: levels.map((level) => ({
               quantities: [{ name: 'available', quantity: level.available }],
-              item: { variant: { id: level.variantId } }
+              // `item.id` is the inventory item id a stock-take adjustment
+              // is keyed by; a level with no id is not usable and is skipped.
+              item: {
+                id: level.variantId.replace('ProductVariant', 'InventoryItem'),
+                variant: { id: level.variantId }
+              }
             }))
           }
         }

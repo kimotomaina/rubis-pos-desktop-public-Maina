@@ -1,5 +1,6 @@
 {
   "generatedFrom": "Tremol vendor SDK Libs/JS/fp.js (var defs)",
+  "defVersion": "2509041522",
   "commandCount": 122,
   "commands": {
     "ChangeSDcard": {

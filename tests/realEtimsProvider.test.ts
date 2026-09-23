@@ -24,6 +24,7 @@ import {
   mapFiscalServerError,
   sumVatGroupSubtotals
 } from '../src/main/services/integrations/real-etims-provider.js'
+import { EXPECTED_DEF_VERSION } from '../src/main/services/integrations/http-client.js'
 import type { FiscalInvoiceRequest } from '../src/main/services/integrations/etims.js'
 
 /**
@@ -48,6 +49,21 @@ function makeMockClient(
   get: ReturnType<typeof vi.fn> = vi.fn().mockResolvedValue({ data: '<Res Code="0"/>' })
 ): AxiosInstance {
   return { post, get, defaults: { baseURL: 'http://localhost:4444/' } } as unknown as AxiosInstance
+}
+
+/**
+ * Builds the `settings()` GET mock for a server echoing `defVer` — the
+ * selector for every version-dependent behaviour (phase-110). Omit
+ * `defVer` for the blank `<defVer></defVer>` a real captured
+ * `settings-ok.xml` carries.
+ *
+ * @param {string} [defVer]
+ * @returns {ReturnType<typeof vi.fn>}
+ */
+function makeSettingsGet(defVer?: string): ReturnType<typeof vi.fn> {
+  return vi.fn().mockResolvedValue({
+    data: `<Res Code="0"><settings><defVer>${defVer ?? ''}</defVer></settings></Res>`
+  })
 }
 
 /** Builds a successful `<Res Code="0">` response body from flat field values. */
@@ -1013,7 +1029,14 @@ describe('OpenInvoice duplicate-filing recovery via ReadCUinvoiceNumber (phase-7
     expect(commandSequence(post)).not.toContain('SellPLUfromExtDB')
   })
 
-  it('on a RETRY, when ReadCUinvoiceNumber itself errors, the ORIGINAL OpenInvoice rejection is still reported — not swallowed', async () => {
+  it('on a RETRY under the new defs, when ReadCUinvoiceNumber itself errors, the ORIGINAL OpenInvoice rejection is still reported — not swallowed', async () => {
+    // Pinned to defVer 2509041522 deliberately: on a server that
+    // positively identifies itself as carrying these definitions, a
+    // failed recovery call is a known-capable device having a bad
+    // moment, and routing is unchanged. On a blank or older defVer a
+    // refused ReadCUinvoiceNumber may equally be a server rejecting a
+    // command it does not declare, which is a different question and a
+    // different answer — see `tests/defVersionCompatibility.test.ts`.
     const post = vi.fn().mockImplementation((path: string, body: string) => {
       const command = commandNameOf([path, body])
       if (command === 'OpenInvoiceWithFreeCustomerData') {
@@ -1024,7 +1047,10 @@ describe('OpenInvoice duplicate-filing recovery via ReadCUinvoiceNumber (phase-7
       }
       return makeSuccessfulPostImpl()(path, body)
     })
-    const provider = new RealFiscalizationProvider({ ...TEST_DEVICE, httpClient: makeMockClient(post) })
+    const provider = new RealFiscalizationProvider({
+      ...TEST_DEVICE,
+      httpClient: makeMockClient(post, makeSettingsGet(EXPECTED_DEF_VERSION))
+    })
 
     const result = await provider.submitInvoice({
       ...SAMPLE_REQUEST,

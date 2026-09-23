@@ -46,9 +46,31 @@ import { createFileErrorLogger, installGlobalErrorHandlers } from './services/er
 import {
   fetchAllProducts,
   createShopifyClient,
+  fetchInventoryLevelDetails,
   resolveShopifyStoreUrl,
   validateAndFetchLocations
 } from './services/shopify.js'
+import type { InventoryLevelDetail } from './services/shopify.js'
+import { pushInventoryAdjustment } from './services/inventory-adjust.js'
+import {
+  abandonStockTake,
+  commitStockTake,
+  openStockTake,
+  previewCommit,
+  readSession,
+  recordCount,
+  removeCount,
+  resolveStockTakeSettings,
+  saveStockTakeSettings,
+  submitForApproval
+} from './services/stock-take.js'
+import type {
+  StockTakeCommitSummary,
+  StockTakeDeps,
+  StockTakePreview,
+  StockTakeSessionView,
+  StockTakeSettings
+} from './services/stock-take.js'
 import { createDatabase, STUCK_WAITING_THRESHOLD_MS } from './services/database.js'
 import { migrateEnvConfigToDatabase } from './services/configMigration.js'
 import { DEMO_PRODUCTS } from './services/demoData.js'
@@ -122,7 +144,14 @@ import {
   etimsIntegrationConfigSchema,
   storeIdentitySetSchema,
   correctPinAndResendSchema,
-  resendFiscalizationSchema
+  resendFiscalizationSchema,
+  stockTakeOpenSchema,
+  stockTakeSessionIdSchema,
+  stockTakeCountSchema,
+  stockTakeRemoveSchema,
+  stockTakeAbandonSchema,
+  stockTakeCommitSchema,
+  stockTakeSettingsSchema
 } from './lib/ipcValidator.js'
 import { checkEtimsCompletion } from './services/etimsSetup.js'
 import type { EtimsCompletionStatus } from './services/etimsSetup.js'
@@ -2468,6 +2497,280 @@ app.whenReady().then(async () => {
     app.quit()
     return { success: true }
   })
+
+  /**
+   * Reads this till's location-scoped levels straight from Shopify,
+   * inventory item ids included, for a stock take's opening snapshot
+   * and its re-read at commit.
+   *
+   * Always a live call. The stock take never reads a cached quantity —
+   * not `products.inventory_quantity`, not a previous session's
+   * snapshot — because Shopify is the only place a current quantity
+   * lives.
+   */
+  const fetchStockTakeLevels = async (): Promise<
+    ServiceResult<Map<string, InventoryLevelDetail>>
+  > => {
+    const env = shopifyEnv()
+    if (!env) {
+      return { success: false, error: 'Shopify credentials missing — set them in Admin > Integrations.' }
+    }
+    if (!locationId) {
+      return { success: false, error: 'This till has no confirmed Shopify location.' }
+    }
+    try {
+      const client = createShopifyClient(env.storeUrl, env.token)
+      return { success: true, data: await fetchInventoryLevelDetails(client, locationId) }
+    } catch (err) {
+      return {
+        success: false,
+        error: err instanceof Error ? err.message : 'Could not read current stock from Shopify'
+      }
+    }
+  }
+
+  /**
+   * Assembles the stock-take service's dependencies.
+   *
+   * Rebuilt per call rather than captured once so `locationId` is
+   * always this till's *current* confirmed location — a session opened
+   * before an admin re-pointed the till is then refused at commit
+   * rather than pushed at the new location.
+   */
+  const stockTakeDeps = (): StockTakeDeps => ({
+    db,
+    locationId,
+    fetchLevels: fetchStockTakeLevels,
+    pushAdjustment: async ({ sessionUuid, batchIndex, changes }) => {
+      const env = shopifyEnv()
+      if (!env || !locationId) {
+        return { success: false, error: 'Shopify is not configured for this till.' }
+      }
+      const client = createShopifyClient(env.storeUrl, env.token)
+      return pushInventoryAdjustment(client, {
+        locationId,
+        sessionUuid,
+        batchIndex,
+        changes
+      })
+    },
+    isOnline: () => monitor.isOnline(),
+    idGen: randomUUID
+  })
+
+  /**
+   * IPC handler that opens a stock-take session against a fresh
+   * Shopify read. Online-only; no manager PIN (counting is ordinary
+   * floor work — pushing the result is what needs authorizing).
+   */
+  ipcMain.handle(
+    'stocktake:open',
+    async (_event, request: unknown): Promise<ServiceResult<StockTakeSessionView>> => {
+      const validation = validate(stockTakeOpenSchema, request)
+      if (!validation.success) {
+        return { success: false, error: validation.error }
+      }
+      const staff = db.getStaffById(validation.data.staffId)
+      if (!staff || staff.is_active !== 1) {
+        return { success: false, error: 'That staff account cannot start a stock take.' }
+      }
+      return openStockTake(stockTakeDeps(), staff.id)
+    }
+  )
+
+  /**
+   * IPC handler that records one counted variant. Works offline — the
+   * snapshot and price it stamps the row with are already local.
+   */
+  ipcMain.handle(
+    'stocktake:count',
+    (_event, request: unknown): ServiceResult<StockTakeSessionView> => {
+      const validation = validate(stockTakeCountSchema, request)
+      if (!validation.success) {
+        return { success: false, error: validation.error }
+      }
+      return recordCount(stockTakeDeps(), validation.data)
+    }
+  )
+
+  /** IPC handler that drops one mis-scanned row from a session still being counted. */
+  ipcMain.handle(
+    'stocktake:remove',
+    (_event, request: unknown): ServiceResult<StockTakeSessionView> => {
+      const validation = validate(stockTakeRemoveSchema, request)
+      if (!validation.success) {
+        return { success: false, error: validation.error }
+      }
+      return removeCount(stockTakeDeps(), validation.data.sessionId, validation.data.variantId)
+    }
+  )
+
+  /** IPC handler returning the session this till is currently working on, if any. */
+  ipcMain.handle(
+    'stocktake:active',
+    (): ServiceResult<StockTakeSessionView | null> => {
+      const active = db.getActiveStockTakeSession()
+      if (!active) return { success: true, data: null }
+      return { success: true, data: { session: active, items: db.getStockTakeItems(active.id) } }
+    }
+  )
+
+  /** IPC handler returning one session with its counted rows. */
+  ipcMain.handle(
+    'stocktake:get',
+    (_event, request: unknown): ServiceResult<StockTakeSessionView> => {
+      const validation = validate(stockTakeSessionIdSchema, request)
+      if (!validation.success) {
+        return { success: false, error: validation.error }
+      }
+      return readSession(stockTakeDeps(), validation.data.sessionId)
+    }
+  )
+
+  /** IPC handler returning recent stock takes for the back-office history list. */
+  ipcMain.handle('stocktake:list', (): ServiceResult<StockTakeSessionView[]> => {
+    try {
+      return {
+        success: true,
+        data: db
+          .listStockTakeSessions()
+          .map((session) => ({ session, items: db.getStockTakeItems(session.id) }))
+      }
+    } catch (err) {
+      return {
+        success: false,
+        error: err instanceof Error ? err.message : 'Failed to load stock takes'
+      }
+    }
+  })
+
+  /** IPC handler that submits a counted session for manager approval. */
+  ipcMain.handle(
+    'stocktake:submit',
+    (_event, request: unknown): ServiceResult<StockTakeSessionView> => {
+      const validation = validate(stockTakeSessionIdSchema, request)
+      if (!validation.success) {
+        return { success: false, error: validation.error }
+      }
+      return submitForApproval(stockTakeDeps(), validation.data.sessionId)
+    }
+  )
+
+  /**
+   * IPC handler that discards an uncommitted session. Requires a
+   * re-verified admin Manager PIN — throwing away a completed count is
+   * a decision someone should have to own.
+   */
+  ipcMain.handle(
+    'stocktake:abandon',
+    (_event, request: unknown): ServiceResult<void> => {
+      const validation = validate(stockTakeAbandonSchema, request)
+      if (!validation.success) {
+        return { success: false, error: validation.error }
+      }
+      const authz = requireAdminPin(db, validation.data.managerId, validation.data.managerPin)
+      if (!authz.success) {
+        return authz
+      }
+      return abandonStockTake(stockTakeDeps(), validation.data.sessionId)
+    }
+  )
+
+  /**
+   * IPC handler building the pre-commit preview. Online-only, and
+   * changes nothing — so no manager PIN, the same reasoning as
+   * `config:validate` and `printers:test`.
+   */
+  ipcMain.handle(
+    'stocktake:preview',
+    async (_event, request: unknown): Promise<ServiceResult<StockTakePreview>> => {
+      const validation = validate(stockTakeSessionIdSchema, request)
+      if (!validation.success) {
+        return { success: false, error: validation.error }
+      }
+      return previewCommit(stockTakeDeps(), validation.data.sessionId)
+    }
+  )
+
+  /**
+   * IPC handler that pushes an approved stock take to Shopify — the
+   * app's only inventory write.
+   *
+   * The approver recorded on the session is the id whose PIN
+   * `requireAdminPin` just verified here, never a name the renderer
+   * supplied. A second approver, required above the configured value
+   * threshold, is verified the same way and must be a different
+   * manager.
+   */
+  ipcMain.handle(
+    'stocktake:commit',
+    async (_event, request: unknown): Promise<ServiceResult<StockTakeCommitSummary>> => {
+      const validation = validate(stockTakeCommitSchema, request)
+      if (!validation.success) {
+        return { success: false, error: validation.error }
+      }
+      const authz = requireAdminPin(db, validation.data.managerId, validation.data.managerPin)
+      if (!authz.success) {
+        return { success: false, error: authz.error }
+      }
+
+      let secondApproverStaffId: number | null = null
+      if (validation.data.secondApproverId !== undefined) {
+        const secondAuthz = requireAdminPin(
+          db,
+          validation.data.secondApproverId,
+          validation.data.secondApproverPin ?? ''
+        )
+        if (!secondAuthz.success) {
+          return { success: false, error: secondAuthz.error }
+        }
+        secondApproverStaffId = validation.data.secondApproverId
+      }
+
+      return commitStockTake(stockTakeDeps(), {
+        sessionId: validation.data.sessionId,
+        approverStaffId: validation.data.managerId,
+        secondApproverStaffId
+      })
+    }
+  )
+
+  /** IPC handler returning the stock-take approval policy. */
+  ipcMain.handle('stocktake:get-settings', (): ServiceResult<StockTakeSettings> => {
+    return { success: true, data: resolveStockTakeSettings(db) }
+  })
+
+  /**
+   * IPC handler saving the stock-take approval policy. Requires a
+   * re-verified admin Manager PIN — these values decide how much stock
+   * one person can move alone.
+   */
+  ipcMain.handle(
+    'stocktake:save-settings',
+    (_event, request: unknown): ServiceResult<void> => {
+      const validation = validate(stockTakeSettingsSchema, request)
+      if (!validation.success) {
+        return { success: false, error: validation.error }
+      }
+      const authz = requireAdminPin(db, validation.data.managerId, validation.data.managerPin)
+      if (!authz.success) {
+        return authz
+      }
+      try {
+        saveStockTakeSettings(db, {
+          varianceThresholdKes: validation.data.varianceThresholdKes,
+          allowSelfApproval: validation.data.allowSelfApproval,
+          expiryHours: validation.data.expiryHours
+        })
+        return { success: true }
+      } catch (err) {
+        return {
+          success: false,
+          error: err instanceof Error ? err.message : 'Failed to save stock take settings'
+        }
+      }
+    }
+  )
 
   createWindow()
 

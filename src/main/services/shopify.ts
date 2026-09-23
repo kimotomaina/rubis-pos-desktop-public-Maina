@@ -70,6 +70,13 @@ query GetProducts($first: Int!, $after: String) {
  * longer exposes a bare `quantity` scalar; it's `quantities(names:)`,
  * an array of named buckets. Only `"available"` is requested since
  * that's the only bucket this app sells against.
+ *
+ * `item { id }` is the inventory item's own id, which
+ * `inventoryAdjustQuantities` is keyed by (it will not take a variant
+ * id). It is read here and carried in a stock-take session's snapshot;
+ * it is deliberately never persisted onto the `products` cache, which
+ * would make this app keep a permanent local shadow of Shopify's
+ * inventory model.
  */
 export const INVENTORY_LEVELS_QUERY = `
 query GetInventoryLevels($locationId: ID!, $first: Int!, $after: String) {
@@ -85,6 +92,7 @@ query GetInventoryLevels($locationId: ID!, $first: Int!, $after: String) {
           quantity
         }
         item {
+          id
           variant {
             id
           }
@@ -418,18 +426,31 @@ export async function fetchProductsAndInventory(
   }
 }
 
+/** One variant's location-scoped level, as read from Shopify. */
+export interface InventoryLevelDetail {
+  /** What `inventoryAdjustQuantities` is keyed by — not the variant id. */
+  inventoryItemId: string
+  /** The `"available"` bucket at this location. */
+  available: number
+}
+
 /**
- * Fetches inventory levels at a specific location, paginated.
+ * Fetches inventory levels at a specific location, paginated, keeping
+ * each variant's inventory item id alongside its quantity.
+ *
+ * The single paginator behind both {@link fetchInventoryLevels} (the
+ * catalog merge, which needs only the number) and the stock take
+ * (which needs the inventory item id to adjust it).
  *
  * @param {AxiosInstance} client
  * @param {string} locationId
- * @returns {Promise<Map<string, number>>} variant id → quantity
+ * @returns {Promise<Map<string, InventoryLevelDetail>>} variant id → level
  */
-export async function fetchInventoryLevels(
+export async function fetchInventoryLevelDetails(
   client: AxiosInstance,
   locationId: string
-): Promise<Map<string, number>> {
-  const inventoryMap = new Map<string, number>()
+): Promise<Map<string, InventoryLevelDetail>> {
+  const levels = new Map<string, InventoryLevelDetail>()
   let cursor: string | null = null
   let hasNextPage = true
 
@@ -444,9 +465,10 @@ export async function fetchInventoryLevels(
 
     for (const level of data.nodes ?? []) {
       const variantId = level.item?.variant?.id
+      const inventoryItemId = level.item?.id
       const available = level.quantities?.find((q) => q.name === 'available')?.quantity
-      if (variantId && available !== undefined) {
-        inventoryMap.set(variantId, available)
+      if (variantId && inventoryItemId && available !== undefined) {
+        levels.set(variantId, { inventoryItemId, available })
       }
     }
 
@@ -454,7 +476,22 @@ export async function fetchInventoryLevels(
     cursor = data.pageInfo?.endCursor ?? null
   }
 
-  return inventoryMap
+  return levels
+}
+
+/**
+ * Fetches inventory levels at a specific location, paginated.
+ *
+ * @param {AxiosInstance} client
+ * @param {string} locationId
+ * @returns {Promise<Map<string, number>>} variant id → quantity
+ */
+export async function fetchInventoryLevels(
+  client: AxiosInstance,
+  locationId: string
+): Promise<Map<string, number>> {
+  const details = await fetchInventoryLevelDetails(client, locationId)
+  return new Map([...details].map(([variantId, level]) => [variantId, level.available]))
 }
 
 /**

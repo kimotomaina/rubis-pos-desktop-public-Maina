@@ -70,6 +70,17 @@ export const FISCAL_CONTENT_TYPE = 'text/plain'
 export const EXPECTED_DEF_VERSION = '2509041522'
 
 /**
+ * The protocol definitions version shipped with the older "API Files" SDK
+ * (`API Files/C# Lib/FP.cs`, `Java Lib/TremolZFP/FP.java`), which the
+ * ZFPLabServer 1.8.2 reports — see `docs/phase-109.md` §0 and
+ * `docs/phase-110.md`. Supported alongside {@link EXPECTED_DEF_VERSION};
+ * it declares 91 commands against the newer set's 122, and the missing
+ * ones include every read-back keyed by `TraderSystemInvNum`. See
+ * {@link resolveDuplicateRecoverySupport}.
+ */
+export const OLD_DEF_VERSION = '2204120945'
+
+/**
  * Three-state comparison of a `settings()` response's `<defVer>` against
  * {@link EXPECTED_DEF_VERSION}. `'unknown'` (blank/absent `<defVer>`) is
  * deliberately distinct from `'mismatch'` — the real captured
@@ -78,6 +89,41 @@ export const EXPECTED_DEF_VERSION = '2509041522'
  * version problem.
  */
 export type DefVersionStatus = 'match' | 'mismatch' | 'unknown'
+
+/**
+ * Whether the connected server's definitions declare
+ * `ReadCUinvoiceNumber` — the command that answers "did this sale already
+ * file?" after a duplicate `TraderSystemInvNum` rejection:
+ *
+ *   - `'available'` — {@link EXPECTED_DEF_VERSION}, which declares it;
+ *   - `'absent'` — {@link OLD_DEF_VERSION}, which does not declare it, nor
+ *     any other read-back keyed by `TraderSystemInvNum`;
+ *   - `'unknown'` — any other (or blank) `defVer`. Blank is a real,
+ *     captured state, not a hypothetical (see {@link DefVersionStatus}),
+ *     so it cannot be collapsed into either certainty.
+ */
+export type DuplicateRecoverySupport = 'available' | 'absent' | 'unknown'
+
+/**
+ * Resolves a server's echoed `<defVer>` to whether its definitions offer
+ * the duplicate-recovery command.
+ *
+ * Deliberately three-state rather than a boolean: a blank `<defVer>` from
+ * an old-defs server has actually been captured, so "not known to be new"
+ * and "known to be old" must stay distinguishable. The caller treats
+ * `'unknown'` as "probe, then fail safe" — see
+ * `RealFiscalizationProvider`'s duplicate-recovery step.
+ *
+ * @param {string | undefined} defVer
+ * @returns {DuplicateRecoverySupport}
+ */
+export function resolveDuplicateRecoverySupport(
+  defVer: string | undefined
+): DuplicateRecoverySupport {
+  if (defVer === EXPECTED_DEF_VERSION) return 'available'
+  if (defVer === OLD_DEF_VERSION) return 'absent'
+  return 'unknown'
+}
 
 /**
  * Pure three-state comparison behind {@link getSettings}'s `<defVer>`
@@ -147,6 +193,48 @@ export function createFiscalHttpClient(options: FiscalHttpClientOptions = {}): A
 }
 
 /**
+ * Environment variable enabling the `keepPortOpen=0` experiment — see
+ * {@link shouldSendKeepPortOpenZero}. Off unless set to exactly `'true'`.
+ */
+export const KEEP_PORT_OPEN_ZERO_ENV = 'FISCAL_SEND_KEEP_PORT_OPEN_ZERO'
+
+/**
+ * Whether to append `keepPortOpen=0` to the TCP `settings()` string.
+ *
+ * **This is an experiment, not a supported setting**, added at the device
+ * manager's request (`docs/phase-115.md`). `keepPortOpen` is documented
+ * *only* for serial connections — it appears in the vendor client solely
+ * in `ServerSetDeviceSerialSettings`'s `tcp=0` string
+ * (`Libs/JS/fp_core.js:386-389`), never in the TCP setter (`:407-410`),
+ * is absent from the server's own `settings` argument template
+ * (`Libs/FileServer/_Settings.xml`) and from both protocol PDFs, and does
+ * not appear anywhere at all in the older SDK. Serial is also physically
+ * impossible for this deployment — the device is on a routable public IP
+ * and the till has no COM ports (`docs/phase-114.md` §2).
+ *
+ * The ZFPLabServer nonetheless *accepts and stores* the parameter on a
+ * `tcp=1` string, which is measured rather than assumed
+ * (`docs/phase-113.md` §3). Storage is not effect: `settings()` never
+ * contacts the fiscal device, so a changed echo proves only that the
+ * server wrote the field.
+ *
+ * Two things to know before enabling it:
+ *
+ *   - **The server-side value is sticky.** Omitting the parameter does
+ *     not clear it; only an explicit `keepPortOpen=1` restores it. Turning
+ *     this flag back off therefore reverts *this app's requests* but not
+ *     the server's stored state.
+ *   - Default off, so the shipped path stays byte-for-byte the vendor's
+ *     TCP form and the behaviour every other test covers.
+ *
+ * @param {NodeJS.ProcessEnv} [env=process.env]
+ * @returns {boolean}
+ */
+export function shouldSendKeepPortOpenZero(env: NodeJS.ProcessEnv = process.env): boolean {
+  return (env[KEEP_PORT_OPEN_ZERO_ENV] || '').trim().toLowerCase() === 'true'
+}
+
+/**
  * Builds the literal `settings(…)` request string the ZFPLabServer
  * parses. Deliberately **not** URL-encoded: the server reads the raw
  * parentheses, commas and equals signs, and percent-encoding them makes
@@ -163,15 +251,18 @@ export function createFiscalHttpClient(options: FiscalHttpClientOptions = {}): A
  * @param {string} deviceIp
  * @param {string} devicePort
  * @param {string} password
+ * @param {boolean} [sendKeepPortOpenZero] appends `,keepPortOpen=0` — see {@link shouldSendKeepPortOpenZero}
  * @returns {string}
  */
 export function buildSettingsCommand(
   deviceIp: string,
   devicePort: string,
-  password: string
+  password: string,
+  sendKeepPortOpenZero: boolean = shouldSendKeepPortOpenZero()
 ): string {
   const passwordSegment = password ? `,password=${password}` : ''
-  return `settings(ip=${deviceIp},port=${devicePort}${passwordSegment},tcp=1)`
+  const keepPortOpenSegment = sendKeepPortOpenZero ? ',keepPortOpen=0' : ''
+  return `settings(ip=${deviceIp},port=${devicePort}${passwordSegment},tcp=1${keepPortOpenSegment})`
 }
 
 /**
@@ -206,10 +297,37 @@ export async function getSettings(
   password: string,
   debug = false
 ): Promise<ServiceResult<Record<string, string>>> {
-  const url = `${normalizeBaseUrl(client.defaults.baseURL ?? DEFAULT_ETIMS_BASE_URL)}${buildSettingsCommand(deviceIp, devicePort, password)}`
-  const result = await sendGet(client, url, 'settings()', debug)
+  const keepPortOpenExperiment = shouldSendKeepPortOpenZero()
+  const url = `${normalizeBaseUrl(client.defaults.baseURL ?? DEFAULT_ETIMS_BASE_URL)}${buildSettingsCommand(deviceIp, devicePort, password, keepPortOpenExperiment)}`
+
+  if (keepPortOpenExperiment) {
+    console.info(`[rubis-pos][keepPortOpen] SENT: GET ${redactPassword(url)}`)
+  }
+
+  const result = await sendGet(
+    client,
+    url,
+    'settings()',
+    debug,
+    keepPortOpenExperiment
+      ? (raw) => console.info(`[rubis-pos][keepPortOpen] RAW RESPONSE: ${redactPasswordElement(raw)}`)
+      : undefined
+  )
   if (!result.success || !result.data) {
+    if (keepPortOpenExperiment) {
+      console.info(`[rubis-pos][keepPortOpen] VERDICT: no settings() response — ${result.error}`)
+    }
     return result
+  }
+
+  if (keepPortOpenExperiment) {
+    const echoed = result.data.keepPortOpen
+    const honoured = echoed === '0' || echoed?.toLowerCase() === 'false'
+    console.info(
+      `[rubis-pos][keepPortOpen] VERDICT: requested=0, echoed=${echoed ?? '<absent>'} -> ` +
+        `${honoured ? 'HONOURED' : 'IGNORED'} (the server stored the field; settings() never ` +
+        'contacts the device, so this says nothing about TCP session behaviour)'
+    )
   }
 
   const defVer = result.data.defVer
@@ -218,11 +336,18 @@ export async function getSettings(
 
   if (defVerStatus === 'mismatch') {
     console.warn(
-      '[rubis-pos] ZFPLabServer protocol definitions version MISMATCH — this build\'s VAT-class sell ' +
-        'routing (SellPLUfromExtDB vs SellPLUfromExtDB_HS) and other command shapes are only confirmed ' +
-        `valid for defVer=${EXPECTED_DEF_VERSION}. Commands this build sends may be rejected or ` +
-        'misrouted by the device. See tests/fixtures/tremol-contract.json and ' +
-        'real-etims-provider.ts#resolveSellCommand.',
+      defVer === OLD_DEF_VERSION
+        ? '[rubis-pos] ZFPLabServer is running the older protocol definitions. This build supports ' +
+            'them: Price is held to 10 characters instead of 15, and duplicate-filing recovery ' +
+            'flags an unverifiable resend for a person instead of calling ReadCUinvoiceNumber, ' +
+            'which these definitions do not declare. See docs/phase-110.md. ' +
+            'VERIFY-AGAINST-REAL-OLD-DEVICE: this path is unit-tested but has never run against a ' +
+            'real device on these definitions.'
+        : '[rubis-pos] ZFPLabServer protocol definitions version MISMATCH — this build\'s command ' +
+            `shapes are confirmed only for defVer=${EXPECTED_DEF_VERSION} and ` +
+            `defVer=${OLD_DEF_VERSION}. Commands this build sends may be rejected or misrouted by ` +
+            'the device. See tests/fixtures/tremol-contract.json and ' +
+            'real-etims-provider.ts#resolveSellCommand.',
       { defVer, expectedDefVer: EXPECTED_DEF_VERSION, defVerStatus }
     )
   }
@@ -311,13 +436,16 @@ export async function postXml(
  * @param {AxiosInstance} client
  * @param {string} url
  * @param {string} label
+ * @param {boolean} [debug=false]
+ * @param {(raw: string) => void} [onRaw] receives the unparsed response body, for callers that must log it verbatim
  * @returns {Promise<ServiceResult<Record<string, string>>>}
  */
 async function sendGet(
   client: AxiosInstance,
   url: string,
   label: string,
-  debug = false
+  debug = false,
+  onRaw?: (raw: string) => void
 ): Promise<ServiceResult<Record<string, string>>> {
   try {
     if (debug) {
@@ -327,6 +455,7 @@ async function sendGet(
     if (debug) {
       console.log(`[DEBUG-HTTP] ${label} → HTTP ${response.status}: ${response.data}`)
     }
+    onRaw?.(String(response.data))
     return { success: true, data: parseXmlResponse(response.data) }
   } catch (error) {
     const description = describeFiscalHttpError(error, label)
@@ -343,6 +472,18 @@ async function sendGet(
  */
 function redactPassword(url: string): string {
   return url.replace(/password=[^,)]*/, 'password=***')
+}
+
+/**
+ * Redacts the `<password>` element out of a raw `settings()` response
+ * body. The server echoes the device TCP password back in cleartext, so
+ * any code path that logs a response verbatim has to strip it first.
+ *
+ * @param {string} body
+ * @returns {string}
+ */
+function redactPasswordElement(body: string): string {
+  return body.replace(/(<password>)[^<]*(<\/password>)/gi, '$1***$2')
 }
 
 /**

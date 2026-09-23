@@ -30,7 +30,14 @@
  * generator, not a source of behavior, so it isn't wired into any build
  * step.
  *
- * Usage: node scripts/extract-tremol-contract.mjs "<path to fp.js or FP.cs>"
+ * The optional second argument is the fixture basename, so the same
+ * extractor produces the fixtures for **both** supported definition
+ * versions rather than one of them being transcribed by hand:
+ *
+ *   node scripts/extract-tremol-contract.mjs ".../Libs/JS/fp.js"
+ *   node scripts/extract-tremol-contract.mjs ".../API Files/C# Lib/FP.cs" tremol-old
+ *
+ * Usage: node scripts/extract-tremol-contract.mjs "<path to fp.js or FP.cs>" [basename]
  */
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs'
 import { dirname, join, extname } from 'node:path'
@@ -41,9 +48,12 @@ const repoRoot = join(__dirname, '..')
 
 const sourcePath = process.argv[2]
 if (!sourcePath) {
-  console.error('Usage: node scripts/extract-tremol-contract.mjs "<path to fp.js or FP.cs>"')
+  console.error('Usage: node scripts/extract-tremol-contract.mjs "<path to fp.js or FP.cs>" [basename]')
   process.exit(1)
 }
+
+/** Fixture basename, so one extractor serves both definition versions. */
+const basename = process.argv[3] ?? 'tremol'
 
 const source = readFileSync(sourcePath, 'utf8')
 
@@ -91,7 +101,7 @@ const defsXml = extractDefsXml(source, extname(sourcePath).toLowerCase())
 
 const fixturesDir = join(repoRoot, 'tests', 'fixtures')
 mkdirSync(fixturesDir, { recursive: true })
-writeFileSync(join(fixturesDir, 'tremol-defs.xml'), defsXml, 'utf8')
+writeFileSync(join(fixturesDir, `${basename}-defs.xml`), defsXml, 'utf8')
 
 /** Parses `Name="value"` attribute pairs off a tag's attribute string. */
 function parseAttrs(attrString) {
@@ -192,16 +202,23 @@ const contract = {
     extname(sourcePath).toLowerCase() === '.js'
       ? 'Tremol vendor SDK Libs/JS/fp.js (var defs)'
       : 'Tremol vendor SDK FP.cs (public string defs)',
+  /**
+   * The defs blob's own `<GenerationTimeStamp>` — the same value the
+   * ZFPLabServer echoes as `<defVer>` on `settings()`, so a fixture
+   * states which definition version it is rather than relying on its
+   * filename to say so.
+   */
+  defVersion: /<GenerationTimeStamp>([^<]*)<\/GenerationTimeStamp>/.exec(defsXml)?.[1].trim() ?? '',
   commandCount: Object.keys(commands).length,
   commands
 }
 
 writeFileSync(
-  join(fixturesDir, 'tremol-contract.json'),
+  join(fixturesDir, `${basename}-contract.json`),
   JSON.stringify(contract, null, 2) + '\n',
   'utf8'
 )
 
 console.log(`Extracted ${contract.commandCount} commands.`)
-console.log(`Wrote ${join(fixturesDir, 'tremol-defs.xml')}`)
-console.log(`Wrote ${join(fixturesDir, 'tremol-contract.json')}`)
+console.log(`Wrote ${join(fixturesDir, `${basename}-defs.xml`)}`)
+console.log(`Wrote ${join(fixturesDir, `${basename}-contract.json`)}`)

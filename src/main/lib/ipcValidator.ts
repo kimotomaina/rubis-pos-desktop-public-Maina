@@ -225,6 +225,81 @@ export const mpesaLogTransactionSchema = z.object({
 export const mpesaQueryStatusSchema = z.string().min(1, 'Checkout request id is required')
 
 /**
+ * `stocktake:open` request payload — who is doing the counting. The
+ * staff row itself is re-read server-side, mirroring how `runCheckout`
+ * resolves a cashier rather than trusting the renderer's copy.
+ *
+ * **No `locationId` field, deliberately.** The till's location is read
+ * from the main-process binding; a stock take that could be aimed at
+ * another location by its caller is how one branch adjusts another's
+ * stock. There is nothing here to spoof because there is nothing here.
+ */
+export const stockTakeOpenSchema = z.object({
+  staffId: z.number().int().positive()
+})
+
+/** `stocktake:get` / `stocktake:submit` request payload. */
+export const stockTakeSessionIdSchema = z.object({
+  sessionId: z.number().int().positive()
+})
+
+/**
+ * `stocktake:count` request payload — one counted variant.
+ *
+ * `countedQty` is a non-negative integer: a shelf can hold none of
+ * something, but it cannot hold a negative or a fraction of it. The
+ * unit price the variance is valued at is read server-side from the
+ * catalog cache, not accepted here, so the figure the approval
+ * threshold is judged against cannot be understated by the caller.
+ */
+export const stockTakeCountSchema = z.object({
+  sessionId: z.number().int().positive(),
+  variantId: z.string().min(1, 'A variant is required'),
+  variantLabel: z.string(),
+  countedQty: z.number().int().min(0, 'A counted quantity cannot be negative')
+})
+
+/** `stocktake:remove` request payload — drops one mis-scanned row. */
+export const stockTakeRemoveSchema = z.object({
+  sessionId: z.number().int().positive(),
+  variantId: z.string().min(1, 'A variant is required')
+})
+
+/** `stocktake:abandon` request payload (manager re-authorization required). */
+export const stockTakeAbandonSchema = managerAuthzSchema.extend({
+  sessionId: z.number().int().positive()
+})
+
+/**
+ * `stocktake:commit` request payload — the app's only inventory write,
+ * so it carries every gate at once.
+ *
+ * `managerId`/`managerPin` are re-verified by `requireAdminPin` and the
+ * verified id becomes the recorded approver — the renderer never names
+ * the approver itself. A second approver's PIN is verified the same
+ * way, and is required above the configured value threshold.
+ *
+ * `confirm` must be literally `true`: the commit is reachable only from
+ * an explicit confirmation of a preview the operator has seen, never as
+ * a side effect of opening one.
+ */
+export const stockTakeCommitSchema = managerAuthzSchema.extend({
+  sessionId: z.number().int().positive(),
+  secondApproverId: z.number().int().positive().optional(),
+  secondApproverPin: z.string().optional(),
+  confirm: z.literal(true, {
+    message: 'A stock take must be explicitly confirmed before it is pushed to Shopify'
+  })
+})
+
+/** `stocktake:save-settings` request payload (manager re-authorization required). */
+export const stockTakeSettingsSchema = managerAuthzSchema.extend({
+  varianceThresholdKes: z.number().min(0, 'A threshold cannot be negative'),
+  allowSelfApproval: z.boolean(),
+  expiryHours: z.number().positive('A count must stay valid for at least some time')
+})
+
+/**
  * `config:set` request payload — a single `app_configurations`
  * key/value write (manager re-authorization required, since these
  * control which integration providers a till talks to live).

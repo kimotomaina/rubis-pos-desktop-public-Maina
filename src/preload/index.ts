@@ -17,6 +17,12 @@ import type {
   AppConfigCategory,
   NeedsAttentionRow
 } from '../main/services/database.js'
+import type {
+  StockTakeCommitSummary,
+  StockTakePreview,
+  StockTakeSessionView,
+  StockTakeSettings
+} from '../main/services/stock-take.js'
 import type { ReceiptPrintResult } from '../main/services/printer.js'
 import type { ZReport, DailySummary } from '../main/services/reports.js'
 import type { UpdateStatus } from '../main/services/updater.js'
@@ -897,7 +903,136 @@ const api = {
     managerId: number,
     managerPin: string
   ): Promise<ServiceResult<void>> =>
-    ipcRenderer.invoke('store:set-identity', { ...identity, managerId, managerPin })
+    ipcRenderer.invoke('store:set-identity', { ...identity, managerId, managerPin }),
+
+  /**
+   * Opens a stock-take session against a fresh Shopify read.
+   * Online-only. The till's location is resolved in the main process
+   * and is deliberately not a parameter here.
+   *
+   * @param {number} staffId — who is doing the counting
+   * @returns {Promise<ServiceResult<StockTakeSessionView>>}
+   */
+  openStockTake: (staffId: number): Promise<ServiceResult<StockTakeSessionView>> =>
+    ipcRenderer.invoke('stocktake:open', { staffId }),
+
+  /**
+   * Returns the stock take this till is currently working on, or null.
+   *
+   * @returns {Promise<ServiceResult<StockTakeSessionView | null>>}
+   */
+  getActiveStockTake: (): Promise<ServiceResult<StockTakeSessionView | null>> =>
+    ipcRenderer.invoke('stocktake:active'),
+
+  /**
+   * Records one counted variant. Works offline.
+   *
+   * @param {object} count
+   * @returns {Promise<ServiceResult<StockTakeSessionView>>}
+   */
+  recordStockTakeCount: (count: {
+    sessionId: number
+    variantId: string
+    variantLabel: string
+    countedQty: number
+  }): Promise<ServiceResult<StockTakeSessionView>> => ipcRenderer.invoke('stocktake:count', count),
+
+  /**
+   * Drops one mis-scanned row from a session still being counted.
+   *
+   * @param {number} sessionId
+   * @param {string} variantId
+   * @returns {Promise<ServiceResult<StockTakeSessionView>>}
+   */
+  removeStockTakeCount: (
+    sessionId: number,
+    variantId: string
+  ): Promise<ServiceResult<StockTakeSessionView>> =>
+    ipcRenderer.invoke('stocktake:remove', { sessionId, variantId }),
+
+  /**
+   * Submits a counted session for manager approval.
+   *
+   * @param {number} sessionId
+   * @returns {Promise<ServiceResult<StockTakeSessionView>>}
+   */
+  submitStockTake: (sessionId: number): Promise<ServiceResult<StockTakeSessionView>> =>
+    ipcRenderer.invoke('stocktake:submit', { sessionId }),
+
+  /**
+   * Discards an uncommitted session. Requires a re-verified admin
+   * Manager PIN.
+   *
+   * @param {number} sessionId
+   * @param {number} managerId
+   * @param {string} managerPin
+   * @returns {Promise<ServiceResult<void>>}
+   */
+  abandonStockTake: (
+    sessionId: number,
+    managerId: number,
+    managerPin: string
+  ): Promise<ServiceResult<void>> =>
+    ipcRenderer.invoke('stocktake:abandon', { sessionId, managerId, managerPin }),
+
+  /**
+   * Re-reads Shopify and returns what pushing this session would do.
+   * Online-only; changes nothing.
+   *
+   * @param {number} sessionId
+   * @returns {Promise<ServiceResult<StockTakePreview>>}
+   */
+  previewStockTake: (sessionId: number): Promise<ServiceResult<StockTakePreview>> =>
+    ipcRenderer.invoke('stocktake:preview', { sessionId }),
+
+  /**
+   * Pushes an approved stock take to Shopify. Requires a re-verified
+   * admin Manager PIN, plus a second approver above the configured
+   * value threshold, and an explicit `confirm`.
+   *
+   * @param {object} request
+   * @returns {Promise<ServiceResult<StockTakeCommitSummary>>}
+   */
+  commitStockTake: (request: {
+    sessionId: number
+    managerId: number
+    managerPin: string
+    secondApproverId?: number
+    secondApproverPin?: string
+  }): Promise<ServiceResult<StockTakeCommitSummary>> =>
+    ipcRenderer.invoke('stocktake:commit', { ...request, confirm: true }),
+
+  /**
+   * Returns recent stock takes for the back-office history list.
+   *
+   * @returns {Promise<ServiceResult<StockTakeSessionView[]>>}
+   */
+  listStockTakes: (): Promise<ServiceResult<StockTakeSessionView[]>> =>
+    ipcRenderer.invoke('stocktake:list'),
+
+  /**
+   * Reads the stock-take approval policy.
+   *
+   * @returns {Promise<ServiceResult<StockTakeSettings>>}
+   */
+  getStockTakeSettings: (): Promise<ServiceResult<StockTakeSettings>> =>
+    ipcRenderer.invoke('stocktake:get-settings'),
+
+  /**
+   * Saves the stock-take approval policy. Requires a re-verified admin
+   * Manager PIN.
+   *
+   * @param {StockTakeSettings} settings
+   * @param {number} managerId
+   * @param {string} managerPin
+   * @returns {Promise<ServiceResult<void>>}
+   */
+  saveStockTakeSettings: (
+    settings: StockTakeSettings,
+    managerId: number,
+    managerPin: string
+  ): Promise<ServiceResult<void>> =>
+    ipcRenderer.invoke('stocktake:save-settings', { ...settings, managerId, managerPin })
 }
 
 if (process.contextIsolated) {

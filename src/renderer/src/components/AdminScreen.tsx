@@ -8,6 +8,7 @@ import { useProductStore } from '../stores/productStore'
 import { LockIcon } from './icons'
 import MpesaLogsPage from '../pages/MpesaLogsPage'
 import NeedsAttentionPage from '../pages/NeedsAttentionPage'
+import StockTakePage from '../pages/StockTakePage'
 import RestartCountdownModal from './RestartCountdownModal'
 import type { DailySummary, ZReport } from '../../../main/services/reports.js'
 import type {
@@ -95,7 +96,13 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
   const [resetConfigError, setResetConfigError] = useState<string | null>(null)
 
   const [activeTab, setActiveTab] = useState<
-    'overview' | 'integrations' | 'peripherals' | 'mpesaLogs' | 'needsAttention' | 'system'
+    | 'overview'
+    | 'integrations'
+    | 'peripherals'
+    | 'mpesaLogs'
+    | 'needsAttention'
+    | 'stockTake'
+    | 'system'
   >(initialTab ?? 'overview')
   const [mpesaConsumerKey, setMpesaConsumerKey] = useState('')
   const [mpesaShortcode, setMpesaShortcode] = useState('')
@@ -833,6 +840,15 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
         </button>
         <button
           type="button"
+          onClick={() => setActiveTab('stockTake')}
+          className={`flex h-14 min-w-32 flex-1 items-center justify-center rounded-md px-6 text-lg font-semibold transition ${
+            activeTab === 'stockTake' ? 'bg-white text-rose-700 shadow-sm' : 'text-slate-500'
+          }`}
+        >
+          Stock Take
+        </button>
+        <button
+          type="button"
           onClick={() => setActiveTab('system')}
           className={`flex h-14 min-w-32 flex-1 items-center justify-center rounded-md px-6 text-lg font-semibold transition ${
             activeTab === 'system' ? 'bg-white text-rose-700 shadow-sm' : 'text-slate-500'
@@ -845,6 +861,8 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
       {activeTab === 'mpesaLogs' && <MpesaLogsPage />}
 
       {activeTab === 'needsAttention' && <NeedsAttentionPage />}
+
+      {activeTab === 'stockTake' && <StockTakePage />}
 
       {activeTab === 'system' && (
         <section className="rounded-xl border border-slate-200 bg-white p-4">

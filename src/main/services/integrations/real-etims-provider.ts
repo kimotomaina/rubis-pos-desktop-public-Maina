@@ -10,6 +10,16 @@
  * full command-by-command citation trail. `tests/fixtures/tremol-contract.json`
  * is generated from the same defs blob (`scripts/extract-tremol-contract.mjs`).
  *
+ * **Both shipped definition versions are supported**, selected by the
+ * `<defVer>` the server echoes on `settings()`: `2509041522` (the newer
+ * SDK, the path every command shape here was built and validated against)
+ * and `2204120945` (the older "API Files" SDK). Every command this module
+ * sends is identical under both except for two differences, each handled
+ * where it arises — `Price` is 10 characters rather than 15
+ * ({@link formatPrice}), and `ReadCUinvoiceNumber` does not exist
+ * ({@link RealFiscalizationProvider.verifyAlreadyFiled}). The full
+ * command-by-command diff is `docs/phase-110.md`.
+ *
  * Per-sale flow:
  *
  *   1. `settings()` — once per session, not per sale. Opens the
@@ -52,7 +62,9 @@ import {
   getSettings,
   postXml,
   normalizeBaseUrl,
+  resolveDuplicateRecoverySupport,
   DEFAULT_ETIMS_BASE_URL,
+  OLD_DEF_VERSION,
   type DefVersionStatus
 } from './http-client.js'
 import {
@@ -111,15 +123,36 @@ export const MAX_MEASURE_UNIT_LENGTH = 3
 
 /**
  * Vendor-declared maximum length for `Price` (`SellPLUfromExtDB`/
- * `SellPLUfromExtDB_HS`) — "up to 15 symbols … with up to 5 digits
- * after the decimal point". Not applied as a truncation (unlike the
- * text fields above): silently chopping digits off a monetary amount
- * would corrupt the sale rather than merely mangle a display string, so
- * this exists only as a documented, test-checked ceiling — see
- * `tests/tremolFixtures.test.ts` for the cross-check against
- * `tremol-contract.json`.
+ * `SellPLUfromExtDB_HS`) under `defVer=2509041522` — "up to 15 symbols …
+ * with up to 5 digits after the decimal point". Never applied as a
+ * truncation (unlike the text fields above): silently chopping digits off
+ * a monetary amount would corrupt the sale rather than merely mangle a
+ * display string — see {@link formatPrice}. Cross-checked against
+ * `tremol-contract.json` by `tests/tremolFixtures.test.ts`.
  */
 export const MAX_PRICE_LENGTH = 15
+
+/**
+ * Vendor-declared maximum length for `Price` under
+ * {@link OLD_DEF_VERSION} — "Up to 10 symbols for article's price". This
+ * is the only *argument* width the older definitions narrow on any
+ * command this app sends; see `docs/phase-110.md` §2.
+ */
+export const MAX_PRICE_LENGTH_OLD_DEFS = 10
+
+/**
+ * Most decimal places `Price` may carry — the newer definitions' own
+ * stated maximum. The older definitions state no decimal limit at all, so
+ * applying the newer, stricter one to both is safe in either direction.
+ */
+const MAX_PRICE_DECIMALS = 5
+
+/**
+ * Fewest decimal places {@link formatPrice} will reduce to when fitting a
+ * price under a narrower ceiling — KES minor units, below which a price
+ * would stop being a faithful amount.
+ */
+const MIN_PRICE_DECIMALS = 2
 
 /** Vendor-declared maximum length for `RelatedInvoiceNum` (credit/debit notes). */
 export const MAX_RELATED_INVOICE_NUM_LENGTH = 19
@@ -178,6 +211,37 @@ const CODE_OPENED_FISCAL_RECEIPT = 'openedFiscalReceipt'
  */
 const STE2_WRONG_CLIENT_PIN = '59'
 
+/**
+ * Cashier/back-office copy for a retry the connected definitions cannot
+ * verify — shown verbatim on the Needs Attention list, so it follows that
+ * screen's copy rules: plain language, no device codes, no jargon, and it
+ * names the one action a person must take. The machine-readable detail
+ * (the device's rejection, the `defVer`, why verification was impossible)
+ * goes to the logger instead. See
+ * {@link RealFiscalizationProvider.verifyAlreadyFiled}.
+ */
+export const UNVERIFIABLE_RETRY_REASON =
+  'This sale was sent to the tax device again and the device refused it. The device cannot tell ' +
+  'us whether this sale was already filed, so it was NOT sent a second time. Check on the device ' +
+  'whether this sale is already filed before filing it again.'
+
+/**
+ * What a duplicate-recovery check concluded about a sale whose
+ * `OpenInvoice` was rejected on a retry:
+ *
+ *   - `'already-filed'` — the device positively named the CU invoice
+ *     number it holds. The sale is filed; report it, send nothing more.
+ *   - `'genuine-failure'` — nothing was ever filed under this
+ *     `TraderSystemInvNum`, so the original rejection is real and routes
+ *     normally.
+ *   - `'unverifiable'` — neither could be established. Flag for a person;
+ *     never resend.
+ */
+type DuplicateRecoveryVerdict =
+  | { outcome: 'already-filed'; cuInvoiceNumber: string }
+  | { outcome: 'genuine-failure' }
+  | { outcome: 'unverifiable'; reason: string }
+
 /** Fiscal device endpoint paths, overridable per deployment. */
 export interface FiscalEndpointPaths {
   readStatus: string
@@ -192,7 +256,11 @@ export interface FiscalEndpointPaths {
   readDateTime: string
   cancelReceipt: string
   openCreditNote: string
-  /** Recovery command for a duplicate `TraderSystemInvNum` rejection — see `submitInvoice`'s `request.isRetry` branch. */
+  /**
+   * Recovery command for a duplicate `TraderSystemInvNum` rejection.
+   * Declared only by `defVer=2509041522` — see
+   * {@link RealFiscalizationProvider.verifyAlreadyFiled}.
+   */
   readCUinvoiceNumber: string
   /** Reads the CU's serial/PIN numbers — static per device, read once per session. See {@link RealFiscalizationProvider.ensureCUNumbers}. */
   readCUnumbers: string
@@ -566,11 +634,13 @@ export type ReconfigureFiscalDeviceOptions = Pick<
  * store-and-forward retry of the same request (see `fiscal-engine.ts`)
  * is recognizable by the device as a duplicate rather than fiscalizing
  * the same sale twice. When `request.isRetry` is set and `OpenInvoice`
- * is rejected, `readCUInvoiceNumber` is checked before concluding
- * failure — if the device already has this sale's invoice number on
- * file (a reply lost on an earlier attempt), that's reported as success
- * with no second `OpenInvoice`/`CloseReceipt` sent (Rule 1 — never file
- * twice; see `docs/phase-75.md`).
+ * is rejected, {@link RealFiscalizationProvider.verifyAlreadyFiled} runs
+ * before concluding failure — if the device already has this sale's
+ * invoice number on file (a reply lost on an earlier attempt), that's
+ * reported as success with no second `OpenInvoice`/`CloseReceipt` sent;
+ * where the connected definitions cannot answer at all, the sale is
+ * flagged for a person and never resent (Rule 1 — never file twice; see
+ * `docs/phase-75.md` and `docs/phase-110.md`).
  *
  * Every free-text field is passed through {@link sanitizeFiscalText}
  * before its documented max length is applied — the G03 manual warns
@@ -770,6 +840,8 @@ export class RealFiscalizationProvider implements FiscalizationProvider {
       return classifyDeviceFailure(settingsResult, 'Unable to initialize the fiscal device session')
     }
     const defVerStatus = (settingsResult.data?.defVerStatus as DefVersionStatus | undefined) ?? 'unknown'
+    const defVer = settingsResult.data?.defVer
+    const priceMaxLength = resolvePriceMaxLength(defVer)
 
     // Ancillary, best-effort: ReadCUnumbers (the CU serial number), cached
     // for the session — not one of the 7 canonical steps (it's session-
@@ -817,46 +889,17 @@ export class RealFiscalizationProvider implements FiscalizationProvider {
         this.buildOpenInvoiceArgs(request)
       )
     }
-    /**
-     * Duplicate-filing recovery (phase-75, Rule 1 — never file an
-     * invoice twice). ONLY reachable on a retry/resend
-     * (`request.isRetry`): a first attempt can never collide with
-     * itself, so it always falls straight through to the normal
-     * `classifyDeviceFailure` below — this branch cannot mark a
-     * genuinely-never-filed sale as fiscalized. On a retry, an
-     * `OpenInvoice` rejection is ambiguous — it could mean the device
-     * already filed this exact `TraderSystemInvNum` on an earlier
-     * attempt whose reply was lost (the sale IS filed; queuing it again
-     * would file it twice), or it could be a genuine, unrelated
-     * rejection. We don't try to recognize "duplicate" by error code —
-     * we ask the device what it actually has on file via
-     * `ReadCUinvoiceNumber`. If it hands back a real invoice number,
-     * the sale was already filed; if it reports not-found/empty/error,
-     * nothing was ever filed and this is a genuine `OpenInvoice`
-     * failure, routed normally.
-     *
-     * VERIFY-ON-DEVICE: no live duplicate-`TraderSystemInvNum`
-     * rejection has ever been captured — this recovery is built from
-     * the protocol documentation's description of `ReadCUinvoiceNumber`
-     * alone (see `readCUInvoiceNumber`'s doc comment).
-     */
     if (!openResult.success && request.isRetry) {
-      if (this.debugLogging) {
-        console.log(
-          `[ETIMS] Sale ${request.localId}: OpenInvoice rejected on a retry/resend — checking ` +
-            `ReadCUinvoiceNumber before concluding this sale was never filed: ${openResult.error}`
-        )
-      }
-      const recovery = await this.readCUInvoiceNumber()
-      if (recovery.success && recovery.data?.cuInvoiceNumber) {
+      const verdict = await this.verifyAlreadyFiled(defVer, openResult, request.localId)
+      if (verdict.outcome === 'already-filed') {
         this.logger.log(
           `[rubis-pos] Sale ${request.localId}: ReadCUinvoiceNumber recovered an already-filed invoice ` +
-            `(${recovery.data.cuInvoiceNumber}) — filed on an earlier, unacknowledged attempt; NOT resubmitting`
+            `(${verdict.cuInvoiceNumber}) — filed on an earlier, unacknowledged attempt; NOT resubmitting`
         )
         return {
           ok: true,
           data: {
-            invoiceNumber: recovery.data.cuInvoiceNumber,
+            invoiceNumber: verdict.cuInvoiceNumber,
             // QR is only ever returned by CloseReceipt at filing time —
             // a recovered sale never went through CloseReceipt on THIS
             // attempt, so there is no QR to store. Left empty, never a
@@ -870,17 +913,19 @@ export class RealFiscalizationProvider implements FiscalizationProvider {
           }
         }
       }
-      // The device doesn't know this TraderSystemInvNum either — this
-      // sale genuinely was never filed. Fall through and route the
-      // ORIGINAL OpenInvoice rejection normally (technical/data/system),
-      // same as a first attempt would — that routing is what logs the
-      // outcome (checkout.ts/fiscal-engine.ts/fiscal-retry.ts), so this
-      // stays debug-only detail rather than a second log of the same event.
-      if (this.debugLogging) {
-        console.log(
-          `[ETIMS] Sale ${request.localId}: ReadCUinvoiceNumber found no record of this sale — the ` +
-            `OpenInvoice rejection is genuine: ${recovery.success ? 'no cuInvoiceNumber in response' : recovery.error}`
+      if (verdict.outcome === 'unverifiable') {
+        this.logger.warn(
+          `[rubis-pos] Sale ${request.localId}: the fiscal device refused to reopen this invoice on a ` +
+            `retry and the connected server's definitions (defVer=${defVer || 'not reported'}) cannot ` +
+            'confirm whether it was already filed — FLAGGED for a person, NOT resent. ' +
+            `Device rejection: ${openResult.error}. Reason it could not be verified: ${verdict.reason}`
         )
+        return {
+          ok: false,
+          reason: UNVERIFIABLE_RETRY_REASON,
+          kind: 'system',
+          retryable: false
+        }
       }
     }
     if (!openResult.success) {
@@ -889,7 +934,7 @@ export class RealFiscalizationProvider implements FiscalizationProvider {
 
     // Step 4/7: SellPLUfromExtDB (class A) or SellPLUfromExtDB_HS (any other class) per line item.
     for (const [index, item] of request.items.entries()) {
-      const { path, commandName, args } = this.resolveSellCommand(item)
+      const { path, commandName, args } = this.resolveSellCommand(item, priceMaxLength)
       logStep(4, `${commandName} ${index + 1}/${request.items.length}`)
       const sellResult = await this.sendCommand(path, commandName, args)
       if (!sellResult.success) {
@@ -1046,20 +1091,20 @@ export class RealFiscalizationProvider implements FiscalizationProvider {
    * `ReadCUinvoiceNumber` — the documented recovery path when
    * `OpenInvoiceWithFreeCustomerData` is rejected for a duplicate
    * `TraderSystemInvNum`: it returns the CU invoice number the device
-   * already assigned on the earlier, unacknowledged attempt. Wired into
-   * `submitInvoice`'s retry/resend path (phase-75) — see the
-   * `request.isRetry` branch around the `OpenInvoice` rejection above.
+   * already assigned on the earlier, unacknowledged attempt.
+   *
+   * Declared only by `defVer=2509041522`. Callers that must stay correct
+   * on either definitions version go through
+   * {@link verifyAlreadyFiled} rather than calling this directly.
    *
    * The command takes no caller-supplied arguments (`Option='I'` is
    * `OptionHardcoded` — server-filled, per the same convention as
    * `OpenInvoice`'s `reserved`/`InvoiceType`).
+   *
+   * @returns {Promise<ServiceResult<{ cuInvoiceNumber: string }>>}
    */
   async readCUInvoiceNumber(): Promise<ServiceResult<{ cuInvoiceNumber: string }>> {
-    const result = await this.sendCommand(
-      this.endpoints.readCUinvoiceNumber,
-      'ReadCUinvoiceNumber',
-      {}
-    )
+    const result = await this.sendReadCUinvoiceNumber()
     if (!result.success) {
       return { success: false, error: result.error }
     }
@@ -1071,6 +1116,113 @@ export class RealFiscalizationProvider implements FiscalizationProvider {
       }
     }
     return { success: true, data: { cuInvoiceNumber } }
+  }
+
+  /**
+   * Answers "was this sale already filed?" after an `OpenInvoice`
+   * rejection on a retry/resend — the guard behind Rule 1, never file an
+   * invoice twice (phase-75; both definition versions, phase-110).
+   *
+   * Only ever reached on a retry (`request.isRetry`). A first attempt
+   * cannot collide with itself, so it falls straight through to normal
+   * failure routing and no branch here can mark a never-filed sale as
+   * filed. Duplicates are never recognized by error code — the device is
+   * asked what it actually holds.
+   *
+   * **Why the older definitions must flag rather than resend.**
+   * `defVer=2204120945` declares no `ReadCUinvoiceNumber`, and no other
+   * read-back keyed by `TraderSystemInvNum` either — `ReadLastAndTotal`
+   * `ReceiptNum` names only the *last* receipt filed, whichever sale that
+   * was, so it can report a sale filed that never was, or unfiled when it
+   * was. Nor do those definitions document any device-side duplicate
+   * refusal (the newer ones state it explicitly, in
+   * `ReadCUinvoiceNumber`'s own operation text), so a resend cannot be
+   * assumed safe. With no way to establish either answer, the only sound
+   * outcome is `'unverifiable'`: a person checks the device. Flagging a
+   * sale that was in fact fine costs seconds; filing one twice is a KRA
+   * compliance problem — the risk is asymmetric, so uncertainty always
+   * resolves to the flag.
+   *
+   * A **transport** failure is deliberately not treated as uncertainty. A
+   * server-level `serverFailure` (Codes 19/30/31/53) means no session
+   * opened and the device never saw this attempt at all, so nothing was
+   * filed by it and what we know about the sale is exactly what we knew
+   * before — a non-event, not an unverified filing. Those keep normal
+   * retry routing, without which every network blip on a queued sale
+   * would become a support ticket.
+   *
+   * VERIFY-ON-DEVICE: no live duplicate-`TraderSystemInvNum` rejection
+   * has ever been captured, on either definitions version — this is built
+   * from the protocol definitions alone.
+   * VERIFY-AGAINST-REAL-OLD-DEVICE: the `'absent'` path has never run
+   * against a real `2204120945` device (see `docs/phase-109.md`).
+   *
+   * @param {string | undefined} defVer the connected server's echoed `<defVer>`
+   * @param {DeviceResult} openResult the rejected `OpenInvoice` result
+   * @param {number | undefined} localId sale id, for the debug trace only
+   * @returns {Promise<DuplicateRecoveryVerdict>}
+   */
+  private async verifyAlreadyFiled(
+    defVer: string | undefined,
+    openResult: DeviceResult,
+    localId: number | undefined
+  ): Promise<DuplicateRecoveryVerdict> {
+    const support = resolveDuplicateRecoverySupport(defVer)
+    const deviceNeverSawIt = Boolean(openResult.serverFailure)
+
+    if (support === 'absent') {
+      return deviceNeverSawIt
+        ? { outcome: 'genuine-failure' }
+        : {
+            outcome: 'unverifiable',
+            reason: `defVer=${OLD_DEF_VERSION} declares no ReadCUinvoiceNumber — not sent`
+          }
+    }
+
+    if (this.debugLogging) {
+      console.log(
+        `[ETIMS] Sale ${localId}: OpenInvoice rejected on a retry/resend — checking ` +
+          `ReadCUinvoiceNumber before concluding this sale was never filed: ${openResult.error}`
+      )
+    }
+    const recovery = await this.sendReadCUinvoiceNumber()
+    const cuInvoiceNumber = recovery.success ? recovery.data?.CU_InvoiceNumber : undefined
+    if (cuInvoiceNumber) {
+      return { outcome: 'already-filed', cuInvoiceNumber }
+    }
+
+    // The device answered and named no invoice: it holds no record of
+    // this TraderSystemInvNum, so the original rejection is genuine.
+    if (recovery.success) {
+      if (this.debugLogging) {
+        console.log(
+          `[ETIMS] Sale ${localId}: ReadCUinvoiceNumber found no record of this sale — the ` +
+            'OpenInvoice rejection is genuine: no cuInvoiceNumber in response'
+        )
+      }
+      return { outcome: 'genuine-failure' }
+    }
+
+    // The command itself failed. On `'available'` that is a known-new
+    // server having a bad moment, routed exactly as it has always been.
+    // On `'unknown'` it may equally be an old-defs server rejecting a
+    // command it does not declare — indistinguishable from here, so it
+    // fails safe.
+    if (support === 'available' || deviceNeverSawIt) {
+      if (this.debugLogging) {
+        console.log(
+          `[ETIMS] Sale ${localId}: ReadCUinvoiceNumber failed — routing the original ` +
+            `OpenInvoice rejection normally: ${recovery.error}`
+        )
+      }
+      return { outcome: 'genuine-failure' }
+    }
+    return { outcome: 'unverifiable', reason: recovery.error ?? 'ReadCUinvoiceNumber failed' }
+  }
+
+  /** Sends the argument-free `ReadCUinvoiceNumber` command. */
+  private sendReadCUinvoiceNumber(): Promise<DeviceResult> {
+    return this.sendCommand(this.endpoints.readCUinvoiceNumber, 'ReadCUinvoiceNumber', {})
   }
 
   /**
@@ -1270,14 +1422,14 @@ export class RealFiscalizationProvider implements FiscalizationProvider {
 
   /**
    * Picks which sell command a line item goes through and builds its
-   * arguments. Per the vendor contract, `SellPLUfromExtDB`'s
+   * arguments. Under `defVer=2509041522`, `SellPLUfromExtDB`'s
    * `OptionVATClass` has exactly one legal enum value, `"A"` — there is
    * no way to express class B/C/D/E through it at all — while
    * `SellPLUfromExtDB_HS` takes neither `OptionVATClass` nor `VATGrRate`
    * and instead carries only `HSCode`, from which the device looks up
    * the item's programmed rate/exempt flag (`ProgHScode`).
    *
-   * // VERIFY-ON-DEVICE: nothing in the vendor's prose documentation
+   * VERIFY-ON-DEVICE: nothing in the vendor's prose documentation
    * states this routing rule outright — it's inferred from the argument
    * lists (`_HS` structurally cannot carry a VAT class or rate; the HS
    * table is the only place non-16%/exempt treatment could come from)
@@ -1285,14 +1437,20 @@ export class RealFiscalizationProvider implements FiscalizationProvider {
    * live device before treating a class-A-looking sale that lands on
    * `_HS` (or vice versa) as correct rather than a device rejection.
    *
-   * This routing is valid ONLY for `defVer=2509041522` (the older VIL
-   * manual's `defVer` shows `SellPLUfromExtDB` itself taking A-E on one
-   * command — a materially different contract). It is not re-checked
-   * here per call; it depends on `settings()`'s `<defVer>` echo, compared
-   * once per session in `http-client.ts#getSettings` and surfaced as
-   * `FiscalInvoiceResult.defVerStatus` — see `submitInvoice`.
+   * This routing is valid under **both** supported definition versions,
+   * confirmed command-by-command in `docs/phase-110.md` §1a. The older
+   * `defVer=2204120945` widens `SellPLUfromExtDB`'s `OptionVATClass` to
+   * accept `A`–`E` where the newer one accepts only `A`; since this
+   * routing sends `A` on that command and nothing else, it is stricter
+   * than the older contract requires and legal under either.
+   *
+   * @param {FiscalInvoiceLine} item
+   * @param {number} priceMaxLength ceiling for `Price` under the connected server's definitions
    */
-  private resolveSellCommand(item: FiscalInvoiceLine): {
+  private resolveSellCommand(
+    item: FiscalInvoiceLine,
+    priceMaxLength: number
+  ): {
     path: string
     commandName: string
     args: Record<string, string | undefined>
@@ -1302,13 +1460,13 @@ export class RealFiscalizationProvider implements FiscalizationProvider {
       return {
         path: this.endpoints.sellPLU,
         commandName: 'SellPLUfromExtDB',
-        args: this.buildSellPluArgs(item)
+        args: this.buildSellPluArgs(item, priceMaxLength)
       }
     }
     return {
       path: this.endpoints.sellPLUWithHsCode,
       commandName: 'SellPLUfromExtDB_HS',
-      args: this.buildSellPluHsArgs(item)
+      args: this.buildSellPluHsArgs(item, priceMaxLength)
     }
   }
 
@@ -1326,12 +1484,19 @@ export class RealFiscalizationProvider implements FiscalizationProvider {
    *
    * `DiscAddP` is optional in the vendor definition and is omitted
    * entirely when the line carries no discount/addition.
+   *
+   * @param {FiscalInvoiceLine} item
+   * @param {number} priceMaxLength ceiling for `Price` under the connected server's definitions
+   * @returns {Record<string, string | undefined>}
    */
-  private buildSellPluArgs(item: FiscalInvoiceLine): Record<string, string | undefined> {
+  private buildSellPluArgs(
+    item: FiscalInvoiceLine,
+    priceMaxLength: number
+  ): Record<string, string | undefined> {
     return {
       NamePLU: sanitizeFiscalText(item.description, MAX_NAME_PLU_LENGTH),
       OptionVATClass: DEFAULT_VAT_CLASS,
-      Price: formatPrice(item.unitPrice),
+      Price: formatPrice(item.unitPrice, priceMaxLength),
       MeasureUnit: sanitizeFiscalText(item.measureUnit || DEFAULT_MEASURE_UNIT, MAX_MEASURE_UNIT_LENGTH),
       HSCode: sanitizeFiscalText(item.hsCode, MAX_HS_CODE_LENGTH),
       HSName: sanitizeFiscalText(item.hsName, MAX_HS_NAME_LENGTH),
@@ -1346,11 +1511,18 @@ export class RealFiscalizationProvider implements FiscalizationProvider {
    * No `OptionVATClass`, `MeasureUnit`, `HSName`, or `VATGrRate` — the
    * command doesn't declare those args at all; the device derives VAT
    * treatment from `HSCode` alone via its programmed HS table.
+   *
+   * @param {FiscalInvoiceLine} item
+   * @param {number} priceMaxLength ceiling for `Price` under the connected server's definitions
+   * @returns {Record<string, string | undefined>}
    */
-  private buildSellPluHsArgs(item: FiscalInvoiceLine): Record<string, string | undefined> {
+  private buildSellPluHsArgs(
+    item: FiscalInvoiceLine,
+    priceMaxLength: number
+  ): Record<string, string | undefined> {
     return {
       NamePLU: sanitizeFiscalText(item.description, MAX_NAME_PLU_LENGTH),
-      Price: formatPrice(item.unitPrice),
+      Price: formatPrice(item.unitPrice, priceMaxLength),
       HSCode: sanitizeFiscalText(item.hsCode, MAX_HS_CODE_LENGTH),
       Quantity: String(item.quantity),
       DiscAddP: formatOptionalDiscAddP(item)
@@ -1387,23 +1559,81 @@ export function sumVatGroupSubtotals(receiptInfo: Record<string, string>): numbe
 }
 
 /**
- * Formats a line item's unit price for `Price`. Never truncated —
- * silently chopping digits off a monetary amount would corrupt the
- * sale — so an over-length value is logged instead of mangled; the
- * vendor's documented ceiling is {@link MAX_PRICE_LENGTH} (15 chars,
- * "up to 5 digits after the decimal point").
+ * Formats a line item's unit price for `Price`, fitted to `maxLength` —
+ * {@link MAX_PRICE_LENGTH} on the newer definitions,
+ * {@link MAX_PRICE_LENGTH_OLD_DEFS} on the older ones, resolved per
+ * session by {@link resolvePriceMaxLength}.
+ *
+ * Two steps, in order:
+ *
+ *   1. **Normalize**, identically on both paths. `String(unitPrice)`
+ *      alone leaks binary-float artifacts — `String(0.1 + 0.2)` is
+ *      `"0.30000000000000004"`, 19 characters, over the ceiling of
+ *      *both* versions. Rounding to {@link MAX_PRICE_DECIMALS} and
+ *      dropping trailing zeros removes those while leaving every
+ *      already-valid price byte-identical, so this costs the newer path
+ *      nothing.
+ *   2. **Fit**, only when still over `maxLength`: step the decimals down
+ *      toward {@link MIN_PRICE_DECIMALS}. Digits are never truncated —
+ *      chopping them off a monetary amount would corrupt the sale rather
+ *      than merely mangle a display string — so a price whose whole-unit
+ *      part alone cannot fit is returned as-is with a warning, for the
+ *      device to reject rather than silently mis-record.
  *
  * @param {number} unitPrice
+ * @param {number} maxLength
  * @returns {string}
  */
-function formatPrice(unitPrice: number): string {
-  const formatted = String(unitPrice)
-  if (formatted.length > MAX_PRICE_LENGTH) {
-    console.warn(
-      `[rubis-pos] Price "${formatted}" exceeds the vendor's documented ${MAX_PRICE_LENGTH}-character limit — sending as-is`
-    )
+function formatPrice(unitPrice: number, maxLength: number): string {
+  const normalized = formatDecimal(unitPrice, MAX_PRICE_DECIMALS)
+  if (normalized.length <= maxLength) {
+    return normalized
   }
-  return formatted
+
+  for (let decimals = MAX_PRICE_DECIMALS - 1; decimals >= MIN_PRICE_DECIMALS; decimals -= 1) {
+    const candidate = formatDecimal(unitPrice, decimals)
+    if (candidate.length <= maxLength) {
+      return candidate
+    }
+  }
+
+  console.warn(
+    `[rubis-pos] Price "${normalized}" exceeds the connected device's ${maxLength}-character limit and ` +
+      'cannot be fitted without dropping whole units — sending as-is'
+  )
+  return normalized
+}
+
+/**
+ * Rounds `value` to at most `decimals` places and renders it with no
+ * trailing zeros, so a whole amount stays `"60"` rather than
+ * `"60.00000"`.
+ *
+ * @param {number} value
+ * @param {number} decimals
+ * @returns {string}
+ */
+function formatDecimal(value: number, decimals: number): string {
+  if (!Number.isFinite(value)) {
+    return String(value)
+  }
+  const fixed = value.toFixed(decimals)
+  return fixed.includes('.') ? fixed.replace(/\.?0+$/, '') : fixed
+}
+
+/**
+ * The `Price` ceiling the connected server's definitions impose. Falls
+ * back to {@link MAX_PRICE_LENGTH} for a blank or unrecognized `defVer`,
+ * which keeps the newer path's behaviour unchanged wherever the server
+ * does not positively identify itself as the older one — over-length
+ * prices are already warned about rather than sent blindly, and the
+ * narrower ceiling is only correct where it is known to apply.
+ *
+ * @param {string | undefined} defVer
+ * @returns {number}
+ */
+function resolvePriceMaxLength(defVer: string | undefined): number {
+  return defVer === OLD_DEF_VERSION ? MAX_PRICE_LENGTH_OLD_DEFS : MAX_PRICE_LENGTH
 }
 
 /**
