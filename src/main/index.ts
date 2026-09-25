@@ -1,4 +1,4 @@
-import { app, BrowserWindow, shell, ipcMain, net, powerMonitor, dialog, session } from 'electron'
+import { app, BrowserWindow, Menu, shell, ipcMain, net, powerMonitor, dialog, session } from 'electron'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 import { randomUUID } from 'node:crypto'
@@ -40,6 +40,7 @@ import {
   buildCspHeaders,
   buildDevContentSecurityPolicy
 } from './window-factory.js'
+import { applyAutoZoom } from './lib/scale.js'
 import { initAutoUpdater, checkForUpdates } from './services/updater.js'
 import type { UpdateStatus } from './services/updater.js'
 import { createFileErrorLogger, installGlobalErrorHandlers } from './services/errorHandler.js'
@@ -251,6 +252,34 @@ function createWindow(): BrowserWindow {
   })
 
   /**
+   * Whole-window scaling (Phase E, `lib/scale.ts`) — makes every screen
+   * fit the window with no scrolling by zooming the page to the window's
+   * real size, the same idea Windows' own display scaling uses. Wired
+   * here rather than left at Chromium's default zoom of 1.
+   *
+   * The adapter below exists only because `BrowserWindow.on` is
+   * overloaded per event name with no single signature spanning all
+   * five triggers — `applyAutoZoom` takes named hooks instead (see its
+   * doc comment) so it stays testable without a real `BrowserWindow`.
+   */
+  applyAutoZoom({
+    getContentBounds: () => mainWindow.getContentBounds(),
+    setZoomFactor: (factor) => mainWindow.webContents.setZoomFactor(factor),
+    onReadyToShow: (listener) => mainWindow.on('ready-to-show', listener),
+    onResize: (listener) => mainWindow.on('resize', listener),
+    onMove: (listener) => mainWindow.on('move', listener),
+    onDidFinishLoad: (listener) => mainWindow.webContents.on('did-finish-load', listener),
+    onZoomChanged: (listener) => mainWindow.webContents.on('zoom-changed', listener)
+  })
+
+  /**
+   * Disables pinch-to-zoom/Ctrl+scroll page zoom — the only zoom this
+   * till ever shows is the one `applyAutoZoom` computes from the window
+   * size, never one a gesture or a scroll wheel introduced.
+   */
+  mainWindow.webContents.setVisualZoomLevelLimits(1, 1)
+
+  /**
    * F11 toggles real OS-level fullscreen (hides the title bar entirely) —
    * in addition to the native maximize/restore button, which only
    * maximizes within the taskbar area. Bound here rather than via an
@@ -300,6 +329,18 @@ function createWindow(): BrowserWindow {
 
 app.whenReady().then(async () => {
   electronApp.setAppUserModelId('com.volcha.rubispos')
+
+  /**
+   * No application menu at all — not `autoHideMenuBar` alone, which only
+   * hides the bar; Electron's default menu still exists underneath it
+   * and still registers Ctrl+Plus/Ctrl+Minus/Ctrl+0 as zoom accelerators
+   * regardless of whether the bar is shown. This till has exactly one
+   * correct zoom, computed from the window size by `applyAutoZoom`
+   * (`lib/scale.ts`) — a menu-driven or keyboard-driven zoom change
+   * would silently break the "everything fits, nothing scrolls"
+   * guarantee the rest of Phase E is built on.
+   */
+  Menu.setApplicationMenu(null)
 
   /**
    * Strict Content-Security-Policy: enforced at the

@@ -67,8 +67,16 @@ export function createBrowserWindowConfig(options: CreateWindowOptions): Browser
   return {
     width: 1280,
     height: 800,
-    minWidth: 1024,
-    minHeight: 768,
+    /**
+     * Approved as decision D6 (phase-135) and built here in Phase E,
+     * where it belongs with the zoom mechanism that makes a window this
+     * small usable: below the old 1024x768 floor the content area can
+     * legitimately be smaller than a 1366x768 display's DIP size once
+     * Windows scaling and window chrome are subtracted (phase-142 §1),
+     * and `applyAutoZoom` (`lib/scale.ts`) zooms out to compensate.
+     */
+    minWidth: 900,
+    minHeight: 500,
     show: false,
     /**
      * Resizable so the native Windows maximize/restore button works;

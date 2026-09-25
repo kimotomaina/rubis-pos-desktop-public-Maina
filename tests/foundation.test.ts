@@ -110,8 +110,13 @@ describe('App Shell Instantiation', () => {
     expect(config.show).toBe(false)
     expect(config.title).toBe('RUBIS POS')
     expect(config.autoHideMenuBar).toBe(true)
-    expect(config.minWidth).toBeGreaterThanOrEqual(1024)
-    expect(config.minHeight).toBeGreaterThanOrEqual(768)
+    /**
+     * Lowered from 1024x768 in Phase E (decision D6): `applyAutoZoom`
+     * (`lib/scale.ts`) now zooms out to fit a window this small, so the
+     * old floor — sized to fit content unscaled — no longer applies.
+     */
+    expect(config.minWidth).toBeGreaterThanOrEqual(900)
+    expect(config.minHeight).toBeGreaterThanOrEqual(500)
   })
 
   it('produces the same hardened defaults in dev config', () => {
