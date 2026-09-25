@@ -70,14 +70,17 @@ export function createBrowserWindowConfig(options: CreateWindowOptions): Browser
     minWidth: 1024,
     minHeight: 768,
     show: false,
-    // Resizable so the native Windows maximize/restore button works —
-    // previously locked to prevent cashiers from dragging the window
-    // around, but that also disabled that button entirely. F11 (wired
-    // in main/index.ts) still offers true fullscreen (title bar hidden).
+    /**
+     * Resizable so the native Windows maximize/restore button works;
+     * previously locked to prevent cashiers from dragging the window
+     * around, but that also disabled that button entirely. F11 (wired
+     * in main/index.ts) still offers true fullscreen (title bar hidden).
+     */
     resizable: true,
     fullscreenable: true,
     autoHideMenuBar: true,
-    backgroundColor: '#0f172a',
+    /** Tailwind slate-50, the renderer's `app-theme` background, so nothing dark flashes before first paint. */
+    backgroundColor: '#f8fafc',
     title: 'RUBIS POS',
     icon: options.iconPath ?? '',
     webPreferences: {

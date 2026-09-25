@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import rubisLogo from '../assets/logo-rubis.png'
-import LocationPicker, { type ShopifyLocationOption } from './LocationPicker'
-import { useProductStore } from '../stores/productStore'
+import LocationPicker, { type ShopifyLocationOption } from './LocationPicker.js'
+import { useProductStore } from '../stores/productStore.js'
 
 interface LocationConfirmScreenProps {
   /** The till's currently-persisted location id, if any — pre-selected in the list when it matches a fetched location. */
@@ -81,10 +81,12 @@ export default function LocationConfirmScreen({
             setConfirmError(result.error ?? 'Failed to save location')
             return
           }
-          // The catalog fetch that ran on app mount used whatever
-          // location (if any) was resolved before this confirmation —
-          // re-fetch now so the POS shell that's about to render shows
-          // the newly-confirmed location's live catalog immediately.
+          /**
+           * The catalog fetch that ran on app mount used whatever
+           * location (if any) was resolved before this confirmation;
+           * re-fetch now so the POS shell that's about to render shows
+           * the newly-confirmed location's live catalog immediately.
+           */
           void useProductStore.getState().fetchProducts()
           onConfirmed()
         })
@@ -96,19 +98,19 @@ export default function LocationConfirmScreen({
   }
 
   return (
-    <div className="flex h-screen flex-col items-center justify-center bg-slate-900 px-4 text-white">
+    <div className="app-theme flex h-screen flex-col items-center justify-center px-4">
       <img src={rubisLogo} alt="Enjoy" className="mb-8 h-16 w-auto" />
 
-      <div className="w-full max-w-md rounded-2xl bg-slate-800 p-6 shadow-xl">
-        <h1 className="mb-1 text-2xl font-bold text-white">Confirm this till&rsquo;s location</h1>
-        <p className="mb-6 text-base text-slate-400">
+      <div className="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-6 shadow-xl">
+        <h1 className="mb-1 text-2xl font-bold text-slate-900">Confirm this till&rsquo;s location</h1>
+        <p className="mb-6 text-base text-slate-500">
           Pick which Shopify location this till sells from before continuing.
         </p>
 
-        {loading && <p className="text-base text-slate-400">Loading locations…</p>}
+        {loading && <p className="text-base text-slate-500">Loading locations…</p>}
 
         {!loading && loadError && (
-          <p className="rounded-lg bg-rose-950 px-3 py-2 text-base font-medium text-rose-300">
+          <p className="rounded-lg bg-rose-50 px-3 py-2 text-base font-medium text-rose-700">
             {loadError}
           </p>
         )}

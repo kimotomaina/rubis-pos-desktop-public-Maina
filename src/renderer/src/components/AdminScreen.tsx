@@ -1578,7 +1578,7 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
             ) : (
               <div className="max-w-md">
                 {locationOptions.length > 0 ? (
-                  <div className="rounded-xl bg-slate-800 p-4">
+                  <div className="rounded-xl border border-slate-200 bg-white p-4">
                     <LocationPicker
                       shopName={locationShopName}
                       locations={locationOptions}

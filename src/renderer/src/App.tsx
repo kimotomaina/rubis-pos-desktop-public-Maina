@@ -319,7 +319,7 @@ export default function App() {
   )
 
   if (configStatus === 'loading') {
-    return <div className="h-screen bg-slate-900" />
+    return <div className="app-theme h-screen" />
   }
 
   if (configStatus === 'unconfigured') {
@@ -365,9 +365,8 @@ export default function App() {
   }
 
   return (
-    <div className="flex h-screen flex-col bg-slate-50 text-slate-900">
+    <div className="app-theme flex h-screen flex-col">
       {demoModeBanner}
-      {/* Header */}
       <header className="flex h-20 w-full shrink-0 items-center justify-between border-b border-slate-200 bg-white px-6 shadow-sm">
         <div className="flex shrink-0 items-center gap-6">
           <img src={rubisLogo} alt="Enjoy" className="h-9 w-auto shrink-0" />
@@ -476,10 +475,8 @@ export default function App() {
         />
       )}
 
-      {/* Main: fast-checkout layout, or order history */}
       {activeView === 'catalog' ? (
         <main className="flex flex-1 flex-col overflow-hidden lg:flex-row">
-          {/* Left zone: search/scan + cart table (~65% on lg:+) */}
           <section className="flex min-h-0 flex-1 flex-col overflow-hidden lg:w-[65%] lg:flex-none">
             <PosSearchBar
               products={products}
@@ -524,7 +521,6 @@ export default function App() {
             />
           </section>
 
-          {/* Right zone: always-visible checkout control panel (~35% on lg:+) */}
           <aside className="flex w-full shrink-0 flex-col border-t border-slate-200 lg:w-[35%] lg:border-l lg:border-t-0">
             <PosCheckoutPanel requestManagerPin={requestManagerPin} />
           </aside>
@@ -546,7 +542,6 @@ export default function App() {
         </main>
       )}
 
-      {/* Variant picker modal */}
       {selectedProductForModal && (
         <VariantModal
           product={selectedProductForModal}
@@ -555,7 +550,6 @@ export default function App() {
         />
       )}
 
-      {/* Manager PIN gate for discounts/price overrides/voids */}
       {pinGate && (
         <ManagerPinModal
           title={pinGate.title}
@@ -567,19 +561,19 @@ export default function App() {
         />
       )}
 
-      {/*
-        Toast producers (phase-84) — each decides its own content off its
-        own trigger (IPC stream or cartStore) and renders nothing itself;
-        ToastStack is the only thing that actually draws a toast, in one
-        unified top-center column.
-      */}
+      {/**
+        * Toast producers (phase-84): each decides its own content off its
+        * own trigger (IPC stream or cartStore) and renders nothing itself;
+        * ToastStack is the only thing that actually draws a toast, in one
+        * unified top-center column.
+        */}
       <UpdateToast />
       <ConnectivityToast />
       <FiscalNotice />
       <SaleCompleteToast />
       <ToastStack />
 
-      {/* On-screen keyboard (phase-86) — opened by any field that calls keyboardStore's open() */}
+      {/** On-screen keyboard (phase-86), opened by any field that calls keyboardStore's open(). */}
       <VirtualKeyboardModal />
     </div>
   )

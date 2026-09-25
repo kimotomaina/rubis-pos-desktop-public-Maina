@@ -1,10 +1,10 @@
 import { useState } from 'react'
-import { WarningIcon } from './icons'
+import { WarningIcon } from './icons.js'
 import {
   validateEtimsConnection,
   DEFAULT_ETIMS_BASE_URL,
   DEFAULT_ETIMS_DEVICE_PORT
-} from '../lib/etimsConfig'
+} from '../lib/etimsConfig.js'
 
 /** Fields collected by the eTIMS setup gate's form. */
 interface EtimsSetupForm {
@@ -62,8 +62,10 @@ export default function EtimsSetupGate({ onComplete }: EtimsSetupGateProps) {
 
   const handleSave = async () => {
     if (!isFormComplete) return
-    // Same checks the Admin screen applies — this is the screen a branch
-    // meets first at go-live, so it cannot be the lenient one.
+    /**
+     * Same checks the Admin screen applies: this is the screen a branch
+     * meets first at go-live, so it cannot be the lenient one.
+     */
     const errors = validateEtimsConnection(form)
     if (errors.length > 0) {
       setFieldErrors(Object.fromEntries(errors.map((e) => [e.field, e.message])))
@@ -87,18 +89,18 @@ export default function EtimsSetupGate({ onComplete }: EtimsSetupGateProps) {
   }
 
   return (
-    <div className="fixed inset-0 z-[100] flex h-screen items-center justify-center overflow-y-auto bg-slate-900 px-4 py-8">
-      <div className="w-full max-w-lg rounded-2xl bg-slate-800 p-6 shadow-xl">
+    <div className="app-theme fixed inset-0 z-[100] flex h-screen items-center justify-center overflow-y-auto px-4 py-8">
+      <div className="w-full max-w-lg rounded-2xl border border-slate-200 bg-white p-6 shadow-xl">
         <div className="mb-4 flex items-center gap-3">
-          <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-amber-500/20 text-amber-400">
+          <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-amber-100 text-amber-600">
             <WarningIcon className="h-7 w-7" />
           </span>
-          <h1 className="text-2xl font-bold text-white">Set up the fiscal device</h1>
+          <h1 className="text-2xl font-bold text-slate-900">Set up the fiscal device</h1>
         </div>
 
         <div className="space-y-4">
           <div>
-            <label className="mb-1 block text-base font-medium text-slate-300">
+            <label className="mb-1 block text-base font-medium text-slate-600">
               Fiscal server address
             </label>
             <input
@@ -106,20 +108,20 @@ export default function EtimsSetupGate({ onComplete }: EtimsSetupGateProps) {
               value={form.baseUrl}
               onChange={updateField('baseUrl')}
               placeholder={DEFAULT_ETIMS_BASE_URL}
-              className="h-14 w-full rounded-lg border border-slate-600 bg-slate-900 px-3 text-lg text-white placeholder-slate-500 focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-900/40"
+              className="h-14 w-full rounded-lg border border-slate-300 bg-white px-3 text-lg text-slate-900 placeholder-slate-400 focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-100"
               autoFocus
             />
-            <p className="mt-1 text-sm text-slate-400">
+            <p className="mt-1 text-sm text-slate-500">
               Already set for this till. Only change it if the fiscal server is on another
               machine.
             </p>
             {fieldErrors.baseUrl && (
-              <p className="mt-1 text-sm font-medium text-rose-300">{fieldErrors.baseUrl}</p>
+              <p className="mt-1 text-sm font-medium text-rose-600">{fieldErrors.baseUrl}</p>
             )}
           </div>
 
           <div>
-            <label className="mb-1 block text-base font-medium text-slate-300">
+            <label className="mb-1 block text-base font-medium text-slate-600">
               Fiscal device IP address
             </label>
             <input
@@ -127,18 +129,18 @@ export default function EtimsSetupGate({ onComplete }: EtimsSetupGateProps) {
               value={form.deviceIp}
               onChange={updateField('deviceIp')}
               placeholder="192.168.1.50"
-              className="h-14 w-full rounded-lg border border-slate-600 bg-slate-900 px-3 text-lg text-white placeholder-slate-500 focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-900/40"
+              className="h-14 w-full rounded-lg border border-slate-300 bg-white px-3 text-lg text-slate-900 placeholder-slate-400 focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-100"
             />
-            <p className="mt-1 text-sm text-slate-400">
+            <p className="mt-1 text-sm text-slate-500">
               The address of the control unit on the shop network.
             </p>
             {fieldErrors.deviceIp && (
-              <p className="mt-1 text-sm font-medium text-rose-300">{fieldErrors.deviceIp}</p>
+              <p className="mt-1 text-sm font-medium text-rose-600">{fieldErrors.deviceIp}</p>
             )}
           </div>
 
           <div>
-            <label className="mb-1 block text-base font-medium text-slate-300">
+            <label className="mb-1 block text-base font-medium text-slate-600">
               Fiscal device port
             </label>
             <input
@@ -147,16 +149,16 @@ export default function EtimsSetupGate({ onComplete }: EtimsSetupGateProps) {
               value={form.devicePort}
               onChange={updateField('devicePort')}
               placeholder={DEFAULT_ETIMS_DEVICE_PORT}
-              className="h-14 w-full rounded-lg border border-slate-600 bg-slate-900 px-3 text-lg text-white placeholder-slate-500 focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-900/40"
+              className="h-14 w-full rounded-lg border border-slate-300 bg-white px-3 text-lg text-slate-900 placeholder-slate-400 focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-100"
             />
-            <p className="mt-1 text-sm text-slate-400">Usually 8000.</p>
+            <p className="mt-1 text-sm text-slate-500">Usually 8000.</p>
             {fieldErrors.devicePort && (
-              <p className="mt-1 text-sm font-medium text-rose-300">{fieldErrors.devicePort}</p>
+              <p className="mt-1 text-sm font-medium text-rose-600">{fieldErrors.devicePort}</p>
             )}
           </div>
 
           <div>
-            <label className="mb-1 block text-base font-medium text-slate-300">
+            <label className="mb-1 block text-base font-medium text-slate-600">
               Fiscal device password
             </label>
             <input
@@ -164,16 +166,16 @@ export default function EtimsSetupGate({ onComplete }: EtimsSetupGateProps) {
               value={form.password}
               onChange={updateField('password')}
               placeholder="••••••••"
-              className="h-14 w-full rounded-lg border border-slate-600 bg-slate-900 px-3 text-lg text-white placeholder-slate-500 focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-900/40"
+              className="h-14 w-full rounded-lg border border-slate-300 bg-white px-3 text-lg text-slate-900 placeholder-slate-400 focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-100"
             />
-            <p className="mt-1 text-sm text-slate-400">
+            <p className="mt-1 text-sm text-slate-500">
               The password set on the control unit. It is stored securely on this till.
             </p>
           </div>
         </div>
 
         {error && (
-          <p className="mt-4 rounded-lg bg-rose-950 px-3 py-2 text-base font-medium text-rose-300">
+          <p className="mt-4 rounded-lg bg-rose-50 px-3 py-2 text-base font-medium text-rose-700">
             {error}
           </p>
         )}

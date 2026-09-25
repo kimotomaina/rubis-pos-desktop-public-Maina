@@ -12,19 +12,19 @@ interface LocationPendingScreenProps {
  */
 export default function LocationPendingScreen({ onLogout }: LocationPendingScreenProps) {
   return (
-    <div className="flex h-screen flex-col items-center justify-center bg-slate-900 px-4 text-white">
+    <div className="app-theme flex h-screen flex-col items-center justify-center px-4">
       <img src={rubisLogo} alt="Enjoy" className="mb-8 h-16 w-auto" />
 
-      <div className="w-full max-w-md rounded-2xl bg-slate-800 p-6 text-center shadow-xl">
-        <h1 className="mb-2 text-2xl font-bold text-white">Ask a manager to set this till&rsquo;s location</h1>
-        <p className="mb-6 text-base text-slate-400">
+      <div className="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-6 text-center shadow-xl">
+        <h1 className="mb-2 text-2xl font-bold text-slate-900">Ask a manager to set this till&rsquo;s location</h1>
+        <p className="mb-6 text-base text-slate-500">
           This till hasn&rsquo;t been assigned a Shopify location yet. Log in as an admin, or ask a
           manager to sign in, to finish setup before selling.
         </p>
         <button
           type="button"
           onClick={onLogout}
-          className="h-14 w-full rounded-lg bg-slate-700 text-lg font-bold text-white transition active:scale-95 hover:bg-slate-600"
+          className="h-14 w-full rounded-lg border border-slate-300 bg-white text-lg font-bold text-slate-700 transition active:scale-95 hover:bg-slate-100"
         >
           Log Out
         </button>

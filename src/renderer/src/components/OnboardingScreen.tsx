@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import rubisLogo from '../assets/logo-rubis.png'
-import LocationPicker, { type ShopifyLocationOption } from './LocationPicker'
+import LocationPicker, { type ShopifyLocationOption } from './LocationPicker.js'
 
 /** Which step of the wizard is currently shown. */
 type OnboardingStep = 'connect' | 'location'
@@ -87,12 +87,12 @@ export default function OnboardingScreen() {
   }
 
   return (
-    <div className="flex h-screen flex-col items-center justify-center bg-slate-900 px-4 text-white">
+    <div className="app-theme flex h-screen flex-col items-center justify-center px-4">
       <img src={rubisLogo} alt="Enjoy" className="mb-8 h-16 w-auto" />
 
-      <div className="w-full max-w-md rounded-2xl bg-slate-800 p-6 shadow-xl">
-        <h1 className="mb-1 text-2xl font-bold text-white">Connect this till to Shopify</h1>
-        <p className="mb-6 text-base text-slate-400">
+      <div className="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-6 shadow-xl">
+        <h1 className="mb-1 text-2xl font-bold text-slate-900">Connect this till to Shopify</h1>
+        <p className="mb-6 text-base text-slate-500">
           {step === 'connect'
             ? 'One-time setup — this only needs to happen once per till.'
             : `Connected to ${shopName}. Pick the location this till sells from.`}
@@ -100,7 +100,7 @@ export default function OnboardingScreen() {
 
         {step === 'connect' && (
           <div>
-            <label className="mb-1 block text-base font-medium text-slate-300">
+            <label className="mb-1 block text-base font-medium text-slate-600">
               Shopify Store URL
             </label>
             <input
@@ -108,11 +108,11 @@ export default function OnboardingScreen() {
               value={storeUrl}
               onChange={(e) => setStoreUrl(e.target.value)}
               placeholder="your-store.myshopify.com"
-              className="mb-4 h-12 w-full rounded-lg border border-slate-600 bg-slate-900 px-3 text-lg text-white placeholder-slate-500 focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-900/40"
+              className="mb-4 h-12 w-full rounded-lg border border-slate-300 bg-white px-3 text-lg text-slate-900 placeholder-slate-400 focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-100"
               autoFocus
             />
 
-            <label className="mb-1 block text-base font-medium text-slate-300">
+            <label className="mb-1 block text-base font-medium text-slate-600">
               Admin API Access Token
             </label>
             <input
@@ -120,11 +120,11 @@ export default function OnboardingScreen() {
               value={token}
               onChange={(e) => setToken(e.target.value)}
               placeholder="shpat_..."
-              className="mb-4 h-12 w-full rounded-lg border border-slate-600 bg-slate-900 px-3 text-lg text-white placeholder-slate-500 focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-900/40"
+              className="mb-4 h-12 w-full rounded-lg border border-slate-300 bg-white px-3 text-lg text-slate-900 placeholder-slate-400 focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-100"
             />
 
             {connectError && (
-              <p className="mb-4 rounded-lg bg-rose-950 px-3 py-2 text-base font-medium text-rose-300">
+              <p className="mb-4 rounded-lg bg-rose-50 px-3 py-2 text-base font-medium text-rose-700">
                 {connectError}
               </p>
             )}

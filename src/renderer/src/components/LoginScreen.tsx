@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { useAuthStore } from '../stores/authStore'
+import { useAuthStore } from '../stores/authStore.js'
 import rubisLogo from '../assets/logo-rubis.png'
 
 /** Digit keys rendered on the PIN pad, in phone-keypad order. */
@@ -82,12 +82,12 @@ export default function LoginScreen() {
   }, [selectedStaff, pin, loggingIn])
 
   return (
-    <div className="flex h-screen flex-col items-center justify-center bg-slate-900 text-white">
+    <div className="app-theme flex h-screen flex-col items-center justify-center">
       <img src={rubisLogo} alt="Enjoy" className="mb-8 h-16 w-auto" />
 
       {!selectedStaff ? (
         <div className="w-full max-w-md">
-          <h2 className="mb-4 text-center text-xl font-medium text-slate-300">
+          <h2 className="mb-4 text-center text-xl font-medium text-slate-700">
             Who&apos;s working?
           </h2>
           <div className="grid grid-cols-2 gap-3">
@@ -96,7 +96,7 @@ export default function LoginScreen() {
                 key={staff.id}
                 type="button"
                 onClick={() => setSelectedStaffId(staff.id)}
-                className="rounded-xl bg-slate-800 px-4 py-6 text-center text-xl font-semibold text-white transition active:scale-95 hover:bg-slate-700"
+                className="rounded-xl border border-slate-200 bg-white px-4 py-6 text-center text-xl font-semibold text-slate-900 shadow-sm transition active:scale-95 hover:bg-slate-100"
               >
                 {staff.name}
               </button>
@@ -113,11 +113,11 @@ export default function LoginScreen() {
           <button
             type="button"
             onClick={handleBack}
-            className="mb-4 text-base text-slate-400 hover:text-slate-200"
+            className="mb-4 text-base text-slate-500 hover:text-slate-700"
           >
             ← Back
           </button>
-          <h2 className="mb-4 text-center text-xl font-medium text-slate-300">
+          <h2 className="mb-4 text-center text-xl font-medium text-slate-700">
             {selectedStaff.name}
           </h2>
 
@@ -126,14 +126,14 @@ export default function LoginScreen() {
               <span
                 key={i}
                 className={`h-3 w-3 rounded-full ${
-                  i < pin.length ? 'bg-rose-500' : 'bg-slate-700'
+                  i < pin.length ? 'bg-rose-600' : 'bg-slate-300'
                 }`}
               />
             ))}
           </div>
 
           {loginError && (
-            <p className="mb-4 text-center text-lg font-medium text-rose-400">
+            <p className="mb-4 text-center text-lg font-medium text-rose-600">
               {loginError}
             </p>
           )}
@@ -148,7 +148,7 @@ export default function LoginScreen() {
                 className={`flex h-16 w-16 items-center justify-center rounded-full text-2xl font-semibold transition active:scale-95 ${
                   key === ''
                     ? 'invisible'
-                    : 'bg-slate-800 text-white hover:bg-slate-700'
+                    : 'bg-slate-100 text-slate-800 hover:bg-slate-200'
                 }`}
               >
                 {key}

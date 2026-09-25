@@ -35,12 +35,12 @@ export default function LocationPicker({
 }: LocationPickerProps) {
   return (
     <div>
-      <p className="mb-2 rounded-lg bg-emerald-950 px-3 py-2 text-base font-medium text-emerald-300">
+      <p className="mb-2 rounded-lg bg-emerald-100 px-3 py-2 text-base font-medium text-emerald-700">
         Connected to {shopName}
       </p>
 
       {locations.length === 1 ? (
-        <p className="mb-4 text-base text-slate-400">
+        <p className="mb-4 text-base text-slate-500">
           Only one location exists — <strong>{locations[0].name}</strong> was automatically
           selected.
         </p>
@@ -51,8 +51,8 @@ export default function LocationPicker({
               key={location.id}
               className={`flex h-14 cursor-pointer items-center gap-3 rounded-lg border px-4 text-lg ${
                 selectedLocationId === location.id
-                  ? 'border-rose-400 bg-rose-950/40'
-                  : 'border-slate-600 bg-slate-900'
+                  ? 'border-rose-400 bg-rose-50 text-slate-900'
+                  : 'border-slate-300 bg-white text-slate-900'
               }`}
             >
               <input
@@ -70,7 +70,7 @@ export default function LocationPicker({
       )}
 
       {confirmError && (
-        <p className="mb-4 rounded-lg bg-rose-950 px-3 py-2 text-base font-medium text-rose-300">
+        <p className="mb-4 rounded-lg bg-rose-50 px-3 py-2 text-base font-medium text-rose-700">
           {confirmError}
         </p>
       )}
@@ -88,7 +88,7 @@ export default function LocationPicker({
         <button
           type="button"
           onClick={onBack}
-          className="mt-3 w-full text-center text-base text-slate-400 hover:text-slate-200"
+          className="mt-3 w-full text-center text-base text-slate-500 hover:text-slate-700"
         >
           ← Back
         </button>
