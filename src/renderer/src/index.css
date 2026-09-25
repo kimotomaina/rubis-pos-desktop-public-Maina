@@ -52,9 +52,9 @@
    * Height of the docked on-screen keyboard sheet, and the space the setup
    * screens reserve below their form while it is open (`h-keyboard-sheet`,
    * `pb-keyboard-sheet`). Fits the tallest key set, the `text` keyboard's
-   * six rows, plus the label and padding.
+   * six rows, plus the label, the echo of the typed value and padding.
    */
-  --spacing-keyboard-sheet: 28rem;
+  --spacing-keyboard-sheet: 31rem;
 }
 
 /**

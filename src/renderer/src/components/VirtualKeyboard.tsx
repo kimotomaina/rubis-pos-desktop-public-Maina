@@ -8,6 +8,12 @@ export interface VirtualKeyboardProps {
   maxLength?: number
   /** `caps` (default) is the uppercase-only grid; `text` adds lower case, a Shift toggle and a symbol row. */
   layout?: 'caps' | 'text'
+  /**
+   * Text and accessible name of the closing key. Omitted, it reads
+   * `Done` with no `aria-label`, exactly as it always has; the overlay
+   * host passes `Submit` (phase-139) so its key sets name one action.
+   */
+  doneLabel?: string
 }
 
 const KEY_CLASS =
@@ -48,7 +54,8 @@ export default function VirtualKeyboard({
   onChange,
   onDone,
   maxLength,
-  layout = 'caps'
+  layout = 'caps',
+  doneLabel
 }: VirtualKeyboardProps) {
   const [shift, setShift] = useState(false)
   const atLimit = maxLength !== undefined && value.length >= maxLength
@@ -144,9 +151,10 @@ export default function VirtualKeyboard({
         <button
           type="button"
           onClick={onDone}
+          aria-label={doneLabel}
           className="h-14 w-24 shrink-0 rounded-lg bg-rose-600 text-lg font-bold text-white transition active:scale-95 hover:bg-rose-700"
         >
-          Done
+          {doneLabel ?? 'Done'}
         </button>
       </div>
     </div>

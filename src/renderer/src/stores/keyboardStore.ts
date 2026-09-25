@@ -43,6 +43,13 @@ export interface KeyboardRequest {
   /** Defaults to `caps`. */
   mode?: KeyboardMode
   /**
+   * Masks the overlay's echo of the value (one `•` per character, never
+   * the characters). Set by the fields whose input is a secret — the
+   * Shopify Admin API token and the fiscal device password — so the echo
+   * added in phase-139 cannot put either on screen in clear text.
+   */
+  secret?: boolean
+  /**
    * Draws the keys as a sheet docked to the bottom of the window with no
    * backdrop, instead of a modal over the whole screen, so the form and
    * its Save button above stay visible and tappable. The setup screens

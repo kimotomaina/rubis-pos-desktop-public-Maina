@@ -7,6 +7,12 @@ interface VirtualNumpadProps {
   allowDecimal?: boolean
   /** Lets the decimal-point key be pressed more than once, for dotted IP addresses. Validation stays with the field. */
   multipleDecimals?: boolean
+  /**
+   * Text and accessible name of the `onEnter` key. Omitted, it reads
+   * `Enter` with no `aria-label`, exactly as it always has; the overlay
+   * host passes `Submit` (phase-139) so its key sets name one action.
+   */
+  enterLabel?: string
 }
 
 const NUMPAD_KEY_CLASS =
@@ -32,7 +38,8 @@ export default function VirtualNumpad({
   onChange,
   onEnter,
   allowDecimal = true,
-  multipleDecimals = false
+  multipleDecimals = false,
+  enterLabel
 }: VirtualNumpadProps) {
   const appendKey = (key: string) => {
     if (key === '.' && (!allowDecimal || (!multipleDecimals && value.includes('.')))) return
@@ -88,9 +95,10 @@ export default function VirtualNumpad({
           <button
             type="button"
             onClick={onEnter}
+            aria-label={enterLabel}
             className="h-16 w-full rounded-xl bg-rose-600 text-2xl font-bold text-white transition active:scale-95 hover:bg-rose-700"
           >
-            Enter
+            {enterLabel ?? 'Enter'}
           </button>
         )}
       </div>

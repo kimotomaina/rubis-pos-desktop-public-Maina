@@ -88,7 +88,12 @@ export default function EtimsSetupGate({ onComplete }: EtimsSetupGateProps) {
       onChange: (next) => setForm((prev) => ({ ...prev, [field.key]: next })),
       label: field.label,
       mode: field.mode,
-      docked: true
+      docked: true,
+      /**
+       * The device password is the only credential here, so it is the only
+       * field whose echo is masked; the address, IP and port echo plainly.
+       */
+      secret: field.type === 'password'
     })
 
   const handleSave = async () => {

@@ -47,8 +47,13 @@ export default function OnboardingScreen() {
   const [saveError, setSaveError] = useState<string | null>(null)
   const keyboardOpen = useKeyboardStore((state) => state.request?.docked === true)
 
-  const openKeyboard = (label: string, value: string, onChange: (next: string) => void) =>
-    useKeyboardStore.getState().open({ value, onChange, label, mode: 'text', docked: true })
+  /** `secret` masks the overlay's echo — the API token is a credential, the store URL is not. */
+  const openKeyboard = (
+    label: string,
+    value: string,
+    onChange: (next: string) => void,
+    secret = false
+  ) => useKeyboardStore.getState().open({ value, onChange, label, mode: 'text', docked: true, secret })
 
   const handleConnect = async () => {
     useKeyboardStore.getState().close()
@@ -147,8 +152,8 @@ export default function OnboardingScreen() {
                   type="password"
                   value={token}
                   readOnly
-                  onFocus={() => openKeyboard('Admin API Access Token', token, setToken)}
-                  onClick={() => openKeyboard('Admin API Access Token', token, setToken)}
+                  onFocus={() => openKeyboard('Admin API Access Token', token, setToken, true)}
+                  onClick={() => openKeyboard('Admin API Access Token', token, setToken, true)}
                   placeholder="shpat_..."
                   className={INPUT_CLASS}
                 />
