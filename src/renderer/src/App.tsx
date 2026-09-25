@@ -22,9 +22,9 @@ import AdminScreen from './components/AdminScreen'
 import EtimsSetupGate from './components/EtimsSetupGate'
 import UpdateToast from './components/UpdateToast'
 import ManagerPinModal from './components/ManagerPinModal'
-import ConnectivityBadges, { type ConnectivityIntegration } from './components/ConnectivityBadges'
+import type { ConnectivityIntegration } from './types/connectivity'
 import ConnectivityModal from './components/ConnectivityModal'
-import UnfiledSalesBadge from './components/UnfiledSalesBadge'
+import NavStatusButton from './components/NavStatusButton'
 import { useUnfiledCountStore } from './stores/unfiledCountStore'
 import ConnectivityToast from './components/ConnectivityToast'
 import FiscalNotice from './components/FiscalNotice'
@@ -429,49 +429,25 @@ export default function App() {
             </button>
           </div>
           {/**
-           * Both states render at the same fixed width (`w-28`,
-           * `justify-center`) so the offline pill is never wider than the
-           * online one (phase-142's header overflow finding) — the full
-           * "sales will queue" message moves to `title`/`aria-label`
-           * rather than staying on screen at every width.
+           * One button consolidates every status the header used to show
+           * as five separate items (Online/Offline, unfiled sales, and
+           * the four connectivity badges) — NavStatusButton's own dot
+           * carries the at-a-glance signal; the dialog it opens carries
+           * the detail. Each row's trigger is unchanged: the unfiled row
+           * still runs the same admin-gated navigate, and each
+           * connectivity row still opens the same `ConnectivityModal`.
            */}
-          {online ? (
-            <span
-              className="flex w-28 shrink-0 items-center justify-center gap-2 rounded-full bg-emerald-100 px-3 py-1 font-medium text-emerald-700"
-              title="Online"
-              aria-label="Online"
-            >
-              <span
-                className="h-2.5 w-2.5 shrink-0 rounded-full bg-emerald-500"
-                aria-hidden
-              />
-              Online
-            </span>
-          ) : (
-            <span
-              className="flex w-28 shrink-0 items-center justify-center gap-2 rounded-full bg-rose-100 px-3 py-1 font-medium text-rose-700"
-              title="Offline — sales will queue"
-              aria-label="Offline — sales will queue"
-            >
-              <span
-                className="h-2.5 w-2.5 shrink-0 rounded-full bg-rose-500"
-                aria-hidden
-              />
-              Offline
-            </span>
-          )}
-          <UnfiledSalesBadge
-            count={unfiledCount}
-            onClick={() => {
+          <NavStatusButton
+            online={online}
+            unfiledCount={unfiledCount}
+            onUnfiledClick={() => {
               if (currentStaff.role !== 'admin') return
               setActiveView('admin')
               setAdminInitialTab('needsAttention')
             }}
-          />
-          <ConnectivityBadges
-            status={connectivityStatus}
+            connectivityStatus={connectivityStatus}
             barcodeStatus={barcodeStatus}
-            onSelect={setSelectedConnectivity}
+            onSelectIntegration={setSelectedConnectivity}
           />
           <span className="shrink-0 font-mono tabular-nums" aria-label="clock">
             {now}

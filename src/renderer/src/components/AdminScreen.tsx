@@ -43,8 +43,9 @@ interface AdminScreenProps {
   ) => void
   /**
    * Opens directly on a specific tab instead of Overview — used by the
-   * header's {@link UnfiledSalesBadge} so tapping it jumps straight to
-   * the list, rather than requiring an extra tap once inside Admin.
+   * header's unfiled-sales row (inside `NavStatusButton`'s status
+   * dialog) so tapping it jumps straight to the list, rather than
+   * requiring an extra tap once inside Admin.
    * Read once at mount only (this screen unmounts on every navigation
    * away from Admin, so a fresh value here always takes effect for the
    * next visit).

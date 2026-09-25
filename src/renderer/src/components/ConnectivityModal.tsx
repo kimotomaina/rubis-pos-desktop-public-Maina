@@ -4,7 +4,7 @@ import type {
   ConnectivityIntegration,
   ConnectivityStatusPayload,
   BarcodeStatus
-} from './ConnectivityBadges.js'
+} from '../types/connectivity.js'
 
 /** Display label per integration. */
 const INTEGRATION_LABELS: Record<ConnectivityIntegration, string> = {

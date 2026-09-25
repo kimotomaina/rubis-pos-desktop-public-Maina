@@ -1,16 +1,20 @@
 /**
  * The logged-in header's shrink behavior (phase-142's overflow finding;
- * Phase E2(a)) — every header child was `shrink-0`, so its minimum
- * width was the sum of all of them with nothing able to give: ~1331px
- * online, ~1470px offline (the "Offline — sales will queue" pill was
- * wider than "Online"), overflowing the 1366px design width.
+ * Phase E2(a), later superseded for the status cluster by the
+ * `NavStatusButton` consolidation) — every header child was `shrink-0`,
+ * so its minimum width was the sum of all of them with nothing able to
+ * give: ~1331px online, ~1470px offline, overflowing the 1366px design
+ * width.
  *
  * `App.tsx` boots the full app shell (barcode scanner, five Zustand
  * stores, several `window.api` calls at mount) — heavier to mount than
  * the value a real DOM render would add here, so this is a source
  * inspection in the `stockTakeGuard.test.ts` style: it fails the moment
- * the header's shrink/truncation classes, or the offline pill's fixed
- * width, regress.
+ * the header's shrink/truncation classes regress. `NavStatusButton`
+ * itself (the Online/Offline, unfiled-sales and connectivity rows that
+ * used to render directly in the header) is covered by a real mount in
+ * `tests/navStatusButton.test.ts` instead — it has no heavy fan-out, so
+ * a real DOM test is stronger evidence there than source inspection.
  */
 
 import { describe, it, expect } from 'vitest'
@@ -36,21 +40,10 @@ describe('logged-in header shrinks to fit 1366px (Phase E2(a))', () => {
     expect(HEADER).toMatch(/hidden shrink-0 rounded-full bg-slate-100[^"]*2xl:inline-block/)
   })
 
-  it('renders the Online and Offline pills at the same fixed width, so offline is never wider', () => {
-    const pillClasses = [...HEADER.matchAll(/className="flex (w-\d+) shrink-0 items-center justify-center/g)].map(
-      (m) => m[1]
-    )
-    expect(pillClasses).toHaveLength(2)
-    expect(pillClasses[0]).toBe(pillClasses[1])
-  })
-
-  it('shortens the offline pill\'s on-screen text and keeps the full message in title/aria-label', () => {
-    expect(HEADER).toContain('title="Offline — sales will queue"')
-    expect(HEADER).toContain('aria-label="Offline — sales will queue"')
-    // The on-screen text node is just "Offline" — not the full sentence.
-    const offlineBranch = HEADER.slice(HEADER.indexOf('title="Offline'))
-    expect(offlineBranch.slice(0, 400)).toMatch(/>\s*Offline\s*</)
-    expect(offlineBranch.slice(0, 400)).not.toContain('sales will queue<')
+  it('consolidates status into a single NavStatusButton instead of separate pills/badges', () => {
+    expect(HEADER).toContain('<NavStatusButton')
+    expect(HEADER).not.toMatch(/\bConnectivityBadges\b/)
+    expect(HEADER).not.toMatch(/\bUnfiledSalesBadge\b/)
   })
 
   it('leaves the two "Admin" occurrences as distinct elements (staff name vs. nav tab) — not a fixable duplicate', () => {
@@ -60,20 +53,5 @@ describe('logged-in header shrinks to fit 1366px (Phase E2(a))', () => {
     // true and deliberately left alone.
     expect(APP_TSX).toMatch(/>\s*\{currentStaff\.name\}\s*</)
     expect(APP_TSX).toMatch(/>\s*Admin\s*<\/button>/)
-  })
-})
-
-describe('ConnectivityBadges collapse to icons below 2xl (Phase E2(a))', () => {
-  const badges = readFileSync(
-    join(process.cwd(), 'src', 'renderer', 'src', 'components', 'ConnectivityBadges.tsx'),
-    'utf8'
-  )
-
-  it('hides every badge label below 2xl, keeping the glyph always visible', () => {
-    const labels = ['M-Pesa', 'Fiscal Server', 'Scanner', 'Printer']
-    for (const label of labels) {
-      expect(badges).toContain(`<span className={LABEL_CLASS}>${label}</span>`)
-    }
-    expect(badges).toMatch(/LABEL_CLASS = 'hidden 2xl:inline'/)
   })
 })

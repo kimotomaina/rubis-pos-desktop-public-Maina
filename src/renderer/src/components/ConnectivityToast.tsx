@@ -6,7 +6,7 @@ import {
 } from '../lib/connectivityToasts.js'
 import { CONNECTIVITY_TOAST_TIMEOUT_MS } from '../lib/toastTimeouts.js'
 import { useToastStore } from '../stores/toastStore.js'
-import type { ConnectivityStatusPayload } from './ConnectivityBadges.js'
+import type { ConnectivityStatusPayload } from '../types/connectivity.js'
 
 /** Display label per integration, matching {@link ConnectivityModal}'s labels. */
 const INTEGRATION_LABELS = {

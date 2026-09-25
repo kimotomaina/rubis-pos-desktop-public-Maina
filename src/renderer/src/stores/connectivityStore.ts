@@ -7,7 +7,7 @@
  */
 
 import { create } from 'zustand'
-import type { ConnectivityStatusPayload } from '../components/ConnectivityBadges.js'
+import type { ConnectivityStatusPayload } from '../types/connectivity.js'
 
 export interface ConnectivityState {
   /** Last reported reachability for every monitored integration, or `null` before the first read. */
