@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useLayoutEffect, useRef, useState } from 'react'
 import { WarningIcon } from './icons.js'
 import {
   validateEtimsConnection,
@@ -6,6 +6,7 @@ import {
   DEFAULT_ETIMS_DEVICE_PORT
 } from '../lib/etimsConfig.js'
 import { useKeyboardStore, type KeyboardMode } from '../stores/keyboardStore.js'
+import { blurRestoredFocus } from '../lib/blurRestoredFocus.js'
 
 /** Fields collected by the eTIMS setup gate's form. */
 interface EtimsSetupForm {
@@ -65,8 +66,10 @@ interface EtimsSetupGateProps {
  * and crashes with an HTTP 500.
  *
  * Fields are read-only and open the docked on-screen keyboard or numpad
- * on tap (see {@link FIELDS}). While it is open the gate top-aligns and
- * reserves the sheet's height, so Save & Continue stays visible above it.
+ * on tap (see {@link FIELDS}). While it is open the gate top-aligns; the
+ * sheet overlays the bottom of the form rather than the form reserving
+ * space for it (Phase E2(c)) — the sheet's own echo shows what is being
+ * typed, and Save & Continue is visible again once Submit closes it.
  *
  * @param {EtimsSetupGateProps} props
  * @returns {JSX.Element}
@@ -79,6 +82,12 @@ export default function EtimsSetupGate({ onComplete }: EtimsSetupGateProps) {
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({})
 
   const keyboardOpen = useKeyboardStore((state) => state.request?.docked === true)
+  const rootRef = useRef<HTMLDivElement>(null)
+
+  /** Undoes a renderer-reload focus restoration before it can reopen the keyboard (phase-142 §11, Phase E2(d)). */
+  useLayoutEffect(() => {
+    blurRestoredFocus(rootRef.current)
+  }, [])
 
   const isFormComplete = Object.values(form).every((value) => value.trim().length > 0)
 
@@ -127,8 +136,9 @@ export default function EtimsSetupGate({ onComplete }: EtimsSetupGateProps) {
 
   return (
     <div
+      ref={rootRef}
       className={`app-theme fixed inset-0 z-[100] flex h-screen justify-center overflow-y-auto px-4 pt-8 ${
-        keyboardOpen ? 'items-start pb-keyboard-sheet' : 'items-center pb-8'
+        keyboardOpen ? 'items-start' : 'items-center pb-8'
       }`}
     >
       <div className="w-full max-w-2xl rounded-2xl border border-slate-200 bg-white p-6 shadow-xl">

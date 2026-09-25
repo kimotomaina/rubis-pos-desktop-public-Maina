@@ -1,7 +1,8 @@
-import { useState } from 'react'
+import { useLayoutEffect, useRef, useState } from 'react'
 import rubisLogo from '../assets/logo-rubis.png'
 import LocationPicker, { type ShopifyLocationOption } from './LocationPicker.js'
 import { useKeyboardStore } from '../stores/keyboardStore.js'
+import { blurRestoredFocus } from '../lib/blurRestoredFocus.js'
 
 /** Which step of the wizard is currently shown. */
 type OnboardingStep = 'connect' | 'location'
@@ -28,8 +29,10 @@ const LABEL_CLASS = 'mb-1 block text-base font-medium text-slate-600'
  * The step-1 fields are read-only and open the docked on-screen keyboard
  * (`text` layout) on tap; its keystrokes come back through the store's
  * relay into the same `setStoreUrl`/`setToken` state a physical keyboard
- * used to write. While the sheet is open the page top-aligns and reserves
- * the sheet's height, so Connect & Verify stays visible above it.
+ * used to write. While the sheet is open the page top-aligns; the sheet
+ * overlays the bottom of the form rather than the form reserving space
+ * for it (Phase E2(c)) — the sheet's own echo shows what is being typed,
+ * and Connect & Verify is visible again once Submit closes it.
  *
  * @returns {JSX.Element}
  */
@@ -46,6 +49,12 @@ export default function OnboardingScreen() {
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
   const keyboardOpen = useKeyboardStore((state) => state.request?.docked === true)
+  const rootRef = useRef<HTMLDivElement>(null)
+
+  /** Undoes a renderer-reload focus restoration before it can reopen the keyboard (phase-142 §11, Phase E2(d)). */
+  useLayoutEffect(() => {
+    blurRestoredFocus(rootRef.current)
+  }, [])
 
   /** `secret` masks the overlay's echo — the API token is a credential, the store URL is not. */
   const openKeyboard = (
@@ -110,8 +119,9 @@ export default function OnboardingScreen() {
 
   return (
     <div
+      ref={rootRef}
       className={`app-theme flex h-screen flex-col items-center overflow-y-auto px-4 ${
-        keyboardOpen ? 'justify-start pt-8 pb-keyboard-sheet' : 'justify-center'
+        keyboardOpen ? 'justify-start pt-8' : 'justify-center'
       }`}
     >
       <img src={rubisLogo} alt="Enjoy" className="mb-8 h-16 w-auto" />

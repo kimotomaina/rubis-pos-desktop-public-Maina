@@ -49,6 +49,15 @@ const BADGE_STYLES = {
  * @param {ConnectivityBadgesProps} props
  * @returns {JSX.Element}
  */
+/**
+ * A badge's text label, hidden below `2xl` so the header's four badges
+ * collapse to just their ✓/✗/? glyph at the window sizes Phase E's zoom
+ * invariant actually produces (phase-142's header-overflow finding) —
+ * the `title`/button label below still carries the full name for a
+ * screen reader or a hover, regardless of whether the text shows.
+ */
+const LABEL_CLASS = 'hidden 2xl:inline'
+
 export default function ConnectivityBadges({ status, barcodeStatus, onSelect }: ConnectivityBadgesProps) {
   const mpesaConnected = status?.mpesa.connected ?? false
   const fiscalConnected = status?.fiscal.connected ?? false
@@ -62,7 +71,7 @@ export default function ConnectivityBadges({ status, barcodeStatus, onSelect }: 
         title={`M-Pesa: ${mpesaConnected ? 'Connected' : 'Disconnected'}`}
         className={`flex items-center gap-1 rounded-full px-2 py-1 text-sm font-medium ${BADGE_STYLES[mpesaConnected ? 'connected' : 'disconnected']}`}
       >
-        {mpesaConnected ? '✓' : '✗'} M-Pesa
+        {mpesaConnected ? '✓' : '✗'} <span className={LABEL_CLASS}>M-Pesa</span>
       </button>
       <button
         type="button"
@@ -70,7 +79,7 @@ export default function ConnectivityBadges({ status, barcodeStatus, onSelect }: 
         title={`Fiscal server: ${fiscalConnected ? 'Reachable' : 'Not reachable'}. This does not confirm sales are filing. See the unfiled sales count for that.`}
         className={`flex items-center gap-1 rounded-full px-2 py-1 text-sm font-medium ${BADGE_STYLES[fiscalConnected ? 'connected' : 'disconnected']}`}
       >
-        {fiscalConnected ? '✓' : '✗'} Fiscal Server
+        {fiscalConnected ? '✓' : '✗'} <span className={LABEL_CLASS}>Fiscal Server</span>
       </button>
       <button
         type="button"
@@ -78,7 +87,7 @@ export default function ConnectivityBadges({ status, barcodeStatus, onSelect }: 
         title={`Barcode Scanner: ${barcodeStatus === 'connected' ? 'Connected' : 'Unknown'}`}
         className={`flex items-center gap-1 rounded-full px-2 py-1 text-sm font-medium ${BADGE_STYLES[barcodeStatus === 'connected' ? 'connected' : 'unknown']}`}
       >
-        {barcodeStatus === 'connected' ? '✓' : '?'} Scanner
+        {barcodeStatus === 'connected' ? '✓' : '?'} <span className={LABEL_CLASS}>Scanner</span>
       </button>
       <button
         type="button"
@@ -86,7 +95,7 @@ export default function ConnectivityBadges({ status, barcodeStatus, onSelect }: 
         title={`Receipt Printer: ${printerConnected ? 'Connected' : 'Disconnected'}`}
         className={`flex items-center gap-1 rounded-full px-2 py-1 text-sm font-medium ${BADGE_STYLES[printerConnected ? 'connected' : 'disconnected']}`}
       >
-        {printerConnected ? '✓' : '✗'} Printer
+        {printerConnected ? '✓' : '✗'} <span className={LABEL_CLASS}>Printer</span>
       </button>
     </div>
   )

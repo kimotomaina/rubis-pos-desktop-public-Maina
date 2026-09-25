@@ -106,6 +106,16 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
     | 'mpesaReconciliation'
     | 'system'
   >(initialTab ?? 'overview')
+  /**
+   * Which Integrations section is on screen (Phase E2(e)) — the tab used
+   * to show Shopify/Location/Fiscal device/M-Pesa/Printer all at once,
+   * whose combined height was measured overflowing by ~2200px at scale 1
+   * (phase-142). Each now renders alone; none of their state or save
+   * handlers changed, only which one is visible at a time.
+   */
+  const [integrationSection, setIntegrationSection] = useState<
+    'shopify' | 'location' | 'fiscal' | 'mpesa' | 'printer'
+  >('shopify')
   const [mpesaConsumerKey, setMpesaConsumerKey] = useState('')
   const [mpesaShortcode, setMpesaShortcode] = useState('')
   const [mpesaEnvironment, setMpesaEnvironment] = useState<'sandbox' | 'production'>('sandbox')
@@ -382,10 +392,13 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
 
   useEffect(() => {
     if (activeTab === 'integrations') void loadIntegrationsConfig()
-    if (activeTab === 'peripherals') void loadPrinters()
+    // Printer registration moved from Peripherals into Integrations >
+    // Printer (Phase E2(e)); loaded once that section is actually on
+    // screen, same as every other section's data.
+    if (activeTab === 'integrations' && integrationSection === 'printer') void loadPrinters()
     if (activeTab === 'system') void loadStartupConfigs()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeTab])
+  }, [activeTab, integrationSection])
 
   /**
    * Saves the M-Pesa/eTIMS mock-vs-real toggles to `app_configurations`
@@ -968,107 +981,6 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
 
       {activeTab === 'peripherals' && (
         <section className="rounded-xl border border-slate-200 bg-white p-4">
-          <h3 className="mb-1 text-2xl font-bold text-slate-800">Printers</h3>
-          <p className="mb-4 text-base text-slate-500">
-            Register additional printers — a secondary kitchen or label printer
-            alongside the main receipt printer. A store with no printers registered here keeps
-            using the single receipt printer configured via environment variables, unchanged.
-          </p>
-
-          {printerActionError && (
-            <p className="mb-3 rounded-lg bg-rose-50 px-3 py-2 text-base font-medium text-rose-700">
-              {printerActionError}
-            </p>
-          )}
-
-          {printersLoading ? (
-            <p className="text-base text-slate-400">Loading…</p>
-          ) : (
-            <div className="space-y-2">
-              {printers.length === 0 && (
-                <p className="text-base text-slate-400">No printers registered yet.</p>
-              )}
-              {printers.map((printer) => (
-                <div
-                  key={printer.id}
-                  className="rounded-lg border border-slate-100 px-3 py-2"
-                >
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-2">
-                      <span className="font-medium text-slate-800">{printer.id}</span>
-                      <span className="rounded-full bg-slate-100 px-2 py-0.5 text-sm font-medium capitalize text-slate-500">
-                        {printer.type}
-                      </span>
-                      {!printer.enabled && (
-                        <span className="rounded-full bg-amber-100 px-2 py-0.5 text-sm font-medium text-amber-700">
-                          Disabled
-                        </span>
-                      )}
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <button
-                        type="button"
-                        disabled={testingPrinterId === printer.id}
-                        onClick={() => handleTestPrinter(printer.id, printer.interfaceName)}
-                        className="rounded-md border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
-                      >
-                        {testingPrinterId === printer.id ? 'Testing…' : 'Test'}
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => handleDeletePrinter(printer.id)}
-                        className="rounded-md border border-rose-300 px-3 py-1.5 text-sm font-medium text-rose-700 hover:bg-rose-50"
-                      >
-                        Remove
-                      </button>
-                    </div>
-                  </div>
-                  <p className="mt-1 text-sm text-slate-500">{printer.interfaceName}</p>
-                  {printerTestMessages[printer.id] && (
-                    <p className="mt-1 text-sm text-slate-600">{printerTestMessages[printer.id]}</p>
-                  )}
-                </div>
-              ))}
-
-              <div className="grid grid-cols-2 gap-2 rounded-lg bg-slate-50 p-3 sm:grid-cols-4">
-                <input
-                  type="text"
-                  placeholder="Printer id (e.g. kitchen-1)"
-                  value={newPrinterId}
-                  onChange={(e) => setNewPrinterId(e.target.value)}
-                  className="h-12 rounded-lg border border-slate-300 px-3 text-lg focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-100"
-                />
-                <select
-                  value={newPrinterType}
-                  onChange={(e) => setNewPrinterType(e.target.value as PrinterType)}
-                  className="h-12 rounded-lg border border-slate-300 px-3 text-lg focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-100"
-                >
-                  <option value="receipt">Receipt</option>
-                  <option value="kitchen">Kitchen</option>
-                  <option value="label">Label</option>
-                </select>
-                <input
-                  type="text"
-                  placeholder="tcp://192.168.0.101:9100"
-                  value={newPrinterInterface}
-                  onChange={(e) => setNewPrinterInterface(e.target.value)}
-                  className="h-12 rounded-lg border border-slate-300 px-3 text-lg focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-100"
-                />
-                <button
-                  type="button"
-                  onClick={() => handleAddPrinter()}
-                  className="rounded-lg bg-rose-600 px-4 py-2 text-base font-semibold text-white hover:bg-rose-700"
-                >
-                  Add Printer
-                </button>
-              </div>
-            </div>
-          )}
-        </section>
-      )}
-
-      {activeTab === 'peripherals' && (
-        <section className="rounded-xl border border-slate-200 bg-white p-4">
           <h3 className="mb-1 text-2xl font-bold text-slate-800">Barcode Scanner Stations</h3>
  
           <ol className="list-inside list-decimal space-y-1 text-base text-slate-600">
@@ -1095,19 +1007,169 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
         </section>
       )}
 
-      {activeTab === 'integrations' ? (
-        <section className="rounded-xl border border-slate-200 bg-white p-4">
-          <h3 className="mb-1 text-2xl font-bold text-slate-800">Payments &amp; Fiscal Device</h3>
-          <p className="mb-4 text-base text-slate-500">
-            How this till takes M-Pesa payments and files sales with KRA.
-          </p>
+      {activeTab === 'integrations' && (
+        /**
+         * One section on screen at a time (Phase E2(e)) — Shopify,
+         * Location, Fiscal device, M-Pesa and Printer used to render
+         * stacked together here, measuring ~2200-2529px tall at scale 1
+         * (phase-142). No section's own state, validation or save
+         * handler changed; `handleSaveIntegrationsConfig` still submits
+         * M-Pesa + Fiscal device + Store Details together exactly as
+         * before; it appears on both sections that feed it so either one
+         * saves the same combined settings without needing to flip
+         * between them for one save.
+         */
+        <div className="space-y-4">
+          <div className="flex flex-wrap gap-2 rounded-lg bg-slate-50 p-1">
+            {(
+              [
+                ['shopify', 'Shopify'],
+                ['location', 'Location'],
+                ['fiscal', 'Fiscal Device'],
+                ['mpesa', 'M-Pesa'],
+                ['printer', 'Printer']
+              ] as const
+            ).map(([key, label]) => (
+              <button
+                key={key}
+                type="button"
+                onClick={() => setIntegrationSection(key)}
+                className={`h-11 flex-1 rounded-md px-4 text-base font-semibold transition ${
+                  integrationSection === key
+                    ? 'bg-white text-rose-700 shadow-sm'
+                    : 'text-slate-500'
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
 
           {integrationsLoading ? (
             <p className="text-base text-slate-400">Loading…</p>
           ) : (
-            <div className="space-y-4">
-              <div>
-                <h4 className="mb-2 text-xl font-semibold text-slate-700">M-Pesa (Daraja)</h4>
+            <>
+              {integrationSection === 'shopify' && (
+                <section className="rounded-xl border border-slate-200 bg-white p-4">
+                  <h3 className="mb-1 text-2xl font-bold text-slate-800">Shopify Connection</h3>
+                  <p className="mb-4 text-base text-slate-500">
+                    Shopify store URL and Admin API token. These credentials are stored securely
+                    on this device and only need to be entered once per till.
+                  </p>
+
+                  <label className="mb-1 block text-lg font-medium text-slate-600">Store URL</label>
+                  <input
+                    type="text"
+                    value={shopifyStoreUrl}
+                    onChange={(e) => setShopifyStoreUrlInput(e.target.value)}
+                    placeholder="https://your-store.myshopify.com"
+                    className="mb-1 w-full h-12 rounded-lg border border-slate-300 px-3 text-lg focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-100"
+                  />
+                  {shopifyStoreUrlMessage && (
+                    <p className="mb-2 text-base text-slate-500">{shopifyStoreUrlMessage}</p>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => handleSaveShopifyStoreUrl()}
+                    className="mb-4 rounded-lg border border-slate-300 px-4 py-2 text-base font-medium text-slate-700 hover:bg-slate-50"
+                  >
+                    Save Store URL
+                  </button>
+
+                  <div className="border-t border-slate-100 pt-4">
+                    <h4 className="mb-1 text-xl font-semibold text-slate-700">Admin API Token</h4>
+                    <p className="mb-3 text-sm text-slate-500">
+                      Stored securely on this device. For your protection, once saved the token
+                      cannot be viewed again here — only whether one is currently configured.
+                    </p>
+
+                    <p className="mb-3 text-base font-medium">
+                      Status:{' '}
+                      <span className={shopifyTokenConfigured ? 'text-emerald-600' : 'text-amber-600'}>
+                        {shopifyTokenConfigured ? 'Configured' : 'Not configured'}
+                      </span>
+                    </p>
+
+                    <label className="mb-1 block text-lg font-medium text-slate-600">
+                      New Token (starts with shpat_)
+                    </label>
+                    <input
+                      type="password"
+                      value={shopifyTokenInput}
+                      onChange={(e) => setShopifyTokenInput(e.target.value)}
+                      placeholder="shpat_••••••••••••••••"
+                      className="mb-3 w-full h-12 rounded-lg border border-slate-300 px-3 text-lg focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-100"
+                    />
+
+                    {shopifyTokenMessage && (
+                      <p className="mb-3 text-base text-slate-500">{shopifyTokenMessage}</p>
+                    )}
+
+                    <button
+                      type="button"
+                      onClick={() => void handleSaveShopifyToken()}
+                      className="rounded-lg bg-rose-600 px-4 py-2 text-base font-semibold text-white hover:bg-rose-700"
+                    >
+                      Save Token
+                    </button>
+                  </div>
+                </section>
+              )}
+
+              {integrationSection === 'location' && (
+                <section className="rounded-xl border border-slate-200 bg-white p-4">
+                  <h3 className="mb-1 text-2xl font-bold text-slate-800">Location</h3>
+                  <p className="mb-4 text-sm text-slate-500">
+                    The Shopify location this till scopes inventory and sales to.
+                  </p>
+
+                  {!changingLocation ? (
+                    <>
+                      <p className="mb-3 text-base font-medium text-slate-700">
+                        Current location:{' '}
+                        <span className="text-slate-900">{currentLocationName ?? 'Not set'}</span>
+                      </p>
+                      <button
+                        type="button"
+                        onClick={handleOpenChangeLocation}
+                        className="rounded-lg border border-slate-300 px-4 py-2 text-base font-medium text-slate-700 hover:bg-slate-50"
+                      >
+                        Change Location
+                      </button>
+                    </>
+                  ) : locationOptionsLoading ? (
+                    <p className="text-base text-slate-400">Loading locations…</p>
+                  ) : (
+                    <div className="max-w-3xl">
+                      {locationOptions.length > 0 ? (
+                        <div className="rounded-xl border border-slate-200 bg-white p-4">
+                          <LocationPicker
+                            shopName={locationShopName}
+                            locations={locationOptions}
+                            selectedLocationId={selectedLocationId}
+                            onSelect={setSelectedLocationId}
+                            onConfirm={handleConfirmChangeLocation}
+                            confirming={locationSaving}
+                            confirmError={locationError}
+                            confirmLabel={locationSaving ? 'Saving…' : 'Save Location'}
+                            onBack={() => setChangingLocation(false)}
+                          />
+                        </div>
+                      ) : (
+                        <p className="rounded-lg bg-rose-50 px-3 py-2 text-base font-medium text-rose-700">
+                          {locationError ?? 'No locations returned by Shopify'}
+                        </p>
+                      )}
+                    </div>
+                  )}
+                </section>
+              )}
+
+              {integrationSection === 'mpesa' && (
+                <section className="rounded-xl border border-slate-200 bg-white p-4">
+                  <h3 className="mb-1 text-2xl font-bold text-slate-800">M-Pesa (Daraja)</h3>
+                  <p className="mb-4 text-base text-slate-500">How this till takes M-Pesa payments.</p>
+                  <div>
                 <div className="grid grid-cols-2 gap-3">
                   <div>
                     <label className="mb-1 block text-lg font-medium text-slate-600">
@@ -1261,8 +1323,22 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
                 </div>
               </div>
 
-              <div>
-                <h4 className="mb-2 text-xl font-semibold text-slate-700">Fiscal Device</h4>
+              {integrationsMessage && (
+                <p className="mt-4 text-base text-slate-500">{integrationsMessage}</p>
+              )}
+              <button
+                type="button"
+                onClick={() => void handleSaveIntegrationsConfig()}
+                className="mt-3 rounded-lg bg-rose-600 px-4 py-2 text-base font-semibold text-white hover:bg-rose-700"
+              >
+                Save Integration Settings
+              </button>
+                </section>
+              )}
+
+              {integrationSection === 'fiscal' && (
+                <section className="rounded-xl border border-slate-200 bg-white p-4">
+                  <h3 className="mb-1 text-2xl font-bold text-slate-800">Fiscal Device</h3>
                 <p className="mb-1 text-sm text-slate-500">
                   How this till reaches the KRA control unit that files your sales.
                 </p>
@@ -1433,9 +1509,8 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
                     </p>
                   </div>
                 )}
-              </div>
 
-              <div>
+              <div className="mt-4 border-t border-slate-100 pt-4">
                 <h4 className="mb-2 text-xl font-semibold text-slate-700">Store Details</h4>
                 <p className="mb-3 text-sm text-slate-500">
                   Printed at the top of every receipt this till issues.
@@ -1473,133 +1548,122 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
               </div>
 
               {integrationsMessage && (
-                <p className="text-base text-slate-500">{integrationsMessage}</p>
+                <p className="mt-4 text-base text-slate-500">{integrationsMessage}</p>
               )}
-
               <button
                 type="button"
                 onClick={() => void handleSaveIntegrationsConfig()}
-                className="rounded-lg bg-rose-600 px-4 py-2 text-base font-semibold text-white hover:bg-rose-700"
+                className="mt-3 rounded-lg bg-rose-600 px-4 py-2 text-base font-semibold text-white hover:bg-rose-700"
               >
                 Save Integration Settings
               </button>
-            </div>
-          )}
-        </section>
-      ) : null}
+                </section>
+              )}
 
-      {activeTab === 'integrations' && (
-        <section className="rounded-xl border border-slate-200 bg-white p-4">
-          <h3 className="mb-1 text-2xl font-bold text-slate-800">Shopify Connection</h3>
-          <p className="mb-4 text-base text-slate-500">
-            Shopify store URL and Admin API token. These credentials are stored securely on
-            this device and only need to be entered once per till.
-          </p>
-
-          <label className="mb-1 block text-lg font-medium text-slate-600">Store URL</label>
-          <input
-            type="text"
-            value={shopifyStoreUrl}
-            onChange={(e) => setShopifyStoreUrlInput(e.target.value)}
-            placeholder="https://your-store.myshopify.com"
-            className="mb-1 w-full h-12 rounded-lg border border-slate-300 px-3 text-lg focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-100"
-          />
-          {shopifyStoreUrlMessage && (
-            <p className="mb-2 text-base text-slate-500">{shopifyStoreUrlMessage}</p>
-          )}
-          <button
-            type="button"
-            onClick={() => handleSaveShopifyStoreUrl()}
-            className="mb-4 rounded-lg border border-slate-300 px-4 py-2 text-base font-medium text-slate-700 hover:bg-slate-50"
-          >
-            Save Store URL
-          </button>
-
-          <div className="border-t border-slate-100 pt-4">
-            <h4 className="mb-1 text-xl font-semibold text-slate-700">Admin API Token</h4>
-            <p className="mb-3 text-sm text-slate-500">
-              Stored securely on this device. For your protection, once saved the token
-              cannot be viewed again here — only whether one is currently configured.
-            </p>
-
-            <p className="mb-3 text-base font-medium">
-              Status:{' '}
-              <span className={shopifyTokenConfigured ? 'text-emerald-600' : 'text-amber-600'}>
-                {shopifyTokenConfigured ? 'Configured' : 'Not configured'}
-              </span>
-            </p>
-
-            <label className="mb-1 block text-lg font-medium text-slate-600">
-              New Token (starts with shpat_)
-            </label>
-            <input
-              type="password"
-              value={shopifyTokenInput}
-              onChange={(e) => setShopifyTokenInput(e.target.value)}
-              placeholder="shpat_••••••••••••••••"
-              className="mb-3 w-full h-12 rounded-lg border border-slate-300 px-3 text-lg focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-100"
-            />
-
-            {shopifyTokenMessage && (
-              <p className="mb-3 text-base text-slate-500">{shopifyTokenMessage}</p>
-            )}
-
-            <button
-              type="button"
-              onClick={() => void handleSaveShopifyToken()}
-              className="rounded-lg bg-rose-600 px-4 py-2 text-base font-semibold text-white hover:bg-rose-700"
-            >
-              Save Token
-            </button>
-          </div>
-
-          <div className="border-t border-slate-100 pt-4">
-            <h4 className="mb-1 text-xl font-semibold text-slate-700">Location</h4>
-            <p className="mb-3 text-sm text-slate-500">
-              The Shopify location this till scopes inventory and sales to.
-            </p>
-
-            {!changingLocation ? (
-              <>
-                <p className="mb-3 text-base font-medium text-slate-700">
-                  Current location:{' '}
-                  <span className="text-slate-900">{currentLocationName ?? 'Not set'}</span>
-                </p>
-                <button
-                  type="button"
-                  onClick={handleOpenChangeLocation}
-                  className="rounded-lg border border-slate-300 px-4 py-2 text-base font-medium text-slate-700 hover:bg-slate-50"
-                >
-                  Change Location
-                </button>
-              </>
-            ) : locationOptionsLoading ? (
-              <p className="text-base text-slate-400">Loading locations…</p>
-            ) : (
-              <div className="max-w-3xl">
-                {locationOptions.length > 0 ? (
-                  <div className="rounded-xl border border-slate-200 bg-white p-4">
-                    <LocationPicker
-                      shopName={locationShopName}
-                      locations={locationOptions}
-                      selectedLocationId={selectedLocationId}
-                      onSelect={setSelectedLocationId}
-                      onConfirm={handleConfirmChangeLocation}
-                      confirming={locationSaving}
-                      confirmError={locationError}
-                      confirmLabel={locationSaving ? 'Saving…' : 'Save Location'}
-                      onBack={() => setChangingLocation(false)}
-                    />
-                  </div>
-                ) : (
-                  <p className="rounded-lg bg-rose-50 px-3 py-2 text-base font-medium text-rose-700">
-                    {locationError ?? 'No locations returned by Shopify'}
+              {integrationSection === 'printer' && (
+                <section className="rounded-xl border border-slate-200 bg-white p-4">
+                  <h3 className="mb-1 text-2xl font-bold text-slate-800">Printers</h3>
+                  <p className="mb-4 text-base text-slate-500">
+                    Register additional printers — a secondary kitchen or label printer
+                    alongside the main receipt printer. A store with no printers registered here
+                    keeps using the single receipt printer configured via environment variables,
+                    unchanged.
                   </p>
-                )}
-              </div>
-            )}
-          </div>
-        </section>
+
+                  {printerActionError && (
+                    <p className="mb-3 rounded-lg bg-rose-50 px-3 py-2 text-base font-medium text-rose-700">
+                      {printerActionError}
+                    </p>
+                  )}
+
+                  {printersLoading ? (
+                    <p className="text-base text-slate-400">Loading…</p>
+                  ) : (
+                    <div className="space-y-2">
+                      {printers.length === 0 && (
+                        <p className="text-base text-slate-400">No printers registered yet.</p>
+                      )}
+                      {printers.map((printer) => (
+                        <div
+                          key={printer.id}
+                          className="rounded-lg border border-slate-100 px-3 py-2"
+                        >
+                          <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-2">
+                              <span className="font-medium text-slate-800">{printer.id}</span>
+                              <span className="rounded-full bg-slate-100 px-2 py-0.5 text-sm font-medium capitalize text-slate-500">
+                                {printer.type}
+                              </span>
+                              {!printer.enabled && (
+                                <span className="rounded-full bg-amber-100 px-2 py-0.5 text-sm font-medium text-amber-700">
+                                  Disabled
+                                </span>
+                              )}
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <button
+                                type="button"
+                                disabled={testingPrinterId === printer.id}
+                                onClick={() => handleTestPrinter(printer.id, printer.interfaceName)}
+                                className="rounded-md border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                              >
+                                {testingPrinterId === printer.id ? 'Testing…' : 'Test'}
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleDeletePrinter(printer.id)}
+                                className="rounded-md border border-rose-300 px-3 py-1.5 text-sm font-medium text-rose-700 hover:bg-rose-50"
+                              >
+                                Remove
+                              </button>
+                            </div>
+                          </div>
+                          <p className="mt-1 text-sm text-slate-500">{printer.interfaceName}</p>
+                          {printerTestMessages[printer.id] && (
+                            <p className="mt-1 text-sm text-slate-600">{printerTestMessages[printer.id]}</p>
+                          )}
+                        </div>
+                      ))}
+
+                      <div className="grid grid-cols-2 gap-2 rounded-lg bg-slate-50 p-3 sm:grid-cols-4">
+                        <input
+                          type="text"
+                          placeholder="Printer id (e.g. kitchen-1)"
+                          value={newPrinterId}
+                          onChange={(e) => setNewPrinterId(e.target.value)}
+                          className="h-12 rounded-lg border border-slate-300 px-3 text-lg focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-100"
+                        />
+                        <select
+                          value={newPrinterType}
+                          onChange={(e) => setNewPrinterType(e.target.value as PrinterType)}
+                          className="h-12 rounded-lg border border-slate-300 px-3 text-lg focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-100"
+                        >
+                          <option value="receipt">Receipt</option>
+                          <option value="kitchen">Kitchen</option>
+                          <option value="label">Label</option>
+                        </select>
+                        <input
+                          type="text"
+                          placeholder="tcp://192.168.0.101:9100"
+                          value={newPrinterInterface}
+                          onChange={(e) => setNewPrinterInterface(e.target.value)}
+                          className="h-12 rounded-lg border border-slate-300 px-3 text-lg focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-100"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => handleAddPrinter()}
+                          className="rounded-lg bg-rose-600 px-4 py-2 text-base font-semibold text-white hover:bg-rose-700"
+                        >
+                          Add Printer
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </section>
+              )}
+            </>
+          )}
+        </div>
       )}
 
       {activeTab === 'overview' && (

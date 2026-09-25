@@ -172,19 +172,34 @@ describe('EtimsSetupGate', () => {
     expect(input('etims-baseUrl').value).toBe('http://localhost:4444')
   })
 
-  it('docks the keys below the form and reserves their height, so Save is never under them', async () => {
+  /**
+   * Phase E2(c): the sheet now overlays the bottom of the form instead of
+   * the form reserving space for it. Replaces the pre-Phase-E assertion
+   * that the root grew a `pb-keyboard-sheet` reservation — this is the
+   * one deliberate exception to this file's tripwire status, recorded in
+   * docs/phase-144.md alongside the old assertion it replaces.
+   */
+  it('overlays the sheet over the form without reserving space; Save is visible and enabled after Submit', async () => {
     await mount(createElement(EtimsSetupGate, { onComplete }))
     const gateRoot = container.firstElementChild as HTMLElement
     expect(gateRoot.className).not.toContain('pb-keyboard-sheet')
 
-    tap(input('etims-deviceIp'))
+    fill(['1', '9', '2', '.', '1', '6', '8', '.', '1', '.', '5', '0'], ['8', '0', '0', '0'], ['p', 'w'])
 
     expect(sheet()!.className).toContain('h-keyboard-sheet')
     expect(sheet()!.className).toContain('bottom-0')
-    expect(gateRoot.className).toContain('pb-keyboard-sheet')
-    expect(gateRoot.className).toContain('items-start')
-    expect(sheet()!.contains(button('Save & Continue'))).toBe(false)
+    expect(gateRoot.className).not.toContain('pb-keyboard-sheet')
     expect(container.querySelector('.bg-black\\/50')).toBeNull()
+
+    const submit = Array.from(sheet()!.querySelectorAll('button')).find(
+      (el) => el.textContent === 'Submit'
+    )
+    if (!submit) throw new Error('No Submit key in the open sheet')
+    act(() => submit.click())
+
+    expect(sheet()).toBeNull()
+    const saveButton = button('Save & Continue')
+    expect(saveButton.disabled).toBe(false)
   })
 
   it('draws the sheet above the gate (z-110 over z-[100])', async () => {

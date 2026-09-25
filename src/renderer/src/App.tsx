@@ -410,39 +410,54 @@ export default function App() {
             )}
           </nav>
         </div>
-        <div className="flex shrink-0 items-center gap-4 text-base text-slate-600">
-          <div className="flex shrink-0 items-center gap-2">
-            <span className="font-medium text-slate-700">
+        <div className="flex min-w-0 flex-1 items-center justify-end gap-4 text-base text-slate-600">
+          <div className="flex min-w-0 items-center gap-2">
+            <span className="max-w-40 truncate font-medium text-slate-700">
               {currentStaff.name}
             </span>
             {currentStaff.role.toLowerCase() !== currentStaff.name.toLowerCase() && (
-              <span className="rounded-full bg-slate-100 px-2.5 py-1 text-sm font-medium capitalize text-slate-500">
+              <span className="hidden shrink-0 rounded-full bg-slate-100 px-2.5 py-1 text-sm font-medium capitalize text-slate-500 2xl:inline-block">
                 {currentStaff.role}
               </span>
             )}
             <button
               type="button"
               onClick={() => void logout()}
-              className="text-sm font-medium text-rose-600 hover:text-rose-700"
+              className="shrink-0 text-sm font-medium text-rose-600 hover:text-rose-700"
             >
               Log Out
             </button>
           </div>
+          {/**
+           * Both states render at the same fixed width (`w-28`,
+           * `justify-center`) so the offline pill is never wider than the
+           * online one (phase-142's header overflow finding) — the full
+           * "sales will queue" message moves to `title`/`aria-label`
+           * rather than staying on screen at every width.
+           */}
           {online ? (
-            <span className="flex shrink-0 items-center gap-2 rounded-full bg-emerald-100 px-3 py-1 font-medium text-emerald-700">
+            <span
+              className="flex w-28 shrink-0 items-center justify-center gap-2 rounded-full bg-emerald-100 px-3 py-1 font-medium text-emerald-700"
+              title="Online"
+              aria-label="Online"
+            >
               <span
-                className="h-2.5 w-2.5 rounded-full bg-emerald-500"
+                className="h-2.5 w-2.5 shrink-0 rounded-full bg-emerald-500"
                 aria-hidden
               />
               Online
             </span>
           ) : (
-            <span className="flex shrink-0 items-center gap-2 rounded-full bg-rose-100 px-3 py-1 font-medium text-rose-700">
+            <span
+              className="flex w-28 shrink-0 items-center justify-center gap-2 rounded-full bg-rose-100 px-3 py-1 font-medium text-rose-700"
+              title="Offline — sales will queue"
+              aria-label="Offline — sales will queue"
+            >
               <span
-                className="h-2.5 w-2.5 rounded-full bg-rose-500"
+                className="h-2.5 w-2.5 shrink-0 rounded-full bg-rose-500"
                 aria-hidden
               />
-              Offline — sales will queue
+              Offline
             </span>
           )}
           <UnfiledSalesBadge
@@ -535,9 +550,19 @@ export default function App() {
           />
         </main>
       ) : (
-        <main className="flex-1 overflow-y-auto p-6">
-          <h2 className="mb-4 text-lg font-semibold text-slate-700">Admin</h2>
-          <AdminScreen requestManagerPin={requestManagerPin} initialTab={adminInitialTab} />
+        /**
+         * The "Admin" heading sits in its own `shrink-0` row above the
+         * scroll region (phase-142's "+44" finding) — previously it
+         * shared `main`'s own `overflow-y-auto` with `AdminScreen`, so
+         * its height came out of the same budget `AdminScreen` was
+         * designed to fit, always overflowing by the heading's own
+         * height before a single Integrations field was ever measured.
+         */
+        <main className="flex flex-1 flex-col overflow-hidden">
+          <h2 className="shrink-0 px-6 pt-6 pb-4 text-lg font-semibold text-slate-700">Admin</h2>
+          <div className="min-h-0 flex-1 overflow-y-auto px-6 pb-6">
+            <AdminScreen requestManagerPin={requestManagerPin} initialTab={adminInitialTab} />
+          </div>
         </main>
       )}
 
