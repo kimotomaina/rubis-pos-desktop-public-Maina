@@ -1,9 +1,13 @@
+import { useState } from 'react'
+
 export interface VirtualKeyboardProps {
   value: string
   onChange: (next: string) => void
   onDone: () => void
   /** A key press once `value.length` reaches this is a no-op, matching the field's own `maxLength`. */
   maxLength?: number
+  /** `caps` (default) is the uppercase-only grid; `text` adds lower case, a Shift toggle and a symbol row. */
+  layout?: 'caps' | 'text'
 }
 
 const KEY_CLASS =
@@ -11,15 +15,14 @@ const KEY_CLASS =
 
 const DIGIT_ROW = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '0']
 
-/**
- * Uppercase-only QWERTY rows (no shift/caps key — see the file doc for
- * why that's a deliberate simplification, not an oversight).
- */
 const LETTER_ROWS = [
   ['Q', 'W', 'E', 'R', 'T', 'Y', 'U', 'I', 'O', 'P'],
   ['A', 'S', 'D', 'F', 'G', 'H', 'J', 'K', 'L'],
   ['Z', 'X', 'C', 'V', 'B', 'N', 'M']
 ]
+
+/** The characters a URL (`http://host:4444/`), a Shopify token (`shpat_…`) or a device password needs. */
+const SYMBOL_ROW = ['-', '_', '.', ':', '/', '@', '#', '$', '!', '?']
 
 /**
  * Touch alphanumeric keyboard (phase-86, Task 3) — the letters/digits
@@ -29,20 +32,27 @@ const LETTER_ROWS = [
  * whatever a field already does (`.trim()`, `.toUpperCase()`, KRA PIN
  * format checks) without needing to know about any of it.
  *
- * Deliberately uppercase-only, no shift/caps key: the KRA PIN fields
- * already uppercase every keystroke themselves (`isValidKraPinFormat`
- * requires it), and an all-caps company name is a normal, unremarkable
- * convention on a printed receipt — so a second, always-on layer of
- * case state would add real complexity (tracking shift, rendering two
- * label sets) for a distinction that's a wash for the fields this
- * actually serves today. If a future field genuinely needs mixed case,
- * that's the point to revisit this, not before.
+ * The default `caps` layout is uppercase-only with no Shift key: the KRA
+ * PIN fields uppercase every keystroke themselves, and an all-caps
+ * company name is normal on a printed receipt. The `text` layout
+ * (phase-137) exists for the setup screens, whose server address, store
+ * URL, API token and device password are case-sensitive and contain
+ * symbols. Its Shift key is a toggle, not one-shot, and is the only state
+ * this component holds; the value itself is still entirely the caller's.
  *
  * @param {VirtualKeyboardProps} props
  * @returns {JSX.Element}
  */
-export default function VirtualKeyboard({ value, onChange, onDone, maxLength }: VirtualKeyboardProps) {
+export default function VirtualKeyboard({
+  value,
+  onChange,
+  onDone,
+  maxLength,
+  layout = 'caps'
+}: VirtualKeyboardProps) {
+  const [shift, setShift] = useState(false)
   const atLimit = maxLength !== undefined && value.length >= maxLength
+  const lowerCase = layout === 'text' && !shift
 
   const append = (char: string): void => {
     if (atLimit) return
@@ -67,23 +77,53 @@ export default function VirtualKeyboard({ value, onChange, onDone, maxLength }: 
         ))}
       </div>
 
-      {LETTER_ROWS.map((row, index) => (
-        <div key={index} className="flex gap-1.5">
-          {row.map((key) => (
+      {layout === 'text' && (
+        <div className="grid grid-cols-10 gap-1.5">
+          {SYMBOL_ROW.map((key) => (
             <button
               key={key}
               type="button"
               onClick={() => append(key)}
               disabled={atLimit}
-              className={`${KEY_CLASS} flex-1`}
+              className={KEY_CLASS}
             >
               {key}
             </button>
           ))}
         </div>
+      )}
+
+      {LETTER_ROWS.map((row, index) => (
+        <div key={index} className="flex gap-1.5">
+          {row.map((key) => {
+            const char = lowerCase ? key.toLowerCase() : key
+            return (
+              <button
+                key={key}
+                type="button"
+                onClick={() => append(char)}
+                disabled={atLimit}
+                className={`${KEY_CLASS} flex-1`}
+              >
+                {char}
+              </button>
+            )
+          })}
+        </div>
       ))}
 
       <div className="flex gap-1.5">
+        {layout === 'text' && (
+          <button
+            type="button"
+            onClick={() => setShift((prev) => !prev)}
+            aria-label="Shift"
+            aria-pressed={shift}
+            className={`${shift ? KEY_CLASS.replace('bg-slate-100', 'bg-slate-300') : KEY_CLASS} w-20 shrink-0`}
+          >
+            ⇧
+          </button>
+        )}
         <button
           type="button"
           onClick={backspace}

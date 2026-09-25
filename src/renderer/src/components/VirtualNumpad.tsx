@@ -5,6 +5,8 @@ interface VirtualNumpadProps {
   onEnter?: () => void
   /** Disables the decimal-point key — used for integer-only fields (e.g. PIN entry). */
   allowDecimal?: boolean
+  /** Lets the decimal-point key be pressed more than once, for dotted IP addresses. Validation stays with the field. */
+  multipleDecimals?: boolean
 }
 
 const NUMPAD_KEY_CLASS =
@@ -29,10 +31,11 @@ export default function VirtualNumpad({
   value,
   onChange,
   onEnter,
-  allowDecimal = true
+  allowDecimal = true,
+  multipleDecimals = false
 }: VirtualNumpadProps) {
   const appendKey = (key: string) => {
-    if (key === '.' && (!allowDecimal || value.includes('.'))) return
+    if (key === '.' && (!allowDecimal || (!multipleDecimals && value.includes('.')))) return
     onChange(value + key)
   }
 

@@ -12,9 +12,25 @@
  * editing or applies any validation of its own — it only ever relays
  * keystrokes through the `onChange` it was given, exactly like
  * `VirtualNumpad`'s "fully controlled, caller owns validation" contract.
+ *
+ * The pre-login setup screens (onboarding, the fiscal setup gate) open it
+ * the same way, with a `mode` choosing the key set and `docked` keeping
+ * their Save button uncovered.
  */
 
 import { create } from 'zustand'
+
+/**
+ * Which key set the overlay shows.
+ *
+ * - `caps` (the default): uppercase letters, digits and space, what the
+ *   KRA PIN and company-name fields have always used.
+ * - `text`: lower and upper case plus the symbols a URL, an API token or
+ *   a device password needs.
+ * - `numeric`: `VirtualNumpad` with no decimal point (ports, PINs).
+ * - `ip`: `VirtualNumpad` whose decimal key can be pressed more than once.
+ */
+export type KeyboardMode = 'caps' | 'text' | 'numeric' | 'ip'
 
 /** What a field hands the keyboard when it opens. */
 export interface KeyboardRequest {
@@ -24,6 +40,16 @@ export interface KeyboardRequest {
   label: string
   /** Enforced the same way the underlying `<input maxLength>` already is — a key press past this length is a no-op. */
   maxLength?: number
+  /** Defaults to `caps`. */
+  mode?: KeyboardMode
+  /**
+   * Draws the keys as a sheet docked to the bottom of the window with no
+   * backdrop, instead of a modal over the whole screen, so the form and
+   * its Save button above stay visible and tappable. The setup screens
+   * that use it reserve the sheet's height (`pb-keyboard-sheet`) below
+   * their content.
+   */
+  docked?: boolean
 }
 
 interface KeyboardStoreState {

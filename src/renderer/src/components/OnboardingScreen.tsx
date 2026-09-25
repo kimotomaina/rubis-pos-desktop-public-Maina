@@ -1,9 +1,15 @@
 import { useState } from 'react'
 import rubisLogo from '../assets/logo-rubis.png'
 import LocationPicker, { type ShopifyLocationOption } from './LocationPicker.js'
+import { useKeyboardStore } from '../stores/keyboardStore.js'
 
 /** Which step of the wizard is currently shown. */
 type OnboardingStep = 'connect' | 'location'
+
+const INPUT_CLASS =
+  'h-12 w-full rounded-lg border border-slate-300 bg-white px-3 text-lg text-slate-900 placeholder-slate-400 focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-100'
+
+const LABEL_CLASS = 'mb-1 block text-base font-medium text-slate-600'
 
 /**
  * First-run setup wizard — replaces the Login screen on a
@@ -19,6 +25,12 @@ type OnboardingStep = 'connect' | 'location'
  * process's already-resolved config (store URL, vault token, location
  * id) is picked up by every service that depends on it.
  *
+ * The step-1 fields are read-only and open the docked on-screen keyboard
+ * (`text` layout) on tap; its keystrokes come back through the store's
+ * relay into the same `setStoreUrl`/`setToken` state a physical keyboard
+ * used to write. While the sheet is open the page top-aligns and reserves
+ * the sheet's height, so Connect & Verify stays visible above it.
+ *
  * @returns {JSX.Element}
  */
 export default function OnboardingScreen() {
@@ -33,8 +45,13 @@ export default function OnboardingScreen() {
   const [selectedLocationId, setSelectedLocationId] = useState('')
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
+  const keyboardOpen = useKeyboardStore((state) => state.request?.docked === true)
+
+  const openKeyboard = (label: string, value: string, onChange: (next: string) => void) =>
+    useKeyboardStore.getState().open({ value, onChange, label, mode: 'text', docked: true })
 
   const handleConnect = async () => {
+    useKeyboardStore.getState().close()
     if (!storeUrl.trim() || !token.trim()) {
       setConnectError('Enter both the store URL and the Admin API token')
       return
@@ -87,10 +104,14 @@ export default function OnboardingScreen() {
   }
 
   return (
-    <div className="app-theme flex h-screen flex-col items-center justify-center px-4">
+    <div
+      className={`app-theme flex h-screen flex-col items-center overflow-y-auto px-4 ${
+        keyboardOpen ? 'justify-start pt-8 pb-keyboard-sheet' : 'justify-center'
+      }`}
+    >
       <img src={rubisLogo} alt="Enjoy" className="mb-8 h-16 w-auto" />
 
-      <div className="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-6 shadow-xl">
+      <div className="w-full max-w-2xl rounded-2xl border border-slate-200 bg-white p-6 shadow-xl">
         <h1 className="mb-1 text-2xl font-bold text-slate-900">Connect this till to Shopify</h1>
         <p className="mb-6 text-base text-slate-500">
           {step === 'connect'
@@ -100,28 +121,39 @@ export default function OnboardingScreen() {
 
         {step === 'connect' && (
           <div>
-            <label className="mb-1 block text-base font-medium text-slate-600">
-              Shopify Store URL
-            </label>
-            <input
-              type="text"
-              value={storeUrl}
-              onChange={(e) => setStoreUrl(e.target.value)}
-              placeholder="your-store.myshopify.com"
-              className="mb-4 h-12 w-full rounded-lg border border-slate-300 bg-white px-3 text-lg text-slate-900 placeholder-slate-400 focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-100"
-              autoFocus
-            />
+            <div className="mb-4 grid grid-cols-2 gap-4">
+              <div>
+                <label htmlFor="onboarding-store-url" className={LABEL_CLASS}>
+                  Shopify Store URL
+                </label>
+                <input
+                  id="onboarding-store-url"
+                  type="text"
+                  value={storeUrl}
+                  readOnly
+                  onFocus={() => openKeyboard('Shopify Store URL', storeUrl, setStoreUrl)}
+                  onClick={() => openKeyboard('Shopify Store URL', storeUrl, setStoreUrl)}
+                  placeholder="your-store.myshopify.com"
+                  className={INPUT_CLASS}
+                />
+              </div>
 
-            <label className="mb-1 block text-base font-medium text-slate-600">
-              Admin API Access Token
-            </label>
-            <input
-              type="password"
-              value={token}
-              onChange={(e) => setToken(e.target.value)}
-              placeholder="shpat_..."
-              className="mb-4 h-12 w-full rounded-lg border border-slate-300 bg-white px-3 text-lg text-slate-900 placeholder-slate-400 focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-100"
-            />
+              <div>
+                <label htmlFor="onboarding-token" className={LABEL_CLASS}>
+                  Admin API Access Token
+                </label>
+                <input
+                  id="onboarding-token"
+                  type="password"
+                  value={token}
+                  readOnly
+                  onFocus={() => openKeyboard('Admin API Access Token', token, setToken)}
+                  onClick={() => openKeyboard('Admin API Access Token', token, setToken)}
+                  placeholder="shpat_..."
+                  className={INPUT_CLASS}
+                />
+              </div>
+            </div>
 
             {connectError && (
               <p className="mb-4 rounded-lg bg-rose-50 px-3 py-2 text-base font-medium text-rose-700">

@@ -47,6 +47,14 @@
   --color-rose-700: color-mix(in oklab, var(--color-brand-red) 80%, var(--color-brand-black));
 
   --font-sans: 'Quicksand', ui-sans-serif, system-ui, sans-serif;
+
+  /**
+   * Height of the docked on-screen keyboard sheet, and the space the setup
+   * screens reserve below their form while it is open (`h-keyboard-sheet`,
+   * `pb-keyboard-sheet`). Fits the tallest key set, the `text` keyboard's
+   * six rows, plus the label and padding.
+   */
+  --spacing-keyboard-sheet: 28rem;
 }
 
 /**

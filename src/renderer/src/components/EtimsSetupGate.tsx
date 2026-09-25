@@ -5,6 +5,7 @@ import {
   DEFAULT_ETIMS_BASE_URL,
   DEFAULT_ETIMS_DEVICE_PORT
 } from '../lib/etimsConfig.js'
+import { useKeyboardStore, type KeyboardMode } from '../stores/keyboardStore.js'
 
 /** Fields collected by the eTIMS setup gate's form. */
 interface EtimsSetupForm {
@@ -33,6 +34,24 @@ const EMPTY_FORM: EtimsSetupForm = {
   password: ''
 }
 
+/**
+ * The form's fields in on-screen order: two per row, so server address
+ * and IP share the first row, port and password the second. `mode` is the
+ * on-screen key set each one opens.
+ */
+const FIELDS: {
+  key: keyof EtimsSetupForm
+  label: string
+  type: 'text' | 'password'
+  mode: KeyboardMode
+  placeholder: string
+}[] = [
+  { key: 'baseUrl', label: 'Fiscal server address', type: 'text', mode: 'text', placeholder: DEFAULT_ETIMS_BASE_URL },
+  { key: 'deviceIp', label: 'Fiscal device IP address', type: 'text', mode: 'ip', placeholder: '192.168.1.50' },
+  { key: 'devicePort', label: 'Fiscal device port', type: 'text', mode: 'numeric', placeholder: DEFAULT_ETIMS_DEVICE_PORT },
+  { key: 'password', label: 'Fiscal device password', type: 'password', mode: 'text', placeholder: '••••••••' }
+]
+
 /** Props accepted by {@link EtimsSetupGate}. */
 interface EtimsSetupGateProps {
   /** Called once the connection fields are saved (or mock mode was chosen), lifting the gate. */
@@ -45,6 +64,10 @@ interface EtimsSetupGateProps {
  * main POS UI so checkout never reaches an unconfigured fiscal device
  * and crashes with an HTTP 500.
  *
+ * Fields are read-only and open the docked on-screen keyboard or numpad
+ * on tap (see {@link FIELDS}). While it is open the gate top-aligns and
+ * reserves the sheet's height, so Save & Continue stays visible above it.
+ *
  * @param {EtimsSetupGateProps} props
  * @returns {JSX.Element}
  */
@@ -55,12 +78,21 @@ export default function EtimsSetupGate({ onComplete }: EtimsSetupGateProps) {
   /** Per-field validation messages, keyed by field. */
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({})
 
+  const keyboardOpen = useKeyboardStore((state) => state.request?.docked === true)
+
   const isFormComplete = Object.values(form).every((value) => value.trim().length > 0)
 
-  const updateField = (field: keyof EtimsSetupForm) => (e: React.ChangeEvent<HTMLInputElement>) =>
-    setForm((prev) => ({ ...prev, [field]: e.target.value }))
+  const openKeyboard = (field: (typeof FIELDS)[number]) =>
+    useKeyboardStore.getState().open({
+      value: form[field.key],
+      onChange: (next) => setForm((prev) => ({ ...prev, [field.key]: next })),
+      label: field.label,
+      mode: field.mode,
+      docked: true
+    })
 
   const handleSave = async () => {
+    useKeyboardStore.getState().close()
     if (!isFormComplete) return
     /**
      * Same checks the Admin screen applies: this is the screen a branch
@@ -89,8 +121,12 @@ export default function EtimsSetupGate({ onComplete }: EtimsSetupGateProps) {
   }
 
   return (
-    <div className="app-theme fixed inset-0 z-[100] flex h-screen items-center justify-center overflow-y-auto px-4 py-8">
-      <div className="w-full max-w-lg rounded-2xl border border-slate-200 bg-white p-6 shadow-xl">
+    <div
+      className={`app-theme fixed inset-0 z-[100] flex h-screen justify-center overflow-y-auto px-4 pt-8 ${
+        keyboardOpen ? 'items-start pb-keyboard-sheet' : 'items-center pb-8'
+      }`}
+    >
+      <div className="w-full max-w-2xl rounded-2xl border border-slate-200 bg-white p-6 shadow-xl">
         <div className="mb-4 flex items-center gap-3">
           <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-amber-100 text-amber-600">
             <WarningIcon className="h-7 w-7" />
@@ -98,80 +134,30 @@ export default function EtimsSetupGate({ onComplete }: EtimsSetupGateProps) {
           <h1 className="text-2xl font-bold text-slate-900">Set up the fiscal device</h1>
         </div>
 
-        <div className="space-y-4">
-          <div>
-            <label className="mb-1 block text-base font-medium text-slate-600">
-              Fiscal server address
-            </label>
-            <input
-              type="text"
-              value={form.baseUrl}
-              onChange={updateField('baseUrl')}
-              placeholder={DEFAULT_ETIMS_BASE_URL}
-              className="h-14 w-full rounded-lg border border-slate-300 bg-white px-3 text-lg text-slate-900 placeholder-slate-400 focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-100"
-              autoFocus
-            />
-            <p className="mt-1 text-sm text-slate-500">
-              Already set for this till. Only change it if the fiscal server is on another
-              machine.
-            </p>
-            {fieldErrors.baseUrl && (
-              <p className="mt-1 text-sm font-medium text-rose-600">{fieldErrors.baseUrl}</p>
-            )}
-          </div>
-
-          <div>
-            <label className="mb-1 block text-base font-medium text-slate-600">
-              Fiscal device IP address
-            </label>
-            <input
-              type="text"
-              value={form.deviceIp}
-              onChange={updateField('deviceIp')}
-              placeholder="192.168.1.50"
-              className="h-14 w-full rounded-lg border border-slate-300 bg-white px-3 text-lg text-slate-900 placeholder-slate-400 focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-100"
-            />
-            <p className="mt-1 text-sm text-slate-500">
-              The address of the control unit on the shop network.
-            </p>
-            {fieldErrors.deviceIp && (
-              <p className="mt-1 text-sm font-medium text-rose-600">{fieldErrors.deviceIp}</p>
-            )}
-          </div>
-
-          <div>
-            <label className="mb-1 block text-base font-medium text-slate-600">
-              Fiscal device port
-            </label>
-            <input
-              type="text"
-              inputMode="numeric"
-              value={form.devicePort}
-              onChange={updateField('devicePort')}
-              placeholder={DEFAULT_ETIMS_DEVICE_PORT}
-              className="h-14 w-full rounded-lg border border-slate-300 bg-white px-3 text-lg text-slate-900 placeholder-slate-400 focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-100"
-            />
-            <p className="mt-1 text-sm text-slate-500">Usually 8000.</p>
-            {fieldErrors.devicePort && (
-              <p className="mt-1 text-sm font-medium text-rose-600">{fieldErrors.devicePort}</p>
-            )}
-          </div>
-
-          <div>
-            <label className="mb-1 block text-base font-medium text-slate-600">
-              Fiscal device password
-            </label>
-            <input
-              type="password"
-              value={form.password}
-              onChange={updateField('password')}
-              placeholder="••••••••"
-              className="h-14 w-full rounded-lg border border-slate-300 bg-white px-3 text-lg text-slate-900 placeholder-slate-400 focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-100"
-            />
-            <p className="mt-1 text-sm text-slate-500">
-              The password set on the control unit. It is stored securely on this till.
-            </p>
-          </div>
+        <div className="grid grid-cols-2 gap-4">
+          {FIELDS.map((field) => (
+            <div key={field.key}>
+              <label
+                htmlFor={`etims-${field.key}`}
+                className="mb-1 block text-base font-medium text-slate-600"
+              >
+                {field.label}
+              </label>
+              <input
+                id={`etims-${field.key}`}
+                type={field.type}
+                value={form[field.key]}
+                readOnly
+                onFocus={() => openKeyboard(field)}
+                onClick={() => openKeyboard(field)}
+                placeholder={field.placeholder}
+                className="h-14 w-full rounded-lg border border-slate-300 bg-white px-3 text-lg text-slate-900 placeholder-slate-400 focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-100"
+              />
+              {fieldErrors[field.key] && (
+                <p className="mt-1 text-sm font-medium text-rose-600">{fieldErrors[field.key]}</p>
+              )}
+            </div>
+          ))}
         </div>
 
         {error && (

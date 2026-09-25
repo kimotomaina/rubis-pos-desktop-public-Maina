@@ -30,7 +30,6 @@ import ConnectivityToast from './components/ConnectivityToast'
 import FiscalNotice from './components/FiscalNotice'
 import SaleCompleteToast from './components/SaleCompleteToast'
 import ToastStack from './components/ToastStack'
-import VirtualKeyboardModal from './components/VirtualKeyboardModal'
 import { useToastStore } from './stores/toastStore'
 import { SCAN_TOAST_TIMEOUT_MS } from './lib/toastTimeouts'
 import { WarningIcon } from './components/icons'
@@ -572,9 +571,6 @@ export default function App() {
       <FiscalNotice />
       <SaleCompleteToast />
       <ToastStack />
-
-      {/** On-screen keyboard (phase-86), opened by any field that calls keyboardStore's open(). */}
-      <VirtualKeyboardModal />
     </div>
   )
 }
