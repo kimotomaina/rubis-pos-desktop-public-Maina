@@ -88,7 +88,7 @@ export default function OnboardingScreen() {
 
   return (
     <div className="flex h-screen flex-col items-center justify-center bg-slate-900 px-4 text-white">
-      <img src={rubisLogo} alt="RUBIS Energie" className="mb-8 h-16 w-auto" />
+      <img src={rubisLogo} alt="Enjoy" className="mb-8 h-16 w-auto" />
 
       <div className="w-full max-w-md rounded-2xl bg-slate-800 p-6 shadow-xl">
         <h1 className="mb-1 text-2xl font-bold text-white">Connect this till to Shopify</h1>

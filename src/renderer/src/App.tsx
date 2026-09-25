@@ -370,7 +370,7 @@ export default function App() {
       {/* Header */}
       <header className="flex h-20 w-full shrink-0 items-center justify-between border-b border-slate-200 bg-white px-6 shadow-sm">
         <div className="flex shrink-0 items-center gap-6">
-          <img src={rubisLogo} alt="RUBIS Energie" className="h-9 w-auto shrink-0" />
+          <img src={rubisLogo} alt="Enjoy" className="h-9 w-auto shrink-0" />
           <nav className="flex min-w-0 gap-2">
             <button
               type="button"

@@ -83,7 +83,7 @@ export default function LoginScreen() {
 
   return (
     <div className="flex h-screen flex-col items-center justify-center bg-slate-900 text-white">
-      <img src={rubisLogo} alt="RUBIS Energie" className="mb-8 h-16 w-auto" />
+      <img src={rubisLogo} alt="Enjoy" className="mb-8 h-16 w-auto" />
 
       {!selectedStaff ? (
         <div className="w-full max-w-md">
