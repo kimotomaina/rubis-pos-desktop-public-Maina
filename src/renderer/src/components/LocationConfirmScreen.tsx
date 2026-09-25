@@ -19,6 +19,13 @@ interface LocationConfirmScreenProps {
  * location hasn't been explicitly confirmed yet — replaces the old
  * silent "Phase 4" auto-detect that picked whichever location
  * Shopify returned first with no admin ever reviewing it.
+ *
+ * The root's `overflow-y-auto` is a safety net rather than a layout
+ * choice: nine location cards plus this screen's chrome measure about
+ * 684px against 768px at the smallest supported viewport, but that is
+ * computed from class values, and without it a miss would centre the
+ * card and clip the Confirm button out of reach instead of letting the
+ * operator scroll to it. Phase E sizes this properly.
  */
 export default function LocationConfirmScreen({
   currentLocationId,
@@ -98,10 +105,10 @@ export default function LocationConfirmScreen({
   }
 
   return (
-    <div className="app-theme flex h-screen flex-col items-center justify-center px-4">
-      <img src={rubisLogo} alt="Enjoy" className="mb-8 h-16 w-auto" />
+    <div className="app-theme flex h-screen flex-col items-center justify-center overflow-y-auto px-4 py-8">
+      <img src={rubisLogo} alt="Enjoy" className="mb-8 h-16 w-auto shrink-0" />
 
-      <div className="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-6 shadow-xl">
+      <div className="w-full max-w-3xl shrink-0 rounded-2xl border border-slate-200 bg-white p-6 shadow-xl">
         <h1 className="mb-1 text-2xl font-bold text-slate-900">Confirm this till&rsquo;s location</h1>
         <p className="mb-6 text-base text-slate-500">
           Pick which Shopify location this till sells from before continuing.

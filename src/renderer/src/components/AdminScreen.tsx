@@ -1576,7 +1576,7 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
             ) : locationOptionsLoading ? (
               <p className="text-base text-slate-400">Loading locations…</p>
             ) : (
-              <div className="max-w-md">
+              <div className="max-w-3xl">
                 {locationOptions.length > 0 ? (
                   <div className="rounded-xl border border-slate-200 bg-white p-4">
                     <LocationPicker

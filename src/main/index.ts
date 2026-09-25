@@ -1920,7 +1920,7 @@ app.whenReady().then(async () => {
   ipcMain.handle(
     'location:list',
     async (): Promise<
-      ServiceResult<{ shopName: string; locations: { id: string; name: string }[] }>
+      ServiceResult<{ shopName: string; locations: { id: string; name: string; address?: string }[] }>
     > => {
       const env = shopifyEnv()
       if (!env) {
@@ -1983,7 +1983,7 @@ app.whenReady().then(async () => {
     async (
       _event,
       request: unknown
-    ): Promise<ServiceResult<{ shopName: string; locations: { id: string; name: string }[] }>> => {
+    ): Promise<ServiceResult<{ shopName: string; locations: { id: string; name: string; address?: string }[] }>> => {
       const validation = validate(configValidateSchema, request)
       if (!validation.success) {
         return { success: false, error: validation.error }

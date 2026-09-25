@@ -105,10 +105,27 @@ export interface ShopifyInventoryLevelsResponse {
   }>
 }
 
-/** A Shopify location. */
+/**
+ * A Shopify location, as handed to the renderer: the address is already
+ * flattened to one display line (see `formatLocationAddress`), so no
+ * consumer has to know Shopify's `LocationAddress` shape.
+ */
 export interface ShopifyLocation {
   id: string
   name: string
+  /** One line of address, when Shopify holds one — absent for a location with no address. */
+  address?: string
+}
+
+/**
+ * A location as it arrives on the wire. `address` itself is non-null on
+ * `Location`, but every field inside it is nullable and `formatted` can
+ * come back empty, so both levels are treated as optional here.
+ */
+export interface ShopifyLocationNode {
+  id: string
+  name: string
+  address?: { formatted?: string[] | null } | null
 }
 
 /** Top-level GraphQL response envelope for the locations query. */
@@ -132,7 +149,8 @@ export interface ShopifyValidateStoreResponse {
   data?: {
     shop?: { name: string }
     locations?: {
-      nodes: ShopifyLocation[]
+      pageInfo?: ShopifyPageInfo
+      nodes: ShopifyLocationNode[]
     }
   }
   errors?: Array<{

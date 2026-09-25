@@ -266,10 +266,18 @@ export interface PosApi {
   validateShopifyConfig: (
     storeUrl: string,
     token: string
-  ) => Promise<ServiceResult<{ shopName: string; locations: { id: string; name: string }[] }>>
-  /** Fetches this till's available Shopify locations using its already-resolved store URL/token. */
+  ) => Promise<
+    ServiceResult<{
+      shopName: string
+      locations: { id: string; name: string; address?: string }[]
+    }>
+  >
+  /** Fetches every one of this till's available Shopify locations, paginated, using its already-resolved store URL/token. */
   listLocations: () => Promise<
-    ServiceResult<{ shopName: string; locations: { id: string; name: string }[] }>
+    ServiceResult<{
+      shopName: string
+      locations: { id: string; name: string; address?: string }[]
+    }>
   >
   /** Persists the admin-confirmed location for this till. Requires a re-verified admin Manager PIN. */
   setLocation: (

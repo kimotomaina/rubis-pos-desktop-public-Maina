@@ -116,7 +116,7 @@ export default function OnboardingScreen() {
     >
       <img src={rubisLogo} alt="Enjoy" className="mb-8 h-16 w-auto" />
 
-      <div className="w-full max-w-2xl rounded-2xl border border-slate-200 bg-white p-6 shadow-xl">
+      <div className="w-full max-w-3xl rounded-2xl border border-slate-200 bg-white p-6 shadow-xl">
         <h1 className="mb-1 text-2xl font-bold text-slate-900">Connect this till to Shopify</h1>
         <p className="mb-6 text-base text-slate-500">
           {step === 'connect'

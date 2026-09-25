@@ -773,12 +773,12 @@ const api = {
    *
    * @param {string} storeUrl
    * @param {string} token
-   * @returns {Promise<ServiceResult<{ shopName: string; locations: { id: string; name: string }[] }>>}
+   * @returns {Promise<ServiceResult<{ shopName: string; locations: { id: string; name: string; address?: string }[] }>>}
    */
   validateShopifyConfig: (
     storeUrl: string,
     token: string
-  ): Promise<ServiceResult<{ shopName: string; locations: { id: string; name: string }[] }>> =>
+  ): Promise<ServiceResult<{ shopName: string; locations: { id: string; name: string; address?: string }[] }>> =>
     ipcRenderer.invoke('config:validate', { storeUrl, token }),
 
   /**
@@ -787,10 +787,10 @@ const api = {
    * the post-login location-confirmation gate and the Admin screen's
    * "Change Location" control.
    *
-   * @returns {Promise<ServiceResult<{ shopName: string; locations: { id: string; name: string }[] }>>}
+   * @returns {Promise<ServiceResult<{ shopName: string; locations: { id: string; name: string; address?: string }[] }>>}
    */
   listLocations: (): Promise<
-    ServiceResult<{ shopName: string; locations: { id: string; name: string }[] }>
+    ServiceResult<{ shopName: string; locations: { id: string; name: string; address?: string }[] }>
   > => ipcRenderer.invoke('location:list'),
 
   /**

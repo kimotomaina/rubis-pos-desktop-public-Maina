@@ -7,6 +7,7 @@ import type {
   ServiceResult,
   ShopifyGraphQLResponse,
   ShopifyLocation,
+  ShopifyLocationNode,
   ShopifyProduct,
   ShopifyValidateStoreResponse
 } from './shopify-types.js'
@@ -105,24 +106,56 @@ query GetInventoryLevels($locationId: ID!, $first: Int!, $after: String) {
 
 /**
  * GraphQL query used by the first-run onboarding wizard's
- * "Connect & Verify" step — a single lightweight round trip that both
- * confirms `storeUrl`/`token` are valid (via `shop.name`) and returns
- * the location list the operator picks from, instead of two separate
- * requests.
+ * "Connect & Verify" step and by the location-confirmation gate — one
+ * round trip that both confirms `storeUrl`/`token` are valid (via
+ * `shop.name`) and returns a page of the locations the operator picks
+ * from, instead of two separate requests.
+ *
+ * Paginated: this used to be `locations(first: 10)` with no `pageInfo`,
+ * which silently dropped every location past the tenth — on an account
+ * with ~106 of them that left 96 branches unable to select their own
+ * location at all. `includeInactive` and `includeLegacy` are deliberately
+ * left at their Shopify defaults of `false`, so deactivated locations
+ * (which can no longer stock inventory or fulfil orders) and
+ * fulfillment-service locations stay out of the picker. `sortKey` is left
+ * at its default of `NAME`, so pages read alphabetically.
+ *
+ * `shop { name }` is re-requested on every page rather than split into a
+ * second query: it costs ~1 point, keeps this a single query string, and
+ * only ever happens at all on a store with more than
+ * {@link LOCATION_PAGE_SIZE} locations.
  */
 export const VALIDATE_STORE_QUERY = `
-query ValidateStore {
+query ValidateStore($first: Int!, $after: String) {
   shop {
     name
   }
-  locations(first: 10) {
+  locations(first: $first, after: $after) {
+    pageInfo {
+      hasNextPage
+      endCursor
+    }
     nodes {
       id
       name
+      address {
+        formatted
+      }
     }
   }
 }
 `
+
+/** Shopify's maximum page size for a connection (shopify.dev, GraphQL pagination, checked 2026-09-25). */
+const LOCATION_PAGE_SIZE = 250
+
+/**
+ * Hard stop on the pagination loop. A malformed or repeating cursor must
+ * fail loudly rather than spin forever; at {@link LOCATION_PAGE_SIZE} this
+ * allows 10,000 locations, far beyond any real store and well inside
+ * Shopify's own 25,000-object deep-pagination limit.
+ */
+const MAX_LOCATION_PAGES = 40
 
 /**
  * Maps a Shopify product's global id (`gid://shopify/Product/123`)
@@ -311,12 +344,41 @@ function translateAxiosError(err: AxiosError): string {
 }
 
 /**
- * Verifies a store URL/token pair works and fetches the store's
- * locations in one round trip — the onboarding wizard's "Connect &
- * Verify" step. A non-empty `shop.name` in the response is
- * what proves the token actually authenticated; a bad token or wrong
- * store URL surfaces as a GraphQL error or an HTTP 401/404, both
+ * Flattens Shopify's `LocationAddress.formatted` (a list of lines, e.g.
+ * `["Mombasa Road", "Nairobi 00100", "Kenya"]`) into the single line a
+ * location card shows under its name.
+ *
+ * The first two lines are kept — street plus city/region is what
+ * distinguishes one branch from another; the country repeats on every
+ * card and earns no space. An address Shopify holds nothing for comes
+ * back as an empty list, which yields `undefined` so the card simply
+ * shows no second line.
+ *
+ * @param {ShopifyLocationNode['address']} address
+ * @returns {string | undefined}
+ */
+export function formatLocationAddress(address: ShopifyLocationNode['address']): string | undefined {
+  const lines = (address?.formatted ?? []).map((line) => line.trim()).filter((line) => line !== '')
+  return lines.length > 0 ? lines.slice(0, 2).join(', ') : undefined
+}
+
+/**
+ * Verifies a store URL/token pair works and fetches **every** one of the
+ * store's locations — the onboarding wizard's "Connect & Verify" step and
+ * the location-confirmation gate. A non-empty `shop.name` in the first
+ * response is what proves the token actually authenticated; a bad token
+ * or wrong store URL surfaces as a GraphQL error or an HTTP 401/404, both
  * already handled by {@link translateAxiosError}.
+ *
+ * Follows `pageInfo.hasNextPage`/`endCursor` to exhaustion, in the same
+ * loop shape as {@link fetchAllProducts}. At {@link LOCATION_PAGE_SIZE}
+ * every realistic store answers in a single request, so this is normally
+ * one round trip, as it was before; the loop is here for correctness
+ * rather than for any store's current size.
+ *
+ * A page that fails fails the **whole** call. Returning the pages that
+ * did arrive would hand the caller a truncated list indistinguishable
+ * from a complete one, which is the exact bug this pagination fixes.
  *
  * @param {string} storeUrl
  * @param {string} token
@@ -337,27 +399,58 @@ export async function validateAndFetchLocations(
   }
 
   try {
-    const response: AxiosResponse<ShopifyValidateStoreResponse> = await client.post('', {
-      query: VALIDATE_STORE_QUERY
-    })
+    const locations: ShopifyLocation[] = []
+    /** Read and checked on the first page only; later pages re-request it but it cannot change. */
+    let shopName = ''
+    let cursor: string | null = null
+    let hasNextPage = true
+    let pages = 0
 
-    const errors = response.data?.errors
-    if (errors && errors.length > 0) {
-      return {
-        success: false,
-        error: errors.map((e) => e.message).join('; ') || 'Shopify returned an unknown error'
+    while (hasNextPage) {
+      if (pages >= MAX_LOCATION_PAGES) {
+        return {
+          success: false,
+          error: `Shopify kept returning more locations after ${MAX_LOCATION_PAGES * LOCATION_PAGE_SIZE} of them — stopping rather than returning a partial list`
+        }
       }
+      pages += 1
+
+      const response: AxiosResponse<ShopifyValidateStoreResponse> = await client.post('', {
+        query: VALIDATE_STORE_QUERY,
+        variables: { first: LOCATION_PAGE_SIZE, after: cursor }
+      })
+
+      const errors = response.data?.errors
+      if (errors && errors.length > 0) {
+        return {
+          success: false,
+          error: errors.map((e) => e.message).join('; ') || 'Shopify returned an unknown error'
+        }
+      }
+
+      if (pages === 1) {
+        shopName = response.data?.data?.shop?.name ?? ''
+        if (!shopName) {
+          return {
+            success: false,
+            error: 'Shopify did not return shop details — check the store URL and token'
+          }
+        }
+      }
+
+      const connection = response.data?.data?.locations
+      for (const node of connection?.nodes ?? []) {
+        locations.push({
+          id: node.id,
+          name: node.name,
+          address: formatLocationAddress(node.address)
+        })
+      }
+
+      hasNextPage = connection?.pageInfo?.hasNextPage ?? false
+      cursor = connection?.pageInfo?.endCursor ?? null
     }
 
-    const shopName = response.data?.data?.shop?.name
-    if (!shopName) {
-      return {
-        success: false,
-        error: 'Shopify did not return shop details — check the store URL and token'
-      }
-    }
-
-    const locations = response.data?.data?.locations?.nodes ?? []
     return { success: true, data: { shopName, locations } }
   } catch (err) {
     if (err instanceof AxiosError) {
