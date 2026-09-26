@@ -1,11 +1,12 @@
 /**
  * `PosCheckoutPanel`'s discount controls and stale-discount block, gated
- * by `fiscalLive` (docs/phase-160/161) — real mount, same pattern as
- * `posCheckoutPanelFit.test.ts`.
+ * by `fiscalMode` (docs/phase-160/161, fails closed per docs/
+ * phase-161-1) — real mount, same pattern as `posCheckoutPanelFit.test.ts`.
  *
- * Mock mode (`fiscalLive: false`) must be unaffected — `posCheckoutPanelFit.test.ts`'s
- * own existing tests already cover that and are left unmodified; this
- * file adds live-mode coverage plus the "already-stale cart" block.
+ * Confirmed mock mode (`fiscalLive: 'mock'`) must be unaffected -
+ * `posCheckoutPanelFit.test.ts`'s own existing tests already cover that
+ * and are left unmodified; this file adds live/unknown-mode coverage
+ * plus the "already-stale cart" block.
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
@@ -52,7 +53,7 @@ beforeEach(() => {
   })
   useAuthStore.setState({ currentStaff: { id: 1, name: 'Cashier', role: 'cashier' } })
   useKeyboardStore.setState({ request: null })
-  useFiscalModeStore.setState({ fiscalLive: false, initialized: true })
+  useFiscalModeStore.setState({ fiscalLive: 'mock', initialized: true })
 })
 
 afterEach(() => {
@@ -60,24 +61,42 @@ afterEach(() => {
   container.remove()
   useCartStore.setState({ items: [], cartDiscount: null, checkoutStatus: 'idle', checkoutError: null })
   useAuthStore.setState({ currentStaff: null })
-  useFiscalModeStore.setState({ fiscalLive: false, initialized: false })
+  useFiscalModeStore.setState({ fiscalLive: 'unknown', initialized: false })
 })
 
-describe('PosCheckoutPanel > live fiscal mode (fiscalLive: true), plain cart', () => {
+describe('PosCheckoutPanel > live fiscal mode, plain cart', () => {
   it('hides the cart-level discount control', () => {
-    useFiscalModeStore.setState({ fiscalLive: true })
+    useFiscalModeStore.setState({ fiscalLive: 'live' })
     mount()
     expect(button('+ Discount')).toBeUndefined()
   })
 
   it('leaves Complete Sale reachable — nothing stale to block', () => {
-    useFiscalModeStore.setState({ fiscalLive: true })
+    useFiscalModeStore.setState({ fiscalLive: 'live' })
     mount()
     expect(() => {
       const el = button('COMPLETE SALE')
       if (!el) throw new Error('missing')
     }).not.toThrow()
     expect(container.textContent).not.toContain('cannot yet be filed correctly')
+  })
+})
+
+describe('PosCheckoutPanel > unknown mode (docs/phase-161-1: startup race / failed read)', () => {
+  it('hides the cart-level discount control before init has resolved', () => {
+    useFiscalModeStore.setState({ fiscalLive: 'unknown', initialized: false })
+    mount()
+    expect(button('+ Discount')).toBeUndefined()
+  })
+
+  it('blocks Complete Sale on a plain cart the same as live mode would, once a discount is present', () => {
+    useCartStore.setState({
+      items: [{ ...plainItem, discount: { type: 'percent', value: 10 } }]
+    })
+    useFiscalModeStore.setState({ fiscalLive: 'unknown', initialized: true })
+    mount()
+    expect(container.textContent).toContain('cannot yet be filed correctly')
+    expect(button('COMPLETE SALE')).toBeUndefined()
   })
 })
 
@@ -89,7 +108,7 @@ describe('PosCheckoutPanel > live fiscal mode, cart already carries a discount',
   })
 
   it('replaces the payment section with a plain notice, not the Complete Sale button', () => {
-    useFiscalModeStore.setState({ fiscalLive: true })
+    useFiscalModeStore.setState({ fiscalLive: 'live' })
     mount()
     expect(container.textContent).toContain('cannot yet be filed correctly')
     expect(button('COMPLETE SALE')).toBeUndefined()
@@ -104,7 +123,7 @@ describe('PosCheckoutPanel > live fiscal mode, cart already carries a price over
   })
 
   it('replaces the payment section with a plain notice', () => {
-    useFiscalModeStore.setState({ fiscalLive: true })
+    useFiscalModeStore.setState({ fiscalLive: 'live' })
     mount()
     expect(container.textContent).toContain('cannot yet be filed correctly')
     expect(button('COMPLETE SALE')).toBeUndefined()
@@ -117,7 +136,7 @@ describe('PosCheckoutPanel > live fiscal mode, cart already carries a cart-level
   })
 
   it('replaces the payment section with a plain notice, and does not silently drop the discount', () => {
-    useFiscalModeStore.setState({ fiscalLive: true })
+    useFiscalModeStore.setState({ fiscalLive: 'live' })
     mount()
     expect(container.textContent).toContain('cannot yet be filed correctly')
     expect(button('COMPLETE SALE')).toBeUndefined()
@@ -125,7 +144,7 @@ describe('PosCheckoutPanel > live fiscal mode, cart already carries a cart-level
   })
 })
 
-describe('PosCheckoutPanel > mock mode with a discounted cart (fiscalLive: false)', () => {
+describe('PosCheckoutPanel > confirmed mock mode with a discounted cart', () => {
   it('behaves exactly as before — Complete Sale reachable, no notice', () => {
     useCartStore.setState({
       items: [{ ...plainItem, discount: { type: 'percent', value: 10 } }]

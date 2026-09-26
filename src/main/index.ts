@@ -225,6 +225,7 @@ import type {
 } from './services/reports.js'
 import { buildOrdersCsv, buildLinesCsv } from './services/reportsExport.js'
 import { buildTraderSystemInvNum } from './lib/traderSystemInvoiceNumber.js'
+import { shouldRefuseCheckoutForDiscount } from './lib/requestHasDiscount.js'
 
 /** One invoice-list row (docs/phase-158): an order plus its pre-computed trader invoice number. */
 interface InvoiceListRow {
@@ -1081,6 +1082,27 @@ app.whenReady().then(async () => {
       const validation = validate(checkoutRequestSchema, request)
       if (!validation.success) {
         return { success: false, error: validation.error }
+      }
+
+      /**
+       * Server-side belt-and-braces (docs/phase-161-1): the renderer
+       * already hides the discount controls on a live till
+       * (`fiscalModeStore.ts`), but this re-checks the request itself,
+       * before any payment step and before `runCheckout` - nothing is
+       * written, queued, charged, or filed for a refused request. Mock
+       * mode is unaffected. See `requestHasDiscount.ts` for why a price
+       * override is not checked here.
+       */
+      if (
+        shouldRefuseCheckoutForDiscount(
+          fiscalizationProvider instanceof RealFiscalizationProvider,
+          validation.data
+        )
+      ) {
+        return {
+          success: false,
+          error: 'Discounts cannot be filed with KRA yet. Remove the discount and try again.'
+        }
       }
 
       /**

@@ -7,7 +7,7 @@ import {
   validatePriceOverride
 } from '../lib/checkoutMath.js'
 import { useKeyboardStore } from '../stores/keyboardStore.js'
-import { useFiscalModeStore } from '../stores/fiscalModeStore.js'
+import { useFiscalModeStore, isFiscalModeLiveOrUnknown } from '../stores/fiscalModeStore.js'
 import { TrashIcon } from './icons.js'
 
 interface CartLineItemProps {
@@ -54,14 +54,18 @@ export default function CartLineItem({
   const lineBase = item.price * item.quantity
   const discounted = lineTotal < lineBase
   /**
-   * Interim safeguard (docs/phase-160/161): the fiscal device and both
-   * receipt renderers are told the raw, undiscounted price, so a new
-   * price override or line discount would be filed and printed wrong
-   * once this till is live. Hides the controls that create one; an
-   * override/discount already on the cart when this flips true is
-   * blocked from checkout by `PosCheckoutPanel`, not silently dropped.
+   * Interim safeguard (docs/phase-160/161, fails closed per docs/
+   * phase-161-1): the fiscal device and both receipt renderers are told
+   * the raw, undiscounted price, so a new price override or line
+   * discount would be filed and printed wrong once this till is live.
+   * Hides the controls that create one whenever the mode is `'live'` OR
+   * still `'unknown'` (not yet confirmed mock) - only a confirmed
+   * `'mock'` read shows them. An override/discount already on the cart
+   * when this flips is blocked from checkout by `PosCheckoutPanel`, not
+   * silently dropped.
    */
-  const fiscalLive = useFiscalModeStore((state) => state.fiscalLive)
+  const fiscalMode = useFiscalModeStore((state) => state.fiscalLive)
+  const controlsHidden = isFiscalModeLiveOrUnknown(fiscalMode)
 
   const [editor, setEditor] = useState<EditorState>('none')
   const [priceInput, setPriceInput] = useState(String(item.price))
@@ -145,7 +149,7 @@ export default function CartLineItem({
           </p>
           <p className="mt-0.5 text-sm text-slate-600">{item.variantTitle}</p>
           <p className="mt-0.5 text-sm text-slate-500">{formatCurrency(item.price)} each</p>
-          {!fiscalLive && (
+          {!controlsHidden && (
             <div className="mt-2 flex gap-2">
               <button
                 type="button"

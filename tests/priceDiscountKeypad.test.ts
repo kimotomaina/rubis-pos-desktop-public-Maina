@@ -19,6 +19,7 @@ import PosCheckoutPanel from '../src/renderer/src/components/PosCheckoutPanel.js
 import { useCartStore } from '../src/renderer/src/stores/cartStore.js'
 import { useAuthStore } from '../src/renderer/src/stores/authStore.js'
 import { useKeyboardStore } from '../src/renderer/src/stores/keyboardStore.js'
+import { useFiscalModeStore } from '../src/renderer/src/stores/fiscalModeStore.js'
 import type { CartItem } from '../src/renderer/src/types/shopify.js'
 
 let container: HTMLDivElement
@@ -39,11 +40,25 @@ beforeEach(() => {
   document.body.appendChild(container)
   root = createRoot(container)
   useKeyboardStore.setState({ request: null })
+  /**
+   * Setup only, no assertion below changed (docs/phase-161-1): this
+   * keyboard-conversion test (docs/phase-156) predates the discount
+   * safeguard and has always assumed the "Edit Price"/"Discount"/
+   * "+ Discount" controls are visible and clickable. docs/phase-161-1
+   * made the store fail closed - its own default is now `'unknown'`,
+   * which hides them - so a confirmed mock read is set explicitly to
+   * keep this test's long-standing assumption true. This test is about
+   * the on-screen-keyboard conversion, not fiscal-mode gating; that has
+   * its own dedicated coverage in `cartLineItemFiscalGate.test.ts`/
+   * `posCheckoutPanelFiscalGate.test.ts`.
+   */
+  useFiscalModeStore.setState({ fiscalLive: 'mock', initialized: true })
 })
 
 afterEach(() => {
   act(() => root.unmount())
   container.remove()
+  useFiscalModeStore.setState({ fiscalLive: 'unknown', initialized: false })
 })
 
 const baseItem: CartItem = {

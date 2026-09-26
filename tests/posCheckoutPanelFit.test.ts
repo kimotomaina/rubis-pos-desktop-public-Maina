@@ -25,6 +25,7 @@ import PosCheckoutPanel from '../src/renderer/src/components/PosCheckoutPanel.js
 import { useCartStore } from '../src/renderer/src/stores/cartStore.js'
 import { useAuthStore } from '../src/renderer/src/stores/authStore.js'
 import { useKeyboardStore } from '../src/renderer/src/stores/keyboardStore.js'
+import { useFiscalModeStore } from '../src/renderer/src/stores/fiscalModeStore.js'
 
 let container: HTMLDivElement
 let root: Root
@@ -65,6 +66,18 @@ beforeEach(() => {
   })
   useAuthStore.setState({ currentStaff: { id: 1, name: 'Cashier', role: 'cashier' } })
   useKeyboardStore.setState({ request: null })
+  /**
+   * Setup only, no assertion below changed (docs/phase-161-1): this
+   * layout test predates the discount safeguard and has always assumed
+   * the discount control is visible. docs/phase-161-1 made the store
+   * fail closed - its own default is now `'unknown'`, which hides that
+   * control - so a confirmed mock read is set explicitly here to keep
+   * this test's own long-standing assumption true. This test is about
+   * layout, not fiscal-mode gating; that gating has its own dedicated
+   * coverage in `cartLineItemFiscalGate.test.ts`/
+   * `posCheckoutPanelFiscalGate.test.ts`.
+   */
+  useFiscalModeStore.setState({ fiscalLive: 'mock', initialized: true })
 })
 
 afterEach(() => {
@@ -72,6 +85,7 @@ afterEach(() => {
   container.remove()
   useCartStore.setState({ items: [], cartDiscount: null, checkoutStatus: 'idle', checkoutError: null })
   useAuthStore.setState({ currentStaff: null })
+  useFiscalModeStore.setState({ fiscalLive: 'unknown', initialized: false })
 })
 
 describe('PosCheckoutPanel fits without an inner scroll', () => {

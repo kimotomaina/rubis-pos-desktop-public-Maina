@@ -363,3 +363,37 @@ recomputing an approximation on the till side at all.
 `orders.csv` VAT figure - all read-only reporting output. No fiscal
 filing is affected; the device's own submitted totals are unrelated to
 this approximation and remain correct regardless of it.
+
+## Server-side discount refusal (docs/phase-161-1) does not detect a price override
+
+Found while building docs/phase-161-1's `orders:checkout` belt-and-braces
+check. The renderer's own safeguard (`fiscalModeStore.ts`, docs/
+phase-161) hides the price-override control on a live till, and the new
+server-side check (`requestHasDiscount.ts`) refuses a request carrying a
+line or cart discount - but it does not, and cannot soundly, detect a
+price override.
+
+`cartItemSchema` (`ipcValidator.ts`) does carry a `basePrice` field
+alongside `price`, so an `item.price !== item.basePrice` check is
+possible to write. It was deliberately not written: both `price` and
+`basePrice` are entirely renderer-supplied and unverified against the
+till's real catalog data, so a request could set `price` to any value
+while also setting `basePrice` to match it - defeating this specific
+check without needing to touch `discount`/`cartDiscount` at all.
+Checking it would give a false sense of a closed loophole rather than
+actually closing one.
+
+**What's still open**: a genuine server-side override check needs the
+main process to know the variant's real catalog price independently of
+what the request claims (e.g. looked up from the last-synced product
+cache) - not proposed or built here. Until then, the only defence
+against a live-mode price override is the renderer hiding the control
+(`fiscalModeStore.ts`) and the underlying receipt/fiscal mismatch itself
+being fixed properly (docs/phase-160 Part B).
+
+**Blast radius**: a compromised or buggy renderer on a live till could
+still submit an overridden price - the same risk docs/phase-160 already
+described, just not closed by this server-side check specifically. A
+correctly-behaving renderer (the actual, non-adversarial case this app
+runs today) cannot reach this at all, since `fiscalModeStore.ts` already
+hides the control.

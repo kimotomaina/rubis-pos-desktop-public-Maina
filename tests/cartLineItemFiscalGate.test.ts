@@ -1,10 +1,12 @@
 /**
  * `CartLineItem`'s discount/price-override controls, gated by
- * `fiscalLive` (docs/phase-160/161) — real mount, matching this
- * project's established style (`react-dom/client`, real DOM clicks).
+ * `fiscalMode` (docs/phase-160/161, fails closed per docs/phase-161-1)
+ * — real mount, matching this project's established style
+ * (`react-dom/client`, real DOM clicks).
  *
- * Mock mode (`fiscalLive: false`) must be unaffected — both controls
- * stay visible and usable exactly as before this phase.
+ * Only a confirmed `'mock'` read shows the controls. `'unknown'` (the
+ * store's initial state, and where a failed/thrown read leaves it) and
+ * `'live'` both hide them.
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
@@ -54,16 +56,16 @@ function button(label: string): HTMLButtonElement | undefined {
 }
 
 beforeEach(() => {
-  useFiscalModeStore.setState({ fiscalLive: false, initialized: true })
+  useFiscalModeStore.setState({ fiscalLive: 'mock', initialized: true })
 })
 
 afterEach(() => {
   act(() => root.unmount())
   container.remove()
-  useFiscalModeStore.setState({ fiscalLive: false, initialized: false })
+  useFiscalModeStore.setState({ fiscalLive: 'unknown', initialized: false })
 })
 
-describe('CartLineItem > mock mode (fiscalLive: false)', () => {
+describe('CartLineItem > confirmed mock mode', () => {
   it('shows both Edit Price and Discount controls, unchanged', () => {
     mount()
     expect(button('Edit Price')).toBeTruthy()
@@ -71,9 +73,25 @@ describe('CartLineItem > mock mode (fiscalLive: false)', () => {
   })
 })
 
-describe('CartLineItem > live fiscal mode (fiscalLive: true)', () => {
+describe('CartLineItem > live fiscal mode', () => {
   it('hides both the price-override and the line-discount controls', () => {
-    useFiscalModeStore.setState({ fiscalLive: true })
+    useFiscalModeStore.setState({ fiscalLive: 'live' })
+    mount()
+    expect(button('Edit Price')).toBeUndefined()
+    expect(button('Discount')).toBeUndefined()
+  })
+})
+
+describe('CartLineItem > unknown mode (docs/phase-161-1: startup race / failed read)', () => {
+  it('hides both controls before init has resolved (the store\'s own default)', () => {
+    useFiscalModeStore.setState({ fiscalLive: 'unknown', initialized: false })
+    mount()
+    expect(button('Edit Price')).toBeUndefined()
+    expect(button('Discount')).toBeUndefined()
+  })
+
+  it('hides both controls when a read failed and left the mode unknown', () => {
+    useFiscalModeStore.setState({ fiscalLive: 'unknown', initialized: true })
     mount()
     expect(button('Edit Price')).toBeUndefined()
     expect(button('Discount')).toBeUndefined()

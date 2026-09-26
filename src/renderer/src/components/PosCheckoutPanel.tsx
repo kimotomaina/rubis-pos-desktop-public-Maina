@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useCartStore } from '../stores/cartStore.js'
 import { useAuthStore } from '../stores/authStore.js'
-import { useFiscalModeStore } from '../stores/fiscalModeStore.js'
+import { useFiscalModeStore, isFiscalModeLiveOrUnknown } from '../stores/fiscalModeStore.js'
 import {
   calculateChange,
   canCompleteSale,
@@ -63,7 +63,9 @@ export default function PosCheckoutPanel({ requestManagerPin }: PosCheckoutPanel
   const cartItems = useCartStore((state) => state.items)
   const cartDiscount = useCartStore((state) => state.cartDiscount)
   const setCartDiscount = useCartStore((state) => state.setCartDiscount)
-  const fiscalLive = useFiscalModeStore((state) => state.fiscalLive)
+  const fiscalMode = useFiscalModeStore((state) => state.fiscalLive)
+  /** Hidden/blocked whenever the mode is `'live'` or still `'unknown'` (docs/phase-161-1: fails closed). */
+  const controlsHidden = isFiscalModeLiveOrUnknown(fiscalMode)
   const checkout = useCartStore((state) => state.checkout)
   const checkoutStatus = useCartStore((state) => state.checkoutStatus)
   const checkoutError = useCartStore((state) => state.checkoutError)
@@ -125,12 +127,13 @@ export default function PosCheckoutPanel({ requestManagerPin }: PosCheckoutPanel
       : null
 
   /**
-   * Interim safeguard (docs/phase-160/161): a discount or override
-   * already on the cart when `fiscalLive` turns true is blocked from
-   * checkout, not silently dropped - the cashier must remove it (or a
-   * manager must), same as any other required fix before a sale.
+   * Interim safeguard (docs/phase-160/161, fails closed per docs/
+   * phase-161-1): a discount or override already on the cart is blocked
+   * from checkout, not silently dropped, whenever the mode is `'live'`
+   * or still `'unknown'` - the cashier must remove it (or a manager
+   * must), same as any other required fix before a sale.
    */
-  const staleDiscountOrOverride = fiscalLive && hasDiscountOrOverride(cartItems, cartDiscount)
+  const staleDiscountOrOverride = controlsHidden && hasDiscountOrOverride(cartItems, cartDiscount)
 
   const canSubmitCash =
     cartCount > 0 &&
@@ -235,7 +238,7 @@ export default function PosCheckoutPanel({ requestManagerPin }: PosCheckoutPanel
                 ? `${trimmedCustomerPin || 'Walk-in'}${trimmedCompanyName ? ` · ${trimmedCompanyName}` : ''} · Edit Details`
                 : 'Walk-in · Add KRA PIN'}
             </button>
-            {!fiscalLive && (
+            {!controlsHidden && (
               <button
                 type="button"
                 onClick={() => {
@@ -259,7 +262,7 @@ export default function PosCheckoutPanel({ requestManagerPin }: PosCheckoutPanel
         )}
         <p className="text-3xl font-extrabold tabular-nums text-slate-900">{formatCurrency(cartTotal)}</p>
 
-        {!fiscalLive && showDiscountEditor && (
+        {!controlsHidden && showDiscountEditor && (
           <div className="mt-2 flex items-center gap-2 rounded-lg bg-white p-2">
             <select
               value={discountType}
