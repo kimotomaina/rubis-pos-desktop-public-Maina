@@ -41,6 +41,14 @@ export interface ZReport {
    * VAT-inclusive shelf price — see {@link computeVatIncluded}).
    */
   vatIncluded: number
+  /**
+   * The store's configured VAT rate used to compute {@link vatIncluded}
+   * (docs/phase-158-1) — carried on the report so the printed slip and
+   * the on-screen modal can both label it correctly (e.g. "calculated at
+   * 16%") without hardcoding a rate that a config change would silently
+   * make wrong. See {@link formatVatRateLabel}.
+   */
+  vatRate: number
   expectedCash: number
   endingCash: number | null
   discrepancy: number | null
@@ -131,6 +139,20 @@ export function computeVatIncluded(total: number, rate: number): number {
 }
 
 /**
+ * Renders the VAT rate as the label shown next to {@link computeVatIncluded}'s
+ * result (docs/phase-158-1, correcting a rate hardcoded as "16%" in three
+ * places — `ZReportModal.tsx`, `renderZReport`, and the Sales Summary
+ * view — which would have silently mislabelled the figure the moment the
+ * store's configured rate ever changed, e.g. to 8%).
+ *
+ * @param {number} rate — fractional VAT rate (0.16 = 16%)
+ * @returns {string}
+ */
+export function formatVatRateLabel(rate: number): string {
+  return `VAT included (calculated at ${Math.round(rate * 100)}%)`
+}
+
+/**
  * Computes the UTC calendar-day boundaries containing `date`.
  *
  * @param {Date} [date] — defaults to now
@@ -195,6 +217,7 @@ export function generateZReport(
     orderCount: orders.length,
     totalRevenue,
     vatIncluded: computeVatIncluded(totalRevenue, taxRate),
+    vatRate: taxRate,
     expectedCash,
     endingCash: shift.ending_cash,
     discrepancy: shift.discrepancy
@@ -637,6 +660,8 @@ export interface SalesSummary {
   orderCount: number
   totalRevenue: number
   vatIncluded: number
+  /** See {@link ZReport.vatRate} — same reasoning, this is the multi-day view. */
+  vatRate: number
   totalsByMethod: PaymentTotals
   mpesaByMode: MpesaModeTotals
 }
@@ -669,6 +694,7 @@ export function generateSalesSummary(
     orderCount: orders.length,
     totalRevenue,
     vatIncluded: computeVatIncluded(totalRevenue, taxRate),
+    vatRate: taxRate,
     totalsByMethod,
     mpesaByMode: sumMpesaByMode(payments)
   }

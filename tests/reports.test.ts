@@ -128,6 +128,17 @@ describe('generateZReport', () => {
     expect(report.vatIncluded).toBeCloseTo(7.41, 2)
   })
 
+  it('carries the configured rate so the label can read it, e.g. 8% not a hardcoded 16% (docs/phase-158-1)', () => {
+    const db = fakeDb({
+      shift: closedShift,
+      staff: admin,
+      ordersForShift: [order({ total: 100 })]
+    })
+
+    expect(generateZReport(db, 1, 0.08).vatRate).toBe(0.08)
+    expect(generateZReport(db, 1, 0.16).vatRate).toBe(0.16)
+  })
+
   it('splits the shift\'s M-Pesa revenue by manual vs Daraja', () => {
     const db = fakeDb({
       shift: closedShift,
@@ -263,6 +274,12 @@ describe('generateSalesSummary (docs/phase-158)', () => {
     expect(summary.label).toBe('Today (2026-09-01)')
     expect(summary.startIso).toBe(range.startIso)
     expect(summary.endIso).toBe(range.endIso)
+  })
+
+  it('carries the configured rate so the label can read it (docs/phase-158-1)', () => {
+    const db = fakeDb({ ordersForRange: [] })
+    expect(generateSalesSummary(db, 0.08, range).vatRate).toBe(0.08)
+    expect(generateSalesSummary(db, 0.16, range).vatRate).toBe(0.16)
   })
 })
 

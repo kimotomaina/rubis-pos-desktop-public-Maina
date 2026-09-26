@@ -11,6 +11,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   computeVatIncluded,
+  formatVatRateLabel,
   getReportRange,
   generateFiscalStatusByDay,
   localDayOf
@@ -36,6 +37,16 @@ describe('computeVatIncluded', () => {
 
   it('returns 0 for a zero rate', () => {
     expect(computeVatIncluded(100, 0)).toBe(0)
+  })
+})
+
+describe('formatVatRateLabel (docs/phase-158-1)', () => {
+  it('labels a 16% rate', () => {
+    expect(formatVatRateLabel(0.16)).toBe('VAT included (calculated at 16%)')
+  })
+
+  it('labels an 8% rate, not a hardcoded 16%', () => {
+    expect(formatVatRateLabel(0.08)).toBe('VAT included (calculated at 8%)')
   })
 })
 

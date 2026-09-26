@@ -13,6 +13,7 @@ import { ThermalPrinter } from 'node-thermal-printer'
 import {
   printReceipt,
   renderReceipt,
+  renderZReport,
   defaultPrinterFactory,
   PRINTER_CONNECT_TIMEOUT_MS
 } from '../src/main/services/printer.js'
@@ -22,6 +23,7 @@ import type {
   ReceiptOrder,
   ThermalPrinterLike
 } from '../src/main/services/printer.js'
+import type { ZReport } from '../src/main/services/reports.js'
 import { formatCurrency } from '../src/main/services/currency.js'
 
 vi.mock('node-thermal-printer', () => ({
@@ -202,6 +204,46 @@ describe('renderReceipt', () => {
     const lineTexts = calls.filter((c) => c.method === 'println').map((c) => c.args[0])
     expect(lineTexts).toContain('Fiscal Inv: KRA-0004')
     expect(lineTexts.some((t) => typeof t === 'string' && t.startsWith('[QR CODE:'))).toBe(false)
+  })
+})
+
+describe('renderZReport (docs/phase-158-1)', () => {
+  const baseReport: ZReport = {
+    shiftId: 7,
+    staffName: 'Ann',
+    openedAt: '2026-09-01T08:00:00.000Z',
+    closedAt: '2026-09-01T16:00:00.000Z',
+    status: 'closed',
+    startingCash: 100,
+    totalsByMethod: { cash: 200, mpesa: 80, card: 0 },
+    mpesaByMode: { manual: 30, daraja: 50 },
+    orderCount: 5,
+    totalRevenue: 280,
+    vatIncluded: 38.62,
+    vatRate: 0.16,
+    expectedCash: 300,
+    endingCash: 300,
+    discrepancy: 0
+  }
+
+  it('labels the VAT line from the report\'s own rate, not a hardcoded 16%', () => {
+    const { client, calls } = createFakePrinter()
+
+    renderZReport(client, baseReport, settings)
+
+    const lineTexts = calls.filter((c) => c.method === 'println').map((c) => c.args[0])
+    expect(lineTexts).toContain(`VAT included (calculated at 16%): ${formatCurrency(38.62)}`)
+  })
+
+  it('relabels correctly at an 8% rate', () => {
+    const { client, calls } = createFakePrinter()
+    const report: ZReport = { ...baseReport, vatRate: 0.08, vatIncluded: 20.74 }
+
+    renderZReport(client, report, settings)
+
+    const lineTexts = calls.filter((c) => c.method === 'println').map((c) => c.args[0])
+    expect(lineTexts).toContain(`VAT included (calculated at 8%): ${formatCurrency(20.74)}`)
+    expect(lineTexts.some((t) => typeof t === 'string' && t.includes('16%'))).toBe(false)
   })
 })
 

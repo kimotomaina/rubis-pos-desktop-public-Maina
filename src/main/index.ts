@@ -213,7 +213,8 @@ import {
   generateEndOfDayReport,
   generateSalesSummary,
   generateFiscalStatusByDay,
-  getReportRange
+  getReportRange,
+  localDayOf
 } from './services/reports.js'
 import type {
   ZReport,
@@ -2915,7 +2916,7 @@ app.whenReady().then(async () => {
    */
   ipcMain.handle(
     'reports:export-csv',
-    async (_event, request: unknown): Promise<ServiceResult<{ saved: boolean; filePath?: string }>> => {
+    async (event, request: unknown): Promise<ServiceResult<{ saved: boolean; filePath?: string }>> => {
       const validation = validate(exportCsvSchema, request)
       if (!validation.success) {
         return { success: false, error: validation.error }
@@ -2927,11 +2928,25 @@ app.whenReady().then(async () => {
           ? buildOrdersCsv(db, range, printerSettings.taxRate)
           : buildLinesCsv(db, range)
 
-        const result = await dialog.showSaveDialog({
+        // Nairobi calendar day, not `range.startIso.slice(0, 10)` — that
+        // slices the UTC instant, which for a Nairobi midnight boundary
+        // (UTC+3) names the *previous* day (docs/phase-158-1, same class
+        // of bug as docs/phase-157 Part 3 G3).
+        const fileName = `rubis-${kind}-${preset}-${localDayOf(range.startIso)}.csv`
+        // `BrowserWindow.fromWebContents` ties the native save dialog to
+        // the window that invoked it (sheet on macOS, modal on Windows)
+        // instead of a windowless dialog; it returns null only if the
+        // renderer's window has already been destroyed mid-call, in
+        // which case the windowless overload is the correct fallback.
+        const parentWindow = BrowserWindow.fromWebContents(event.sender)
+        const dialogOptions = {
           title: `Export ${kind} CSV - ${range.label}`,
-          defaultPath: `${kind}-${preset}-${range.startIso.slice(0, 10)}.csv`,
+          defaultPath: join(app.getPath('documents'), fileName),
           filters: [{ name: 'CSV', extensions: ['csv'] }]
-        })
+        }
+        const result = parentWindow
+          ? await dialog.showSaveDialog(parentWindow, dialogOptions)
+          : await dialog.showSaveDialog(dialogOptions)
         if (result.canceled || !result.filePath) {
           return { success: true, data: { saved: false } }
         }

@@ -78,7 +78,8 @@ export function buildOrdersCsv(db: RubisDatabase, range: ReportRange, taxRate: n
     'Order status',
     'Shopify order id',
     'Sync status',
-    'Customer KRA PIN present'
+    'Customer KRA PIN present',
+    'Client order UUID'
   ]
 
   const rows = orders.map((order) => {
@@ -99,7 +100,12 @@ export function buildOrdersCsv(db: RubisDatabase, range: ReportRange, taxRate: n
       order.status === 'voided' ? 'voided' : 'completed',
       order.shopify_order_id ?? '',
       order.status,
-      payload?.customerPin?.trim() ? 'yes' : 'no'
+      payload?.customerPin?.trim() ? 'yes' : 'no',
+      // Same value orders.ts sends Shopify as the `client_order_uuid`
+      // customAttribute/metafield (docs/phase-158-1) — the offline
+      // dedup key, useful here for cross-referencing this row against
+      // the matching Shopify order.
+      payload?.clientOrderUuid ?? ''
     ]
   })
 

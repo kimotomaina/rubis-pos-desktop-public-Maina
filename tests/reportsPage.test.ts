@@ -35,6 +35,7 @@ const SAMPLE_Z_REPORT: ZReport = {
   orderCount: 5,
   totalRevenue: 280,
   vatIncluded: 38.62,
+  vatRate: 0.16,
   expectedCash: 300,
   endingCash: 300,
   discrepancy: 0
@@ -55,6 +56,7 @@ function stubApi(overrides: Record<string, unknown> = {}): void {
         orderCount: 3,
         totalRevenue: 150,
         vatIncluded: 20.69,
+        vatRate: 0.16,
         totalsByMethod: { cash: 100, mpesa: 50, card: 0 },
         mpesaByMode: { manual: 20, daraja: 30 }
       })
@@ -155,6 +157,22 @@ describe('ReportsPage > Shift History', () => {
     expect(window.api.printZReport).toHaveBeenCalledWith(7)
   })
 
+  it('labels the Z-report VAT figure from the report\'s own rate, not a hardcoded 16% (docs/phase-158-1)', async () => {
+    const getZReport = vi.fn().mockResolvedValue(ok({ ...SAMPLE_Z_REPORT, vatRate: 0.08, vatIncluded: 20.74 }))
+    stubApi({ getZReport })
+    await mount()
+
+    await act(async () => {
+      const row = Array.from(container.querySelectorAll('tr')).find((tr) => tr.textContent?.includes('#7'))
+      row!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(container.textContent).toContain('VAT included (calculated at 8%)')
+    expect(container.textContent).not.toContain('16%')
+  })
+
   it('shows a Previous/Next pager and requests the next page', async () => {
     const getShiftsList = vi.fn().mockImplementation((page: number) =>
       Promise.resolve(
@@ -184,6 +202,7 @@ describe('ReportsPage > Sales Summary', () => {
         orderCount: 3,
         totalRevenue: 150,
         vatIncluded: 20.69,
+        vatRate: 0.16,
         totalsByMethod: { cash: 100, mpesa: 50, card: 0 },
         mpesaByMode: { manual: 20, daraja: 30 }
       })
@@ -194,9 +213,32 @@ describe('ReportsPage > Sales Summary', () => {
 
     expect(getSalesSummary).toHaveBeenCalledWith('today')
     expect(container.textContent).toContain('150')
+    expect(container.textContent).toContain('VAT included (calculated at 16%)')
 
     await click('This week')
     expect(getSalesSummary).toHaveBeenCalledWith('thisWeek')
+  })
+
+  it('labels the VAT figure from the configured rate, not a hardcoded 16% (docs/phase-158-1)', async () => {
+    const getSalesSummary = vi.fn().mockResolvedValue(
+      ok({
+        startIso: '2026-09-26T00:00:00.000Z',
+        endIso: '2026-09-27T00:00:00.000Z',
+        label: 'Today (2026-09-26)',
+        orderCount: 3,
+        totalRevenue: 150,
+        vatIncluded: 11.11,
+        vatRate: 0.08,
+        totalsByMethod: { cash: 100, mpesa: 50, card: 0 },
+        mpesaByMode: { manual: 20, daraja: 30 }
+      })
+    )
+    stubApi({ getSalesSummary })
+    await mount()
+    await click('Sales Summary')
+
+    expect(container.textContent).toContain('VAT included (calculated at 8%)')
+    expect(container.textContent).not.toContain('16%')
   })
 })
 

@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import type { ZReport } from '../../../main/services/reports.js'
 import { formatCurrency } from '../lib/currency.js'
+import { formatVatRateLabel } from '../lib/vatLabel.js'
 import { CloseIcon } from './icons.js'
 
 interface ZReportModalProps {
@@ -129,7 +130,7 @@ export default function ZReportModal({ report, onClose }: ZReportModalProps) {
               <span>{formatCurrency(report.totalRevenue)}</span>
             </div>
             <div className="flex justify-between">
-              <span className="text-slate-600">VAT included (calculated at 16%)</span>
+              <span className="text-slate-600">{formatVatRateLabel(report.vatRate)}</span>
               <span className="font-medium">{formatCurrency(report.vatIncluded)}</span>
             </div>
           </div>

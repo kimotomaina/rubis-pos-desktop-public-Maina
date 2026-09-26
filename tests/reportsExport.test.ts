@@ -7,8 +7,10 @@
 import { describe, it, expect, vi } from 'vitest'
 import { buildOrdersCsv, buildLinesCsv } from '../src/main/services/reportsExport.js'
 import { buildTraderSystemInvNum } from '../src/main/lib/traderSystemInvoiceNumber.js'
+import { buildOrderInput } from '../src/main/services/orders.js'
 import type { RubisDatabase, OrderRow, MpesaPaymentRow, OrderStatus, StaffRow } from '../src/main/services/database.js'
 import type { ReportRange } from '../src/main/services/reports.js'
+import type { OfflineOrderPayload } from '../src/main/services/shopify-types.js'
 
 const RANGE: ReportRange = {
   startIso: '2026-09-01T00:00:00.000Z',
@@ -138,6 +140,35 @@ describe('buildOrdersCsv', () => {
     const db = fakeDb({ orders: [order({ local_id: 7, staff_id: 1 })], staff: [admin] })
     const csv = buildOrdersCsv(db, RANGE, 0.16)
     expect(csv).toContain('Ann')
+  })
+
+  it('exports the same client order UUID that orders.ts sends Shopify as the customAttribute and metafield (docs/phase-158-1)', () => {
+    const payload: OfflineOrderPayload = {
+      clientOrderUuid: 'uuid-42',
+      total: 100,
+      lineItems: [],
+      createdAt: '2026-09-01T09:00:00.000Z',
+      staffId: 1,
+      staffName: 'Ann',
+      paymentMethod: 'cash',
+      tenderedAmount: 100,
+      changeDue: 0
+    }
+    const db = fakeDb({
+      orders: [order({ local_id: 10, payload_json: JSON.stringify(payload) })],
+      staff: [admin]
+    })
+
+    const csv = buildOrdersCsv(db, RANGE, 0.16)
+    const dataRow = csv.split('\r\n')[1].split(',')
+    // Column 15 (0-indexed), the last column, is "Client order UUID".
+    expect(dataRow[15]).toBe('uuid-42')
+
+    const shopifyInput = buildOrderInput(payload)
+    const customAttributes = shopifyInput.order.customAttributes as Array<{ key: string; value: string }>
+    const metafields = shopifyInput.order.metafields as Array<{ key: string; value: string }>
+    expect(dataRow[15]).toBe(customAttributes[0].value)
+    expect(dataRow[15]).toBe(metafields[0].value)
   })
 })
 

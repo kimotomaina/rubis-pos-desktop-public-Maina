@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import type { ShiftRow } from '../../../main/services/database.js'
 import type { ZReport, SalesSummary, FiscalStatusDayCount, ReportRangePreset } from '../../../main/services/reports.js'
 import { formatCurrency } from '../lib/currency.js'
+import { formatVatRateLabel } from '../lib/vatLabel.js'
 import { paginate } from '../lib/paginate.js'
 import ZReportModal from '../components/ZReportModal.js'
 
@@ -237,7 +238,7 @@ function SalesSummaryView() {
               <p className="text-xl font-semibold text-slate-900">{formatCurrency(summary.totalRevenue)}</p>
             </div>
             <div className="rounded-lg bg-slate-50 p-3">
-              <p className="text-sm text-slate-500">VAT included (16%)</p>
+              <p className="text-sm text-slate-500">{formatVatRateLabel(summary.vatRate)}</p>
               <p className="text-xl font-semibold text-slate-900">{formatCurrency(summary.vatIncluded)}</p>
             </div>
             <div className="rounded-lg bg-slate-50 p-3">

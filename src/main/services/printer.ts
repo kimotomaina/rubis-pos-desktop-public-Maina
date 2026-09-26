@@ -22,6 +22,7 @@
 import { ThermalPrinter, PrinterTypes } from 'node-thermal-printer'
 import type { ServiceResult } from './shopify-types.js'
 import type { ZReport } from './reports.js'
+import { formatVatRateLabel } from './reports.js'
 import type { PrinterConfig, PrinterType } from './database.js'
 import { formatCurrency } from './currency.js'
 import { generatePdfReceipt } from './pdf-receipt.js'
@@ -338,7 +339,7 @@ export function renderZReport(
   client.bold(true)
   client.println(`Total Revenue: ${formatCurrency(report.totalRevenue)}`)
   client.bold(false)
-  client.println(`VAT included (calculated at 16%): ${formatCurrency(report.vatIncluded)}`)
+  client.println(`${formatVatRateLabel(report.vatRate)}: ${formatCurrency(report.vatIncluded)}`)
   client.drawLine()
 
   client.println(`Expected Cash: ${formatCurrency(report.expectedCash)}`)

@@ -340,3 +340,26 @@ widen as more `reports:*` reads are added.
 **Blast radius**: `reports:*` read channels only. No write channel is
 affected - `reports:approve-day` already re-verifies an admin PIN
 server-side and is unchanged.
+
+## Reports VAT uses one rate per order, not per line
+
+Found in docs/phase-157, corrected from additive to extractive in
+docs/phase-158, noted as still approximate in docs/phase-158-1.
+`computeVatIncluded` (`reports.ts`) extracts VAT from an order's `total`
+at the store's single configured rate. This is correct today because
+every item on the till currently carries the same VAT treatment. It
+becomes wrong the moment a basket mixes VAT classes - a zero-rated or
+exempt item alongside a standard-rated one - since one rate applied to
+the whole order total would misstate the VAT on that order.
+
+**What's still open**: VAT on reports uses one rate per order; wrong for
+mixed baskets once per-item VAT classes arrive (Item 3). Fix: per-line
+VAT or device figures (G8) - either compute VAT per line item once each
+line carries its own rate, or read the device's own per-VAT-group
+totals back after fiscalisation (docs/phase-157 Part 3, G8) rather than
+recomputing an approximation on the till side at all.
+
+**Blast radius**: every Z-report, daily summary, sales summary, and
+`orders.csv` VAT figure - all read-only reporting output. No fiscal
+filing is affected; the device's own submitted totals are unrelated to
+this approximation and remain correct regardless of it.
