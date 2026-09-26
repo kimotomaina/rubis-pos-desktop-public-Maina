@@ -130,9 +130,9 @@ export const MPESA_MANUAL_CODE_INVALID_MESSAGE =
 export const MPESA_MANUAL_NOT_ENABLED_MESSAGE =
   'Recording an unverified M-Pesa payment is not switched on for this till. Ask an administrator to enable it in Admin > Integrations.'
 
-/** Shown when the unverified-payment acknowledgement is missing. */
+/** Shown when the cashier's attestation is missing (docs/phase-150.md step 3 — a positive statement, not a warning acknowledgement). */
 export const MPESA_MANUAL_NOT_ACKNOWLEDGED_MESSAGE =
-  'This records a payment nobody has confirmed. Confirm that explicitly before completing the sale.'
+  'Confirm that you have seen the M-Pesa confirmation message on the customer’s phone before completing the sale.'
 
 /** Shown when a manual code has already been recorded against another sale. */
 export const MPESA_MANUAL_CODE_ALREADY_USED_MESSAGE =
@@ -368,15 +368,23 @@ export async function runCheckout(
      *     typed reference that never went through it does not.
      *
      * A third outcome was added in phase-121: a **manually entered code,
-     * completed on a manager's authority and recorded as confirmed by
-     * nobody.** It bends this rule's letter — the gate no longer only
-     * confirms or refuses — while keeping its purpose exactly: the point
-     * was never that every sale is proven, it was that nobody is ever
-     * misled about whether a sale was proven. A manual payment is an
-     * exception an operator opens deliberately, by name, that the record
-     * describes as open for ever. It is reached only when an
-     * administrator switched it on, only with a manager's re-verified
-     * PIN, and only with the cashier's explicit acknowledgement.
+     * recorded as confirmed by nobody.** It bends this rule's letter —
+     * the gate no longer only confirms or refuses — while keeping its
+     * purpose exactly: the point was never that every sale is proven, it
+     * was that nobody is ever misled about whether a sale was proven. A
+     * manual payment is an exception an operator opens deliberately, by
+     * name, that the record describes as open for ever.
+     *
+     * As of docs/phase-150.md step 3 (the client's POC decision,
+     * consciously reversing phase-120 §7.3's "fallback flag" framing —
+     * manual is now this till's default, exclusive method, not an
+     * exception bolted onto another one), this is reached with **no
+     * manager PIN at sale time**: only the cashier's own positive
+     * attestation that they saw the confirmation message on the
+     * customer's phone. `approvedByStaffId` is always written `null`
+     * here — a manager's approval is deferred to the end-of-day report
+     * (Step 4), covering every manual entry in it at once, not
+     * re-verified per sale.
      *
      * `verifyTransactionCode` is **never** called on this branch. Routing
      * manual through the provider would make an unverified payment
@@ -412,7 +420,9 @@ export async function runCheckout(
           reference,
           amount: total,
           enteredByStaffId: staff.id,
-          approvedByStaffId: input.manualApproval.approvedByStaffId
+          // No per-sale approval any more (docs/phase-150.md step 3) — a
+          // manager's end-of-day approval (Step 4) is what sets this.
+          approvedByStaffId: null
         }
       } else if (verifyReferenceNumbers) {
         const verification = await mpesaProvider.verifyTransactionCode({

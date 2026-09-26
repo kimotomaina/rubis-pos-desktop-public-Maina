@@ -84,10 +84,11 @@ export default function MpesaReconciliationPage() {
   return (
     <div className="space-y-4">
       <section className="rounded-xl border border-slate-200 bg-white p-4">
-        <h3 className="text-xl font-semibold text-slate-900">Unverified M-Pesa payments</h3>
+        <h3 className="text-xl font-semibold text-slate-900">Manual (cashier-recorded) M-Pesa payments</h3>
         <p className="mt-1 max-w-3xl text-base text-slate-500">
-          Sales completed on a manually entered code. Nobody confirmed these at the till — check
-          each one against the M-Pesa statement and mark it here once you have.
+          Sales completed on a code the cashier read off the customer&rsquo;s phone. Nobody
+          verified these systematically — check each one against the M-Pesa statement and mark it
+          here once you have.
         </p>
       </section>
 

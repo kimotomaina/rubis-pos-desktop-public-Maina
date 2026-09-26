@@ -235,15 +235,16 @@ export interface CheckoutRequest {
   companyName?: string
   cartDiscount?: Discount
   /**
-   * Set **only by the `orders:checkout` IPC handler**, after it has
-   * re-verified a manager's PIN, when this sale is being completed on a
-   * manually entered M-Pesa code.
+   * Set **only by the `orders:checkout` IPC handler**, when this sale is
+   * being completed on a manually entered M-Pesa code.
    *
    * There is no field for this on `checkoutRequestSchema`, so a renderer
    * cannot supply it — the same structural guarantee the stock-take
-   * commit gets by having no `locationId` in its payload. An authorizing
-   * manager is something the main process establishes, never something a
-   * caller asserts.
+   * commit gets by having no `locationId` in its payload. As of
+   * docs/phase-150.md step 3 (the client's POC decision), this needs no
+   * manager PIN at sale time — the control is the cashier's own
+   * attestation plus attribution, with a manager's approval deferred to
+   * the end-of-day report (Step 4), not re-verified per sale.
    */
   manualApproval?: ManualMpesaApproval
 }
@@ -251,18 +252,15 @@ export interface CheckoutRequest {
 /**
  * A manually entered M-Pesa code, as the renderer sends it.
  *
- * The manager's credentials travel with it because the main process,
- * not the payment screen, is what decides whether this sale may
- * complete — a `contextBridge`-exposed API means a renderer-side modal
- * is never a gate.
+ * No manager credentials travel with it (docs/phase-150.md step 3 —
+ * per-sale manager approval was removed; see `ManualMpesaApproval`). The
+ * cashier attesting to it is the till's own logged-in staff member,
+ * established server-side from `staffId`, never from this object.
  */
 export interface ManualMpesaEntry {
   /** The 10-character code the cashier read off the customer's message. */
   code: string
-  /** The authorizing manager — their PIN is re-verified in the main process. */
-  managerId: number
-  managerPin: string
-  /** Must be `true`: the cashier's acknowledgement that nobody confirmed this payment. */
+  /** Must be `true`: the cashier's positive attestation that they saw the confirmation message on the customer's phone. */
   confirmUnverified: true
 }
 
@@ -270,26 +268,27 @@ export interface ManualMpesaEntry {
  * What the renderer may send to `orders:checkout`.
  *
  * `manualApproval` is deliberately absent — that is established in the
- * main process from a re-verified PIN, never asserted by a caller.
+ * main process, never asserted by a caller.
  */
 export type CheckoutIpcRequest = Omit<CheckoutRequest, 'manualApproval'> & {
   mpesaManual?: ManualMpesaEntry
 }
 
 /**
- * A manager's verified authorization for one manually entered M-Pesa
- * payment.
+ * The cashier's attestation for one manually entered M-Pesa payment.
  *
- * `approvedByStaffId` is the id whose PIN `requireAdminPin` just checked
- * in the main process — not a number from the payload.
+ * No `approvedByStaffId` field: as of docs/phase-150.md step 3, manual
+ * entries are never approved at sale time — the row is written with
+ * `approved_by_staff_id = NULL` and only a manager's later end-of-day
+ * approval (Step 4) sets it. This type only carries what a cashier
+ * attests to at the till.
  */
 export interface ManualMpesaApproval {
-  approvedByStaffId: number
   /**
-   * The cashier's explicit acknowledgement that this records an
-   * **unverified** payment. Carried through rather than assumed so the
-   * gate can refuse a request that skipped the acknowledgement, however
-   * it reached the main process.
+   * The cashier's explicit, positive attestation that they saw the
+   * M-Pesa confirmation message on the customer's phone. Carried through
+   * rather than assumed so the gate can refuse a request that skipped
+   * it, however it reached the main process.
    */
   acknowledgedUnverified: boolean
 }

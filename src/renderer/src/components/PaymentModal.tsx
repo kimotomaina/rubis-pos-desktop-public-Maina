@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { formatCurrency } from '../lib/currency.js'
-import ManagerPinModal from './ManagerPinModal.js'
+import { useKeyboardStore } from '../stores/keyboardStore.js'
 import {
   createMpesaPaymentPoller,
   MPESA_POLL_TIMEOUT_MS,
@@ -9,6 +9,26 @@ import {
 
 /** How this till confirms an M-Pesa payment — mirrors `MpesaConfirmationMethod` in the main process. */
 type MpesaMode = 'manual' | 'daraja' | 'sms'
+
+/**
+ * `getMpesaCapabilities`'s lifecycle: `'loading'` until the first reply,
+ * `'unavailable'` if the call fails or returns no usable data, `'ready'`
+ * with the resolved mode otherwise.
+ *
+ * Added per a user correction to this component's original fail-safe
+ * choice: falling back to the Daraja STK form while loading or on error
+ * was the right default when Daraja was the default *method* — now that
+ * manual is, that fallback would briefly (or, on a real failure,
+ * indefinitely) show a manual till a phone-number form it cannot use
+ * (a manual-mode till's provider refuses `initiateStkPush`, so no money
+ * is ever at risk — it is just the wrong screen). A neutral "Loading…"
+ * and an explicit "unavailable" notice are honest about what's actually
+ * known instead.
+ */
+type MpesaCapabilitiesState =
+  | { status: 'loading' }
+  | { status: 'unavailable' }
+  | { status: 'ready'; mode: MpesaMode; manualEntryEnabled: boolean }
 
 /** Which M-Pesa flow tab is active, within `'daraja'` mode only. Hidden once an STK Push is in flight or has failed. */
 type PaymentTab = 'stk' | 'unverified'
@@ -27,15 +47,15 @@ type StkPhase =
   | { kind: 'failed'; reason: string }
 
 /**
- * A manually entered code plus the manager authorizing the sale on it.
+ * A manually entered code plus the cashier's attestation.
  *
- * Passed straight through to `orders:checkout`, where the PIN is
- * re-verified in the main process. Nothing decided here is trusted.
+ * No manager credentials here (docs/phase-150.md step 3 — per-sale
+ * manager approval was removed). Passed straight through to
+ * `orders:checkout`, where the cashier is established from the
+ * authenticated session, never from this object.
  */
 export interface ManualMpesaEntryInput {
   code: string
-  managerId: number
-  managerPin: string
   confirmUnverified: true
 }
 
@@ -73,14 +93,15 @@ function stripLeadingZero(rawInput: string): string {
 
 /**
  * M-Pesa payment collection UI. Renders an entirely different screen
- * depending on `mode` (`'manual'` | `'daraja'` | `'sms'`, reported by
- * `getMpesaCapabilities`) — the client's POC decision (docs/phase-148.md
- * step 2) that manual recording is this till's default, exclusive method
- * unless an administrator explicitly turned on Daraja:
+ * depending on the resolved mode (`'manual'` | `'daraja'` | `'sms'`,
+ * reported by `getMpesaCapabilities`) — the client's POC decision
+ * (docs/phase-148.md step 2) that manual recording is this till's
+ * default, exclusive method unless an administrator explicitly turned on
+ * Daraja:
  *   - **`'manual'`** (the default): one screen only, "Record M-Pesa
  *     payment" — the cashier checks the confirmation message on the
- *     customer's own phone and types the code in. No request is ever
- *     sent anywhere.
+ *     customer's own phone and types the code in, with no manager PIN
+ *     (docs/phase-150.md step 3). No request is ever sent anywhere.
  *   - **`'daraja'`**: the STK Push flow — phone number (entered after a
  *     fixed `254` prefix — a leading `0`, as in `0712345678`, is
  *     stripped automatically) → push prompt → a "Waiting for M-Pesa
@@ -94,12 +115,15 @@ function stripLeadingZero(rawInput: string): string {
  *     message yet — its parser is still a stub (`MPESA_SMS_PARSER_READY`
  *     in `src/main/lib/mpesaSms.ts`).
  *
- * `mode` defaults to `'daraja'` before the capabilities reply arrives (or
- * if it never does) — the same fail-safe direction the old
- * `manualCodeSupported`/`manualEntryEnabled` flags took: every provider
- * call is still checked server-side regardless of what this screen
- * shows, so the worst case is a cashier seeing an STK form that, if
- * used, is refused with a clear reason rather than silently succeeding.
+ * While the capabilities reply is in flight, this shows a plain
+ * "Loading…" notice, and if the call fails (or never resolves), a plain
+ * "M-Pesa is unavailable right now" notice with no form at all — a user
+ * correction to this component's earlier choice of falling back to the
+ * Daraja STK form in both cases, which was the right default when Daraja
+ * was the default *method* but became the wrong screen once manual is:
+ * showing a manual till a phone-number form it cannot use (its provider
+ * refuses `initiateStkPush` outright, so no money is ever at risk — it
+ * is just confusing) rather than saying plainly that M-Pesa isn't ready.
  *
  * Every STK Push attempt — accepted or rejected — is also logged via
  * `logMpesaTransaction` for the M-Pesa Logs screen.
@@ -114,7 +138,7 @@ function stripLeadingZero(rawInput: string): string {
  * @returns {JSX.Element}
  */
 export default function PaymentModal({ total, onPaid, onCancel }: PaymentModalProps) {
-  const [mode, setMode] = useState<MpesaMode>('daraja')
+  const [capabilities, setCapabilities] = useState<MpesaCapabilitiesState>({ status: 'loading' })
   const [tab, setTab] = useState<PaymentTab>('stk')
 
   /** Raw digits typed after the fixed `254` prefix — may still include a leading `0`. */
@@ -124,33 +148,28 @@ export default function PaymentModal({ total, onPaid, onCancel }: PaymentModalPr
   const [stkError, setStkError] = useState<string | null>(null)
   const [stkPhase, setStkPhase] = useState<StkPhase>({ kind: 'form' })
 
-  /**
-   * Whether an administrator has allowed a `'daraja'` till to also
-   * complete a sale on a code nobody confirmed (the older fallback,
-   * `docs/phase-120.md` §7.3). Fails closed — starts `false`, switched on
-   * only once the main process says so — so a lost reply hides the route
-   * rather than offering one whose server-side gate would refuse it.
-   * Irrelevant, and never consulted, outside `'daraja'` mode.
-   */
-  const [manualEntryEnabled, setManualEntryEnabled] = useState(false)
-
   const [unverifiedCode, setUnverifiedCode] = useState('')
   const [acknowledged, setAcknowledged] = useState(false)
   const [unverifiedError, setUnverifiedError] = useState<string | null>(null)
-  const [collectingManagerPin, setCollectingManagerPin] = useState(false)
 
   useEffect(() => {
     let cancelled = false
     void window.api
       .getMpesaCapabilities()
       .then((result) => {
-        if (!cancelled && result.success && result.data) {
-          setMode(result.data.mode)
-          setManualEntryEnabled(result.data.manualEntryEnabled)
+        if (cancelled) return
+        if (result.success && result.data) {
+          setCapabilities({
+            status: 'ready',
+            mode: result.data.mode,
+            manualEntryEnabled: result.data.manualEntryEnabled
+          })
+        } else {
+          setCapabilities({ status: 'unavailable' })
         }
       })
       .catch(() => {
-        // Fail closed: leave mode at its 'daraja' default (see doc comment above).
+        if (!cancelled) setCapabilities({ status: 'unavailable' })
       })
     return () => {
       cancelled = true
@@ -261,11 +280,30 @@ export default function PaymentModal({ total, onPaid, onCancel }: PaymentModalPr
   }
 
   /**
-   * Validates the typed code and the acknowledgement, then asks for a
-   * manager's PIN.
-   *
-   * Both checks are repeated in the main process. These exist to tell
-   * the cashier what is wrong before a manager is called over, not to
+   * Opens the shared on-screen keyboard for the M-Pesa code field (caps
+   * layout, a live echo of what's typed, and a "Submit" key that closes
+   * the overlay — the same pattern every other till field on a touch
+   * screen uses via `keyboardStore`, e.g. the customer KRA PIN field in
+   * `PosCheckoutPanel`). Docked to the bottom, matching the pre-login
+   * setup screens' choice for a field low in a scrollable form, so the
+   * Complete Sale button below stays reachable while typing.
+   */
+  const openCodeKeyboard = () => {
+    useKeyboardStore.getState().open({
+      value: unverifiedCode,
+      onChange: (next) => setUnverifiedCode(next.toUpperCase().replace(/[^A-Z0-9]/g, '')),
+      maxLength: 10,
+      label: 'M-Pesa code from the customer’s message',
+      mode: 'caps',
+      docked: true
+    })
+  }
+
+  /**
+   * Validates the typed code and the cashier's attestation, then
+   * completes the sale directly — no manager PIN (docs/phase-150.md step
+   * 3). Both checks are repeated in the main process; these exist to
+   * tell the cashier what is wrong before they tap Complete, not to
    * decide anything.
    */
   const handleUnverifiedContinue = () => {
@@ -277,34 +315,21 @@ export default function PaymentModal({ total, onPaid, onCancel }: PaymentModalPr
       return
     }
     if (!acknowledged) {
-      setUnverifiedError('Tick the box to confirm this payment has not been verified.')
+      setUnverifiedError('Confirm that you have seen the M-Pesa confirmation message on the customer’s phone.')
       return
     }
-    setCollectingManagerPin(true)
+    onPaid(unverifiedCode, { code: unverifiedCode, confirmUnverified: true })
   }
 
   /**
-   * Hands the code and the manager's credentials up to the caller, which
-   * sends them to `orders:checkout`. The PIN is re-verified there — this
-   * modal's own check is a courtesy, never the gate.
-   */
-  const handleUnverifiedAuthorized = (managerId: number, managerPin: string) => {
-    setCollectingManagerPin(false)
-    onPaid(unverifiedCode, {
-      code: unverifiedCode,
-      managerId,
-      managerPin,
-      confirmUnverified: true
-    })
-  }
-
-  /**
-   * The code-entry + acknowledgement + manager-PIN form, shared between
-   * `'manual'` mode's sole screen and `'daraja'` mode's optional
-   * "Unverified" tab — the two contexts differ only in framing (manual
-   * mode is this till's normal way of taking every M-Pesa payment;
-   * Daraja's Unverified tab is an exception for a payment Daraja itself
-   * never confirmed), never in mechanics.
+   * The code-entry + attestation form, shared between `'manual'` mode's
+   * sole screen and `'daraja'` mode's optional "Unverified" tab — the two
+   * contexts differ only in framing (manual mode is this till's normal
+   * way of taking every M-Pesa payment; Daraja's Unverified tab is an
+   * exception for a payment Daraja itself never confirmed), never in
+   * mechanics. Neither asks for a manager's PIN — the control is the
+   * cashier's own attestation and attribution, with a manager's approval
+   * deferred to the end-of-day report (docs/phase-150.md step 3/4).
    */
   const renderManualEntryPanel = (heading: string, description: string) => (
     <div className="rounded-xl border-2 border-amber-400 bg-amber-50/60 p-3">
@@ -317,9 +342,10 @@ export default function PaymentModal({ total, onPaid, onCancel }: PaymentModalPr
       <input
         type="text"
         value={unverifiedCode}
-        onChange={(e) => setUnverifiedCode(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, ''))}
+        readOnly
+        onClick={openCodeKeyboard}
         placeholder="e.g. QDF73HK9LM"
-        maxLength={10}
+        aria-label="M-Pesa code from the customer’s message"
         className="w-full rounded-lg border border-amber-400 bg-white px-3 py-3 text-xl uppercase tracking-wide focus:border-amber-500 focus:outline-none"
       />
 
@@ -330,8 +356,7 @@ export default function PaymentModal({ total, onPaid, onCancel }: PaymentModalPr
           onChange={(e) => setAcknowledged(e.target.checked)}
           className="mt-1 h-5 w-5"
         />
-        I confirm this payment has not been verified, and this sale will be recorded as
-        unverified.
+        I have seen the M-Pesa confirmation message on the customer&rsquo;s phone.
       </label>
 
       {unverifiedError && (
@@ -345,16 +370,8 @@ export default function PaymentModal({ total, onPaid, onCancel }: PaymentModalPr
         onClick={handleUnverifiedContinue}
         className="mt-4 w-full rounded-xl border-2 border-amber-600 bg-white py-4 text-xl font-semibold text-amber-900 transition active:scale-95"
       >
-        Continue &mdash; needs a manager&rsquo;s PIN
+        Complete Sale
       </button>
-
-      {collectingManagerPin && (
-        <ManagerPinModal
-          title={`Authorize an UNVERIFIED M-Pesa payment of ${formatCurrency(total)}`}
-          onAuthorized={handleUnverifiedAuthorized}
-          onCancel={() => setCollectingManagerPin(false)}
-        />
-      )}
     </div>
   )
 
@@ -440,7 +457,39 @@ export default function PaymentModal({ total, onPaid, onCancel }: PaymentModalPr
     )
   }
 
-  if (mode === 'sms') {
+  if (capabilities.status === 'loading') {
+    return (
+      <div>
+        <button
+          type="button"
+          onClick={onCancel}
+          className="mb-3 text-base text-slate-500 hover:text-slate-700"
+        >
+          ← Change payment method
+        </button>
+        <p className="text-base text-slate-400">Loading…</p>
+      </div>
+    )
+  }
+
+  if (capabilities.status === 'unavailable') {
+    return (
+      <div>
+        <button
+          type="button"
+          onClick={onCancel}
+          className="mb-3 text-base text-slate-500 hover:text-slate-700"
+        >
+          ← Change payment method
+        </button>
+        <p className="rounded-lg bg-rose-50 px-4 py-3 text-base font-medium text-rose-700">
+          M-Pesa is unavailable right now. Take payment another way.
+        </p>
+      </div>
+    )
+  }
+
+  if (capabilities.mode === 'sms') {
     // The parser is still a stub (MPESA_SMS_PARSER_READY, phase-147
     // §1.4) — no code path in this mode can ever confirm a payment, so
     // there is nothing useful to show but this notice.
@@ -460,7 +509,7 @@ export default function PaymentModal({ total, onPaid, onCancel }: PaymentModalPr
     )
   }
 
-  if (mode === 'manual') {
+  if (capabilities.mode === 'manual') {
     // The till's default, exclusive method (docs/phase-148.md step 2):
     // one screen, no STK tab, no Manual Code tab.
     return (
@@ -482,6 +531,8 @@ export default function PaymentModal({ total, onPaid, onCancel }: PaymentModalPr
       </div>
     )
   }
+
+  const { manualEntryEnabled } = capabilities
 
   return (
     <div>

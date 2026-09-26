@@ -7,11 +7,17 @@
  * tests are mostly about what must remain impossible:
  *
  *   - a manual payment reading as `confirmed`;
- *   - the renderer deciding the verification status, the cashier or the
- *     approver;
- *   - reaching the route without the switch, the format, the PIN or the
- *     acknowledgement;
+ *   - the renderer deciding the verification status, the cashier, or the
+ *     approver (there is no approver at sale time at all — see below);
+ *   - reaching the route without the switch, the format, or the
+ *     attestation;
  *   - a sale existing without its payment record, or the reverse.
+ *
+ * As of docs/phase-150.md step 3 (the client's POC decision, reversing
+ * phase-121's manager-PIN-per-sale design), there is no manager
+ * involved at sale time at all: `approved_by_staff_id` is always
+ * written `null` here, set later only by a manager's end-of-day
+ * approval (Step 4) — not by anything this file exercises.
  *
  * Run against a real in-memory SQLite database: the `UNIQUE` constraint
  * and the order-and-payment transaction are part of the argument, so
@@ -85,12 +91,8 @@ function makeDeps(db: RubisDatabase, overrides: Partial<RunCheckoutDeps> = {}): 
   }
 }
 
-/** A manual M-Pesa sale, as `index.ts` builds it after verifying the PIN. */
-function manualSale(
-  cashierId: number,
-  managerId: number,
-  overrides: Partial<CheckoutRequest> = {}
-): CheckoutRequest {
+/** A manual M-Pesa sale, as `index.ts` builds it — no manager involved (docs/phase-150.md step 3). */
+function manualSale(cashierId: number, overrides: Partial<CheckoutRequest> = {}): CheckoutRequest {
   return {
     items: [cartItem],
     total: 139.2,
@@ -99,7 +101,7 @@ function manualSale(
     tenderedAmount: 139.2,
     changeDue: 0,
     referenceNumber: CODE,
-    manualApproval: { approvedByStaffId: managerId, acknowledgedUnverified: true },
+    manualApproval: { acknowledgedUnverified: true },
     ...overrides
   }
 }
@@ -107,9 +109,9 @@ function manualSale(
 describe('a manual payment is recorded as unverified, never as confirmed', () => {
   it('completes the sale and records manual_unverified', async () => {
     const db = freshDb()
-    const { cashierId, managerId } = seedStaff(db)
+    const { cashierId } = seedStaff(db)
 
-    const result = await runCheckout(makeDeps(db), manualSale(cashierId, managerId))
+    const result = await runCheckout(makeDeps(db), manualSale(cashierId))
 
     expect(result.success).toBe(true)
     const [payment] = db.listMpesaPayments()
@@ -126,9 +128,9 @@ describe('a manual payment is recorded as unverified, never as confirmed', () =>
    */
   it('ignores a verification status the caller tries to supply', async () => {
     const db = freshDb()
-    const { cashierId, managerId } = seedStaff(db)
+    const { cashierId } = seedStaff(db)
     const hostile = {
-      ...manualSale(cashierId, managerId),
+      ...manualSale(cashierId),
       verificationStatus: 'confirmed',
       mode: 'daraja'
     } as unknown as CheckoutRequest
@@ -140,11 +142,22 @@ describe('a manual payment is recorded as unverified, never as confirmed', () =>
     expect(payment.mode).toBe('manual')
   })
 
-  it('ignores a cashier or approver the caller tries to name', async () => {
+  /**
+   * DELIBERATE TEST CHANGE (docs/phase-150.md step 3): `approved_by_staff_id`
+   * can no longer equal a manager's id at sale time — there is no
+   * manager involved in a manual sale at all any more.
+   *   Old assertion: `approved_by_staff_id` equals the seeded manager's
+   *     id (from a PIN re-verified during checkout).
+   *   New assertion: `approved_by_staff_id` is `null`, always — a
+   *     hostile payload naming one changes nothing, and neither does a
+   *     real one, since nothing populates it until Step 4's end-of-day
+   *     approval.
+   */
+  it('ignores a cashier or approver the caller tries to name, and records no approver at all', async () => {
     const db = freshDb()
-    const { cashierId, managerId } = seedStaff(db)
+    const { cashierId } = seedStaff(db)
     const hostile = {
-      ...manualSale(cashierId, managerId),
+      ...manualSale(cashierId),
       enteredByStaffId: 999,
       approvedByStaffId: 999
     } as unknown as CheckoutRequest
@@ -153,31 +166,53 @@ describe('a manual payment is recorded as unverified, never as confirmed', () =>
 
     const [payment] = db.listMpesaPayments()
     expect(payment.entered_by_staff_id).toBe(cashierId)
-    expect(payment.approved_by_staff_id).toBe(managerId)
+    expect(payment.approved_by_staff_id).toBeNull()
   })
 
   it('never asks the provider to verify a manual code', async () => {
     const db = freshDb()
-    const { cashierId, managerId } = seedStaff(db)
+    const { cashierId } = seedStaff(db)
     const verifyTransactionCode = vi.fn()
 
     await runCheckout(
       makeDeps(db, { verifyReferenceNumbers: true, mpesaProvider: { verifyTransactionCode } }),
-      manualSale(cashierId, managerId)
+      manualSale(cashierId)
     )
 
     expect(verifyTransactionCode).not.toHaveBeenCalled()
+  })
+
+  /**
+   * Manual entry makes no request to Safaricom, no manager PIN
+   * round-trip, and no other network-dependent call — `makeDeps`'
+   * `monitor.isOnline: () => false` above already covers every test in
+   * this file, but this one says so explicitly and checks the provider
+   * was never touched, which is what "offline" actually depends on here.
+   */
+  it('completes fully offline — no network call of any kind', async () => {
+    const db = freshDb()
+    const { cashierId } = seedStaff(db)
+    const verifyTransactionCode = vi.fn()
+
+    const result = await runCheckout(
+      makeDeps(db, { monitor: { isOnline: () => false }, mpesaProvider: { verifyTransactionCode } }),
+      manualSale(cashierId)
+    )
+
+    expect(result.success).toBe(true)
+    expect(verifyTransactionCode).not.toHaveBeenCalled()
+    expect(db.listMpesaPayments()).toHaveLength(1)
   })
 })
 
 describe('the four guard rails', () => {
   it('refuses when the till was never allowed manual entry', async () => {
     const db = freshDb()
-    const { cashierId, managerId } = seedStaff(db)
+    const { cashierId } = seedStaff(db)
 
     const result = await runCheckout(
       makeDeps(db, { manualEntryEnabled: false }),
-      manualSale(cashierId, managerId)
+      manualSale(cashierId)
     )
 
     expect(result).toEqual({ success: false, error: MPESA_MANUAL_NOT_ENABLED_MESSAGE })
@@ -187,11 +222,11 @@ describe('the four guard rails', () => {
 
   it('refuses when the flag is simply absent, rather than defaulting to allowed', async () => {
     const db = freshDb()
-    const { cashierId, managerId } = seedStaff(db)
+    const { cashierId } = seedStaff(db)
     const deps = makeDeps(db)
     delete (deps as { manualEntryEnabled?: boolean }).manualEntryEnabled
 
-    const result = await runCheckout(deps, manualSale(cashierId, managerId))
+    const result = await runCheckout(deps, manualSale(cashierId))
 
     expect(result.success).toBe(false)
     expect(db.getOrders()).toHaveLength(0)
@@ -207,11 +242,11 @@ describe('the four guard rails', () => {
     ['punctuation', 'QDF-73HK9L']
   ])('refuses a code that is %s', async (_label, code) => {
     const db = freshDb()
-    const { cashierId, managerId } = seedStaff(db)
+    const { cashierId } = seedStaff(db)
 
     const result = await runCheckout(
       makeDeps(db),
-      manualSale(cashierId, managerId, { referenceNumber: code })
+      manualSale(cashierId, { referenceNumber: code })
     )
 
     expect(result.success).toBe(false)
@@ -221,24 +256,24 @@ describe('the four guard rails', () => {
 
   it('names the format problem rather than the generic refusal', async () => {
     const db = freshDb()
-    const { cashierId, managerId } = seedStaff(db)
+    const { cashierId } = seedStaff(db)
 
     const result = await runCheckout(
       makeDeps(db),
-      manualSale(cashierId, managerId, { referenceNumber: 'AAA' })
+      manualSale(cashierId, { referenceNumber: 'AAA' })
     )
 
     expect(result.error).toBe(MPESA_MANUAL_CODE_INVALID_MESSAGE)
   })
 
-  it('refuses without the unverified acknowledgement', async () => {
+  it('refuses without the cashier’s attestation', async () => {
     const db = freshDb()
-    const { cashierId, managerId } = seedStaff(db)
+    const { cashierId } = seedStaff(db)
 
     const result = await runCheckout(
       makeDeps(db),
-      manualSale(cashierId, managerId, {
-        manualApproval: { approvedByStaffId: managerId, acknowledgedUnverified: false }
+      manualSale(cashierId, {
+        manualApproval: { acknowledgedUnverified: false }
       })
     )
 
@@ -255,11 +290,11 @@ describe('the four guard rails', () => {
    */
   it('refuses a bare typed code with no approval at all, as it always did', async () => {
     const db = freshDb()
-    const { cashierId, managerId } = seedStaff(db)
+    const { cashierId } = seedStaff(db)
 
     const result = await runCheckout(
       makeDeps(db),
-      manualSale(cashierId, managerId, { manualApproval: undefined })
+      manualSale(cashierId, { manualApproval: undefined })
     )
 
     expect(result.success).toBe(false)
@@ -271,9 +306,9 @@ describe('the four guard rails', () => {
 describe('the order and its payment record are one fact', () => {
   it('writes both, linked, or neither', async () => {
     const db = freshDb()
-    const { cashierId, managerId } = seedStaff(db)
+    const { cashierId } = seedStaff(db)
 
-    const result = await runCheckout(makeDeps(db), manualSale(cashierId, managerId))
+    const result = await runCheckout(makeDeps(db), manualSale(cashierId))
 
     const [payment] = db.listMpesaPayments()
     expect(payment.order_local_id).toBe(result.data?.localId)
@@ -287,7 +322,7 @@ describe('the order and its payment record are one fact', () => {
    */
   it('refuses a manual code that another mode already settled a sale with', async () => {
     const db = freshDb()
-    const { cashierId, managerId } = seedStaff(db)
+    const { cashierId } = seedStaff(db)
     db.logMpesaTransaction({
       checkoutRequestId: 'ws_CO_1',
       merchantRequestId: 'm',
@@ -296,12 +331,12 @@ describe('the order and its payment record are one fact', () => {
     })
     db.updateMpesaTransactionStatus('ws_CO_1', 'success', CODE)
     const confirmed = await runCheckout(makeDeps(db), {
-      ...manualSale(cashierId, managerId),
+      ...manualSale(cashierId),
       manualApproval: undefined
     })
     expect(confirmed.success).toBe(true)
 
-    const typedIn = await runCheckout(makeDeps(db), manualSale(cashierId, managerId))
+    const typedIn = await runCheckout(makeDeps(db), manualSale(cashierId))
 
     expect(typedIn).toEqual({ success: false, error: MPESA_MANUAL_CODE_ALREADY_USED_MESSAGE })
     expect(db.getOrders()).toHaveLength(1)
@@ -310,12 +345,12 @@ describe('the order and its payment record are one fact', () => {
 
   it('rolls the sale back when the payment record cannot be written', async () => {
     const db = freshDb()
-    const { cashierId, managerId } = seedStaff(db)
-    await runCheckout(makeDeps(db), manualSale(cashierId, managerId))
+    const { cashierId } = seedStaff(db)
+    await runCheckout(makeDeps(db), manualSale(cashierId))
 
     // The same code again: the payment row conflicts, so the second sale
     // must not exist either.
-    const second = await runCheckout(makeDeps(db), manualSale(cashierId, managerId))
+    const second = await runCheckout(makeDeps(db), manualSale(cashierId))
 
     expect(second).toEqual({ success: false, error: MPESA_MANUAL_CODE_ALREADY_USED_MESSAGE })
     expect(db.getOrders()).toHaveLength(1)
@@ -327,7 +362,7 @@ describe('the reconciliation queue', () => {
   it('lists a manual payment and takes it off only via reconciling', async () => {
     const db = freshDb()
     const { cashierId, managerId } = seedStaff(db)
-    await runCheckout(makeDeps(db), manualSale(cashierId, managerId))
+    await runCheckout(makeDeps(db), manualSale(cashierId))
 
     const queued = db.listUnreconciledMpesaPayments()
     expect(queued).toHaveLength(1)
@@ -346,7 +381,7 @@ describe('the reconciliation queue', () => {
   it('leaves the payment recorded as unverified for ever', async () => {
     const db = freshDb()
     const { cashierId, managerId } = seedStaff(db)
-    await runCheckout(makeDeps(db), manualSale(cashierId, managerId))
+    await runCheckout(makeDeps(db), manualSale(cashierId))
     const [queued] = db.listUnreconciledMpesaPayments()
 
     db.markMpesaPaymentReconciled(queued.id, managerId, null)
@@ -360,7 +395,7 @@ describe('the reconciliation queue', () => {
   it('refuses to reconcile the same payment twice', async () => {
     const db = freshDb()
     const { cashierId, managerId } = seedStaff(db)
-    await runCheckout(makeDeps(db), manualSale(cashierId, managerId))
+    await runCheckout(makeDeps(db), manualSale(cashierId))
     const [queued] = db.listUnreconciledMpesaPayments()
 
     expect(db.markMpesaPaymentReconciled(queued.id, managerId, null)).toBe(true)
@@ -415,7 +450,7 @@ describe('the wire contract gives a renderer nothing to forge', () => {
       tenderedAmount: 139.2,
       changeDue: 0
     }
-    const manual = { code: CODE, managerId: 2, managerPin: '2222' }
+    const manual = { code: CODE }
 
     expect(
       validate(checkoutRequestSchema, {
@@ -441,7 +476,7 @@ describe('the wire contract gives a renderer nothing to forge', () => {
       paymentMethod: 'mpesa',
       tenderedAmount: 139.2,
       changeDue: 0,
-      mpesaManual: { code, managerId: 2, managerPin: '2222', confirmUnverified: true }
+      mpesaManual: { code, confirmUnverified: true }
     })
 
     expect(validate(checkoutRequestSchema, payload(CODE)).success).toBe(true)
@@ -450,7 +485,18 @@ describe('the wire contract gives a renderer nothing to forge', () => {
     expect(validate(checkoutRequestSchema, payload('QDF73HK9L')).success).toBe(false)
   })
 
-  it('requires a manager on every manual entry', async () => {
+  /**
+   * DELIBERATE TEST CHANGE (docs/phase-150.md step 3, named explicitly
+   * in the task): manual entry no longer needs a manager at all.
+   *   Old title/assertion: `'requires a manager on every manual entry'`
+   *     — a payload with just `code`/`confirmUnverified` and no
+   *     `managerId`/`managerPin` was rejected.
+   *   New title/assertion: `'needs no manager PIN — just the code and
+   *     the cashier's attestation'` — the same minimal payload is now
+   *     accepted, and the schema has no `managerId`/`managerPin` fields
+   *     left to require.
+   */
+  it('needs no manager PIN — just the code and the cashier’s attestation', async () => {
     const { checkoutRequestSchema, validate } = await import('../src/main/lib/ipcValidator.js')
 
     const result = validate(checkoutRequestSchema, {
@@ -463,6 +509,10 @@ describe('the wire contract gives a renderer nothing to forge', () => {
       mpesaManual: { code: CODE, confirmUnverified: true }
     })
 
-    expect(result.success).toBe(false)
+    expect(result.success).toBe(true)
+    expect(Object.keys(checkoutRequestSchema.shape.mpesaManual.unwrap().shape)).toEqual([
+      'code',
+      'confirmUnverified'
+    ])
   })
 })

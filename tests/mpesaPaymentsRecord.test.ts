@@ -148,15 +148,24 @@ describe('every mode writes exactly one payment row, naming its sale', () => {
     )
   })
 
-  it('records a manual sale as manual_unverified with its approver', async () => {
+  /**
+   * DELIBERATE TEST CHANGE (docs/phase-150.md step 3): a manual sale no
+   * longer has an approver at sale time — `ManualMpesaApproval` dropped
+   * `approvedByStaffId` entirely, since per-sale manager approval was
+   * removed (a manager's later end-of-day approval, Step 4, is what
+   * eventually sets it).
+   *   Old assertion: `approved_by_staff_id` equals the seeded manager's id.
+   *   New assertion: `approved_by_staff_id` is `null`.
+   */
+  it('records a manual sale as manual_unverified with no approver yet', async () => {
     const db = freshDb()
-    const { cashierId, managerId } = seedStaff(db)
+    const { cashierId } = seedStaff(db)
 
     const result = await runCheckout(
       makeDeps(db, { manualEntryEnabled: true }),
       sale(cashierId, {
         referenceNumber: 'QDF73HK9LM',
-        manualApproval: { approvedByStaffId: managerId, acknowledgedUnverified: true }
+        manualApproval: { acknowledgedUnverified: true }
       })
     )
 
@@ -165,7 +174,7 @@ describe('every mode writes exactly one payment row, naming its sale', () => {
       verification_status: 'manual_unverified',
       order_local_id: result.data?.localId,
       entered_by_staff_id: cashierId,
-      approved_by_staff_id: managerId
+      approved_by_staff_id: null
     })
   })
 

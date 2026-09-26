@@ -1052,27 +1052,25 @@ app.whenReady().then(async () => {
       }
 
       /**
-       * A manually entered M-Pesa code completes a sale nobody confirmed,
-       * so the manager's PIN is re-verified here — in the main process,
-       * against the staff table — before `runCheckout` is told an
-       * approval exists at all.
+       * A manually entered M-Pesa code completes a sale nobody has
+       * confirmed. As of docs/phase-150.md step 3 (the client's POC
+       * decision, consciously reversing phase-120 §7.3's original
+       * "fallback flag, always manager-gated" design), this needs no
+       * manager PIN at sale time: the control is the cashier physically
+       * checking the confirmation message on the customer's phone, their
+       * attestation of that, and their attribution on the record — a
+       * manager's approval comes later, for the whole day's manual
+       * entries at once (Step 4), not per sale here.
        *
-       * The PIN itself goes no further: `mpesaManual` is stripped and
-       * replaced with the **verified** approver's id. `runCheckout`
-       * therefore cannot be handed an approval that was never checked,
-       * and the renderer never gets to name who approved anything.
+       * `mpesaManual` is still stripped before `runCheckout` sees it —
+       * `manualApproval` carries only the cashier's own attestation,
+       * never anything the renderer could use to claim a status,
+       * cashier, or approver it did not earn.
        */
       const { mpesaManual, ...checkoutInput } = validation.data
       let manualApproval: ManualMpesaApproval | undefined
       if (mpesaManual) {
-        const authz = requireAdminPin(db, mpesaManual.managerId, mpesaManual.managerPin)
-        if (!authz.success) {
-          return { success: false, error: authz.error }
-        }
-        manualApproval = {
-          approvedByStaffId: mpesaManual.managerId,
-          acknowledgedUnverified: mpesaManual.confirmUnverified
-        }
+        manualApproval = { acknowledgedUnverified: mpesaManual.confirmUnverified }
       }
 
       return runCheckout(

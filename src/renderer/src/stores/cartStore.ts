@@ -46,9 +46,10 @@ export interface CheckoutParams {
   cartDiscount?: Discount
   /**
    * Present only when this M-Pesa sale is being completed on a manually
-   * entered code nobody confirmed. Carries the authorizing manager's
-   * credentials, which the main process re-verifies before the sale is
-   * allowed through.
+   * entered code nobody confirmed. No manager credentials travel with it
+   * (docs/phase-150.md step 3) — the main process establishes the
+   * cashier from the authenticated session and needs no PIN to allow the
+   * sale through.
    */
   mpesaManual?: ManualMpesaEntry
 }

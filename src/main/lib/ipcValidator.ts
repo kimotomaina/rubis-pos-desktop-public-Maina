@@ -60,22 +60,24 @@ export const checkoutRequestSchema = z.object({
    * What is **not** here is the point. There is no `verificationStatus`,
    * no `enteredByStaffId` and no `approvedByStaffId` field anywhere on
    * this payload, so a renderer cannot claim a payment was confirmed,
-   * nor attribute it to someone who did not authorize it. The handler
-   * derives all three: the status from which gate branch runs, the
-   * cashier from the authenticated `staffId`, and the approver from the
-   * id whose PIN `requireAdminPin` just re-verified.
+   * nor attribute it to, or approve it as, someone else. The handler
+   * derives the status from which gate branch runs and the cashier from
+   * the authenticated `staffId` — as of docs/phase-150.md step 3 (the
+   * client's POC decision), no manager PIN is re-verified here at all:
+   * the row is written with no approver, and a manager's later
+   * end-of-day approval (Step 4) is what sets one.
    *
-   * `confirmUnverified` must be literally `true`. The exception has to
-   * be taken deliberately, never as a side effect of opening a screen —
-   * the same shape as the stock-take commit's confirmation.
+   * `confirmUnverified` must be literally `true` — the cashier's positive
+   * attestation that they saw the M-Pesa confirmation message on the
+   * customer's phone, taken deliberately, never as a side effect of
+   * opening a screen — the same shape as the stock-take commit's
+   * confirmation.
    */
   mpesaManual: z
     .object({
       code: z
         .string()
         .regex(/^[A-Z0-9]{10}$/, 'Enter the 10-character M-Pesa code from the customer’s message'),
-      managerId: z.number().int().positive(),
-      managerPin: z.string().min(1, 'Manager PIN is required'),
       confirmUnverified: z.literal(true, {
         message: 'An unverified M-Pesa payment must be explicitly confirmed'
       })
