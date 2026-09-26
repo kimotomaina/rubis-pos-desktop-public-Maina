@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
-import { useAuthStore } from '../stores/authStore'
-import VirtualNumpad from './VirtualNumpad'
+import { useAuthStore } from '../stores/authStore.js'
+import VirtualNumpad from './VirtualNumpad.js'
 
 interface ManagerPinModalProps {
   /** Shown as the modal's heading — describes what's being authorized. */

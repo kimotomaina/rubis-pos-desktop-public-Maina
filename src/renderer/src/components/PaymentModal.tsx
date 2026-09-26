@@ -1,11 +1,11 @@
 import { useEffect, useRef, useState } from 'react'
-import { formatCurrency } from '../lib/currency'
-import ManagerPinModal from './ManagerPinModal'
+import { formatCurrency } from '../lib/currency.js'
+import ManagerPinModal from './ManagerPinModal.js'
 import {
   createMpesaPaymentPoller,
   MPESA_POLL_TIMEOUT_MS,
   type MpesaPaymentPoller
-} from '../lib/mpesaPaymentPoller'
+} from '../lib/mpesaPaymentPoller.js'
 
 /** Which M-Pesa flow tab is active. Hidden once an STK Push is in flight or has failed. */
 type PaymentTab = 'stk' | 'manual' | 'unverified'

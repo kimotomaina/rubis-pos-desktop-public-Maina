@@ -13,10 +13,20 @@ interface VirtualNumpadProps {
    * host passes `Submit` (phase-139) so its key sets name one action.
    */
   enterLabel?: string
+  /**
+   * Key height: `'default'` (`h-16`, unchanged — every existing caller
+   * keeps this) or `'compact'` (`h-12`). `PosCheckoutPanel`'s Cash panel
+   * passes `'compact'` so the whole checkout aside fits 1366x772 without
+   * scrolling (phase-146); even at the smallest supported window
+   * (1366x768 @150%) a compact key still measures well over the 34
+   * physical-px touch-target floor. Everything except each key's own
+   * height (font size, colors, spacing) stays identical between sizes.
+   */
+  size?: 'default' | 'compact'
 }
 
-const NUMPAD_KEY_CLASS =
-  'h-16 w-full rounded-xl bg-slate-100 text-2xl font-semibold text-slate-800 transition active:scale-95 hover:bg-slate-200 disabled:cursor-not-allowed disabled:opacity-40'
+/** Key height per {@link VirtualNumpadProps.size}. */
+const KEY_HEIGHT_CLASS = { default: 'h-16', compact: 'h-12' } as const
 
 const DIGIT_KEYS = ['1', '2', '3', '4', '5', '6', '7', '8', '9']
 
@@ -39,7 +49,8 @@ export default function VirtualNumpad({
   onEnter,
   allowDecimal = true,
   multipleDecimals = false,
-  enterLabel
+  enterLabel,
+  size = 'default'
 }: VirtualNumpadProps) {
   const appendKey = (key: string) => {
     if (key === '.' && (!allowDecimal || (!multipleDecimals && value.includes('.')))) return
@@ -49,6 +60,9 @@ export default function VirtualNumpad({
   const backspace = () => onChange(value.slice(0, -1))
   const clear = () => onChange('')
 
+  const keyHeight = KEY_HEIGHT_CLASS[size]
+  const numpadKeyClass = `${keyHeight} w-full rounded-xl bg-slate-100 text-2xl font-semibold text-slate-800 transition active:scale-95 hover:bg-slate-200 disabled:cursor-not-allowed disabled:opacity-40`
+
   return (
     <div className="flex flex-col gap-2">
       <div className="grid grid-cols-3 gap-2">
@@ -57,7 +71,7 @@ export default function VirtualNumpad({
             key={key}
             type="button"
             onClick={() => appendKey(key)}
-            className={NUMPAD_KEY_CLASS}
+            className={numpadKeyClass}
           >
             {key}
           </button>
@@ -66,18 +80,18 @@ export default function VirtualNumpad({
           type="button"
           onClick={() => appendKey('.')}
           disabled={!allowDecimal}
-          className={NUMPAD_KEY_CLASS}
+          className={numpadKeyClass}
           aria-label="Decimal point"
         >
           .
         </button>
-        <button type="button" onClick={() => appendKey('0')} className={NUMPAD_KEY_CLASS}>
+        <button type="button" onClick={() => appendKey('0')} className={numpadKeyClass}>
           0
         </button>
         <button
           type="button"
           onClick={backspace}
-          className={NUMPAD_KEY_CLASS}
+          className={numpadKeyClass}
           aria-label="Backspace"
         >
           ⌫
@@ -87,7 +101,7 @@ export default function VirtualNumpad({
         <button
           type="button"
           onClick={clear}
-          className="h-16 w-full rounded-xl bg-slate-200 text-2xl font-semibold text-slate-700 transition active:scale-95 hover:bg-slate-300"
+          className={`${keyHeight} w-full rounded-xl bg-slate-200 text-2xl font-semibold text-slate-700 transition active:scale-95 hover:bg-slate-300`}
         >
           Clear
         </button>
@@ -96,7 +110,7 @@ export default function VirtualNumpad({
             type="button"
             onClick={onEnter}
             aria-label={enterLabel}
-            className="h-16 w-full rounded-xl bg-rose-600 text-2xl font-bold text-white transition active:scale-95 hover:bg-rose-700"
+            className={`${keyHeight} w-full rounded-xl bg-rose-600 text-2xl font-bold text-white transition active:scale-95 hover:bg-rose-700`}
           >
             {enterLabel ?? 'Enter'}
           </button>

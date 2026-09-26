@@ -224,6 +224,30 @@ const ICON_PATH = app.isPackaged
   : join(__dirname, '../../resources/icons/icon.ico')
 
 /**
+ * Parses `RUBIS_CHECK_FIT_SIZE` (e.g. `"911x512"`) for `scripts/check-
+ * fit.mjs` — Electron's CDP implementation has no `Browser.setWindowBounds`
+ * (confirmed while building that script: the method doesn't exist on a
+ * desktop `BrowserWindow`, only in headless Chrome), so the only way to
+ * drive the window to each of the 9 supported-display cases is to set its
+ * initial content size at launch and relaunch per case, rather than
+ * resize one running instance. Absent or malformed, this is a no-op and
+ * the window maximizes exactly as it always has — no real launch ever
+ * sets this variable.
+ *
+ * @param {string | undefined} raw
+ * @returns {{ width: number; height: number } | null}
+ */
+function parseCheckFitSize(raw: string | undefined): { width: number; height: number } | null {
+  if (!raw) return null
+  const match = /^(\d+)x(\d+)$/.exec(raw.trim())
+  if (!match) return null
+  const width = Number(match[1])
+  const height = Number(match[2])
+  if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) return null
+  return { width, height }
+}
+
+/**
  * Creates and configures the main BrowserWindow.
  *
  * Security posture (see window-factory.createBrowserWindowConfig):
@@ -248,7 +272,12 @@ function createWindow(): BrowserWindow {
 
   mainWindow.on('ready-to-show', () => {
     mainWindow.show()
-    mainWindow.maximize()
+    const testSize = parseCheckFitSize(process.env['RUBIS_CHECK_FIT_SIZE'])
+    if (testSize) {
+      mainWindow.setContentSize(testSize.width, testSize.height)
+    } else {
+      mainWindow.maximize()
+    }
   })
 
   /**

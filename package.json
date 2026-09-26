@@ -34,6 +34,7 @@
     "test:live": "vitest run --config vitest.live.config.ts",
     "mock:zfplab": "vite-node mock-zfplab-server/run.ts",
     "check-env": "node scripts/check-env.cjs",
+    "check:fit": "npm run check-node-version && node scripts/check-fit.mjs",
     "predist": "npm run check-node-version && npm run check-env",
     "dist": "npm run build && electron-builder --win",
     "postdist": "node scripts/verify-dist.cjs",

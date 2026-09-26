@@ -151,9 +151,17 @@ export default function PosCheckoutPanel({ requestManagerPin }: PosCheckoutPanel
 
   return (
     <div className="flex h-full flex-col bg-white">
-      <div className="border-b border-slate-200 p-4">
+      {/**
+       * The customer row and the TOTAL block's header line used to be two
+       * separate bordered sections (phase-142/146: ~57px + ~101px). They
+       * share one now — "TOTAL" / the customer summary (tap to edit) /
+       * "+ Discount" all on one line — closing most of the checkout
+       * aside's ~150-158px shortfall against the 1366x772 design box
+       * without touching either action's own behavior.
+       */}
+      <div className="border-b border-slate-200 bg-slate-50 p-3">
         {editingPin ? (
-          <div className="flex flex-col gap-2">
+          <div className="mb-1 flex flex-col gap-2">
             <input
               type="text"
               value={companyName}
@@ -197,47 +205,38 @@ export default function PosCheckoutPanel({ requestManagerPin }: PosCheckoutPanel
             </div>
           </div>
         ) : (
-          <div className="flex items-center justify-between">
-            <p className="text-base font-medium text-slate-600">
-              Customer: <span className="font-semibold text-slate-900">{trimmedCustomerPin || 'Walk-in'}</span>
-              {trimmedCompanyName && (
-                <span className="text-slate-500"> · {trimmedCompanyName}</span>
-              )}
-            </p>
+          <div className="mb-1 flex items-center justify-between gap-2">
+            <p className="shrink-0 text-base font-medium text-slate-500">TOTAL</p>
             <button
               type="button"
               onClick={() => setEditingPin(true)}
-              className="text-sm font-medium text-rose-600 hover:text-rose-700"
+              className="min-w-0 flex-1 truncate text-center text-sm font-medium text-slate-600 hover:text-rose-600"
             >
-              {trimmedCustomerPin || trimmedCompanyName ? 'Edit Details' : 'Add KRA PIN'}
+              {trimmedCustomerPin || trimmedCompanyName
+                ? `${trimmedCustomerPin || 'Walk-in'}${trimmedCompanyName ? ` · ${trimmedCompanyName}` : ''} · Edit Details`
+                : 'Walk-in · Add KRA PIN'}
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setDiscountValue(cartDiscount ? String(cartDiscount.value) : '')
+                setDiscountType(cartDiscount?.type ?? 'percent')
+                setShowDiscountEditor((prev) => !prev)
+              }}
+              className="shrink-0 text-sm font-medium text-slate-500 hover:text-rose-600"
+            >
+              {cartDiscount ? 'Edit Discount' : '+ Discount'}
             </button>
           </div>
         )}
-        {customerPinError && <p className="mt-1 text-sm font-medium text-rose-600">{customerPinError}</p>}
-      </div>
-
-      <div className="border-b border-slate-200 bg-slate-50 p-4">
-        <div className="mb-1 flex items-center justify-between">
-          <p className="text-base font-medium text-slate-500">TOTAL</p>
-          <button
-            type="button"
-            onClick={() => {
-              setDiscountValue(cartDiscount ? String(cartDiscount.value) : '')
-              setDiscountType(cartDiscount?.type ?? 'percent')
-              setShowDiscountEditor((prev) => !prev)
-            }}
-            className="text-sm font-medium text-slate-500 hover:text-rose-600"
-          >
-            {cartDiscount ? 'Edit Discount' : '+ Discount'}
-          </button>
-        </div>
+        {customerPinError && <p className="mb-1 text-sm font-medium text-rose-600">{customerPinError}</p>}
         {cartDiscount && (
           <p className="mb-1 flex justify-between text-sm text-slate-500">
             <span>Subtotal</span>
             <span>{formatCurrency(cartSubtotal)}</span>
           </p>
         )}
-        <p className="text-4xl font-extrabold tabular-nums text-slate-900">{formatCurrency(cartTotal)}</p>
+        <p className="text-3xl font-extrabold tabular-nums text-slate-900">{formatCurrency(cartTotal)}</p>
 
         {showDiscountEditor && (
           <div className="mt-2 flex items-center gap-2 rounded-lg bg-white p-2">
@@ -276,12 +275,19 @@ export default function PosCheckoutPanel({ requestManagerPin }: PosCheckoutPanel
         )}
       </div>
 
-      <div className="flex-1 overflow-y-auto p-4">
-        <div className="mb-4 grid grid-cols-2 gap-3">
+      {/**
+       * At the exact worst-case window (1366x768 @150%, the smallest this
+       * app supports) the tightening above alone left zero measured
+       * slack against the 1366x772 box — a real pass, but not the >= 8px
+       * margin the spec asks to stop at. `p-2` (was `p-3`) and `mb-2`
+       * (was `mb-3`, below) reclaim 12px of comfortable margin.
+       */}
+      <div className="flex-1 overflow-hidden p-2">
+        <div className="mb-2 grid grid-cols-2 gap-3">
           <button
             type="button"
             onClick={() => setMethod('cash')}
-            className={`h-16 rounded-xl text-xl font-bold transition active:scale-95 ${
+            className={`h-14 rounded-xl text-xl font-bold transition active:scale-95 ${
               method === 'cash'
                 ? 'bg-rose-600 text-white shadow'
                 : 'border border-slate-200 text-slate-700 hover:bg-slate-50'
@@ -292,7 +298,7 @@ export default function PosCheckoutPanel({ requestManagerPin }: PosCheckoutPanel
           <button
             type="button"
             onClick={() => setMethod('mpesa')}
-            className={`h-16 rounded-xl text-xl font-bold transition active:scale-95 ${
+            className={`h-14 rounded-xl text-xl font-bold transition active:scale-95 ${
               method === 'mpesa'
                 ? 'bg-rose-600 text-white shadow'
                 : 'border border-slate-200 text-slate-700 hover:bg-slate-50'
@@ -304,26 +310,32 @@ export default function PosCheckoutPanel({ requestManagerPin }: PosCheckoutPanel
 
         {method === 'cash' ? (
           <div>
-            <p className="mb-1 text-base font-medium text-slate-600">Amount Tendered</p>
-            <p className="mb-2 rounded-lg bg-slate-100 px-4 py-3 text-right text-3xl font-mono">
-              Ksh {tenderedInput || '0'}
-            </p>
-            <div className="mb-3 flex justify-between text-base font-medium">
+            {/**
+             * Amount Tendered's label and its display used to stack on
+             * separate lines (phase-142: ~96px together); one row, label
+             * left and a smaller display right, saves roughly half that
+             * without hiding either piece of information.
+             */}
+            <div className="mb-2 flex items-center justify-between gap-2 rounded-lg bg-slate-100 px-3 py-2">
+              <span className="text-base font-medium text-slate-600">Amount Tendered</span>
+              <span className="text-xl font-mono">Ksh {tenderedInput || '0'}</span>
+            </div>
+            <div className="mb-2 flex justify-between text-base font-medium">
               <span className="text-slate-600">Change Due</span>
               <span className={changeDue > 0 ? 'text-emerald-600' : 'text-slate-400'}>
                 {formatCurrency(changeDue)}
               </span>
             </div>
             {tenderedAmount > 0 && tenderedAmount < cartTotal && (
-              <p className="mb-3 text-base font-medium text-rose-600">Insufficient amount</p>
+              <p className="mb-2 text-base font-medium text-rose-600">Insufficient amount</p>
             )}
-            <VirtualNumpad value={tenderedInput} onChange={setTenderedInput} />
+            <VirtualNumpad value={tenderedInput} onChange={setTenderedInput} size="compact" />
 
             <button
               type="button"
               disabled={!canSubmitCash}
               onClick={handleCompleteCashSale}
-              className="mt-4 h-20 w-full rounded-xl bg-rose-600 text-2xl font-extrabold text-white transition active:scale-95 disabled:cursor-not-allowed disabled:opacity-50"
+              className="mt-3 h-16 w-full rounded-xl bg-rose-600 text-2xl font-extrabold text-white transition active:scale-95 disabled:cursor-not-allowed disabled:opacity-50"
             >
               {checkoutStatus === 'submitting' ? 'PROCESSING…' : 'COMPLETE SALE'}
             </button>
