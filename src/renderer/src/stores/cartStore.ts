@@ -31,7 +31,7 @@ export type CheckoutStatus =
   | 'queued-offline'
   | 'error'
 
-/** Payment details collected by `CheckoutModal` and submitted with the sale. */
+/** Payment details collected by `PosCheckoutPanel` and submitted with the sale. */
 export interface CheckoutParams {
   staffId: number
   paymentMethod: PaymentMethod

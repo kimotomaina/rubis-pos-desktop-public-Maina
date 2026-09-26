@@ -1,7 +1,7 @@
 /**
  * KRA PIN format helpers for the checkout's optional B2B customer PIN
  * field — kept framework-free so they're unit-testable without
- * mounting `CheckoutModal`.
+ * mounting `PosCheckoutPanel`.
  */
 
 /** Maximum length of a standard KRA PIN (e.g. `P051234567Z`). */

@@ -2,7 +2,7 @@
  * Maps a checkout's fiscal outcome to the small notice shown at the
  * till (phase-78). Pure and dependency-free, tested directly without
  * mounting `FiscalNotice`, matching how `checkoutMath.ts` is tested
- * independently of `CheckoutModal`.
+ * independently of `PosCheckoutPanel`.
  *
  * Copy rules: plain language only, no device codes, no jargon. The
  * customer's sale is already complete in every case below; wording

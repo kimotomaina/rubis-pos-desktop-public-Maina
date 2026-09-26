@@ -2,7 +2,7 @@
  * Pure checkout math for staff auth and the checkout flow.
  *
  * Kept dependency-free and directly testable, independent of
- * `CheckoutModal`'s React state, mirroring how the barcode timing
+ * `PosCheckoutPanel`'s React state, mirroring how the barcode timing
  * logic and `computeBackoffMs` are pure exported functions elsewhere
  * in this codebase.
  */

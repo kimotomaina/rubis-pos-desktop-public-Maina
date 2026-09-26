@@ -30,7 +30,7 @@ type QuickPaymentMethod = Extract<PaymentMethod, 'cash' | 'mpesa'>
 /**
  * Always-visible checkout control panel — the fast-checkout layout's
  * right zone, replacing the old cart-sidebar's totals/checkout button
- * and the `CheckoutModal` popup entirely for Cash/M-Pesa sales.
+ * entirely for Cash/M-Pesa sales.
  *
  * Cash and M-Pesa are deliberately the only two quick-toggle options
  * (Hick's Law: fewer choices, faster decisions) — a Card sale still

@@ -2,7 +2,7 @@
  * Checkout math tests.
  *
  * `calculateChange`/`canCompleteSale` are pure functions, tested
- * directly without mounting `CheckoutModal`.
+ * directly without mounting `PosCheckoutPanel`.
  */
 
 import { describe, it, expect } from 'vitest'

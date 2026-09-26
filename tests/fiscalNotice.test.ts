@@ -3,7 +3,7 @@
  *
  * `FiscalNotice.tsx` itself is not mounted here — this repo tests the
  * pure mapping function directly, matching `checkoutMath.ts`'s tests
- * (`tests/checkout.test.ts`), which do the same for `CheckoutModal`.
+ * (`tests/checkout.test.ts`), which do the same for `PosCheckoutPanel`.
  */
 
 import { describe, it, expect } from 'vitest'
