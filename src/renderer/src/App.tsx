@@ -26,6 +26,7 @@ import type { ConnectivityIntegration } from './types/connectivity'
 import ConnectivityModal from './components/ConnectivityModal'
 import NavStatusButton from './components/NavStatusButton'
 import { useUnfiledCountStore } from './stores/unfiledCountStore'
+import { useFiscalModeStore } from './stores/fiscalModeStore'
 import ConnectivityToast from './components/ConnectivityToast'
 import FiscalNotice from './components/FiscalNotice'
 import SaleCompleteToast from './components/SaleCompleteToast'
@@ -189,6 +190,7 @@ export default function App() {
 
   const unfiledCount = useUnfiledCountStore((state) => state.count)
   const initUnfiledCount = useUnfiledCountStore((state) => state.init)
+  const initFiscalMode = useFiscalModeStore((state) => state.init)
   const [adminInitialTab, setAdminInitialTab] = useState<'needsAttention' | undefined>(undefined)
 
   const selectedProductForModal = useUiStore((state) => state.selectedProductForModal)
@@ -228,6 +230,10 @@ export default function App() {
   useEffect(() => {
     void initUnfiledCount()
   }, [initUnfiledCount])
+
+  useEffect(() => {
+    void initFiscalMode()
+  }, [initFiscalMode])
 
   /**
    * Adds an item and briefly flashes its `PosCartTable` row, giving

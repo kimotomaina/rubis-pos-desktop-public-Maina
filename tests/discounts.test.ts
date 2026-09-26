@@ -15,6 +15,7 @@ import {
   calculateCartTotal,
   discountPercentOf,
   requiresManagerPinForDiscount,
+  hasDiscountOrOverride,
   MANAGER_PIN_DISCOUNT_THRESHOLD_PERCENT
 } from '../src/renderer/src/lib/checkoutMath.js'
 import type { CartItem, Discount } from '../src/renderer/src/types/shopify.js'
@@ -110,5 +111,37 @@ describe('discountPercentOf / requiresManagerPinForDiscount', () => {
   it(`requires Manager PIN above ${MANAGER_PIN_DISCOUNT_THRESHOLD_PERCENT}%`, () => {
     expect(requiresManagerPinForDiscount({ type: 'percent', value: 11 }, 200)).toBe(true)
     expect(requiresManagerPinForDiscount({ type: 'fixed', value: 21 }, 200)).toBe(true)
+  })
+})
+
+describe('hasDiscountOrOverride (docs/phase-161)', () => {
+  it('is false for a plain cart with no discount or override', () => {
+    const items = [item({ price: 100, basePrice: 100 })]
+    expect(hasDiscountOrOverride(items, null)).toBe(false)
+  })
+
+  it('is true when any line carries a discount', () => {
+    const items = [item({ discount: { type: 'percent', value: 5 } })]
+    expect(hasDiscountOrOverride(items, null)).toBe(true)
+  })
+
+  it('is true when a cart-level discount is set, even with no line discount', () => {
+    const items = [item()]
+    expect(hasDiscountOrOverride(items, { type: 'fixed', value: 10 })).toBe(true)
+  })
+
+  it('is true when a line price has been overridden away from its basePrice', () => {
+    const items = [item({ price: 120, basePrice: 100 })]
+    expect(hasDiscountOrOverride(items, null)).toBe(true)
+  })
+
+  it('is false when basePrice is unset (never overridden) even if price and basePrice would otherwise differ', () => {
+    const items = [item({ price: 100, basePrice: undefined })]
+    expect(hasDiscountOrOverride(items, null)).toBe(false)
+  })
+
+  it('treats no cartDiscount argument the same as null', () => {
+    const items = [item({ price: 100, basePrice: 100 })]
+    expect(hasDiscountOrOverride(items)).toBe(false)
   })
 })

@@ -121,6 +121,8 @@ export interface PosApi {
   getSalesNeedingAttention: () => Promise<ServiceResult<NeedsAttentionRow[]>>
   /** The Rule-3 safety-net count: every completed-but-unfiled sale, regardless of the stuck threshold. */
   getUnfiledSalesCount: () => Promise<ServiceResult<number>>
+  /** Whether this till is running the real fiscal provider (docs/phase-161). */
+  isFiscalLive: () => Promise<ServiceResult<boolean>>
   /** Prints (or, in mock mode, logs) a receipt for a local order, optionally routed to a printer type. */
   printReceipt: (
     localId: number,

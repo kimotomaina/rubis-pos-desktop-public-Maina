@@ -2369,6 +2369,30 @@ app.whenReady().then(async () => {
   )
 
   /**
+   * IPC handler exposing whether this till is running the real fiscal
+   * provider (docs/phase-161, Commit 1 - an interim safeguard against
+   * docs/phase-160's finding that a discount or price override is filed
+   * with KRA and printed on the receipt against the raw, undiscounted
+   * price). The renderer hides the discount/override controls, and
+   * blocks completing a sale that already carries one, only when this
+   * is `true`.
+   *
+   * Read directly off the provider instance actually in use
+   * (`instanceof RealFiscalizationProvider`, the same check already used
+   * elsewhere in this file, e.g. `setup:check-etims-completion` above) -
+   * never a second evaluation of `mockRequested`/`isPackaged`, so this
+   * can never disagree with what `resolveFiscalizationProvider` already
+   * decided at startup.
+   */
+  ipcMain.handle(
+    'fiscal:is-live',
+    (): ServiceResult<boolean> => ({
+      success: true,
+      data: fiscalizationProvider instanceof RealFiscalizationProvider
+    })
+  )
+
+  /**
    * Opens a PDF receipt in the OS default viewer when printing fell
    * back to saving one instead of reaching a physical printer — never
    * when the physical printer actually printed.

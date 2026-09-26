@@ -1,7 +1,13 @@
 import { useEffect, useState } from 'react'
 import { useCartStore } from '../stores/cartStore.js'
 import { useAuthStore } from '../stores/authStore.js'
-import { calculateChange, canCompleteSale, requiresManagerPinForDiscount } from '../lib/checkoutMath.js'
+import { useFiscalModeStore } from '../stores/fiscalModeStore.js'
+import {
+  calculateChange,
+  canCompleteSale,
+  hasDiscountOrOverride,
+  requiresManagerPinForDiscount
+} from '../lib/checkoutMath.js'
 import { formatCurrency } from '../lib/currency.js'
 import { isValidKraPinFormat, KRA_PIN_MAX_LENGTH } from '../lib/kraPin.js'
 import { useKeyboardStore } from '../stores/keyboardStore.js'
@@ -54,8 +60,10 @@ export default function PosCheckoutPanel({ requestManagerPin }: PosCheckoutPanel
   const cartSubtotal = useCartStore((state) => state.getSubtotal())
   const cartTotal = useCartStore((state) => state.getTotal())
   const cartCount = useCartStore((state) => state.getItemCount())
+  const cartItems = useCartStore((state) => state.items)
   const cartDiscount = useCartStore((state) => state.cartDiscount)
   const setCartDiscount = useCartStore((state) => state.setCartDiscount)
+  const fiscalLive = useFiscalModeStore((state) => state.fiscalLive)
   const checkout = useCartStore((state) => state.checkout)
   const checkoutStatus = useCartStore((state) => state.checkoutStatus)
   const checkoutError = useCartStore((state) => state.checkoutError)
@@ -116,8 +124,19 @@ export default function PosCheckoutPanel({ requestManagerPin }: PosCheckoutPanel
       ? 'Not a valid KRA PIN format (e.g. P051234567Z).'
       : null
 
+  /**
+   * Interim safeguard (docs/phase-160/161): a discount or override
+   * already on the cart when `fiscalLive` turns true is blocked from
+   * checkout, not silently dropped - the cashier must remove it (or a
+   * manager must), same as any other required fix before a sale.
+   */
+  const staleDiscountOrOverride = fiscalLive && hasDiscountOrOverride(cartItems, cartDiscount)
+
   const canSubmitCash =
-    cartCount > 0 && canCompleteSale('cash', cartTotal, tenderedAmount) && checkoutStatus !== 'submitting'
+    cartCount > 0 &&
+    !staleDiscountOrOverride &&
+    canCompleteSale('cash', cartTotal, tenderedAmount) &&
+    checkoutStatus !== 'submitting'
 
   const handleCompleteCashSale = () => {
     if (!currentStaff) return
@@ -216,17 +235,19 @@ export default function PosCheckoutPanel({ requestManagerPin }: PosCheckoutPanel
                 ? `${trimmedCustomerPin || 'Walk-in'}${trimmedCompanyName ? ` · ${trimmedCompanyName}` : ''} · Edit Details`
                 : 'Walk-in · Add KRA PIN'}
             </button>
-            <button
-              type="button"
-              onClick={() => {
-                setDiscountValue(cartDiscount ? String(cartDiscount.value) : '')
-                setDiscountType(cartDiscount?.type ?? 'percent')
-                setShowDiscountEditor((prev) => !prev)
-              }}
-              className="shrink-0 text-sm font-medium text-slate-500 hover:text-rose-600"
-            >
-              {cartDiscount ? 'Edit Discount' : '+ Discount'}
-            </button>
+            {!fiscalLive && (
+              <button
+                type="button"
+                onClick={() => {
+                  setDiscountValue(cartDiscount ? String(cartDiscount.value) : '')
+                  setDiscountType(cartDiscount?.type ?? 'percent')
+                  setShowDiscountEditor((prev) => !prev)
+                }}
+                className="shrink-0 text-sm font-medium text-slate-500 hover:text-rose-600"
+              >
+                {cartDiscount ? 'Edit Discount' : '+ Discount'}
+              </button>
+            )}
           </div>
         )}
         {customerPinError && <p className="mb-1 text-sm font-medium text-rose-600">{customerPinError}</p>}
@@ -238,7 +259,7 @@ export default function PosCheckoutPanel({ requestManagerPin }: PosCheckoutPanel
         )}
         <p className="text-3xl font-extrabold tabular-nums text-slate-900">{formatCurrency(cartTotal)}</p>
 
-        {showDiscountEditor && (
+        {!fiscalLive && showDiscountEditor && (
           <div className="mt-2 flex items-center gap-2 rounded-lg bg-white p-2">
             <select
               value={discountType}
@@ -292,65 +313,83 @@ export default function PosCheckoutPanel({ requestManagerPin }: PosCheckoutPanel
        * (was `mb-3`, below) reclaim 12px of comfortable margin.
        */}
       <div className="flex-1 overflow-hidden p-2">
-        <div className="mb-2 grid grid-cols-2 gap-3">
-          <button
-            type="button"
-            onClick={() => setMethod('cash')}
-            className={`h-14 rounded-xl text-xl font-bold transition active:scale-95 ${
-              method === 'cash'
-                ? 'bg-rose-600 text-white shadow'
-                : 'border border-slate-200 text-slate-700 hover:bg-slate-50'
-            }`}
-          >
-            CASH
-          </button>
-          <button
-            type="button"
-            onClick={() => setMethod('mpesa')}
-            className={`h-14 rounded-xl text-xl font-bold transition active:scale-95 ${
-              method === 'mpesa'
-                ? 'bg-rose-600 text-white shadow'
-                : 'border border-slate-200 text-slate-700 hover:bg-slate-50'
-            }`}
-          >
-            M-PESA
-          </button>
-        </div>
-
-        {method === 'cash' ? (
-          <div>
-            {/**
-             * Amount Tendered's label and its display used to stack on
-             * separate lines (phase-142: ~96px together); one row, label
-             * left and a smaller display right, saves roughly half that
-             * without hiding either piece of information.
-             */}
-            <div className="mb-2 flex items-center justify-between gap-2 rounded-lg bg-slate-100 px-3 py-2">
-              <span className="text-base font-medium text-slate-600">Amount Tendered</span>
-              <span className="text-xl font-mono">Ksh {tenderedInput || '0'}</span>
-            </div>
-            <div className="mb-2 flex justify-between text-base font-medium">
-              <span className="text-slate-600">Change Due</span>
-              <span className={changeDue > 0 ? 'text-emerald-600' : 'text-slate-400'}>
-                {formatCurrency(changeDue)}
-              </span>
-            </div>
-            {tenderedAmount > 0 && tenderedAmount < cartTotal && (
-              <p className="mb-2 text-base font-medium text-rose-600">Insufficient amount</p>
-            )}
-            <VirtualNumpad value={tenderedInput} onChange={setTenderedInput} size="compact" />
-
-            <button
-              type="button"
-              disabled={!canSubmitCash}
-              onClick={handleCompleteCashSale}
-              className="mt-3 h-16 w-full rounded-xl bg-rose-600 text-2xl font-extrabold text-white transition active:scale-95 disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              {checkoutStatus === 'submitting' ? 'PROCESSING…' : 'COMPLETE SALE'}
-            </button>
-          </div>
+        {staleDiscountOrOverride ? (
+          /**
+           * Interim safeguard (docs/phase-160/161): replaces the whole
+           * payment section rather than merely disabling Complete Sale,
+           * so an M-Pesa sale (which has no such button of its own — it
+           * completes through `PaymentModal`'s own STK-push flow) is
+           * blocked the same way a cash sale is. Nothing is dropped from
+           * the cart; the discount/override stays exactly as entered
+           * until a person removes it.
+           */
+          <p className="rounded-lg bg-amber-50 p-4 text-base font-medium text-amber-800">
+            This sale has a discount or price override that cannot yet be filed correctly with
+            KRA. Remove it from the cart before completing this sale.
+          </p>
         ) : (
-          <PaymentModal total={cartTotal} onPaid={handleMpesaPaid} onCancel={() => setMethod('cash')} />
+          <>
+            <div className="mb-2 grid grid-cols-2 gap-3">
+              <button
+                type="button"
+                onClick={() => setMethod('cash')}
+                className={`h-14 rounded-xl text-xl font-bold transition active:scale-95 ${
+                  method === 'cash'
+                    ? 'bg-rose-600 text-white shadow'
+                    : 'border border-slate-200 text-slate-700 hover:bg-slate-50'
+                }`}
+              >
+                CASH
+              </button>
+              <button
+                type="button"
+                onClick={() => setMethod('mpesa')}
+                className={`h-14 rounded-xl text-xl font-bold transition active:scale-95 ${
+                  method === 'mpesa'
+                    ? 'bg-rose-600 text-white shadow'
+                    : 'border border-slate-200 text-slate-700 hover:bg-slate-50'
+                }`}
+              >
+                M-PESA
+              </button>
+            </div>
+
+            {method === 'cash' ? (
+              <div>
+                {/**
+                 * Amount Tendered's label and its display used to stack on
+                 * separate lines (phase-142: ~96px together); one row, label
+                 * left and a smaller display right, saves roughly half that
+                 * without hiding either piece of information.
+                 */}
+                <div className="mb-2 flex items-center justify-between gap-2 rounded-lg bg-slate-100 px-3 py-2">
+                  <span className="text-base font-medium text-slate-600">Amount Tendered</span>
+                  <span className="text-xl font-mono">Ksh {tenderedInput || '0'}</span>
+                </div>
+                <div className="mb-2 flex justify-between text-base font-medium">
+                  <span className="text-slate-600">Change Due</span>
+                  <span className={changeDue > 0 ? 'text-emerald-600' : 'text-slate-400'}>
+                    {formatCurrency(changeDue)}
+                  </span>
+                </div>
+                {tenderedAmount > 0 && tenderedAmount < cartTotal && (
+                  <p className="mb-2 text-base font-medium text-rose-600">Insufficient amount</p>
+                )}
+                <VirtualNumpad value={tenderedInput} onChange={setTenderedInput} size="compact" />
+
+                <button
+                  type="button"
+                  disabled={!canSubmitCash}
+                  onClick={handleCompleteCashSale}
+                  className="mt-3 h-16 w-full rounded-xl bg-rose-600 text-2xl font-extrabold text-white transition active:scale-95 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {checkoutStatus === 'submitting' ? 'PROCESSING…' : 'COMPLETE SALE'}
+                </button>
+              </div>
+            ) : (
+              <PaymentModal total={cartTotal} onPaid={handleMpesaPaid} onCancel={() => setMethod('cash')} />
+            )}
+          </>
         )}
 
         {checkoutStatus === 'error' && (

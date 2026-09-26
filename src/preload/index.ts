@@ -256,6 +256,16 @@ const api = {
     ipcRenderer.invoke('fiscal:unfiled-count'),
 
   /**
+   * Whether this till is running the real fiscal provider (docs/phase-161,
+   * Commit 1) - the renderer hides discount/price-override controls, and
+   * blocks a cart that already carries one, only when this is `true`.
+   *
+   * @returns {Promise<ServiceResult<boolean>>}
+   */
+  isFiscalLive: (): Promise<ServiceResult<boolean>> =>
+    ipcRenderer.invoke('fiscal:is-live'),
+
+  /**
    * Prints (or, in mock mode, logs) a receipt for a local order.
    *
    * @param {number} localId

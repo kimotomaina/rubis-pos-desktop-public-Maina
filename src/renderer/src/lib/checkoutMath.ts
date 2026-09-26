@@ -170,6 +170,26 @@ export function requiresManagerPinForDiscount(discount: Discount, baseAmount: nu
 }
 
 /**
+ * Whether the cart currently holds any line discount, cart discount, or
+ * price override (docs/phase-160: the fiscal device and both receipt
+ * renderers are told the raw, undiscounted price, so any of these three
+ * makes the amount filed with KRA and the printed total wrong until
+ * docs/phase-161 Part B is built). Used to gate discount/override
+ * controls once `fiscalLive` is true and to block a cart that already
+ * holds one from completing (docs/phase-161 Commit 1).
+ *
+ * @param {CartItem[]} items
+ * @param {Discount | null} [cartDiscount]
+ * @returns {boolean}
+ */
+export function hasDiscountOrOverride(items: CartItem[], cartDiscount?: Discount | null): boolean {
+  if (cartDiscount) return true
+  return items.some(
+    (item) => Boolean(item.discount) || (item.basePrice !== undefined && item.price !== item.basePrice)
+  )
+}
+
+/**
  * Validates a manual price override against the line's original
  * catalog price:
  *   - `0` or negative is rejected outright (a "free item" should go
