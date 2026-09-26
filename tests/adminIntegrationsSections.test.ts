@@ -6,22 +6,48 @@
  * any zoom. Printer registration (moved here from Peripherals) makes it
  * five sections, shown one at a time via a small sub-nav.
  *
- * Source inspection, not a mount: `AdminScreen.tsx` has several relative
- * imports without a `.js` extension (`./EmptyState`, `../lib/currency`,
- * etc., unchanged by this phase) — fine for Vite's bundler resolution,
- * but `tests/**` compiles under `tsconfig.node.json`'s NodeNext
- * resolution, which requires the extension on every relative import it
- * reaches. Importing `AdminScreen` here would pull its whole fan-out
- * (EmptyState, ZReportModal, LocationPicker, the four page components,
- * etc.) into that stricter project and break `npm run typecheck` on
- * lines this phase did not touch. `adminIntegrationsSections` instead
- * verifies the JSX and effect wiring directly, the `stockTakeGuard.
- * test.ts` pattern for files too heavy to unit-import.
+ * DELIBERATE TEST CHANGE (docs/phase-155): `AdminScreen.tsx` could not be
+ * mounted here before this phase — several of its relative imports (and
+ * a few of its transitive ones — `EmptyState`, `ZReportModal`,
+ * `RestartCountdownModal`, `MpesaLogsPage`) were missing the `.js`
+ * extension `tests/**`'s NodeNext resolution requires, so this file did
+ * source inspection instead (`readFileSync` + regex/slice), the
+ * `stockTakeGuard.test.ts` pattern for files too heavy to unit-import.
+ * Phase-155 fixed those extensions (the same fix phase-146 applied to
+ * `PosCheckoutPanel`) so it could convert every plain `<input>` to the
+ * on-screen-keyboard pattern and test the result with a real mount
+ * (`tests/adminScreen.test.ts`) — and mounting is now possible here too.
+ *   Old assertions: four tests below (`declares exactly the five named
+ *     sections`, `renders each section only when integrationSection
+ *     matches`, `titles each section distinctly`, `loads printers only
+ *     once the Printer section is showing`) each read `AdminScreen.tsx`
+ *     as a string and matched regex/substrings against its JSX.
+ *   New assertions: the same four behaviours, proved instead by
+ *     mounting `AdminScreen` and driving its sub-nav for real — a mount
+ *     confirms the section actually renders, not just that the source
+ *     text contains the right conditional.
+ *   Decision that required it: docs/phase-155's own instruction to
+ *     replace phase-148's source-reading checks with real mount
+ *     assertions "where they cover the same behaviour."
+ *
+ * The remaining tests in this file (save-handler isolation: no shared
+ * handler, M-Pesa validation independent of the fiscal fields, an
+ * honest restart prompt, the fiscal save never touching M-Pesa state,
+ * etc.) stay source-reading on purpose: they are negative-space
+ * assertions ("this function body does not reference that variable"),
+ * which reading the function's own text proves more directly than
+ * driving the UI and inferring absence from a spy's call arguments —
+ * and none of their underlying code changed in phase-155.
  */
 
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { createElement } from 'react'
+import { act } from 'react'
+import { createRoot, type Root } from 'react-dom/client'
+import AdminScreen from '../src/renderer/src/components/AdminScreen.js'
+import { useAuthStore } from '../src/renderer/src/stores/authStore.js'
 
 const ADMIN_SCREEN = readFileSync(
   join(process.cwd(), 'src', 'renderer', 'src', 'components', 'AdminScreen.tsx'),
@@ -40,20 +66,119 @@ const PERIPHERALS_BLOCK = ADMIN_SCREEN.slice(
   ADMIN_SCREEN.indexOf("{activeTab === 'integrations' && (")
 )
 
+let container: HTMLDivElement
+let root: Root
+
+function ok<T>(data?: T): { success: true; data: T | undefined } {
+  return { success: true, data }
+}
+
+/** Stubs only what mounting AdminScreen and visiting Integrations/Peripherals needs. */
+function stubApi(): void {
+  window.api = {
+    getDailySummary: vi
+      .fn()
+      .mockResolvedValue(ok({ orderCount: 0, totalRevenue: 0, totalTax: 0, totalsByMethod: { cash: 0, mpesa: 0, card: 0 } })),
+    getCurrentShift: vi.fn().mockResolvedValue(ok(null)),
+    getStaffList: vi.fn().mockResolvedValue(ok([])),
+    getIntegrationConfig: vi.fn((provider: string) =>
+      Promise.resolve(
+        ok(
+          provider === 'mpesa'
+            ? {
+                consumerKey: '',
+                shortcode: '',
+                environment: 'sandbox',
+                callbackUrl: '',
+                confirmationMethod: 'manual',
+                smsInboxPath: '',
+                manualEntryEnabled: false
+              }
+            : { baseUrl: '', deviceIp: '', devicePort: '', defaultVatClass: '' }
+        )
+      )
+    ),
+    getMpesaCredentialStatus: vi
+      .fn()
+      .mockResolvedValue(ok({ consumerSecretConfigured: false, passkeyConfigured: false })),
+    getEtimsSecretStatus: vi.fn().mockResolvedValue(ok({ passwordConfigured: false })),
+    getStoreIdentity: vi.fn().mockResolvedValue(ok({ storeName: '', storeKraPin: '' })),
+    getShopifyTokenStatus: vi.fn().mockResolvedValue(ok({ configured: false })),
+    getShopifyStoreUrl: vi.fn().mockResolvedValue(ok({ storeUrl: '' })),
+    getConfigStatus: vi.fn().mockResolvedValue(ok({ config: null })),
+    getPrinters: vi.fn().mockResolvedValue(ok([]))
+  } as unknown as typeof window.api
+}
+
+async function mount(): Promise<void> {
+  await act(async () => {
+    root.render(createElement(AdminScreen, { requestManagerPin: () => {} }))
+    await Promise.resolve()
+    await Promise.resolve()
+  })
+}
+
+function button(label: string): HTMLButtonElement {
+  const el = Array.from(container.querySelectorAll('button')).find((b) => b.textContent === label)
+  if (!el) throw new Error(`No button "${label}"`)
+  return el as HTMLButtonElement
+}
+
+async function click(label: string): Promise<void> {
+  await act(async () => {
+    button(label).click()
+    await Promise.resolve()
+  })
+}
+
 describe('AdminScreen > Integrations: five sections, shown one at a time', () => {
-  it('declares exactly the five named sections, in order, as a sub-nav', () => {
-    expect(ADMIN_SCREEN).toMatch(
-      /\[\s*\['shopify', 'Shopify'\],\s*\['location', 'Location'\],\s*\['fiscal', 'Fiscal Device'\],\s*\['mpesa', 'M-Pesa'\],\s*\['printer', 'Printer'\]\s*\]/
-    )
+  beforeEach(() => {
+    container = document.createElement('div')
+    document.body.appendChild(container)
+    root = createRoot(container)
+    useAuthStore.setState({ currentStaff: { id: 1, name: 'Admin', role: 'admin' } })
   })
 
-  it('renders each section only when integrationSection matches it — none unconditionally', () => {
-    for (const key of ['shopify', 'location', 'fiscal', 'mpesa', 'printer']) {
-      expect(INTEGRATIONS_BLOCK).toContain(`integrationSection === '${key}' && (`)
+  afterEach(() => {
+    act(() => root.unmount())
+    container.remove()
+  })
+
+  it('declares exactly the five named sections, in order, as a sub-nav', async () => {
+    stubApi()
+    await mount()
+    await click('Integrations')
+
+    const subNav = Array.from(container.querySelectorAll('button')).map((b) => b.textContent)
+    expect(subNav).toEqual(
+      expect.arrayContaining(['Shopify', 'Location', 'Fiscal Device', 'M-Pesa', 'Printer'])
+    )
+    // In this exact order, immediately after Overview/Integrations/etc.'s own tab bar.
+    const order = subNav.filter((label) =>
+      ['Shopify', 'Location', 'Fiscal Device', 'M-Pesa', 'Printer'].includes(label ?? '')
+    )
+    expect(order).toEqual(['Shopify', 'Location', 'Fiscal Device', 'M-Pesa', 'Printer'])
+  })
+
+  it('renders each section only when its sub-nav button is the one clicked — none unconditionally', async () => {
+    stubApi()
+    await mount()
+    await click('Integrations')
+
+    // Default sub-section (Shopify) is showing; none of the other four are
+    // (their own headings, not the always-present sub-nav button labels).
+    expect(container.innerHTML).toContain('Shopify Connection</h3>')
+    expect(container.innerHTML).not.toContain('>Fiscal Device</h3>')
+    for (const [button_, heading] of [
+      ['Location', 'Location</h3>'],
+      ['Fiscal Device', 'Fiscal Device</h3>'],
+      ['M-Pesa', '>M-Pesa</h3>'],
+      ['Printer', 'Printers</h3>']
+    ] as const) {
+      await click(button_)
+      expect(container.innerHTML).toContain(heading)
+      expect(container.innerHTML).not.toContain('Shopify Connection</h3>')
     }
-    // Exactly five conditional sections, one per key — no extra always-on section left over.
-    const matches = INTEGRATIONS_BLOCK.match(/integrationSection === '\w+' && \(/g) ?? []
-    expect(matches).toHaveLength(5)
   })
 
   /**
@@ -64,19 +189,36 @@ describe('AdminScreen > Integrations: five sections, shown one at a time', () =>
    *   Old assertion: `'M-Pesa (Daraja)</h3>'`.
    *   New assertion: `'>M-Pesa</h3>'`.
    */
-  it('titles each section distinctly from the sub-nav label it lives under', () => {
-    expect(INTEGRATIONS_BLOCK).toContain('Shopify Connection</h3>')
-    expect(INTEGRATIONS_BLOCK).toContain('>Location</h3>')
-    expect(INTEGRATIONS_BLOCK).toContain('>Fiscal Device</h3>')
-    expect(INTEGRATIONS_BLOCK).toContain('>M-Pesa</h3>')
-    expect(INTEGRATIONS_BLOCK).toContain('>Printers</h3>')
+  it('titles each section distinctly from the sub-nav label it lives under', async () => {
+    stubApi()
+    await mount()
+    await click('Integrations')
+    expect(container.innerHTML).toContain('Shopify Connection</h3>')
+
+    await click('Location')
+    expect(container.textContent).toContain('Location')
+
+    await click('Fiscal Device')
+    expect(container.innerHTML).toContain('>Fiscal Device</h3>')
+
+    await click('M-Pesa')
+    expect(container.innerHTML).toContain('>M-Pesa</h3>')
+
+    await click('Printer')
+    expect(container.innerHTML).toContain('>Printers</h3>')
   })
 
-  it('loads printers only once the Printer section is the one showing, not just the Integrations tab', () => {
-    expect(ADMIN_SCREEN).toContain(
-      "if (activeTab === 'integrations' && integrationSection === 'printer') void loadPrinters()"
-    )
-    expect(ADMIN_SCREEN).toMatch(/}, \[activeTab, integrationSection\]\)/)
+  it('loads printers only once the Printer section is the one showing, not just the Integrations tab', async () => {
+    stubApi()
+    await mount()
+    await click('Integrations')
+    expect(window.api.getPrinters).not.toHaveBeenCalled()
+
+    await click('M-Pesa')
+    expect(window.api.getPrinters).not.toHaveBeenCalled()
+
+    await click('Printer')
+    expect(window.api.getPrinters).toHaveBeenCalledTimes(1)
   })
 
   /**

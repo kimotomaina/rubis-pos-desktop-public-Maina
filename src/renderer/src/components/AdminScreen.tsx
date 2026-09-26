@@ -1,16 +1,17 @@
 import { useEffect, useState } from 'react'
-import { useAuthStore } from '../stores/authStore'
-import { formatCurrency } from '../lib/currency'
-import EmptyState from './EmptyState'
-import ZReportModal from './ZReportModal'
-import LocationPicker, { type ShopifyLocationOption } from './LocationPicker'
-import { useProductStore } from '../stores/productStore'
-import { LockIcon } from './icons'
-import MpesaLogsPage from '../pages/MpesaLogsPage'
-import NeedsAttentionPage from '../pages/NeedsAttentionPage'
-import StockTakePage from '../pages/StockTakePage'
-import EndOfDayPage from '../pages/EndOfDayPage'
-import RestartCountdownModal from './RestartCountdownModal'
+import { useAuthStore } from '../stores/authStore.js'
+import { formatCurrency } from '../lib/currency.js'
+import EmptyState from './EmptyState.js'
+import ZReportModal from './ZReportModal.js'
+import LocationPicker, { type ShopifyLocationOption } from './LocationPicker.js'
+import { useProductStore } from '../stores/productStore.js'
+import { LockIcon } from './icons.js'
+import MpesaLogsPage from '../pages/MpesaLogsPage.js'
+import NeedsAttentionPage from '../pages/NeedsAttentionPage.js'
+import StockTakePage from '../pages/StockTakePage.js'
+import EndOfDayPage from '../pages/EndOfDayPage.js'
+import RestartCountdownModal from './RestartCountdownModal.js'
+import { useKeyboardStore, type KeyboardMode } from '../stores/keyboardStore.js'
 import type { DailySummary, ZReport } from '../../../main/services/reports.js'
 import type {
   ShiftRow,
@@ -27,6 +28,32 @@ import {
 } from '../lib/etimsConfig.js'
 import { MPESA_SMS_PARSER_READY } from '../lib/mpesaConfig.js'
 import type { FiscalConnectionTestResult } from '../../../main/services/integrations/fiscal-connection-test.js'
+
+/**
+ * Opens the shared on-screen keyboard (`PosCheckoutPanel`,
+ * `OnboardingScreen`, `EtimsSetupGate`) for one Admin field — a thin
+ * wrapper over `useKeyboardStore.getState().open(...)`, kept only to
+ * avoid repeating the same call shape at every one of this screen's
+ * ~20 text fields (docs/phase-155). Every field it opens for stays a
+ * `readOnly` input; the keyboard relays keystrokes back through
+ * `onChange`, exactly as it always has.
+ *
+ * @param {string} value — the field's current value
+ * @param {(next: string) => void} onChange — the field's own setter
+ * @param {string} label — shown above the key grid
+ * @param {object} [options]
+ * @param {KeyboardMode} [options.mode] — defaults to `caps` (`useKeyboardStore`'s own default)
+ * @param {boolean} [options.secret] — masks the echo, for a credential field
+ * @param {number} [options.maxLength]
+ */
+function openField(
+  value: string,
+  onChange: (next: string) => void,
+  label: string,
+  options: { mode?: KeyboardMode; secret?: boolean; maxLength?: number } = {}
+): void {
+  useKeyboardStore.getState().open({ value, onChange, label, ...options })
+}
 
 interface AdminScreenProps {
   /**
@@ -1181,8 +1208,11 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
                   <label className="mb-1 block text-lg font-medium text-slate-600">Store URL</label>
                   <input
                     type="text"
+                    readOnly
                     value={shopifyStoreUrl}
-                    onChange={(e) => setShopifyStoreUrlInput(e.target.value)}
+                    onClick={() =>
+                      openField(shopifyStoreUrl, setShopifyStoreUrlInput, 'Store URL', { mode: 'text' })
+                    }
                     placeholder="https://your-store.myshopify.com"
                     className="mb-1 w-full h-12 rounded-lg border border-slate-300 px-3 text-lg focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-100"
                   />
@@ -1216,8 +1246,14 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
                     </label>
                     <input
                       type="password"
+                      readOnly
                       value={shopifyTokenInput}
-                      onChange={(e) => setShopifyTokenInput(e.target.value)}
+                      onClick={() =>
+                        openField(shopifyTokenInput, setShopifyTokenInput, 'Shopify Admin API Token', {
+                          mode: 'text',
+                          secret: true
+                        })
+                      }
                       placeholder="shpat_••••••••••••••••"
                       className="mb-3 w-full h-12 rounded-lg border border-slate-300 px-3 text-lg focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-100"
                     />
@@ -1360,8 +1396,9 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
                         </label>
                         <input
                           type="text"
+                          readOnly
                           value={mpesaShortcode}
-                          onChange={(e) => setMpesaShortcode(e.target.value)}
+                          onClick={() => openField(mpesaShortcode, setMpesaShortcode, 'Shortcode', { mode: 'caps' })}
                           placeholder="174379"
                           className="w-full h-12 rounded-lg border border-slate-300 px-3 text-lg focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-100"
                         />
@@ -1372,8 +1409,11 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
                         </label>
                         <input
                           type="text"
+                          readOnly
                           value={mpesaConsumerKey}
-                          onChange={(e) => setMpesaConsumerKey(e.target.value)}
+                          onClick={() =>
+                            openField(mpesaConsumerKey, setMpesaConsumerKey, 'Consumer Key', { mode: 'text' })
+                          }
                           className="w-full h-12 rounded-lg border border-slate-300 px-3 text-lg focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-100"
                         />
                       </div>
@@ -1383,8 +1423,14 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
                         </label>
                         <input
                           type="password"
+                          readOnly
                           value={mpesaConsumerSecretInput}
-                          onChange={(e) => setMpesaConsumerSecretInput(e.target.value)}
+                          onClick={() =>
+                            openField(mpesaConsumerSecretInput, setMpesaConsumerSecretInput, 'Consumer Secret', {
+                              mode: 'text',
+                              secret: true
+                            })
+                          }
                           placeholder={
                             mpesaConsumerSecretConfigured ? '•••••••• (configured)' : 'Not configured'
                           }
@@ -1397,8 +1443,14 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
                         </label>
                         <input
                           type="password"
+                          readOnly
                           value={mpesaPasskeyInput}
-                          onChange={(e) => setMpesaPasskeyInput(e.target.value)}
+                          onClick={() =>
+                            openField(mpesaPasskeyInput, setMpesaPasskeyInput, 'Passkey', {
+                              mode: 'text',
+                              secret: true
+                            })
+                          }
                           placeholder={mpesaPasskeyConfigured ? '•••••••• (configured)' : 'Not configured'}
                           className="w-full h-12 rounded-lg border border-slate-300 px-3 text-lg focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-100"
                         />
@@ -1409,8 +1461,11 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
                         </label>
                         <input
                           type="text"
+                          readOnly
                           value={mpesaCallbackUrl}
-                          onChange={(e) => setMpesaCallbackUrl(e.target.value)}
+                          onClick={() =>
+                            openField(mpesaCallbackUrl, setMpesaCallbackUrl, 'Callback URL', { mode: 'text' })
+                          }
                           placeholder="https://example.com/callback"
                           className="w-full h-12 rounded-lg border border-slate-300 px-3 text-lg focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-100"
                         />
@@ -1425,8 +1480,13 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
                       </label>
                       <input
                         type="text"
+                        readOnly
                         value={mpesaSmsInboxPath}
-                        onChange={(e) => setMpesaSmsInboxPath(e.target.value)}
+                        onClick={() =>
+                          openField(mpesaSmsInboxPath, setMpesaSmsInboxPath, 'Where payment messages arrive', {
+                            mode: 'text'
+                          })
+                        }
                         placeholder="C:\\gammu\\inbox"
                         aria-label="Where payment messages arrive"
                         className="w-full h-12 rounded-lg border border-slate-300 px-3 text-lg focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-100"
@@ -1523,8 +1583,11 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
                     </label>
                     <input
                       type="text"
+                      readOnly
                       value={etimsBaseUrl}
-                      onChange={(e) => setEtimsBaseUrl(e.target.value)}
+                      onClick={() =>
+                        openField(etimsBaseUrl, setEtimsBaseUrl, 'Fiscal server address', { mode: 'text' })
+                      }
                       placeholder={DEFAULT_ETIMS_BASE_URL}
                       className="w-full h-12 rounded-lg border border-slate-300 px-3 text-lg focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-100"
                     />
@@ -1545,8 +1608,11 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
                     </label>
                     <input
                       type="text"
+                      readOnly
                       value={etimsDeviceIp}
-                      onChange={(e) => setEtimsDeviceIp(e.target.value)}
+                      onClick={() =>
+                        openField(etimsDeviceIp, setEtimsDeviceIp, 'Fiscal device IP address', { mode: 'ip' })
+                      }
                       placeholder="192.168.1.50"
                       className="w-full h-12 rounded-lg border border-slate-300 px-3 text-lg focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-100"
                     />
@@ -1566,9 +1632,11 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
                     </label>
                     <input
                       type="text"
-                      inputMode="numeric"
+                      readOnly
                       value={etimsDevicePort}
-                      onChange={(e) => setEtimsDevicePort(e.target.value)}
+                      onClick={() =>
+                        openField(etimsDevicePort, setEtimsDevicePort, 'Fiscal device port', { mode: 'numeric' })
+                      }
                       placeholder={DEFAULT_ETIMS_DEVICE_PORT}
                       className="w-full h-12 rounded-lg border border-slate-300 px-3 text-lg focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-100"
                     />
@@ -1586,8 +1654,14 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
                     </label>
                     <input
                       type="password"
+                      readOnly
                       value={etimsPassword}
-                      onChange={(e) => setEtimsPassword(e.target.value)}
+                      onClick={() =>
+                        openField(etimsPassword, setEtimsPassword, 'Fiscal device password', {
+                          mode: 'text',
+                          secret: true
+                        })
+                      }
                       placeholder={etimsPasswordConfigured ? '•••••••• (saved)' : 'Required'}
                       className="w-full h-12 rounded-lg border border-slate-300 px-3 text-lg focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-100"
                     />
@@ -1604,8 +1678,13 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
                     </label>
                     <input
                       type="text"
+                      readOnly
                       value={etimsDefaultVatClass}
-                      onChange={(e) => setEtimsDefaultVatClass(e.target.value)}
+                      onClick={() =>
+                        openField(etimsDefaultVatClass, setEtimsDefaultVatClass, 'Default tax class', {
+                          mode: 'caps'
+                        })
+                      }
                       placeholder={DEFAULT_ETIMS_VAT_CLASS}
                       className="w-full h-12 rounded-lg border border-slate-300 px-3 text-lg focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-100"
                     />
@@ -1701,8 +1780,9 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
                     </label>
                     <input
                       type="text"
+                      readOnly
                       value={storeName}
-                      onChange={(e) => setStoreName(e.target.value)}
+                      onClick={() => openField(storeName, setStoreName, 'Store name', { mode: 'text' })}
                       placeholder="Rubis Haile Selassie"
                       className="w-full h-12 rounded-lg border border-slate-300 px-3 text-lg focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-100"
                     />
@@ -1713,8 +1793,13 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
                     </label>
                     <input
                       type="text"
+                      readOnly
                       value={storeKraPin}
-                      onChange={(e) => setStoreKraPin(e.target.value.toUpperCase())}
+                      onClick={() =>
+                        openField(storeKraPin, (next) => setStoreKraPin(next.toUpperCase()), 'Store KRA PIN', {
+                          mode: 'caps'
+                        })
+                      }
                       placeholder="P051234567X"
                       className="w-full h-12 rounded-lg border border-slate-300 px-3 text-lg focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-100"
                     />
@@ -1808,9 +1893,12 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
                       <div className="grid grid-cols-2 gap-2 rounded-lg bg-slate-50 p-3 sm:grid-cols-4">
                         <input
                           type="text"
+                          readOnly
                           placeholder="Printer id (e.g. kitchen-1)"
                           value={newPrinterId}
-                          onChange={(e) => setNewPrinterId(e.target.value)}
+                          onClick={() =>
+                            openField(newPrinterId, setNewPrinterId, 'Printer id', { mode: 'text' })
+                          }
                           className="h-12 rounded-lg border border-slate-300 px-3 text-lg focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-100"
                         />
                         <select
@@ -1824,9 +1912,14 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
                         </select>
                         <input
                           type="text"
+                          readOnly
                           placeholder="tcp://192.168.0.101:9100"
                           value={newPrinterInterface}
-                          onChange={(e) => setNewPrinterInterface(e.target.value)}
+                          onClick={() =>
+                            openField(newPrinterInterface, setNewPrinterInterface, 'Printer interface', {
+                              mode: 'text'
+                            })
+                          }
                           className="h-12 rounded-lg border border-slate-300 px-3 text-lg focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-100"
                         />
                         <button
@@ -1926,11 +2019,11 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
                 Starting Cash
               </label>
               <input
-                type="number"
-                min="0"
-                step="0.01"
+                type="text"
+                readOnly
                 value={startingCashInput}
-                onChange={(e) => setStartingCashInput(e.target.value)}
+                onClick={() => openField(startingCashInput, setStartingCashInput, 'Starting Cash', { mode: 'numeric' })}
+                onFocus={() => openField(startingCashInput, setStartingCashInput, 'Starting Cash', { mode: 'numeric' })}
                 className="w-32 h-12 rounded-lg border border-slate-300 px-3 text-xl focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-100"
                 autoFocus
               />
@@ -1972,11 +2065,11 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
                 Ending Cash (counted)
               </label>
               <input
-                type="number"
-                min="0"
-                step="0.01"
+                type="text"
+                readOnly
                 value={endingCashInput}
-                onChange={(e) => setEndingCashInput(e.target.value)}
+                onClick={() => openField(endingCashInput, setEndingCashInput, 'Ending Cash (counted)', { mode: 'numeric' })}
+                onFocus={() => openField(endingCashInput, setEndingCashInput, 'Ending Cash (counted)', { mode: 'numeric' })}
                 className="w-32 h-12 rounded-lg border border-slate-300 px-3 text-xl focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-100"
                 autoFocus
               />
@@ -2025,16 +2118,18 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
           <div className="mb-4 grid grid-cols-2 gap-2 rounded-lg bg-slate-50 p-3 sm:grid-cols-4">
             <input
               type="text"
+              readOnly
               placeholder="Name"
               value={newStaffName}
-              onChange={(e) => setNewStaffName(e.target.value)}
+              onClick={() => openField(newStaffName, setNewStaffName, 'Staff name', { mode: 'text' })}
               className="h-12 rounded-lg border border-slate-300 px-3 text-lg focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-100"
             />
             <input
               type="password"
+              readOnly
               placeholder="PIN"
               value={newStaffPin}
-              onChange={(e) => setNewStaffPin(e.target.value)}
+              onClick={() => openField(newStaffPin, setNewStaffPin, 'New staff PIN', { mode: 'numeric', secret: true })}
               className="h-12 rounded-lg border border-slate-300 px-3 text-lg focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-100"
             />
             <select
@@ -2072,9 +2167,15 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
                 <div className="flex items-center gap-2">
                   <input
                     type="password"
+                    readOnly
                     placeholder="New PIN"
                     value={resetPinValue}
-                    onChange={(e) => setResetPinValue(e.target.value)}
+                    onClick={() =>
+                      openField(resetPinValue, setResetPinValue, 'New PIN', { mode: 'numeric', secret: true })
+                    }
+                    onFocus={() =>
+                      openField(resetPinValue, setResetPinValue, 'New PIN', { mode: 'numeric', secret: true })
+                    }
                     className="h-12 w-28 rounded-lg border border-slate-300 px-2 text-lg focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-100"
                     autoFocus
                   />

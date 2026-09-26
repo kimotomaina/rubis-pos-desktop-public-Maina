@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { createRestartCountdown, RESTART_COUNTDOWN_MS } from '../lib/restartCountdown'
+import { createRestartCountdown, RESTART_COUNTDOWN_MS } from '../lib/restartCountdown.js'
 
 interface RestartCountdownModalProps {
   /** Called once, either when the countdown reaches zero or "Restart Now" is clicked. */

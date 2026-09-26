@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import type { ZReport } from '../../../main/services/reports.js'
-import { formatCurrency } from '../lib/currency'
-import { CloseIcon } from './icons'
+import { formatCurrency } from '../lib/currency.js'
+import { CloseIcon } from './icons.js'
 
 interface ZReportModalProps {
   report: ZReport

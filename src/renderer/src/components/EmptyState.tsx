@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react'
-import { PackageIcon } from './icons'
+import { PackageIcon } from './icons.js'
 
 interface EmptyStateProps {
   icon?: ReactNode

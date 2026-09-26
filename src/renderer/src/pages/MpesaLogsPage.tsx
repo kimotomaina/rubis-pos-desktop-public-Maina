@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import type { MpesaTransactionRow, MpesaTransactionStatus } from '../../../main/services/database.js'
-import { formatCurrency } from '../lib/currency'
+import { formatCurrency } from '../lib/currency.js'
 
 /** Tailwind classes for a status pill, keyed by transaction status. */
 const STATUS_BADGE_CLASSES: Record<MpesaTransactionStatus, string> = {
