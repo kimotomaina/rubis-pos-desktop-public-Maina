@@ -211,14 +211,22 @@ wired into this app at all. `FiscalEndpointPaths`
 (`real-etims-provider.ts`) declares twelve commands; none of these five
 is among them, and no command in this family is ever sent.
 
-Separately, `checkDeviceResponse` (`real-etims-provider.ts`) only names
-one `STE1` value (`52`, "Opened fiscal receipt"). `STE1 = 0x3b` (59
-decimal - "24 hours block, missing Z report", per the protocol) is not
-decoded: it falls through to whatever `STE2` maps to instead, which is
-an unrelated business code (`STE2 = '59'` happens to mean "Wrong client
-PIN" - a coincidental overlap in a different byte column). A cashier
-hitting this condition on a real device would see a misleading message,
-not one naming the actual cause.
+**Update (docs/phase-162)**: the condition itself is now named. Before
+this, `checkDeviceResponse` (`real-etims-provider.ts`) only named one
+`STE1` value (`52`, "Opened fiscal receipt"); `STE1 = 0x3b` (59 decimal -
+"24 hours block, missing Z report", per the protocol) fell through to
+whatever `STE2` mapped to instead, which is an unrelated business code
+(`STE2 = '59'` happens to mean "Wrong client PIN" - a coincidental
+overlap in a different byte column), so a cashier hitting this condition
+would have seen a misleading message. `checkDeviceResponse` now checks
+`STE1 = 59` on its own, before `STE2`'s table, and reports a plain
+cashier-facing reason ("The fiscal device needs its daily closure before
+it can file sales...") with `kind: 'technical'`, `retryable: true` - the
+sale is queued and retried automatically, the same as any other
+transient fiscal condition, never tagged as a wrong-PIN data issue. This
+is a naming/classification fix only; nothing changed about which
+commands are sent, and the daily closure itself still isn't wired in -
+see below.
 
 **What's still open**: whether and how the daily closure should ever
 run is explicitly a VIL/TSL decision (per the client's own POC scope),
@@ -227,15 +235,16 @@ not an engineering one - sending `DailyReport` zeroes fiscal memory and
 family has been sent, in testing or otherwise, and none should be until
 VIL confirms the cadence and who is authorized to trigger it.
 `VERIFY-ON-DEVICE`: what `STE2` (if any) actually accompanies a real
-`STE1 = 0x3b` response, and the exact cashier-facing wording KRA expects
-for it - the protocol PDF section for this was not available to check
-this against.
+`STE1 = 0x3b` response (the new check does not depend on it, but it has
+still never been observed), and the exact cashier-facing wording KRA
+expects for it - the protocol PDF section for this was not available to
+check this against.
 
 **Blast radius**: none today - nothing in this codebase can reach
-`DailyReport`. If it is ever wired in, it would need its own explicit,
-deliberately-triggered IPC channel (never inferred from a report screen
-being opened), and the `STE1 = 0x3b` mapping should be added to
-`checkDeviceResponse` alongside it.
+`DailyReport`. The `STE1 = 0x3b` classification fix affects any sale a
+real device rejects with that code: it is now queued for automatic
+retry with a plain reason, rather than shown as a wrong-PIN/other STE2
+business rejection.
 
 ## No fiscal reconciliation report (system amount vs device-validated amount)
 

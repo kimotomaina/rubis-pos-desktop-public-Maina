@@ -201,6 +201,43 @@ const STE1_OPENED_FISCAL_RECEIPT = 52
 const CODE_OPENED_FISCAL_RECEIPT = 'openedFiscalReceipt'
 
 /**
+ * Decimal value of `STE1` (the FD-errors column, protocol PDF §1.2.1) for
+ * "24 hours block, missing Z report" — hex `0x3b` (`parseInt('3b', 16) ===
+ * 59`). Named explicitly (docs/phase-159 B1.5, docs/phase-162): before this,
+ * `checkDeviceResponse` had no case for it, so it fell through to `STE2`'s
+ * command-errors table, and `STE2`'s own decimal `59` happens to mean
+ * "Wrong client PIN" (see {@link STE2_WRONG_CLIENT_PIN}) — a coincidental
+ * overlap in a different byte column that gave a cashier a misleading
+ * reason for an unrelated device-wide condition.
+ */
+const STE1_DAILY_CLOSURE_BLOCK = 59
+
+/**
+ * `DeviceResult.code` value `checkDeviceResponse` reports when `STE1`
+ * equals {@link STE1_DAILY_CLOSURE_BLOCK} — fired on `STE1` alone, never
+ * depending on or guessing at whatever `STE2` accompanies it (the real
+ * pairing has never been captured on a live device; see
+ * `docs/KNOWN_GAPS.md`'s `VERIFY-ON-DEVICE` note). A distinct sentinel,
+ * mirroring {@link CODE_OPENED_FISCAL_RECEIPT}, so it can never be confused
+ * with `STE2`'s own decimal `59` ("Wrong client PIN").
+ */
+const CODE_DAILY_CLOSURE_BLOCK = 'dailyClosureBlock'
+
+/**
+ * Cashier-facing reason for {@link CODE_DAILY_CLOSURE_BLOCK}, used verbatim
+ * as the outcome's `reason` — plain language, no device codes, per the same
+ * copy rule {@link UNVERIFIABLE_RETRY_REASON} follows. The sale itself is
+ * already saved locally (Rule 3: never silently lose an unfiscalized sale)
+ * and will be filed automatically once the closure is done; only VIL or an
+ * authorized operator can run that closure (docs/KNOWN_GAPS.md's "Fiscal
+ * device daily closure" entry), so a cashier is told to call support rather
+ * than to retry anything themselves.
+ */
+export const DAILY_CLOSURE_BLOCK_REASON =
+  'The fiscal device needs its daily closure before it can file sales. The sale is saved and will be ' +
+  'filed once the closure is done. Call support.'
+
+/**
  * `STE2` command-errors code for "Wrong client PIN"
  * ({@link mapFiscalDeviceError}'s `'59'` case) — the one `kind: 'data'`
  * rejection specific enough that a cashier can fix it on the spot
@@ -452,8 +489,12 @@ type DeviceResult = ServiceResult<Record<string, string>> & {
  *      {@link CODE_OPENED_FISCAL_RECEIPT} as `code` so the caller's retry
  *      check can never be confused with `STE2 = 52` ("Syntax error", a
  *      plain non-retryable business rejection with the *same* hex byte
- *      in the other column). Otherwise `STE2` is looked up in
- *      {@link mapFiscalDeviceError}'s command-errors table;
+ *      in the other column). `STE1 = 59` (hex `0x3b`, "24 hours block,
+ *      missing Z report", docs/phase-162) is checked next, on `STE1`
+ *      alone and ahead of `STE2`'s table, reporting
+ *      {@link CODE_DAILY_CLOSURE_BLOCK} — again never to be confused with
+ *      `STE2`'s own decimal `59` ("Wrong client PIN"). Otherwise `STE2`
+ *      is looked up in {@link mapFiscalDeviceError}'s command-errors table;
  *   3. a defensive fallback for any other non-zero code (no known server
  *      case and not `40`) — treated as a business code directly, same as
  *      before this parser could read `Code 40`'s STE bytes.
@@ -502,6 +543,18 @@ function checkDeviceResponse(result: ServiceResult<Record<string, string>>): Dev
         retryable: true
       }
     }
+    if (ste1 === STE1_DAILY_CLOSURE_BLOCK) {
+      // Fires on STE1 alone, checked before STE2's table and regardless of
+      // whatever STE2 carries (docs/phase-159 B1.5, docs/phase-162) — the
+      // real STE1/STE2 pairing for this condition has never been captured
+      // on a live device, so this must not guess at STE2's value.
+      return {
+        success: false,
+        error: DAILY_CLOSURE_BLOCK_REASON,
+        code: CODE_DAILY_CLOSURE_BLOCK,
+        retryable: true
+      }
+    }
     if (ste2 !== undefined) {
       const mapped = mapFiscalDeviceError(String(ste2), rawMessage)
       return {
@@ -534,8 +587,11 @@ function checkDeviceResponse(result: ServiceResult<Record<string, string>>): Dev
  * fiscalization-specific outcome `submitInvoice` returns:
  *
  *   - `retryable` (already correctly computed by `checkDeviceResponse` —
- *     the transient server/technical codes 19/30/31/53, and a still-
- *     unresolved `STE1=52` "opened receipt" case) → `'technical'`;
+ *     the transient server/technical codes 19/30/31/53, a still-
+ *     unresolved `STE1=52` "opened receipt" case, and `STE1=59` "missing
+ *     daily closure", docs/phase-162) → `'technical'`. This branch runs
+ *     before the `dataIssue`/wrong-PIN tag below, so none of these can
+ *     ever be mistagged as a data problem;
  *   - otherwise `code === '63'` (`ZFPLabServer rejected the request
  *     format` — a malformed request is this build's own bug, not the
  *     sale's data) → `'system'`;

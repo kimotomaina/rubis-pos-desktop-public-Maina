@@ -970,6 +970,91 @@ describe('OpenInvoiceWithFreeCustomerData payload', () => {
   })
 })
 
+/**
+ * STE1=59 (hex 0x3b, "24 hours block, missing Z report" — docs/phase-159
+ * B1.5, built in docs/phase-162). Named on `STE1` alone, checked ahead of
+ * `STE2`'s command-errors table, at every one of the five submitInvoice
+ * steps docs/phase-162's audit identified as able to carry a Code 40
+ * (ReadStatus, OpenInvoice, SellPLU, ReadCurrentReceiptInfo, CloseReceipt),
+ * and independent of whatever STE2 happens to carry alongside it — the
+ * real STE1/STE2 pairing has never been observed on a live device.
+ */
+describe('STE1=59 (0x3b, "missing daily closure") named at every step it can arrive (docs/phase-162)', () => {
+  const STEPS = [
+    'ReadStatus',
+    'OpenInvoiceWithFreeCustomerData',
+    'SellPLUfromExtDB',
+    'ReadCurrentReceiptInfo',
+    'CloseReceipt'
+  ] as const
+
+  /** Fails exactly one named command with `xml`; every other command succeeds normally. */
+  function withCommandError(commandName: string, xml: string): ReturnType<typeof vi.fn> {
+    const success = makeSuccessfulPostImpl()
+    return vi.fn().mockImplementation((path: string, body: string) => {
+      if (commandNameOf([path, body]) === commandName) {
+        return Promise.resolve({ data: xml })
+      }
+      return success(path, body)
+    })
+  }
+
+  /** Asserts the daily-closure outcome shape common to every case below. */
+  function expectDailyClosureOutcome(result: Awaited<ReturnType<RealFiscalizationProvider['submitInvoice']>>): void {
+    expect(result.ok).toBe(false)
+    expect(!result.ok && result.reason).toBe(
+      'The fiscal device needs its daily closure before it can file sales. The sale is saved and will ' +
+        'be filed once the closure is done. Call support.'
+    )
+    expect(!result.ok && result.kind).toBe('technical')
+    expect(!result.ok && result.retryable).toBe(true)
+    expect(!result.ok && result.dataIssue).toBeUndefined()
+  }
+
+  it.each(STEPS)(
+    'STE2=59 at %s: daily-closure reason, kind technical, retryable, NOT tagged wrong-pin',
+    async (step) => {
+      // STE2=59 is "Wrong client PIN" in the command-errors table — this
+      // proves STE1 wins outright, never falling through to STE2's mapping.
+      const post = withCommandError(step, xmlCommandError(59, 'irrelevant', 59))
+      const provider = new RealFiscalizationProvider({ ...TEST_DEVICE, httpClient: makeMockClient(post) })
+
+      const result = await provider.submitInvoice(SAMPLE_REQUEST)
+
+      expectDailyClosureOutcome(result)
+    }
+  )
+
+  it.each(STEPS)(
+    'STE2=some other value (64) at %s: daily-closure reason, kind technical, retryable, NOT tagged wrong-pin',
+    async (step) => {
+      const post = withCommandError(step, xmlCommandError(64, 'irrelevant', 59))
+      const provider = new RealFiscalizationProvider({ ...TEST_DEVICE, httpClient: makeMockClient(post) })
+
+      const result = await provider.submitInvoice(SAMPLE_REQUEST)
+
+      expectDailyClosureOutcome(result)
+    }
+  )
+
+  it.each(STEPS)(
+    'STE2 absent at %s: daily-closure reason, kind technical, retryable, NOT tagged wrong-pin',
+    async (step) => {
+      // No STE2 attribute on <Err> at all — `checkDeviceResponse` must not
+      // depend on STE2 being present, let alone any particular value.
+      const xml =
+        '<Res Code="40"><Err Source="Device" Type="FPException" STE1="3b" FPLibErrorCode="00">' +
+        '<Message>irrelevant</Message></Err></Res>'
+      const post = withCommandError(step, xml)
+      const provider = new RealFiscalizationProvider({ ...TEST_DEVICE, httpClient: makeMockClient(post) })
+
+      const result = await provider.submitInvoice(SAMPLE_REQUEST)
+
+      expectDailyClosureOutcome(result)
+    }
+  )
+})
+
 describe('OpenInvoice duplicate-filing recovery via ReadCUinvoiceNumber (phase-75, Part B — Rule 1)', () => {
   it('on a RETRY, when the device reports the invoice as already filed, recovers as fiscalized WITHOUT resending SellPLU/CloseReceipt', async () => {
     const post = vi.fn().mockImplementation((path: string, body: string) => {
