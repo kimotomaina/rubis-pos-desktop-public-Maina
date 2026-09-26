@@ -283,6 +283,33 @@ export const reconcileMpesaPaymentSchema = managerAuthzSchema.extend({
   note: z.string().max(500, 'Keep the note under 500 characters').optional()
 })
 
+/** A `YYYY-MM-DD` calendar day, as read on a clock in Nairobi. */
+const localDaySchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'localDay must be in YYYY-MM-DD form')
+
+/**
+ * `reports:end-of-day` request payload. Read-only — any logged-in staff
+ * may view the report, only approving it (below) is manager-gated —
+ * `localDay` defaults to today (Nairobi) when omitted.
+ */
+export const endOfDayReportSchema = z.object({
+  localDay: localDaySchema.optional()
+})
+
+/**
+ * `reports:approve-day` request payload (manager re-authorization
+ * required).
+ *
+ * `paymentIds` is exactly the set of ids the report the manager is
+ * looking at displayed — never inferred server-side from `localDay`
+ * alone — so an entry recorded after that report was generated can never
+ * be swept into this approval (see `RubisDatabase.approveMpesaEntries`).
+ */
+export const approveDayReportSchema = managerAuthzSchema.extend({
+  localDay: localDaySchema,
+  paymentIds: z.array(z.number().int().positive()).min(1, 'Select at least one entry to approve'),
+  note: z.string().max(500, 'Keep the note under 500 characters').optional()
+})
+
 /** `stocktake:get` / `stocktake:submit` request payload. */
 export const stockTakeSessionIdSchema = z.object({
   sessionId: z.number().int().positive()

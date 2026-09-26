@@ -9,7 +9,7 @@ import { LockIcon } from './icons'
 import MpesaLogsPage from '../pages/MpesaLogsPage'
 import NeedsAttentionPage from '../pages/NeedsAttentionPage'
 import StockTakePage from '../pages/StockTakePage'
-import MpesaReconciliationPage from '../pages/MpesaReconciliationPage'
+import EndOfDayPage from '../pages/EndOfDayPage'
 import RestartCountdownModal from './RestartCountdownModal'
 import type { DailySummary, ZReport } from '../../../main/services/reports.js'
 import type {
@@ -105,7 +105,7 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
     | 'mpesaLogs'
     | 'needsAttention'
     | 'stockTake'
-    | 'mpesaReconciliation'
+    | 'endOfDay'
     | 'system'
   >(initialTab ?? 'overview')
   /**
@@ -993,12 +993,12 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
         </button>
         <button
           type="button"
-          onClick={() => setActiveTab('mpesaReconciliation')}
+          onClick={() => setActiveTab('endOfDay')}
           className={`flex h-14 min-w-32 flex-1 items-center justify-center rounded-md px-6 text-lg font-semibold transition ${
-            activeTab === 'mpesaReconciliation' ? 'bg-white text-rose-700 shadow-sm' : 'text-slate-500'
+            activeTab === 'endOfDay' ? 'bg-white text-rose-700 shadow-sm' : 'text-slate-500'
           }`}
         >
-          Reconciliation
+          End of Day
         </button>
         <button
           type="button"
@@ -1017,7 +1017,7 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
 
       {activeTab === 'stockTake' && <StockTakePage />}
 
-      {activeTab === 'mpesaReconciliation' && <MpesaReconciliationPage />}
+      {activeTab === 'endOfDay' && <EndOfDayPage />}
 
       {activeTab === 'system' && (
         <section className="rounded-xl border border-slate-200 bg-white p-4">

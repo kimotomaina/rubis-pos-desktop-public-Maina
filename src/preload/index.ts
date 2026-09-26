@@ -16,7 +16,8 @@ import type {
   PrinterType,
   MpesaTransactionRow,
   AppConfigCategory,
-  NeedsAttentionRow
+  NeedsAttentionRow,
+  ApproveMpesaEntriesResult
 } from '../main/services/database.js'
 import type {
   StockTakeCommitSummary,
@@ -25,7 +26,7 @@ import type {
   StockTakeSettings
 } from '../main/services/stock-take.js'
 import type { ReceiptPrintResult } from '../main/services/printer.js'
-import type { ZReport, DailySummary } from '../main/services/reports.js'
+import type { ZReport, DailySummary, EndOfDayReport } from '../main/services/reports.js'
 import type { UpdateStatus } from '../main/services/updater.js'
 import type { FiscalConnectionTestResult } from '../main/services/integrations/fiscal-connection-test.js'
 import type {
@@ -393,6 +394,39 @@ const api = {
    */
   getDailySummary: (): Promise<ServiceResult<DailySummary>> =>
     ipcRenderer.invoke('reports:daily-summary'),
+
+  /**
+   * Generates the end-of-day report (docs/phase-151/152) for one
+   * Africa/Nairobi calendar day, defaulting to today when omitted.
+   * Read-only — any logged-in staff may call it.
+   *
+   * @param {string} [localDay] — `YYYY-MM-DD`
+   * @returns {Promise<ServiceResult<EndOfDayReport>>}
+   */
+  getEndOfDayReport: (localDay?: string): Promise<ServiceResult<EndOfDayReport>> =>
+    ipcRenderer.invoke('reports:end-of-day', { localDay }),
+
+  /**
+   * A manager's "Approve day" action: approves exactly the manual M-Pesa
+   * entries named by `paymentIds` (the ids the caller's own report
+   * displayed), requiring a re-verified admin Manager PIN.
+   *
+   * @param {object} request
+   * @param {string} request.localDay
+   * @param {number[]} request.paymentIds
+   * @param {number} request.managerId
+   * @param {string} request.managerPin
+   * @param {string} [request.note]
+   * @returns {Promise<ServiceResult<ApproveMpesaEntriesResult>>}
+   */
+  approveDayReport: (request: {
+    localDay: string
+    paymentIds: number[]
+    managerId: number
+    managerPin: string
+    note?: string
+  }): Promise<ServiceResult<ApproveMpesaEntriesResult>> =>
+    ipcRenderer.invoke('reports:approve-day', request),
 
   /**
    * Triggers an update check against the configured GitHub Releases feed.

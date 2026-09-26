@@ -26,7 +26,8 @@ import type {
   PrinterType,
   MpesaTransactionRow,
   AppConfigCategory,
-  NeedsAttentionRow
+  NeedsAttentionRow,
+  ApproveMpesaEntriesResult
 } from '../main/services/database.js'
 import type {
   StockTakeCommitSummary,
@@ -35,7 +36,7 @@ import type {
   StockTakeSettings
 } from '../main/services/stock-take.js'
 import type { ReceiptPrintResult } from '../main/services/printer.js'
-import type { ZReport, DailySummary } from '../main/services/reports.js'
+import type { ZReport, DailySummary, EndOfDayReport } from '../main/services/reports.js'
 import type { UpdateStatus } from '../main/services/updater.js'
 import type {
   StkPushRequest,
@@ -154,6 +155,16 @@ export interface PosApi {
   getZReport: (shiftId: number) => Promise<ServiceResult<ZReport>>
   /** Generates today's sales summary for the Admin screen. */
   getDailySummary: () => Promise<ServiceResult<DailySummary>>
+  /** Generates the end-of-day report for one Africa/Nairobi calendar day (defaults to today). Read-only. */
+  getEndOfDayReport: (localDay?: string) => Promise<ServiceResult<EndOfDayReport>>
+  /** A manager's "Approve day" action on exactly the manual M-Pesa entries named by `paymentIds`. */
+  approveDayReport: (request: {
+    localDay: string
+    paymentIds: number[]
+    managerId: number
+    managerPin: string
+    note?: string
+  }) => Promise<ServiceResult<ApproveMpesaEntriesResult>>
   /** Triggers an update check against the configured update feed. */
   checkForUpdates: () => Promise<ServiceResult<void>>
   /** Quits and relaunches the app to install a downloaded update. */

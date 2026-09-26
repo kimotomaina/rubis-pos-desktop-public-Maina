@@ -149,6 +149,8 @@ import {
   correctPinAndResendSchema,
   resendFiscalizationSchema,
   reconcileMpesaPaymentSchema,
+  endOfDayReportSchema,
+  approveDayReportSchema,
   stockTakeOpenSchema,
   stockTakeSessionIdSchema,
   stockTakeCountSchema,
@@ -177,7 +179,8 @@ import type {
   PrinterType,
   MpesaTransactionRow,
   AppConfigCategory,
-  NeedsAttentionRow
+  NeedsAttentionRow,
+  ApproveMpesaEntriesResult
 } from './services/database.js'
 import { createSyncEngine } from './services/sync-engine.js'
 import { createFiscalEngine } from './services/fiscal-engine.js'
@@ -197,8 +200,8 @@ import {
 } from './services/printer.js'
 import type { PrinterSettings, ReceiptPrintResult, PrinterRegistry } from './services/printer.js'
 import { hashPin, authenticateStaff } from './services/auth.js'
-import { generateZReport, generateDailySummary } from './services/reports.js'
-import type { ZReport, DailySummary } from './services/reports.js'
+import { generateZReport, generateDailySummary, generateEndOfDayReport } from './services/reports.js'
+import type { ZReport, DailySummary, EndOfDayReport } from './services/reports.js'
 import type { OfflineOrderPayload, ServiceResult } from './services/shopify-types.js'
 import type { ProductSummary } from '../renderer/src/types/shopify.js'
 
@@ -2635,6 +2638,66 @@ app.whenReady().then(async () => {
         return {
           success: false,
           error: err instanceof Error ? err.message : 'Failed to generate daily summary'
+        }
+      }
+    }
+  )
+
+  /**
+   * IPC handler generating the end-of-day report (docs/phase-151/152) —
+   * read-only, open to any logged-in staff exactly like the Z-report and
+   * daily-summary handlers above it. Only *approving* the report
+   * (`reports:approve-day`, below) is manager-gated.
+   */
+  ipcMain.handle(
+    'reports:end-of-day',
+    (_event, request: unknown): ServiceResult<EndOfDayReport> => {
+      const validation = validate(endOfDayReportSchema, request ?? {})
+      if (!validation.success) {
+        return { success: false, error: validation.error }
+      }
+      try {
+        return {
+          success: true,
+          data: generateEndOfDayReport(db, validation.data.localDay)
+        }
+      } catch (err) {
+        return {
+          success: false,
+          error: err instanceof Error ? err.message : 'Failed to generate end-of-day report'
+        }
+      }
+    }
+  )
+
+  /**
+   * IPC handler for a manager's "Approve day" action. Requires a
+   * re-verified admin Manager PIN — this is the only check a manual
+   * M-Pesa entry gets, now that phase-150 removed the per-sale PIN.
+   *
+   * `paymentIds` must be exactly the ids the renderer's report displayed;
+   * `approveMpesaEntries` only ever touches those, never "every
+   * unapproved entry as of now" (see its own doc comment).
+   */
+  ipcMain.handle(
+    'reports:approve-day',
+    (_event, request: unknown): ServiceResult<ApproveMpesaEntriesResult> => {
+      const validation = validate(approveDayReportSchema, request)
+      if (!validation.success) {
+        return { success: false, error: validation.error }
+      }
+      const authz = requireAdminPin(db, validation.data.managerId, validation.data.managerPin)
+      if (!authz.success) {
+        return { success: false, error: authz.error }
+      }
+      try {
+        const { localDay, paymentIds, managerId, note } = validation.data
+        const result = db.approveMpesaEntries(paymentIds, managerId, localDay, note?.trim() || null)
+        return { success: true, data: result }
+      } catch (err) {
+        return {
+          success: false,
+          error: err instanceof Error ? err.message : 'Failed to approve these entries'
         }
       }
     }

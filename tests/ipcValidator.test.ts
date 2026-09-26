@@ -34,7 +34,9 @@ import {
   mpesaIntegrationConfigSchema,
   storeIdentitySetSchema,
   correctPinAndResendSchema,
-  resendFiscalizationSchema
+  resendFiscalizationSchema,
+  endOfDayReportSchema,
+  approveDayReportSchema
 } from '../src/main/lib/ipcValidator.js'
 
 const validItem = {
@@ -819,6 +821,71 @@ describe('stock take schemas', () => {
     expect(
       validate(stockTakeSettingsSchema, { ...base, varianceThresholdKes: 0, expiryHours: 0 })
         .success
+    ).toBe(false)
+  })
+})
+
+/**
+ * `reports:end-of-day` / `reports:approve-day` (docs/phase-150.md
+ * deferred approval to this; docs/phase-151/152 design it). Approving is
+ * manager-gated exactly like every other privileged handler in
+ * `main/index.ts` — the PIN itself is re-verified by `requireAdminPin`,
+ * whose own generic wrong-PIN / non-admin / unknown-id refusals are
+ * already covered by `tests/requireAdminPin.test.ts`; what belongs here
+ * is the wire contract this endpoint adds on top of that shared gate.
+ */
+describe('endOfDayReportSchema', () => {
+  it('accepts an empty payload — localDay defaults to today server-side', () => {
+    expect(validate(endOfDayReportSchema, {}).success).toBe(true)
+  })
+
+  it('accepts a well-formed localDay', () => {
+    expect(validate(endOfDayReportSchema, { localDay: '2026-09-10' }).success).toBe(true)
+  })
+
+  it('refuses a malformed localDay', () => {
+    expect(validate(endOfDayReportSchema, { localDay: '10-09-2026' }).success).toBe(false)
+    expect(validate(endOfDayReportSchema, { localDay: 'today' }).success).toBe(false)
+  })
+})
+
+describe('approveDayReportSchema', () => {
+  const approval = {
+    managerId: 2,
+    managerPin: '2222',
+    localDay: '2026-09-10',
+    paymentIds: [1, 2, 3]
+  }
+
+  it('accepts a well-formed approval', () => {
+    expect(validate(approveDayReportSchema, approval).success).toBe(true)
+  })
+
+  it('refuses a payload with no manager credentials, exactly like every other privileged action', () => {
+    const { managerId: _id, managerPin: _pin, ...anonymous } = approval
+    expect(validate(approveDayReportSchema, anonymous).success).toBe(false)
+  })
+
+  it('refuses an empty paymentIds list — there is nothing to approve without at least one id', () => {
+    expect(validate(approveDayReportSchema, { ...approval, paymentIds: [] }).success).toBe(false)
+  })
+
+  it('refuses a non-integer or non-positive payment id', () => {
+    expect(validate(approveDayReportSchema, { ...approval, paymentIds: [1.5] }).success).toBe(false)
+    expect(validate(approveDayReportSchema, { ...approval, paymentIds: [0] }).success).toBe(false)
+    expect(validate(approveDayReportSchema, { ...approval, paymentIds: [-1] }).success).toBe(false)
+  })
+
+  it('refuses a malformed localDay', () => {
+    expect(validate(approveDayReportSchema, { ...approval, localDay: '2026/09/10' }).success).toBe(
+      false
+    )
+  })
+
+  it('accepts an optional note, capped at 500 characters', () => {
+    expect(validate(approveDayReportSchema, { ...approval, note: 'checked' }).success).toBe(true)
+    expect(
+      validate(approveDayReportSchema, { ...approval, note: 'x'.repeat(501) }).success
     ).toBe(false)
   })
 })
