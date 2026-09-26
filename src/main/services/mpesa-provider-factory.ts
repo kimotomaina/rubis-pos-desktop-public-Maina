@@ -35,15 +35,43 @@ import {
   type SmsMpesaProviderDb
 } from './integrations/sms-mpesa-provider.js'
 
-/** How a till confirms that an M-Pesa payment really happened. */
-export type MpesaConfirmationMethod = 'daraja' | 'sms'
+/**
+ * How a till confirms that an M-Pesa payment really happened.
+ *
+ * `'manual'` — the client's POC default (docs/phase-148.md step 2): the
+ * cashier reads the confirmation off the customer's own phone and
+ * records the code, with no request sent anywhere and nothing checked
+ * against Safaricom. This is a deliberate reversal of phase-120 §7.3,
+ * which recommended manual entry only ever be an opt-in fallback
+ * *alongside* a confirming method, never a till's primary, exclusive
+ * one — the client chose otherwise for this POC.
+ * `'daraja'` prompts the customer and reads Safaricom's answer.
+ * `'sms'` reads the confirmation message the till's own notification SIM
+ * received — kept in code as a stub; see {@link MPESA_SMS_PARSER_READY}.
+ */
+export type MpesaConfirmationMethod = 'manual' | 'daraja' | 'sms'
 
 /** Shown to the cashier when this till has no M-Pesa credentials saved. */
 export const MPESA_NOT_CONFIGURED_MESSAGE =
   'M-Pesa has not been set up on this till yet. Take payment another way, or ask an administrator to finish the setup.'
 
 /**
- * Stands in when no M-Pesa credentials are configured.
+ * Shown if anything ever calls a provider method while the till is in
+ * `'manual'` mode. It never should: `checkout.ts`'s manual-approval
+ * branch never calls `verifyTransactionCode`, and `PaymentModal` shows
+ * no STK/Manual-Code route when the resolved mode is `'manual'` — the
+ * till only records what the cashier read off the customer's own phone.
+ * A call reaching this provider is a wiring bug, not a real cashier
+ * request, so the message says so rather than "not configured" (this
+ * till *is* configured — deliberately, for manual recording).
+ */
+export const MPESA_MANUAL_MODE_MESSAGE =
+  'This till records M-Pesa payments manually — there is no automatic request or verification to make.'
+
+/**
+ * Stands in when no M-Pesa credentials are configured, or (with a
+ * different message) when the till is in `'manual'` mode and a provider
+ * call was made anyway.
  *
  * `DarajaMpesaProvider` throws on missing credentials, and a till that
  * cannot take M-Pesa must still open and still take cash — so an
@@ -56,18 +84,20 @@ export const MPESA_NOT_CONFIGURED_MESSAGE =
  * same reason.
  */
 class UnconfiguredMpesaProvider implements MpesaProvider {
+  constructor(private readonly message: string = MPESA_NOT_CONFIGURED_MESSAGE) {}
+
   async initiateStkPush(_request: StkPushRequest): Promise<ServiceResult<StkPushResult>> {
-    return { success: false, error: MPESA_NOT_CONFIGURED_MESSAGE }
+    return { success: false, error: this.message }
   }
 
   async verifyTransactionCode(
     _input: ManualCodeVerification
   ): Promise<ServiceResult<ManualCodeVerificationResult>> {
-    return { success: false, error: MPESA_NOT_CONFIGURED_MESSAGE }
+    return { success: false, error: this.message }
   }
 
   async queryStkPushStatus(_checkoutRequestId: string): Promise<ServiceResult<StkPushStatusResult>> {
-    return { success: false, error: MPESA_NOT_CONFIGURED_MESSAGE }
+    return { success: false, error: this.message }
   }
 }
 
@@ -95,10 +125,11 @@ export interface ResolveMpesaProviderOptions {
   /** Whether the till's config asked for the mock provider. */
   mockRequested: boolean
   /**
-   * How this till confirms an M-Pesa payment. `'daraja'` prompts the
-   * customer and reads Safaricom's answer; `'sms'` reads the
-   * confirmation message the till's own notification SIM received.
-   * Defaults to `'daraja'`.
+   * How this till confirms an M-Pesa payment. See
+   * {@link MpesaConfirmationMethod}. Defaults to `'manual'` when unset —
+   * a row saved before this default existed, or one that never set the
+   * field, resolves as manual rather than Daraja; a row that explicitly
+   * holds `'daraja'` or `'sms'` keeps it.
    */
   confirmationMethod?: MpesaConfirmationMethod
   /** Constructor options forwarded to {@link DarajaMpesaProvider}. */
@@ -107,10 +138,13 @@ export interface ResolveMpesaProviderOptions {
    * Whether this till may also complete a sale on a manually entered,
    * unconfirmed code.
    *
-   * Orthogonal to {@link confirmationMethod}, deliberately: it is a
-   * fallback permitted *alongside* a confirming method, not a way of
-   * confirming. Defaults to off — the exception has to be switched on by
-   * an administrator who read what it does.
+   * Orthogonal to {@link confirmationMethod} when the method is
+   * `'daraja'` or `'sms'`, deliberately: it is a fallback permitted
+   * *alongside* a confirming method there, not a way of confirming.
+   * Defaults to off in that case — the exception has to be switched on by
+   * an administrator who read what it does. Ignored, and always treated
+   * as on, when `confirmationMethod` is `'manual'` — that mode has
+   * nothing else, so there is no separate flag to opt into.
    */
   manualEntryEnabled?: boolean
   /** Database surface the SMS provider reads. Required when the method is `'sms'`. */
@@ -173,7 +207,16 @@ export async function resolveMpesaProvider(
   options: ResolveMpesaProviderOptions
 ): Promise<ResolvedMpesaProvider> {
   const logger = options.logger ?? console
-  const manualEntryEnabled = options.manualEntryEnabled === true
+  // 'manual' is the default confirming method (docs/phase-148.md step 2):
+  // a row that never set this, or was saved before this default existed,
+  // resolves as manual rather than Daraja. A row that explicitly holds
+  // 'daraja' or 'sms' keeps it.
+  const confirmationMethod: MpesaConfirmationMethod = options.confirmationMethod ?? 'manual'
+  // Manual mode has nothing else to opt into, so the flag is always on
+  // there regardless of what was stored; otherwise it's exactly the
+  // configured fallback (default off).
+  const manualEntryEnabled =
+    confirmationMethod === 'manual' ? true : options.manualEntryEnabled === true
 
   if (options.mockRequested && options.isPackaged) {
     logger.warn(
@@ -197,7 +240,20 @@ export async function resolveMpesaProvider(
     }
   }
 
-  if (options.confirmationMethod === 'sms') {
+  if (confirmationMethod === 'manual') {
+    // No provider call is ever made in this mode — see
+    // MPESA_MANUAL_MODE_MESSAGE's doc comment. verifyReferenceNumbers is
+    // false so PaymentModal's dead "Manual Code" route can never appear
+    // here either.
+    return {
+      provider: new UnconfiguredMpesaProvider(MPESA_MANUAL_MODE_MESSAGE),
+      verifyReferenceNumbers: false,
+      claimsStoredPayments: false,
+      manualEntryEnabled: true
+    }
+  }
+
+  if (confirmationMethod === 'sms') {
     if (!options.smsDb) {
       // Nothing to read confirmations from, so nothing can be confirmed.
       // Refusing is the only safe answer; a till in this state takes cash.

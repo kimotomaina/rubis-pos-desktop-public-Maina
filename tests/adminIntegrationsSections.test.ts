@@ -56,11 +56,19 @@ describe('AdminScreen > Integrations: five sections, shown one at a time', () =>
     expect(matches).toHaveLength(5)
   })
 
+  /**
+   * DELIBERATE TEST CHANGE (docs/phase-148.md step 2): the M-Pesa
+   * section heading dropped "(Daraja)" — M-Pesa is no longer
+   * Daraja-exclusive (manual/daraja/sms), so a heading naming only one
+   * of its three modes would be actively wrong once manual is the default.
+   *   Old assertion: `'M-Pesa (Daraja)</h3>'`.
+   *   New assertion: `'>M-Pesa</h3>'`.
+   */
   it('titles each section distinctly from the sub-nav label it lives under', () => {
     expect(INTEGRATIONS_BLOCK).toContain('Shopify Connection</h3>')
     expect(INTEGRATIONS_BLOCK).toContain('>Location</h3>')
     expect(INTEGRATIONS_BLOCK).toContain('>Fiscal Device</h3>')
-    expect(INTEGRATIONS_BLOCK).toContain('M-Pesa (Daraja)</h3>')
+    expect(INTEGRATIONS_BLOCK).toContain('>M-Pesa</h3>')
     expect(INTEGRATIONS_BLOCK).toContain('>Printers</h3>')
   })
 

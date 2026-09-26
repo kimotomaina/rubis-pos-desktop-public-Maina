@@ -141,7 +141,7 @@ export default function ConnectivityModal({
             <p>
               Status:{' '}
               <span className="font-medium text-slate-800">
-                {check?.connected ? 'Connected' : 'Disconnected'}
+                {check?.notApplicable ? 'Not applicable' : check?.connected ? 'Connected' : 'Disconnected'}
               </span>
             </p>
             <p>
@@ -157,7 +157,14 @@ export default function ConnectivityModal({
               </p>
             )}
             {check?.error && (
-              <p className="rounded-lg bg-rose-50 px-3 py-2 text-sm font-medium text-rose-700">
+              // A `notApplicable` result (e.g. M-Pesa in manual mode) is a
+              // normal state, not a warning — the rose "error" box would
+              // contradict the neutral tone the header already shows for it.
+              <p
+                className={`rounded-lg px-3 py-2 text-sm font-medium ${
+                  check.notApplicable ? 'bg-slate-50 text-slate-600' : 'bg-rose-50 text-rose-700'
+                }`}
+              >
                 {check.error}
               </p>
             )}

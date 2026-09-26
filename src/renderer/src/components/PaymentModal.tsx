@@ -7,8 +7,11 @@ import {
   type MpesaPaymentPoller
 } from '../lib/mpesaPaymentPoller.js'
 
-/** Which M-Pesa flow tab is active. Hidden once an STK Push is in flight or has failed. */
-type PaymentTab = 'stk' | 'manual' | 'unverified'
+/** How this till confirms an M-Pesa payment — mirrors `MpesaConfirmationMethod` in the main process. */
+type MpesaMode = 'manual' | 'daraja' | 'sms'
+
+/** Which M-Pesa flow tab is active, within `'daraja'` mode only. Hidden once an STK Push is in flight or has failed. */
+type PaymentTab = 'stk' | 'unverified'
 
 /** The shape of a Safaricom confirmation code, mirrored from `checkout.ts`. */
 export const MANUAL_CODE_PATTERN = /^[A-Z0-9]{10}$/
@@ -69,23 +72,37 @@ function stripLeadingZero(rawInput: string): string {
 }
 
 /**
- * M-Pesa payment collection UI, wired to the mock Daraja IPC
- * placeholders (`initiateMpesaStkPush` / `verifyMpesaCode` /
- * `queryMpesaStatus`). Every STK Push attempt — accepted or rejected
- * — is also logged via `logMpesaTransaction` for the M-Pesa Logs
- * screen.
+ * M-Pesa payment collection UI. Renders an entirely different screen
+ * depending on `mode` (`'manual'` | `'daraja'` | `'sms'`, reported by
+ * `getMpesaCapabilities`) — the client's POC decision (docs/phase-148.md
+ * step 2) that manual recording is this till's default, exclusive method
+ * unless an administrator explicitly turned on Daraja:
+ *   - **`'manual'`** (the default): one screen only, "Record M-Pesa
+ *     payment" — the cashier checks the confirmation message on the
+ *     customer's own phone and types the code in. No request is ever
+ *     sent anywhere.
+ *   - **`'daraja'`**: the STK Push flow — phone number (entered after a
+ *     fixed `254` prefix — a leading `0`, as in `0712345678`, is
+ *     stripped automatically) → push prompt → a "Waiting for M-Pesa
+ *     Confirmation" overlay that polls `queryMpesaStatus` every 5s (see
+ *     `mpesaPaymentPoller.ts`) for up to 90s, only calling `onPaid` once
+ *     Daraja actually confirms the payment — this component never checks
+ *     out on push-*acceptance* alone. If an administrator also enabled
+ *     the manual fallback (for a payment Daraja never confirmed), a
+ *     second "Unverified" tab appears alongside STK.
+ *   - **`'sms'`**: a plain notice that this till cannot take M-Pesa by
+ *     message yet — its parser is still a stub (`MPESA_SMS_PARSER_READY`
+ *     in `src/main/lib/mpesaSms.ts`).
  *
- * Two tabs mirror the hybrid flow:
- *   - **STK Push**: phone number (entered after a fixed `254` prefix —
- *     a leading `0`, as in `0712345678`, is stripped automatically) →
- *     push prompt → a "Waiting for M-Pesa Confirmation" overlay that
- *     polls `queryMpesaStatus` every 5s
- *     (see `mpesaPaymentPoller.ts`) for up to 90s, only calling
- *     `onPaid` once Daraja actually confirms the payment — this
- *     component never checks out on push-*acceptance* alone.
- *   - **Manual Code**: the cashier reads the 6-character confirmation
- *     code off the customer's SMS and it's verified directly — the
- *     offline-capable path, unaffected by the STK polling above.
+ * `mode` defaults to `'daraja'` before the capabilities reply arrives (or
+ * if it never does) — the same fail-safe direction the old
+ * `manualCodeSupported`/`manualEntryEnabled` flags took: every provider
+ * call is still checked server-side regardless of what this screen
+ * shows, so the worst case is a cashier seeing an STK form that, if
+ * used, is refused with a clear reason rather than silently succeeding.
+ *
+ * Every STK Push attempt — accepted or rejected — is also logged via
+ * `logMpesaTransaction` for the M-Pesa Logs screen.
  *
  * The M-Pesa amount always equals the cart `total` passed in as a
  * prop — there is no editable amount field for the cashier to
@@ -97,6 +114,7 @@ function stripLeadingZero(rawInput: string): string {
  * @returns {JSX.Element}
  */
 export default function PaymentModal({ total, onPaid, onCancel }: PaymentModalProps) {
+  const [mode, setMode] = useState<MpesaMode>('daraja')
   const [tab, setTab] = useState<PaymentTab>('stk')
 
   /** Raw digits typed after the fixed `254` prefix — may still include a leading `0`. */
@@ -106,27 +124,13 @@ export default function PaymentModal({ total, onPaid, onCancel }: PaymentModalPr
   const [stkError, setStkError] = useState<string | null>(null)
   const [stkPhase, setStkPhase] = useState<StkPhase>({ kind: 'form' })
 
-  const [code, setCode] = useState('')
-  const [verifying, setVerifying] = useState(false)
-  const [verifyError, setVerifyError] = useState<string | null>(null)
-
   /**
-   * Whether this till can actually confirm a typed transaction code.
-   *
-   * Starts `false` and is only switched on once the main process says
-   * so. A Daraja till cannot check a code against Safaricom, so its
-   * Manual Code tab could only ever dead-end on an error — and a route
-   * that looks like a way to complete a sale but is not is exactly what
-   * sends a cashier hunting for a way around the payment gate. Failing
-   * closed also means a lost reply hides the tab rather than offering
-   * one that does not work.
-   */
-  const [manualCodeSupported, setManualCodeSupported] = useState(false)
-
-  /**
-   * Whether an administrator has allowed this till to complete a sale on
-   * a code nobody confirmed. Fails closed for the same reason as
-   * {@link manualCodeSupported}: a lost reply hides the route.
+   * Whether an administrator has allowed a `'daraja'` till to also
+   * complete a sale on a code nobody confirmed (the older fallback,
+   * `docs/phase-120.md` §7.3). Fails closed — starts `false`, switched on
+   * only once the main process says so — so a lost reply hides the route
+   * rather than offering one whose server-side gate would refuse it.
+   * Irrelevant, and never consulted, outside `'daraja'` mode.
    */
   const [manualEntryEnabled, setManualEntryEnabled] = useState(false)
 
@@ -141,12 +145,12 @@ export default function PaymentModal({ total, onPaid, onCancel }: PaymentModalPr
       .getMpesaCapabilities()
       .then((result) => {
         if (!cancelled && result.success && result.data) {
-          setManualCodeSupported(result.data.manualCodeSupported)
+          setMode(result.data.mode)
           setManualEntryEnabled(result.data.manualEntryEnabled)
         }
       })
       .catch(() => {
-        // Fail closed: leave the tab hidden.
+        // Fail closed: leave mode at its 'daraja' default (see doc comment above).
       })
     return () => {
       cancelled = true
@@ -294,6 +298,66 @@ export default function PaymentModal({ total, onPaid, onCancel }: PaymentModalPr
     })
   }
 
+  /**
+   * The code-entry + acknowledgement + manager-PIN form, shared between
+   * `'manual'` mode's sole screen and `'daraja'` mode's optional
+   * "Unverified" tab — the two contexts differ only in framing (manual
+   * mode is this till's normal way of taking every M-Pesa payment;
+   * Daraja's Unverified tab is an exception for a payment Daraja itself
+   * never confirmed), never in mechanics.
+   */
+  const renderManualEntryPanel = (heading: string, description: string) => (
+    <div className="rounded-xl border-2 border-amber-400 bg-amber-50/60 p-3">
+      <p className="text-lg font-semibold text-amber-900">{heading}</p>
+      <p className="mt-1 text-base text-amber-900/80">{description}</p>
+
+      <label className="mb-1 mt-3 block text-base font-medium text-slate-700">
+        M-Pesa code from the customer&rsquo;s message
+      </label>
+      <input
+        type="text"
+        value={unverifiedCode}
+        onChange={(e) => setUnverifiedCode(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, ''))}
+        placeholder="e.g. QDF73HK9LM"
+        maxLength={10}
+        className="w-full rounded-lg border border-amber-400 bg-white px-3 py-3 text-xl uppercase tracking-wide focus:border-amber-500 focus:outline-none"
+      />
+
+      <label className="mt-3 flex items-start gap-2 text-base text-amber-900">
+        <input
+          type="checkbox"
+          checked={acknowledged}
+          onChange={(e) => setAcknowledged(e.target.checked)}
+          className="mt-1 h-5 w-5"
+        />
+        I confirm this payment has not been verified, and this sale will be recorded as
+        unverified.
+      </label>
+
+      {unverifiedError && (
+        <p className="mt-3 rounded-lg bg-rose-50 px-3 py-2 text-base font-medium text-rose-700">
+          {unverifiedError}
+        </p>
+      )}
+
+      <button
+        type="button"
+        onClick={handleUnverifiedContinue}
+        className="mt-4 w-full rounded-xl border-2 border-amber-600 bg-white py-4 text-xl font-semibold text-amber-900 transition active:scale-95"
+      >
+        Continue &mdash; needs a manager&rsquo;s PIN
+      </button>
+
+      {collectingManagerPin && (
+        <ManagerPinModal
+          title={`Authorize an UNVERIFIED M-Pesa payment of ${formatCurrency(total)}`}
+          onAuthorized={handleUnverifiedAuthorized}
+          onCancel={() => setCollectingManagerPin(false)}
+        />
+      )}
+    </div>
+  )
+
   /** Cashier cancels while waiting for confirmation — stops polling and returns to the cart. */
   const handleCancelWaiting = () => {
     stopPolling()
@@ -305,32 +369,6 @@ export default function PaymentModal({ total, onPaid, onCancel }: PaymentModalPr
     stopPolling()
     setStkError(null)
     setStkPhase({ kind: 'form' })
-  }
-
-  const handleVerifyCode = async () => {
-    setVerifyError(null)
-    if (!code.trim()) {
-      setVerifyError('Enter the M-Pesa transaction code')
-      return
-    }
-    setVerifying(true)
-    try {
-      const result = await window.api.verifyMpesaCode({
-        transactionCode: code.trim(),
-        amount: total
-      })
-      if (result.success && result.data?.verified) {
-        onPaid(result.data.transactionCode)
-        return
-      }
-      setVerifyError(
-        result.success ? (result.data?.reason ?? 'Invalid M-Pesa Code') : (result.error ?? 'Invalid M-Pesa Code')
-      )
-    } catch (err) {
-      setVerifyError(err instanceof Error ? err.message : 'Invalid M-Pesa Code')
-    } finally {
-      setVerifying(false)
-    }
   }
 
   if (total <= 0) {
@@ -402,6 +440,49 @@ export default function PaymentModal({ total, onPaid, onCancel }: PaymentModalPr
     )
   }
 
+  if (mode === 'sms') {
+    // The parser is still a stub (MPESA_SMS_PARSER_READY, phase-147
+    // §1.4) — no code path in this mode can ever confirm a payment, so
+    // there is nothing useful to show but this notice.
+    return (
+      <div>
+        <button
+          type="button"
+          onClick={onCancel}
+          className="mb-3 text-base text-slate-500 hover:text-slate-700"
+        >
+          ← Change payment method
+        </button>
+        <p className="rounded-lg bg-slate-100 px-4 py-3 text-base font-medium text-slate-600">
+          M-Pesa by SMS is not available on this till.
+        </p>
+      </div>
+    )
+  }
+
+  if (mode === 'manual') {
+    // The till's default, exclusive method (docs/phase-148.md step 2):
+    // one screen, no STK tab, no Manual Code tab.
+    return (
+      <div>
+        <button
+          type="button"
+          onClick={onCancel}
+          className="mb-3 text-base text-slate-500 hover:text-slate-700"
+        >
+          ← Change payment method
+        </button>
+        <p className="mb-4 text-base text-slate-500">
+          Charging <span className="font-semibold text-slate-800">{formatCurrency(total)}</span>
+        </p>
+        {renderManualEntryPanel(
+          'Record M-Pesa payment',
+          "Check the confirmation message on the customer's phone, then enter the code below."
+        )}
+      </div>
+    )
+  }
+
   return (
     <div>
       <button
@@ -412,7 +493,7 @@ export default function PaymentModal({ total, onPaid, onCancel }: PaymentModalPr
         ← Change payment method
       </button>
 
-      {(manualCodeSupported || manualEntryEnabled) && (
+      {manualEntryEnabled && (
         <div className="mb-4 flex rounded-lg bg-slate-100 p-1">
           <button
             type="button"
@@ -423,34 +504,21 @@ export default function PaymentModal({ total, onPaid, onCancel }: PaymentModalPr
           >
             STK Push
           </button>
-          {manualCodeSupported && (
-            <button
-              type="button"
-              onClick={() => setTab('manual')}
-              className={`flex-1 rounded-md py-2 text-base font-semibold transition ${
-                tab === 'manual' ? 'bg-white text-rose-700 shadow-sm' : 'text-slate-500'
-              }`}
-            >
-              Manual Code
-            </button>
-          )}
           {/*
-            Styled apart from the confirming routes on purpose. This tab
+            Styled apart from the confirming route on purpose. This tab
             completes a sale nobody has checked, and a cashier should never
             reach it by accident or mistake it for the verified one beside
             it. The amber carries through to the panel and the button.
           */}
-          {manualEntryEnabled && (
-            <button
-              type="button"
-              onClick={() => setTab('unverified')}
-              className={`flex-1 rounded-md py-2 text-base font-semibold transition ${
-                tab === 'unverified' ? 'bg-amber-100 text-amber-900 shadow-sm' : 'text-amber-700'
-              }`}
-            >
-              Unverified
-            </button>
-          )}
+          <button
+            type="button"
+            onClick={() => setTab('unverified')}
+            className={`flex-1 rounded-md py-2 text-base font-semibold transition ${
+              tab === 'unverified' ? 'bg-amber-100 text-amber-900 shadow-sm' : 'text-amber-700'
+            }`}
+          >
+            Unverified
+          </button>
         </div>
       )}
 
@@ -509,97 +577,12 @@ export default function PaymentModal({ total, onPaid, onCancel }: PaymentModalPr
         </div>
       )}
 
-      {tab === 'manual' && manualCodeSupported && (
-        <div>
-          <label className="mb-1 block text-base font-medium text-slate-600">
-            M-Pesa Transaction Code
-          </label>
-          <input
-            type="text"
-            value={code}
-            onChange={(e) => setCode(e.target.value.toUpperCase())}
-            placeholder="e.g. QDF73H"
-            maxLength={12}
-            disabled={verifying}
-            className="w-full rounded-lg border border-slate-300 px-3 py-3 text-xl uppercase tracking-wide focus:border-rose-400 focus:outline-none disabled:bg-slate-50"
-          />
-
-          {verifyError && (
-            <p className="mt-3 rounded-lg bg-rose-50 px-3 py-2 text-base font-medium text-rose-700">
-              {verifyError}
-            </p>
-          )}
-
-          <button
-            type="button"
-            disabled={verifying}
-            onClick={() => void handleVerifyCode()}
-            className="mt-4 w-full rounded-xl bg-rose-600 py-4 text-xl font-semibold text-white transition active:scale-95 disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            {verifying ? 'Verifying…' : 'Verify & Pay'}
-          </button>
-        </div>
-      )}
-
-      {tab === 'unverified' && manualEntryEnabled && (
-        <div className="rounded-xl border-2 border-amber-400 bg-amber-50/60 p-3">
-          <p className="text-lg font-semibold text-amber-900">
-            This records a payment nobody has confirmed.
-          </p>
-          <p className="mt-1 text-base text-amber-900/80">
-            Use this only when the customer has paid but the confirmation has not reached this
-            till. The sale will complete and be listed for a manager to check against the M-Pesa
-            statement later.
-          </p>
-
-          <label className="mb-1 mt-3 block text-base font-medium text-slate-700">
-            M-Pesa code from the customer&rsquo;s message
-          </label>
-          <input
-            type="text"
-            value={unverifiedCode}
-            onChange={(e) =>
-              setUnverifiedCode(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, ''))
-            }
-            placeholder="e.g. QDF73HK9LM"
-            maxLength={10}
-            className="w-full rounded-lg border border-amber-400 bg-white px-3 py-3 text-xl uppercase tracking-wide focus:border-amber-500 focus:outline-none"
-          />
-
-          <label className="mt-3 flex items-start gap-2 text-base text-amber-900">
-            <input
-              type="checkbox"
-              checked={acknowledged}
-              onChange={(e) => setAcknowledged(e.target.checked)}
-              className="mt-1 h-5 w-5"
-            />
-            I confirm this payment has not been verified, and this sale will be recorded as
-            unverified.
-          </label>
-
-          {unverifiedError && (
-            <p className="mt-3 rounded-lg bg-rose-50 px-3 py-2 text-base font-medium text-rose-700">
-              {unverifiedError}
-            </p>
-          )}
-
-          <button
-            type="button"
-            onClick={handleUnverifiedContinue}
-            className="mt-4 w-full rounded-xl border-2 border-amber-600 bg-white py-4 text-xl font-semibold text-amber-900 transition active:scale-95"
-          >
-            Continue &mdash; needs a manager&rsquo;s PIN
-          </button>
-
-          {collectingManagerPin && (
-            <ManagerPinModal
-              title={`Authorize an UNVERIFIED M-Pesa payment of ${formatCurrency(total)}`}
-              onAuthorized={handleUnverifiedAuthorized}
-              onCancel={() => setCollectingManagerPin(false)}
-            />
-          )}
-        </div>
-      )}
+      {tab === 'unverified' &&
+        manualEntryEnabled &&
+        renderManualEntryPanel(
+          'This records a payment nobody has confirmed.',
+          'Use this only when the customer has paid but the confirmation has not reached this till. The sale will complete and be listed for a manager to check against the M-Pesa statement later.'
+        )}
     </div>
   )
 }

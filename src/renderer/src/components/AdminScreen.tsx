@@ -25,6 +25,7 @@ import {
   DEFAULT_ETIMS_VAT_CLASS,
   validateEtimsConnection
 } from '../lib/etimsConfig.js'
+import { MPESA_SMS_PARSER_READY } from '../lib/mpesaConfig.js'
 import type { FiscalConnectionTestResult } from '../../../main/services/integrations/fiscal-connection-test.js'
 
 interface AdminScreenProps {
@@ -123,20 +124,28 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
   const [mpesaCallbackUrl, setMpesaCallbackUrl] = useState('')
   /**
    * How this till confirms an M-Pesa payment, and where the messages
-   * arrive when it does so by message.
+   * arrive when it does so by message. Defaults to `'manual'` — the
+   * cashier reads the code off the customer's own phone, with no
+   * request or verification call to anyone — matching the main
+   * process's own default (`resolveMpesaProvider`,
+   * `mpesaIntegrationConfigSchema`) for a fresh/never-configured till.
    *
    * Loaded and saved alongside the Daraja fields on purpose: saving an
    * integration replaces the whole stored row, so an Admin screen that
    * sent only the Daraja fields would switch a message-based till back to
-   * Daraja and erase its folder, discovered only when payments stopped
+   * manual and erase its folder, discovered only when payments stopped
    * confirming.
    */
-  const [mpesaConfirmationMethod, setMpesaConfirmationMethod] = useState<'daraja' | 'sms'>('daraja')
+  const [mpesaConfirmationMethod, setMpesaConfirmationMethod] = useState<
+    'manual' | 'daraja' | 'sms'
+  >('manual')
   const [mpesaSmsInboxPath, setMpesaSmsInboxPath] = useState('')
   /**
-   * Whether this till may complete a sale on a manually entered code
-   * nobody confirmed. A fallback permitted alongside the confirming
-   * method above, never instead of one.
+   * Whether this till may also complete a sale on a manually entered
+   * Daraja/SMS code nobody confirmed — the older fallback alongside a
+   * confirming method, never instead of one. Meaningless, and hidden,
+   * when `mpesaConfirmationMethod` is already `'manual'`: that mode
+   * already works exactly this way for every sale.
    */
   const [mpesaManualEntryEnabled, setMpesaManualEntryEnabled] = useState(false)
   const [mpesaConsumerSecretInput, setMpesaConsumerSecretInput] = useState('')
@@ -231,7 +240,13 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
       setMpesaShortcode(String(mpesaResult.data.shortcode ?? ''))
       setMpesaEnvironment(mpesaResult.data.environment === 'production' ? 'production' : 'sandbox')
       setMpesaCallbackUrl(String(mpesaResult.data.callbackUrl ?? ''))
-      setMpesaConfirmationMethod(mpesaResult.data.confirmationMethod === 'sms' ? 'sms' : 'daraja')
+      setMpesaConfirmationMethod(
+        mpesaResult.data.confirmationMethod === 'sms'
+          ? 'sms'
+          : mpesaResult.data.confirmationMethod === 'daraja'
+            ? 'daraja'
+            : 'manual'
+      )
       setMpesaSmsInboxPath(String(mpesaResult.data.smsInboxPath ?? ''))
       setMpesaManualEntryEnabled(mpesaResult.data.manualEntryEnabled === true)
     }
@@ -1273,102 +1288,136 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
 
               {integrationSection === 'mpesa' && (
                 <section className="rounded-xl border border-slate-200 bg-white p-4">
-                  <h3 className="mb-1 text-2xl font-bold text-slate-800">M-Pesa (Daraja)</h3>
+                  <h3 className="mb-1 text-2xl font-bold text-slate-800">M-Pesa</h3>
                   <p className="mb-4 text-base text-slate-500">How this till takes M-Pesa payments.</p>
                   <div>
                 <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <label className="mb-1 block text-lg font-medium text-slate-600">
-                      Environment
-                    </label>
-                    <select
-                      value={mpesaEnvironment}
-                      onChange={(e) => setMpesaEnvironment(e.target.value as 'sandbox' | 'production')}
-                      className="w-full h-12 rounded-lg border border-slate-300 px-3 text-lg focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-100"
-                    >
-                      <option value="sandbox">Sandbox</option>
-                      <option value="production">Production</option>
-                    </select>
-                  </div>
-                  <div>
-                    <label className="mb-1 block text-lg font-medium text-slate-600">
-                      Shortcode
-                    </label>
-                    <input
-                      type="text"
-                      value={mpesaShortcode}
-                      onChange={(e) => setMpesaShortcode(e.target.value)}
-                      placeholder="174379"
-                      className="w-full h-12 rounded-lg border border-slate-300 px-3 text-lg focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-100"
-                    />
-                  </div>
-                  <div>
-                    <label className="mb-1 block text-lg font-medium text-slate-600">
-                      Consumer Key
-                    </label>
-                    <input
-                      type="text"
-                      value={mpesaConsumerKey}
-                      onChange={(e) => setMpesaConsumerKey(e.target.value)}
-                      className="w-full h-12 rounded-lg border border-slate-300 px-3 text-lg focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-100"
-                    />
-                  </div>
-                  <div>
-                    <label className="mb-1 flex items-center gap-1 text-lg font-medium text-slate-600">
-                      Consumer Secret <LockIcon className="h-4 w-4 text-slate-400" />
-                    </label>
-                    <input
-                      type="password"
-                      value={mpesaConsumerSecretInput}
-                      onChange={(e) => setMpesaConsumerSecretInput(e.target.value)}
-                      placeholder={mpesaConsumerSecretConfigured ? '•••••••• (configured)' : 'Not configured'}
-                      className="w-full h-12 rounded-lg border border-slate-300 px-3 text-lg focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-100"
-                    />
-                  </div>
-                  <div>
-                    <label className="mb-1 flex items-center gap-1 text-lg font-medium text-slate-600">
-                      Passkey <LockIcon className="h-4 w-4 text-slate-400" />
-                    </label>
-                    <input
-                      type="password"
-                      value={mpesaPasskeyInput}
-                      onChange={(e) => setMpesaPasskeyInput(e.target.value)}
-                      placeholder={mpesaPasskeyConfigured ? '•••••••• (configured)' : 'Not configured'}
-                      className="w-full h-12 rounded-lg border border-slate-300 px-3 text-lg focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-100"
-                    />
-                  </div>
-                  <div>
-                    <label className="mb-1 block text-lg font-medium text-slate-600">
-                      Callback URL
-                    </label>
-                    <input
-                      type="text"
-                      value={mpesaCallbackUrl}
-                      onChange={(e) => setMpesaCallbackUrl(e.target.value)}
-                      placeholder="https://example.com/callback"
-                      className="w-full h-12 rounded-lg border border-slate-300 px-3 text-lg focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-100"
-                    />
-                  </div>
                   <div>
                     <label className="mb-1 block text-lg font-medium text-slate-600">
                       How payments are confirmed
                     </label>
                     <select
                       value={mpesaConfirmationMethod}
-                      onChange={(e) =>
-                        setMpesaConfirmationMethod(e.target.value === 'sms' ? 'sms' : 'daraja')
-                      }
+                      onChange={(e) => {
+                        const value = e.target.value
+                        setMpesaConfirmationMethod(
+                          value === 'sms' ? 'sms' : value === 'daraja' ? 'daraja' : 'manual'
+                        )
+                      }}
                       aria-label="How payments are confirmed"
                       className="w-full h-12 rounded-lg border border-slate-300 px-3 text-lg focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-100"
                     >
+                      <option value="manual">Record the code myself, after checking the customer&rsquo;s phone</option>
                       <option value="daraja">Send a payment request to the customer</option>
-                      <option value="sms">Read the payment message on this till</option>
+                      {/*
+                        Left selectable (not removed) so a till already saved
+                        with 'sms' still shows its own current setting — but
+                        disabled, so nobody can newly choose a method that
+                        cannot confirm a single payment yet (MPESA_SMS_PARSER_READY,
+                        phase-147 §1.4). The main process refuses the save too.
+                      */}
+                      <option value="sms" disabled={!MPESA_SMS_PARSER_READY}>
+                        {MPESA_SMS_PARSER_READY
+                          ? 'Read the payment message on this till'
+                          : 'SMS modem (not available yet)'}
+                      </option>
                     </select>
                     <p className="mt-1 text-base text-slate-500">
-                      Choose reading the message when this till has the payment phone or modem
-                      connected to it.
+                      Manual is the default: the cashier checks the confirmation message on the
+                      customer&rsquo;s own phone and records the code. Choose sending a request
+                      only once Daraja credentials are ready below.
                     </p>
                   </div>
+
+                  {mpesaConfirmationMethod === 'manual' && (
+                    <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-base text-slate-600">
+                      No Daraja credentials are needed for this mode. The cashier reads the code
+                      off the customer&rsquo;s phone and enters it at the till for every M-Pesa
+                      sale.
+                    </div>
+                  )}
+
+                  {mpesaConfirmationMethod === 'daraja' && (
+                    <>
+                      <div>
+                        <label className="mb-1 block text-lg font-medium text-slate-600">
+                          Environment
+                        </label>
+                        <select
+                          value={mpesaEnvironment}
+                          onChange={(e) =>
+                            setMpesaEnvironment(e.target.value as 'sandbox' | 'production')
+                          }
+                          className="w-full h-12 rounded-lg border border-slate-300 px-3 text-lg focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-100"
+                        >
+                          <option value="sandbox">Sandbox</option>
+                          <option value="production">Production</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label className="mb-1 block text-lg font-medium text-slate-600">
+                          Shortcode
+                        </label>
+                        <input
+                          type="text"
+                          value={mpesaShortcode}
+                          onChange={(e) => setMpesaShortcode(e.target.value)}
+                          placeholder="174379"
+                          className="w-full h-12 rounded-lg border border-slate-300 px-3 text-lg focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-100"
+                        />
+                      </div>
+                      <div>
+                        <label className="mb-1 block text-lg font-medium text-slate-600">
+                          Consumer Key
+                        </label>
+                        <input
+                          type="text"
+                          value={mpesaConsumerKey}
+                          onChange={(e) => setMpesaConsumerKey(e.target.value)}
+                          className="w-full h-12 rounded-lg border border-slate-300 px-3 text-lg focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-100"
+                        />
+                      </div>
+                      <div>
+                        <label className="mb-1 flex items-center gap-1 text-lg font-medium text-slate-600">
+                          Consumer Secret <LockIcon className="h-4 w-4 text-slate-400" />
+                        </label>
+                        <input
+                          type="password"
+                          value={mpesaConsumerSecretInput}
+                          onChange={(e) => setMpesaConsumerSecretInput(e.target.value)}
+                          placeholder={
+                            mpesaConsumerSecretConfigured ? '•••••••• (configured)' : 'Not configured'
+                          }
+                          className="w-full h-12 rounded-lg border border-slate-300 px-3 text-lg focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-100"
+                        />
+                      </div>
+                      <div>
+                        <label className="mb-1 flex items-center gap-1 text-lg font-medium text-slate-600">
+                          Passkey <LockIcon className="h-4 w-4 text-slate-400" />
+                        </label>
+                        <input
+                          type="password"
+                          value={mpesaPasskeyInput}
+                          onChange={(e) => setMpesaPasskeyInput(e.target.value)}
+                          placeholder={mpesaPasskeyConfigured ? '•••••••• (configured)' : 'Not configured'}
+                          className="w-full h-12 rounded-lg border border-slate-300 px-3 text-lg focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-100"
+                        />
+                      </div>
+                      <div>
+                        <label className="mb-1 block text-lg font-medium text-slate-600">
+                          Callback URL
+                        </label>
+                        <input
+                          type="text"
+                          value={mpesaCallbackUrl}
+                          onChange={(e) => setMpesaCallbackUrl(e.target.value)}
+                          placeholder="https://example.com/callback"
+                          className="w-full h-12 rounded-lg border border-slate-300 px-3 text-lg focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-100"
+                        />
+                      </div>
+                    </>
+                  )}
+
                   {mpesaConfirmationMethod === 'sms' && (
                     <div>
                       <label className="mb-1 block text-lg font-medium text-slate-600">
@@ -1387,46 +1436,52 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
                       </p>
                     </div>
                   )}
+
                   {/*
-                    Deliberately not an option inside the select above. This
-                    permits an exception alongside whichever method confirms
-                    payments; it is not a way of confirming one, and offering
-                    it as a third choice would make it the setting a shop
-                    with a flaky modem quietly settles on.
+                    Deliberately not an option inside the select above, and
+                    shown only for Daraja: this permits an exception
+                    alongside a confirming method, not a way of confirming
+                    one. Meaningless in manual mode, which already works this
+                    way for every sale — hidden there rather than shown
+                    checked-and-disabled, since there's nothing to opt into.
                   */}
-                  <div className="rounded-lg border-2 border-amber-300 bg-amber-50/60 p-3">
-                    <label className="flex items-start gap-2 text-lg font-medium text-amber-900">
-                      <input
-                        type="checkbox"
-                        checked={mpesaManualEntryEnabled}
-                        onChange={(e) => setMpesaManualEntryEnabled(e.target.checked)}
-                        aria-label="Allow recording unverified M-Pesa payments"
-                        className="mt-1 h-5 w-5"
-                      />
-                      Allow recording unverified M-Pesa payments
-                    </label>
-                    <p className="mt-1 text-base text-amber-900/80">
-                      Lets a cashier complete a sale by typing the customer&rsquo;s M-Pesa code when
-                      the confirmation has not reached this till. <strong>Nothing checks that the
-                      payment really happened.</strong> Each one needs a manager&rsquo;s PIN, is
-                      recorded as unverified, and stays on the Reconciliation tab until someone
-                      matches it to the M-Pesa statement. Takes effect after a restart.
-                    </p>
-                  </div>
-                </div>
-                <div className="mt-3 flex items-center gap-3">
-                  <button
-                    type="button"
-                    disabled={mpesaTesting}
-                    onClick={() => void handleTestMpesaConnection()}
-                    className="rounded-lg border border-slate-300 px-4 py-2 text-base font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    {mpesaTesting ? 'Testing…' : 'Test Connection'}
-                  </button>
-                  {mpesaTestMessage && (
-                    <p className="text-base text-slate-500">{mpesaTestMessage}</p>
+                  {mpesaConfirmationMethod === 'daraja' && (
+                    <div className="rounded-lg border-2 border-amber-300 bg-amber-50/60 p-3">
+                      <label className="flex items-start gap-2 text-lg font-medium text-amber-900">
+                        <input
+                          type="checkbox"
+                          checked={mpesaManualEntryEnabled}
+                          onChange={(e) => setMpesaManualEntryEnabled(e.target.checked)}
+                          aria-label="Allow recording unverified M-Pesa payments"
+                          className="mt-1 h-5 w-5"
+                        />
+                        Allow recording unverified M-Pesa payments
+                      </label>
+                      <p className="mt-1 text-base text-amber-900/80">
+                        Lets a cashier complete a sale by typing the customer&rsquo;s M-Pesa code when
+                        the confirmation has not reached this till. <strong>Nothing checks that the
+                        payment really happened.</strong> Each one needs a manager&rsquo;s PIN, is
+                        recorded as unverified, and stays on the Reconciliation tab until someone
+                        matches it to the M-Pesa statement. Takes effect after a restart.
+                      </p>
+                    </div>
                   )}
                 </div>
+                {mpesaConfirmationMethod === 'daraja' && (
+                  <div className="mt-3 flex items-center gap-3">
+                    <button
+                      type="button"
+                      disabled={mpesaTesting}
+                      onClick={() => void handleTestMpesaConnection()}
+                      className="rounded-lg border border-slate-300 px-4 py-2 text-base font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      {mpesaTesting ? 'Testing…' : 'Test Connection'}
+                    </button>
+                    {mpesaTestMessage && (
+                      <p className="text-base text-slate-500">{mpesaTestMessage}</p>
+                    )}
+                  </div>
+                )}
               </div>
 
               <p className="mt-4 text-sm text-slate-500">

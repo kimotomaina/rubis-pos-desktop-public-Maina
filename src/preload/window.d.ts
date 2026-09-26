@@ -45,6 +45,7 @@ import type {
   StkPushStatusResult
 } from '../main/services/integrations/mpesa.js'
 import type { UnmatchedMpesaPayment } from '../main/services/integrations/sms-mpesa-provider.js'
+import type { MpesaConfirmationMethod } from '../main/services/mpesa-provider-factory.js'
 
 /** Payload of the `network:status` broadcast / `network:get-status` invoke. */
 export interface NetworkStatusPayload {
@@ -57,6 +58,8 @@ export interface ConnectivityCheckPayload {
   lastCheckedAt: string
   latencyMs?: number
   error?: string
+  /** True when there is nothing external to probe (e.g. M-Pesa in manual/SMS mode) — a neutral state, not a failure. */
+  notApplicable?: boolean
 }
 
 /** Payload of the `connectivity:status` broadcast / `connectivity:get-status` invoke. */
@@ -159,9 +162,17 @@ export interface PosApi {
   onUpdateStatus: (callback: (status: UpdateStatus) => void) => () => void
   /** Initiates an M-Pesa STK Push prompt to the customer's phone. */
   initiateMpesaStkPush: (request: StkPushRequest) => Promise<ServiceResult<StkPushResult>>
-  /** Reports what this till's M-Pesa provider can confirm, so a screen offers no dead-end route. */
+  /**
+   * Reports what this till's M-Pesa provider can confirm, so a screen
+   * offers no dead-end route. `mode` is how this till confirms M-Pesa
+   * payments (`'manual'` by default) — `PaymentModal` renders per mode.
+   */
   getMpesaCapabilities: () => Promise<
-    ServiceResult<{ manualCodeSupported: boolean; manualEntryEnabled: boolean }>
+    ServiceResult<{
+      manualCodeSupported: boolean
+      manualEntryEnabled: boolean
+      mode: MpesaConfirmationMethod
+    }>
   >
   /** Every M-Pesa payment that settled a sale, across all three modes. */
   listMpesaPayments: () => Promise<ServiceResult<MpesaPaymentRow[]>>

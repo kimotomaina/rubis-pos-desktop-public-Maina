@@ -30,6 +30,20 @@ function silentLogger(): { log: ReturnType<typeof vi.fn>; warn: ReturnType<typeo
   return { log: vi.fn(), warn: vi.fn() }
 }
 
+/**
+ * DELIBERATE TEST CHANGE (docs/phase-148.md step 2): every test in this
+ * `describe` block is specifically about Daraja/mock behavior and used
+ * to rely on Daraja being the *implicit* default when `confirmationMethod`
+ * was omitted. Now that `'manual'` is the default (the client's POC
+ * decision), each of these tests passes `confirmationMethod: 'daraja'`
+ * explicitly so it keeps testing what it always meant to test, rather
+ * than silently starting to exercise the new manual branch instead.
+ *   Old: no `confirmationMethod` passed; relied on the implicit default.
+ *   New: `confirmationMethod: 'daraja'` passed explicitly.
+ * The one exception is `'is never selected in a packaged build, whatever
+ * the config says'` in the mock-fencing `describe` further down — same
+ * fix, same reason.
+ */
 describe('resolveMpesaProvider', () => {
   it('returns the real provider in a packaged build even when the mock was requested', async () => {
     const logger = silentLogger()
@@ -37,6 +51,7 @@ describe('resolveMpesaProvider', () => {
     const { provider, verifyReferenceNumbers } = await resolveMpesaProvider({
       isPackaged: true,
       mockRequested: true,
+      confirmationMethod: 'daraja',
       darajaOptions: { ...DARAJA },
       logger
     })
@@ -50,6 +65,7 @@ describe('resolveMpesaProvider', () => {
     const { provider, verifyReferenceNumbers } = await resolveMpesaProvider({
       isPackaged: false,
       mockRequested: false,
+      confirmationMethod: 'daraja',
       darajaOptions: { ...DARAJA },
       logger: silentLogger()
     })
@@ -65,6 +81,7 @@ describe('resolveMpesaProvider', () => {
     const { verifyReferenceNumbers } = await resolveMpesaProvider({
       isPackaged: false,
       mockRequested: false,
+      confirmationMethod: 'daraja',
       darajaOptions: { ...DARAJA },
       logger: silentLogger()
     })
@@ -82,6 +99,7 @@ describe('resolveMpesaProvider', () => {
     const { provider } = await resolveMpesaProvider({
       isPackaged: true,
       mockRequested: false,
+      confirmationMethod: 'daraja',
       darajaOptions: { ...DARAJA, passkey: '' },
       logger
     })
@@ -111,6 +129,7 @@ describe('resolveMpesaProvider', () => {
     const { provider, verifyReferenceNumbers } = await resolveMpesaProvider({
       isPackaged: true,
       mockRequested: false,
+      confirmationMethod: 'daraja',
       darajaOptions: { ...DARAJA, consumerSecret: '' },
       logger: silentLogger()
     })
@@ -127,6 +146,7 @@ describe('resolveMpesaProvider', () => {
       const { provider } = await resolveMpesaProvider({
         isPackaged: true,
         mockRequested: false,
+        confirmationMethod: 'daraja',
         darajaOptions: { ...DARAJA, [missing]: '' },
         logger: silentLogger()
       })
@@ -222,17 +242,76 @@ describe('choosing the message method does not disturb Daraja', () => {
     expect(claimsStoredPayments).toBe(false)
   })
 
-  it('still selects Daraja when no method is configured at all', async () => {
-    // A till that has never been told otherwise keeps what it had.
+  /**
+   * DELIBERATE TEST CHANGE (docs/phase-148.md step 2 — the client's POC
+   * decision to make manual the till's default, exclusive method).
+   *   Old title/assertion: "still selects Daraja when no method is
+   *     configured at all" — asserted `DarajaMpesaProvider` and
+   *     `verifyReferenceNumbers === false`.
+   *   New title/assertion: a till with no method configured resolves to
+   *     the manual provider, not Daraja, with no "dead" Manual Code tab
+   *     and manual entry implied on.
+   */
+  it('resolves the manual provider, not Daraja, when no method is configured at all', async () => {
+    const { provider, verifyReferenceNumbers, claimsStoredPayments, manualEntryEnabled } =
+      await resolveMpesaProvider({
+        isPackaged: true,
+        mockRequested: false,
+        darajaOptions: { ...DARAJA },
+        logger: silentLogger()
+      })
+
+    expect(provider).not.toBeInstanceOf(DarajaMpesaProvider)
+    expect(verifyReferenceNumbers).toBe(false)
+    expect(claimsStoredPayments).toBe(false)
+    expect(manualEntryEnabled).toBe(true)
+  })
+
+  it('resolves the manual provider when the method is explicitly manual, even with full Daraja credentials on hand', async () => {
+    // Daraja credentials being present must not override an explicit
+    // 'manual' choice — the two are independent settings.
     const { provider, verifyReferenceNumbers } = await resolveMpesaProvider({
       isPackaged: true,
       mockRequested: false,
+      confirmationMethod: 'manual',
       darajaOptions: { ...DARAJA },
       logger: silentLogger()
     })
 
-    expect(provider).toBeInstanceOf(DarajaMpesaProvider)
+    expect(provider).not.toBeInstanceOf(DarajaMpesaProvider)
     expect(verifyReferenceNumbers).toBe(false)
+  })
+
+  it('never calls a provider method in manual mode without the till-specific refusal message', async () => {
+    // Nothing in this app should ever call these — see
+    // MPESA_MANUAL_MODE_MESSAGE's doc comment — but if a wiring bug ever
+    // does, the message must say why, not the unrelated "not configured".
+    const { provider } = await resolveMpesaProvider({
+      isPackaged: true,
+      mockRequested: false,
+      confirmationMethod: 'manual',
+      darajaOptions: { ...DARAJA },
+      logger: silentLogger()
+    })
+
+    const result = await provider.verifyTransactionCode({ transactionCode: 'X', amount: 100 })
+    expect(result).toEqual({
+      success: false,
+      error: 'This till records M-Pesa payments manually — there is no automatic request or verification to make.'
+    })
+  })
+
+  it('ignores a stored manualEntryEnabled=false in manual mode — it is always implied on', async () => {
+    const { manualEntryEnabled } = await resolveMpesaProvider({
+      isPackaged: true,
+      mockRequested: false,
+      confirmationMethod: 'manual',
+      manualEntryEnabled: false,
+      darajaOptions: { ...DARAJA },
+      logger: silentLogger()
+    })
+
+    expect(manualEntryEnabled).toBe(true)
   })
 })
 
@@ -242,6 +321,7 @@ describe('the mock M-Pesa provider is fenced off', () => {
       const { provider } = await resolveMpesaProvider({
         isPackaged: true,
         mockRequested,
+        confirmationMethod: 'daraja',
         darajaOptions: { ...DARAJA },
         logger: silentLogger()
       })

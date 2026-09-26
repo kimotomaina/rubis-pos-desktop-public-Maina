@@ -12,10 +12,16 @@ import {
   createConnectivityMonitor,
   checkHttpReachable,
   checkTcpReachable,
+  checkMpesaConnectivity,
   mockConnectedResult,
   mockDisconnectedResult,
+  notApplicableResult,
   type ConnectivityCheckResult
 } from '../src/main/services/connectivityMonitor.js'
+import {
+  DARAJA_SANDBOX_BASE_URL,
+  DARAJA_PRODUCTION_BASE_URL
+} from '../src/main/services/integrations/daraja-mpesa-provider.js'
 
 function ok(): ConnectivityCheckResult {
   return { connected: true, lastCheckedAt: new Date().toISOString(), latencyMs: 5 }
@@ -160,6 +166,70 @@ describe('mockDisconnectedResult', () => {
   it('accepts a custom message', () => {
     const result = mockDisconnectedResult('M-Pesa mock mode enabled')
     expect(result.error).toBe('M-Pesa mock mode enabled')
+  })
+})
+
+describe('notApplicableResult', () => {
+  it('reports disconnected with notApplicable set and the given message', () => {
+    const result = notApplicableResult('Manual recording')
+    expect(result.connected).toBe(false)
+    expect(result.notApplicable).toBe(true)
+    expect(result.error).toBe('Manual recording')
+  })
+})
+
+/**
+ * `checkMpesaConnectivity` (docs/phase-148.md step 2) — the header's
+ * M-Pesa probe, extracted the same way `resolveMpesaProvider` was, so
+ * "which host does a Daraja till actually check" is testable without
+ * booting `main/index.ts`. Closes phase-147 Part 6 #1: the previous
+ * inline version in `index.ts` always probed sandbox regardless of the
+ * till's configured environment.
+ */
+describe('checkMpesaConnectivity', () => {
+  it('reports manual mode as not applicable, never as disconnected-and-bad', async () => {
+    const result = await checkMpesaConnectivity({
+      mode: 'manual',
+      mockEnabled: false,
+      environment: 'sandbox'
+    })
+    expect(result.notApplicable).toBe(true)
+    expect(result.error).toBe('Manual recording')
+  })
+
+  it('reports SMS mode as not applicable', async () => {
+    const result = await checkMpesaConnectivity({
+      mode: 'sms',
+      mockEnabled: false,
+      environment: 'sandbox'
+    })
+    expect(result.notApplicable).toBe(true)
+    expect(result.error).toBe('Not available')
+  })
+
+  it('reports mock mode as disconnected (not not-applicable) even in daraja mode', async () => {
+    const result = await checkMpesaConnectivity({
+      mode: 'daraja',
+      mockEnabled: true,
+      environment: 'sandbox'
+    })
+    expect(result.notApplicable).toBeFalsy()
+    expect(result.connected).toBe(false)
+    expect(result.error).toBe('M-Pesa mock mode enabled')
+  })
+
+  it('probes the sandbox host for a sandbox-configured Daraja till', async () => {
+    const spy = vi.spyOn(axios, 'get').mockResolvedValue({ status: 200 })
+    await checkMpesaConnectivity({ mode: 'daraja', mockEnabled: false, environment: 'sandbox' })
+    expect(spy).toHaveBeenCalledWith(DARAJA_SANDBOX_BASE_URL, expect.anything())
+    vi.restoreAllMocks()
+  })
+
+  it('probes the production host for a production-configured Daraja till (phase-147 Part 6 #1)', async () => {
+    const spy = vi.spyOn(axios, 'get').mockResolvedValue({ status: 200 })
+    await checkMpesaConnectivity({ mode: 'daraja', mockEnabled: false, environment: 'production' })
+    expect(spy).toHaveBeenCalledWith(DARAJA_PRODUCTION_BASE_URL, expect.anything())
+    vi.restoreAllMocks()
   })
 })
 

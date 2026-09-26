@@ -116,6 +116,7 @@ import {
   createConnectivityMonitor,
   checkHttpReachable,
   checkTcpReachable,
+  checkMpesaConnectivity,
   mockConnectedResult,
   mockDisconnectedResult
 } from './services/connectivityMonitor.js'
@@ -673,11 +674,26 @@ app.whenReady().then(async () => {
     manualEntryEnabled?: boolean
   }>('mpesa')
   /**
-   * How this till confirms an M-Pesa payment. Defaults to Daraja, so a
-   * till that has never been told otherwise keeps the behaviour it had.
+   * How this till confirms an M-Pesa payment. Defaults to `'manual'`
+   * (docs/phase-148.md step 2 — the client's POC default). A row that
+   * explicitly holds `'daraja'` or `'sms'` from before this default
+   * existed keeps it; only a row with neither becomes manual.
    */
   const mpesaConfirmationMethod: MpesaConfirmationMethod =
-    mpesaConfig.confirmationMethod === 'sms' ? 'sms' : 'daraja'
+    mpesaConfig.confirmationMethod === 'sms'
+      ? 'sms'
+      : mpesaConfig.confirmationMethod === 'daraja'
+        ? 'daraja'
+        : 'manual'
+  /**
+   * Sandbox vs production, resolved once here so both the real Daraja
+   * client and the connectivity probe below check the same host this
+   * till is actually configured to call — the probe used to be
+   * hardcoded to sandbox regardless of this setting (phase-147 Part 6 #1).
+   */
+  const mpesaEnvironment: 'sandbox' | 'production' =
+    mpesaConfig.environment ??
+    (process.env.MPESA_ENVIRONMENT === 'production' ? 'production' : 'sandbox')
   /**
    * `consumerSecret`/`passkey` are the two Daraja fields that can
    * actually authorize a transaction, so — unlike `consumerKey`/
@@ -712,9 +728,7 @@ app.whenReady().then(async () => {
       consumerSecret: mpesaConsumerSecret,
       shortcode: mpesaConfig.shortcode || process.env.MPESA_SHORTCODE || '',
       passkey: mpesaPasskey,
-      environment:
-        mpesaConfig.environment ??
-        (process.env.MPESA_ENVIRONMENT === 'production' ? 'production' : 'sandbox'),
+      environment: mpesaEnvironment,
       callbackUrl: mpesaConfig.callbackUrl ?? process.env.MPESA_CALLBACK_URL
     }
   })
@@ -887,22 +901,25 @@ app.whenReady().then(async () => {
   }
 
   /**
-   * M-Pesa (Daraja sandbox) / fiscal device / printer reachability —
-   * a mocked integration always reports connected without any real
-   * network I/O, since there is nothing external to actually reach.
-   * M-Pesa/eTIMS mock mode is reported as disconnected — mocking means
-   * no real Daraja/fiscal connection exists, and the badge should say
-   * so rather than imply a working live integration. The mock printer
-   * (a distinct, older `VITE_MOCK_PRINTER` flag) simulates hardware
-   * that was never expected to have a real counterpart, so it's
-   * reported as connected instead.
+   * M-Pesa (Daraja, environment-aware) / fiscal device / printer
+   * reachability — a mocked integration always reports connected without
+   * any real network I/O, since there is nothing external to actually
+   * reach. M-Pesa/eTIMS mock mode is reported as disconnected — mocking
+   * means no real Daraja/fiscal connection exists, and the badge should
+   * say so rather than imply a working live integration. Manual/SMS
+   * M-Pesa modes report a neutral "nothing to probe" state instead of
+   * either (see `checkMpesaConnectivity`). The mock printer (a distinct,
+   * older `VITE_MOCK_PRINTER` flag) simulates hardware that was never
+   * expected to have a real counterpart, so it's reported as connected
+   * instead.
    */
-  const DARAJA_SANDBOX_HOST = 'https://sandbox.safaricom.co.ke'
   const connectivityMonitor = createConnectivityMonitor({
     checkMpesa: () =>
-      mockMpesaEnabled
-        ? Promise.resolve(mockDisconnectedResult('M-Pesa mock mode enabled'))
-        : checkHttpReachable(DARAJA_SANDBOX_HOST),
+      checkMpesaConnectivity({
+        mode: mpesaConfirmationMethod,
+        mockEnabled: mockMpesaEnabled,
+        environment: mpesaEnvironment
+      }),
     checkFiscal: () =>
       mockEtimsEnabled
         ? Promise.resolve(mockDisconnectedResult('eTIMS mock mode enabled'))
@@ -1205,9 +1222,17 @@ app.whenReady().then(async () => {
 
   ipcMain.handle(
     'integrations:mpesa-capabilities',
-    (): ServiceResult<{ manualCodeSupported: boolean; manualEntryEnabled: boolean }> => ({
+    (): ServiceResult<{
+      manualCodeSupported: boolean
+      manualEntryEnabled: boolean
+      mode: MpesaConfirmationMethod
+    }> => ({
       success: true,
-      data: { manualCodeSupported: verifyReferenceNumbers, manualEntryEnabled }
+      data: {
+        manualCodeSupported: verifyReferenceNumbers,
+        manualEntryEnabled,
+        mode: mpesaConfirmationMethod
+      }
     })
   )
 

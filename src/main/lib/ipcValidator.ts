@@ -13,6 +13,7 @@
  */
 
 import { z } from 'zod'
+import { MPESA_SMS_PARSER_READY } from './mpesaSms.js'
 
 /** A discount payload, shared by line items and the cart-level discount. */
 const discountSchema = z.object({
@@ -422,11 +423,22 @@ const etimsConnectionFields = {
  * the generic envelope accepts any record, and the main process must not
  * trust a value merely because a screen validated it.
  *
+ * `confirmationMethod` defaults to `'manual'` when the field is omitted
+ * (docs/phase-148.md step 2 — the client's POC default: the cashier
+ * records the code after checking the confirmation message on the
+ * customer's own phone). This is a deliberate reversal of the original
+ * `docs/phase-120.md` §7.3 recommendation, which kept manual entry an
+ * opt-in fallback rather than a till's primary, exclusive method — see
+ * `manualEntryEnabled` below for that older, still-available fallback.
+ *
  * `smsInboxPath` is required when, and only when, the till confirms
  * payments from messages: it is the folder the reader watches, and a
  * blank one would leave a till selecting a method it cannot perform. It
  * is a folder path, not a credential, so it stays on the row rather than
- * in the vault.
+ * in the vault. `sms` itself is refused below while
+ * {@link MPESA_SMS_PARSER_READY} is false — an existing row already
+ * holding `'sms'` is untouched (this schema only gates new writes), but
+ * nobody can newly select a method that cannot confirm a single payment.
  */
 export const mpesaIntegrationConfigSchema = z
   .object({
@@ -434,14 +446,14 @@ export const mpesaIntegrationConfigSchema = z
     shortcode: z.string().optional(),
     environment: z.enum(['sandbox', 'production']).optional(),
     callbackUrl: z.string().optional(),
-    confirmationMethod: z.enum(['daraja', 'sms']).optional(),
+    confirmationMethod: z.enum(['manual', 'daraja', 'sms']).default('manual'),
     smsInboxPath: z.string().optional(),
     /**
      * Permits completing a sale on a manually entered, unconfirmed
-     * M-Pesa code — **alongside** whichever confirming method is set
-     * above, never instead of one. Manual is deliberately absent from
-     * `confirmationMethod`'s enum: it confirms nothing, so it is not a
-     * way of confirming. See `docs/phase-120.md` §7.3.
+     * M-Pesa code alongside the Daraja/SMS confirming methods — the
+     * older fallback `docs/phase-120.md` §7.3 recommended. Meaningless
+     * (and ignored) when `confirmationMethod` is `'manual'`, since that
+     * mode already works exactly this way for every sale.
      */
     manualEntryEnabled: z.boolean().optional()
   })
@@ -452,6 +464,10 @@ export const mpesaIntegrationConfigSchema = z
       path: ['smsInboxPath']
     }
   )
+  .refine((data) => data.confirmationMethod !== 'sms' || MPESA_SMS_PARSER_READY, {
+    message: 'M-Pesa by SMS is not available on this till yet.',
+    path: ['confirmationMethod']
+  })
 
 export const etimsConfigSaveSchema = z.object({
   ...etimsConnectionFields,

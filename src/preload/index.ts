@@ -36,6 +36,7 @@ import type {
   StkPushStatusResult
 } from '../main/services/integrations/mpesa.js'
 import type { UnmatchedMpesaPayment } from '../main/services/integrations/sms-mpesa-provider.js'
+import type { MpesaConfirmationMethod } from '../main/services/mpesa-provider-factory.js'
 
 /** Status payload broadcast over the `network:status` channel. */
 export interface NetworkStatusPayload {
@@ -48,6 +49,8 @@ export interface ConnectivityCheckPayload {
   lastCheckedAt: string
   latencyMs?: number
   error?: string
+  /** True when there is nothing external to probe (e.g. M-Pesa in manual/SMS mode) — a neutral state, not a failure. */
+  notApplicable?: boolean
 }
 
 /** Status payload broadcast over the `connectivity:status` channel. */
@@ -448,11 +451,18 @@ const api = {
   /**
    * Reports what this till's M-Pesa provider can do, so a payment
    * screen never offers a route that cannot end in a confirmed payment.
+   * `mode` is how the till confirms M-Pesa payments (`'manual'` by
+   * default) — `PaymentModal` renders an entirely different screen per
+   * mode rather than inferring it from the two booleans alone.
    *
-   * @returns {Promise<ServiceResult<{ manualCodeSupported: boolean }>>}
+   * @returns {Promise<ServiceResult<{ manualCodeSupported: boolean; manualEntryEnabled: boolean; mode: MpesaConfirmationMethod }>>}
    */
   getMpesaCapabilities: (): Promise<
-    ServiceResult<{ manualCodeSupported: boolean; manualEntryEnabled: boolean }>
+    ServiceResult<{
+      manualCodeSupported: boolean
+      manualEntryEnabled: boolean
+      mode: MpesaConfirmationMethod
+    }>
   > => ipcRenderer.invoke('integrations:mpesa-capabilities'),
 
   /**

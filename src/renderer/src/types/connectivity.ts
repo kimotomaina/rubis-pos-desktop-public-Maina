@@ -13,6 +13,8 @@ export interface ConnectivityCheckPayload {
   lastCheckedAt: string
   latencyMs?: number
   error?: string
+  /** True when there is nothing external to probe (e.g. M-Pesa in manual/SMS mode) — a neutral state, not a failure. */
+  notApplicable?: boolean
 }
 
 /** Mirrors `ConnectivityStatusPayload` in the preload layer. */

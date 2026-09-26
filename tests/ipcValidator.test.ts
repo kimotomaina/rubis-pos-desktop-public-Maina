@@ -685,13 +685,24 @@ describe('mpesaIntegrationConfigSchema', () => {
     expect(result.success).toBe(true)
   })
 
-  it('accepts a message-based till with a folder', () => {
+  /**
+   * DELIBERATE TEST CHANGE (docs/phase-148.md step 2): this used to
+   * assert `success: true` for an `'sms'` row with a folder — before the
+   * schema refused `'sms'` outright while its parser is a stub
+   * (`MPESA_SMS_PARSER_READY`). The client's POC decision keeps SMS mode
+   * in code but makes it unselectable until the parser is real, so a
+   * valid folder is no longer enough on its own.
+   *   Old assertion: `success: true`.
+   *   New assertion: `success: false`, with the "not available" reason.
+   */
+  it('rejects a message-based till even with a folder, while the SMS parser is a stub', () => {
     const result = validate(mpesaIntegrationConfigSchema, {
       confirmationMethod: 'sms',
       smsInboxPath: 'C:\gammu\inbox'
     })
 
-    expect(result.success).toBe(true)
+    expect(result.success).toBe(false)
+    expect(result.success === false && result.error).toMatch(/not available on this till yet/)
   })
 
   it('rejects a message-based till with no folder', () => {
@@ -718,8 +729,26 @@ describe('mpesaIntegrationConfigSchema', () => {
     expect(result.success).toBe(false)
   })
 
-  it('accepts a row with no method at all, which means Daraja', () => {
-    expect(validate(mpesaIntegrationConfigSchema, { consumerKey: 'key' }).success).toBe(true)
+  /**
+   * DELIBERATE TEST CHANGE (docs/phase-148.md step 2): the field's
+   * default flipped from implicitly meaning Daraja to explicitly
+   * `'manual'` — the client's POC default.
+   *   Old assertion: title said "which means Daraja"; only checked
+   *     `success: true`.
+   *   New assertion: title says "which now means manual"; also checks
+   *     the schema actually fills in `'manual'`, not just that the
+   *     payload is accepted.
+   */
+  it('accepts a row with no method at all, which now means manual', () => {
+    const result = validate(mpesaIntegrationConfigSchema, { consumerKey: 'key' })
+    expect(result.success).toBe(true)
+    expect(result.success && result.data.confirmationMethod).toBe('manual')
+  })
+
+  it('accepts an explicit manual row', () => {
+    const result = validate(mpesaIntegrationConfigSchema, { confirmationMethod: 'manual' })
+    expect(result.success).toBe(true)
+    expect(result.success && result.data.confirmationMethod).toBe('manual')
   })
 })
 

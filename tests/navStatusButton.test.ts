@@ -167,4 +167,30 @@ describe('NavStatusButton', () => {
     // And the overall button dot must not turn red for this alone.
     expect(button('Status').querySelector('span[aria-hidden]')!.className).toContain('bg-emerald-500')
   })
+
+  /**
+   * docs/phase-148.md step 2: M-Pesa in manual/SMS mode has nothing to
+   * be connected to at all — `checkMpesaConnectivity` reports
+   * `notApplicable`, and this row must render the same neutral way the
+   * untested scanner does above, not as a red "Disconnected" that would
+   * make every manual-mode till (the new default) look broken.
+   */
+  it('M-Pesa reported not-applicable (manual/SMS mode) is neutral (slate), not bad (rose)', () => {
+    mount(
+      baseProps({
+        connectivityStatus: {
+          ...ALL_OK,
+          mpesa: { ...check(false), notApplicable: true, error: 'Manual recording' }
+        }
+      })
+    )
+    tap(button('Status'))
+    const row = Array.from(dialog()!.querySelectorAll('button')).find((b) =>
+      b.textContent?.includes('M-Pesa')
+    )!
+    expect(row.querySelector('span[aria-hidden]')!.className).toContain('bg-slate-400')
+    expect(row.textContent).toContain('Manual recording')
+    // And the overall button dot must not turn red for this alone.
+    expect(button('Status').querySelector('span[aria-hidden]')!.className).toContain('bg-emerald-500')
+  })
 })

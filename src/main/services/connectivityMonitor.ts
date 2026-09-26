@@ -15,6 +15,11 @@
 
 import { Socket } from 'node:net'
 import axios from 'axios'
+import {
+  DARAJA_SANDBOX_BASE_URL,
+  DARAJA_PRODUCTION_BASE_URL
+} from './integrations/daraja-mpesa-provider.js'
+import type { MpesaConfirmationMethod } from './mpesa-provider-factory.js'
 
 /** Result of one reachability probe. */
 export interface ConnectivityCheckResult {
@@ -25,6 +30,14 @@ export interface ConnectivityCheckResult {
   latencyMs?: number
   /** Human-readable failure reason, present only when `connected` is false. */
   error?: string
+  /**
+   * True when there is nothing external to probe at all — e.g. M-Pesa
+   * configured for manual recording, or SMS mode, which cannot confirm a
+   * payment yet either way. Distinct from `connected: false`, which means
+   * a real probe was attempted and failed: a consumer should show this as
+   * a neutral state, not as something needing attention.
+   */
+  notApplicable?: boolean
 }
 
 /** Combined status of every monitored integration. */
@@ -257,4 +270,62 @@ export function mockDisconnectedResult(
   message = 'Mock mode enabled — not a real connection'
 ): ConnectivityCheckResult {
   return { connected: false, lastCheckedAt: new Date().toISOString(), error: message }
+}
+
+/**
+ * Reported for an integration with nothing external to probe at all —
+ * e.g. M-Pesa configured for manual recording. Unlike
+ * {@link mockDisconnectedResult}, this is a normal, expected state, not
+ * a warning: `connected` is `false` only because there is no connection
+ * to be true or false about, and `notApplicable` tells a consumer to
+ * render it as neutral rather than "needs attention".
+ *
+ * @param {string} message short label for the header/detail row, e.g. "Manual recording"
+ * @returns {ConnectivityCheckResult}
+ */
+export function notApplicableResult(message: string): ConnectivityCheckResult {
+  return {
+    connected: false,
+    lastCheckedAt: new Date().toISOString(),
+    error: message,
+    notApplicable: true
+  }
+}
+
+/**
+ * Decides how to check M-Pesa reachability for the header status.
+ *
+ * `'manual'` and `'sms'` have nothing to probe: manual mode makes no
+ * request to anyone, and `'sms'` cannot confirm a payment yet either way
+ * (its parser is still a stub — see `mpesaSms.ts`) — both report
+ * {@link notApplicableResult} instead of a misleading "disconnected".
+ * `'daraja'` probes whichever base URL this till's own resolved
+ * `environment` actually points at — the previous version of this check
+ * always probed the sandbox host regardless of environment, so a
+ * production-configured till's status reflected the wrong endpoint
+ * (phase-147 Part 6 #1).
+ *
+ * @param {object} options
+ * @param {MpesaConfirmationMethod} options.mode
+ * @param {boolean} options.mockEnabled
+ * @param {'sandbox' | 'production'} options.environment
+ * @returns {Promise<ConnectivityCheckResult>}
+ */
+export function checkMpesaConnectivity(options: {
+  mode: MpesaConfirmationMethod
+  mockEnabled: boolean
+  environment: 'sandbox' | 'production'
+}): Promise<ConnectivityCheckResult> {
+  if (options.mode === 'manual') {
+    return Promise.resolve(notApplicableResult('Manual recording'))
+  }
+  if (options.mode === 'sms') {
+    return Promise.resolve(notApplicableResult('Not available'))
+  }
+  if (options.mockEnabled) {
+    return Promise.resolve(mockDisconnectedResult('M-Pesa mock mode enabled'))
+  }
+  return checkHttpReachable(
+    options.environment === 'production' ? DARAJA_PRODUCTION_BASE_URL : DARAJA_SANDBOX_BASE_URL
+  )
 }

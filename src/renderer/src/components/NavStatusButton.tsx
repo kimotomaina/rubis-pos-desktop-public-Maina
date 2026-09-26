@@ -80,7 +80,10 @@ function StatusRow({
  * The button's own dot is the worst status among all six, so a cashier
  * can tell something needs attention without opening the dialog: red if
  * offline or any of M-Pesa/Fiscal/Printer is disconnected, amber if
- * sales are unfiled, green otherwise. Each row keeps its original
+ * sales are unfiled, green otherwise. M-Pesa in manual/SMS mode has
+ * nothing to be connected to at all (`notApplicable`), so it is excluded
+ * from "disconnected" the same way an untested barcode scanner is —
+ * neutral, not bad. Each row keeps its original
  * behavior exactly — tapping a connectivity row still opens that
  * integration's own `ConnectivityModal` (via `onSelectIntegration`, the
  * same prop `ConnectivityBadges` took), and tapping the unfiled-sales
@@ -102,12 +105,20 @@ export default function NavStatusButton({
   const [open, setOpen] = useState(false)
 
   const mpesaConnected = connectivityStatus?.mpesa.connected ?? false
+  /**
+   * M-Pesa in manual/SMS mode has nothing to be connected or
+   * disconnected to (`checkMpesaConnectivity` reports this rather than a
+   * false "disconnected") — treated like the barcode scanner's "unknown"
+   * below: shown neutrally, and never the reason the overall dot turns red.
+   */
+  const mpesaNotApplicable = connectivityStatus?.mpesa.notApplicable ?? false
   const fiscalConnected = connectivityStatus?.fiscal.connected ?? false
   const printerConnected = connectivityStatus?.printer.connected ?? false
   const scannerConnected = barcodeStatus === 'connected'
   const unfiled = unfiledCount === null ? null : describeUnfiledCount(unfiledCount)
 
-  const hasBadConnectivity = !online || !mpesaConnected || !fiscalConnected || !printerConnected
+  const hasBadConnectivity =
+    !online || (!mpesaConnected && !mpesaNotApplicable) || !fiscalConnected || !printerConnected
   const overallTone: Tone = hasBadConnectivity ? 'bad' : unfiled?.tone === 'alert' ? 'warn' : 'ok'
 
   const select = (integration: ConnectivityIntegration) => {
@@ -168,8 +179,14 @@ export default function NavStatusButton({
               )}
               <StatusRow
                 label="M-Pesa"
-                tone={mpesaConnected ? 'ok' : 'bad'}
-                detail={mpesaConnected ? 'Connected' : 'Disconnected'}
+                tone={mpesaNotApplicable ? 'unknown' : mpesaConnected ? 'ok' : 'bad'}
+                detail={
+                  mpesaNotApplicable
+                    ? (connectivityStatus?.mpesa.error ?? 'Not applicable')
+                    : mpesaConnected
+                      ? 'Connected'
+                      : 'Disconnected'
+                }
                 onClick={() => select('mpesa')}
               />
               <StatusRow
