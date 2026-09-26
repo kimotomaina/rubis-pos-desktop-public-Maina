@@ -64,7 +64,10 @@ const order: ReceiptOrder = {
   cashierName: 'Alex',
   paymentMethod: 'cash',
   tenderedAmount: 50,
-  changeDue: 1.41
+  changeDue: 1.41,
+  // The amount actually charged (docs/phase-161) — no discount here, and
+  // shelf prices already include VAT, so it equals the raw subtotal.
+  total: 44.99
 }
 
 const items: ReceiptLineItem[] = [
@@ -97,10 +100,23 @@ describe('renderReceipt', () => {
     expect(lineTexts).toContain('RUBIS T-Shirt x1')
     expect(lineTexts).toContain(`  ${formatCurrency(19.99)}`)
 
-    // subtotal = 25 + 19.99 = 44.99; tax = 44.99 * 0.08 = 3.5992 -> 3.60; total = 48.59
+    /**
+     * DELIBERATE TEST CHANGE (docs/phase-161 Commit 2, docs/phase-160 Part A):
+     * this order carries no discount, and shelf prices already include VAT
+     * (docs/phase-158), so the correct total is the order's own stored
+     * total (44.99, unchanged from the raw subtotal) — not the old
+     * added-on-top figure.
+     *   Old assertions: `Tax: 3.60` (44.99 * 0.08, added on top),
+     *     `Total: 48.59` (subtotal + that tax).
+     *   New assertions: no "Discount:" line (nothing was discounted),
+     *     `Total: 44.99` (the stored total, never recomputed), and
+     *     `VAT included (calculated at 8%): 3.33` (44.99 * 0.08 / 1.08,
+     *     the VAT already inside 44.99, extracted rather than added).
+     */
     expect(lineTexts).toContain(`Subtotal: ${formatCurrency(44.99)}`)
-    expect(lineTexts).toContain(`Tax: ${formatCurrency(3.5992)}`)
-    expect(lineTexts).toContain(`Total: ${formatCurrency(48.59)}`)
+    expect(lineTexts.some((t) => typeof t === 'string' && t.startsWith('Discount:'))).toBe(false)
+    expect(lineTexts).toContain(`Total: ${formatCurrency(44.99)}`)
+    expect(lineTexts).toContain(`VAT included (calculated at 8%): ${formatCurrency(3.33)}`)
     expect(lineTexts).toContain('Payment: cash')
     expect(lineTexts).toContain(`Tendered: ${formatCurrency(50)}`)
     expect(lineTexts).toContain(`Change: ${formatCurrency(1.41)}`)
@@ -204,6 +220,29 @@ describe('renderReceipt', () => {
     const lineTexts = calls.filter((c) => c.method === 'println').map((c) => c.args[0])
     expect(lineTexts).toContain('Fiscal Inv: KRA-0004')
     expect(lineTexts.some((t) => typeof t === 'string' && t.startsWith('[QR CODE:'))).toBe(false)
+  })
+
+  it('prints the discount line and the stored total, not a recomputed one (docs/phase-160/161)', async () => {
+    const { client, calls } = createFakePrinter()
+    const discountedItems: ReceiptLineItem[] = [
+      { title: 'RUBIS Mug', variantTitle: 'Small', quantity: 2, unitPrice: 100, discount: { type: 'fixed', value: 10 } }
+    ]
+    const discountedOrder: ReceiptOrder = { ...order, total: 190 }
+
+    await renderReceipt(client, discountedOrder, discountedItems, settings)
+
+    const lineTexts = calls.filter((c) => c.method === 'println').map((c) => c.args[0])
+    expect(lineTexts).toContain(`Subtotal: ${formatCurrency(200)}`)
+    expect(lineTexts).toContain(`Discount: -${formatCurrency(10)}`)
+    expect(lineTexts).toContain(`Total: ${formatCurrency(190)}`)
+  })
+
+  it('omits the discount line entirely when nothing was discounted', async () => {
+    const { client, calls } = createFakePrinter()
+    await renderReceipt(client, order, items, settings)
+
+    const lineTexts = calls.filter((c) => c.method === 'println').map((c) => c.args[0])
+    expect(lineTexts.some((t) => typeof t === 'string' && t.startsWith('Discount:'))).toBe(false)
   })
 })
 
@@ -336,7 +375,12 @@ describe('printReceipt', () => {
     expect(logSpy).toHaveBeenCalledTimes(1)
     const logged = logSpy.mock.calls[0][0] as string
     expect(logged).toContain('Order #7')
-    expect(logged).toContain(`Total: ${formatCurrency(48.59)}`)
+    // DELIBERATE TEST CHANGE (docs/phase-161 Commit 2, same reasoning as
+    // the "issues the ESC/POS call sequence" test above): old assertion
+    // `Total: 48.59` (the old added-on-top figure); new assertion
+    // `Total: 44.99` (the order's own stored total, unchanged since
+    // there is no discount here).
+    expect(logged).toContain(`Total: ${formatCurrency(44.99)}`)
 
     logSpy.mockRestore()
   })

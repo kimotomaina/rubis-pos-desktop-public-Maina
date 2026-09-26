@@ -20,12 +20,14 @@
  */
 
 import { ThermalPrinter, PrinterTypes } from 'node-thermal-printer'
-import type { ServiceResult } from './shopify-types.js'
+import type { ServiceResult, Discount } from './shopify-types.js'
 import type { ZReport } from './reports.js'
 import { formatVatRateLabel } from './reports.js'
 import type { PrinterConfig, PrinterType } from './database.js'
 import { formatCurrency } from './currency.js'
 import { generatePdfReceipt } from './pdf-receipt.js'
+import { computeReceiptTotals } from '../lib/receiptTotals.js'
+import type { ReceiptTotalsLineItem } from '../lib/receiptTotals.js'
 
 /** Store-level configuration resolved once at startup from env vars / settings. */
 export interface PrinterSettings {
@@ -61,6 +63,10 @@ export interface ReceiptOrder {
   fiscalInvoiceNumber?: string
   /** Base64 QR code payload returned (or generated) at fiscalization time. */
   fiscalQrCode?: string
+  /** The amount actually charged (docs/phase-161) - printed verbatim, never recomputed. See {@link computeReceiptTotals}. */
+  total: number
+  /** Cart-level discount applied at checkout, when any (docs/phase-161). */
+  cartDiscount?: Discount
 }
 
 /** One printed line item. */
@@ -69,6 +75,8 @@ export interface ReceiptLineItem {
   variantTitle: string
   quantity: number
   unitPrice: number
+  /** Line-level discount applied at checkout, when any (docs/phase-161). */
+  discount?: Discount
 }
 
 /** Result data on a successful print. */
@@ -192,9 +200,13 @@ export function resolvePrinterSettings(
  *
  * Layout: store name (centered, bold) → order # → date/time → cashier
  * → customer KRA PIN, for a B2B sale → dashed line → items
- * (name/variant, qty, price) → dashed line → subtotal → tax → total
- * (bold) → payment method → "Thank you!" → fiscal invoice number/QR
- * code, when the sale was fiscalized.
+ * (name/variant, qty, price) → dashed line → subtotal → discount (only
+ * if any) → total (bold) → VAT included → payment method → "Thank
+ * you!" → fiscal invoice number/QR code, when the sale was fiscalized.
+ *
+ * Subtotal/discount/total/VAT all come from {@link computeReceiptTotals}
+ * (docs/phase-161 Commit 2) — `total` is always `order.total`, the
+ * amount actually charged, never recomputed from `items` here.
  *
  * @param {ThermalPrinterLike} client
  * @param {ReceiptOrder} order
@@ -208,12 +220,15 @@ export async function renderReceipt(
   items: ReceiptLineItem[],
   settings: PrinterSettings
 ): Promise<void> {
-  const subtotal = items.reduce(
-    (sum, item) => sum + item.unitPrice * item.quantity,
-    0
+  const lineItems: ReceiptTotalsLineItem[] = items.map((item) => ({
+    unitPrice: item.unitPrice,
+    quantity: item.quantity,
+    discount: item.discount
+  }))
+  const totals = computeReceiptTotals(
+    { localId: order.localId, lineItems, cartDiscount: order.cartDiscount, total: order.total },
+    settings.taxRate
   )
-  const tax = subtotal * settings.taxRate
-  const total = subtotal + tax
 
   client.alignCenter()
   client.bold(true)
@@ -240,11 +255,14 @@ export async function renderReceipt(
   }
   client.drawLine()
 
-  client.println(`Subtotal: ${formatCurrency(subtotal)}`)
-  client.println(`Tax: ${formatCurrency(tax)}`)
+  client.println(`Subtotal: ${formatCurrency(totals.rawSubtotal)}`)
+  if (totals.discountTotal > 0) {
+    client.println(`Discount: -${formatCurrency(totals.discountTotal)}`)
+  }
   client.bold(true)
-  client.println(`Total: ${formatCurrency(total)}`)
+  client.println(`Total: ${formatCurrency(totals.total)}`)
   client.bold(false)
+  client.println(`${formatVatRateLabel(settings.taxRate)}: ${formatCurrency(totals.vatIncluded)}`)
   client.println(`Payment: ${order.paymentMethod}`)
   if (order.paymentMethod === 'cash') {
     client.println(`Tendered: ${formatCurrency(order.tenderedAmount)}`)

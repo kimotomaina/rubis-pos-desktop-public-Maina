@@ -2465,13 +2465,18 @@ app.whenReady().then(async () => {
               referenceNumber: payload.referenceNumber,
               customerPin: payload.customerPin,
               fiscalInvoiceNumber: order.fiscal_invoice_number ?? undefined,
-              fiscalQrCode: order.fiscal_qr_code ?? undefined
+              fiscalQrCode: order.fiscal_qr_code ?? undefined,
+              // docs/phase-161: the stored total/discounts, no longer
+              // stripped before reaching the printer.
+              total: order.total,
+              cartDiscount: payload.cartDiscount
             },
             payload.lineItems.map((line) => ({
               title: line.title,
               variantTitle: line.variantTitle ?? '',
               quantity: line.quantity,
-              unitPrice: line.unitPrice
+              unitPrice: line.unitPrice,
+              discount: line.discount
             })),
             printerRegistry,
             printerSettings,

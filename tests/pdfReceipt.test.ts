@@ -23,7 +23,10 @@ const order: ReceiptOrder = {
   cashierName: 'Alex',
   paymentMethod: 'cash',
   tenderedAmount: 50,
-  changeDue: 1.41
+  changeDue: 1.41,
+  // The amount actually charged (docs/phase-161) — no discount here, so
+  // it equals the raw subtotal (2 x 12.50).
+  total: 25
 }
 
 const items: ReceiptLineItem[] = [
@@ -62,6 +65,37 @@ describe('generatePdfReceipt', () => {
     const b2bOrder: ReceiptOrder = { ...order, customerPin: 'P051234567Z' }
 
     const filePath = await generatePdfReceipt(b2bOrder, items, settings)
+
+    expect(existsSync(filePath)).toBe(true)
+  })
+
+  /**
+   * Content-level assertions on the printed Subtotal/Discount/Total/VAT
+   * lines aren't possible here — `pdfkit`'s output is a compressed PDF
+   * stream, and this project has no PDF-text-extraction dependency (the
+   * existing tests above only ever check the file's existence and its
+   * magic header). These two tests instead exercise
+   * `computeReceiptTotals` being wired through with a line discount and
+   * a cart discount without throwing; the line-by-line correctness of
+   * what gets printed is covered exhaustively by `receiptTotals.test.ts`
+   * (the pure function) and `printer.test.ts` (the thermal path, whose
+   * `println` calls ARE plain-text-assertable).
+   */
+  it('accepts a line discount and still produces a PDF (docs/phase-160/161)', async () => {
+    const discountedOrder: ReceiptOrder = { ...order, total: 20 }
+    const discountedItems: ReceiptLineItem[] = [
+      { title: 'RUBIS Mug', variantTitle: 'Small', quantity: 2, unitPrice: 12.5, discount: { type: 'fixed', value: 5 } }
+    ]
+
+    const filePath = await generatePdfReceipt(discountedOrder, discountedItems, settings)
+
+    expect(existsSync(filePath)).toBe(true)
+  })
+
+  it('accepts a cart discount and still produces a PDF', async () => {
+    const discountedOrder: ReceiptOrder = { ...order, total: 22.5, cartDiscount: { type: 'fixed', value: 2.5 } }
+
+    const filePath = await generatePdfReceipt(discountedOrder, items, settings)
 
     expect(existsSync(filePath)).toBe(true)
   })

@@ -13,6 +13,9 @@ import { join } from 'node:path'
 import { app } from 'electron'
 import type { ReceiptOrder, ReceiptLineItem, PrinterSettings } from './printer.js'
 import { formatCurrency } from './currency.js'
+import { formatVatRateLabel } from './reports.js'
+import { computeReceiptTotals } from '../lib/receiptTotals.js'
+import type { ReceiptTotalsLineItem } from '../lib/receiptTotals.js'
 
 /** Narrow receipt-page width (points) approximating an 80mm thermal roll. */
 const PAGE_WIDTH = 280
@@ -33,9 +36,15 @@ export async function generatePdfReceipt(
   items: ReceiptLineItem[],
   settings: PrinterSettings
 ): Promise<string> {
-  const subtotal = items.reduce((sum, item) => sum + item.unitPrice * item.quantity, 0)
-  const tax = subtotal * settings.taxRate
-  const total = subtotal + tax
+  const lineItems: ReceiptTotalsLineItem[] = items.map((item) => ({
+    unitPrice: item.unitPrice,
+    quantity: item.quantity,
+    discount: item.discount
+  }))
+  const totals = computeReceiptTotals(
+    { localId: order.localId, lineItems, cartDiscount: order.cartDiscount, total: order.total },
+    settings.taxRate
+  )
 
   const filePath = join(app.getPath('desktop'), `RUBIS_Receipt_Order_${order.localId}.pdf`)
 
@@ -63,10 +72,13 @@ export async function generatePdfReceipt(
     }
 
     doc.text(DASHED_LINE)
-    doc.text(`Subtotal: ${formatCurrency(subtotal)}`)
-    doc.text(`Tax: ${formatCurrency(tax)}`)
-    doc.font('Helvetica-Bold').text(`Total: ${formatCurrency(total)}`)
+    doc.text(`Subtotal: ${formatCurrency(totals.rawSubtotal)}`)
+    if (totals.discountTotal > 0) {
+      doc.text(`Discount: -${formatCurrency(totals.discountTotal)}`)
+    }
+    doc.font('Helvetica-Bold').text(`Total: ${formatCurrency(totals.total)}`)
     doc.font('Helvetica')
+    doc.text(`${formatVatRateLabel(settings.taxRate)}: ${formatCurrency(totals.vatIncluded)}`)
     doc.text(`Payment: ${order.paymentMethod}`)
     if (order.paymentMethod === 'cash') {
       doc.text(`Tendered: ${formatCurrency(order.tenderedAmount)}`)

@@ -126,7 +126,8 @@ const order: ReceiptOrder = {
   cashierName: 'Alex',
   paymentMethod: 'cash',
   tenderedAmount: 10,
-  changeDue: 0
+  changeDue: 0,
+  total: 10
 }
 
 const items: ReceiptLineItem[] = [
