@@ -249,12 +249,21 @@ export default function PosCheckoutPanel({ requestManagerPin }: PosCheckoutPanel
               <option value="fixed">Ksh</option>
             </select>
             <input
-              type="number"
-              min="0"
-              step="0.01"
+              type="text"
+              readOnly
               value={discountValue}
-              onChange={(e) => setDiscountValue(e.target.value)}
+              onClick={() =>
+                useKeyboardStore
+                  .getState()
+                  .open({ value: discountValue, onChange: setDiscountValue, label: 'Discount amount', mode: 'decimal' })
+              }
+              onFocus={() =>
+                useKeyboardStore
+                  .getState()
+                  .open({ value: discountValue, onChange: setDiscountValue, label: 'Discount amount', mode: 'decimal' })
+              }
               autoFocus
+              aria-label="Discount amount"
               className="h-11 w-24 rounded-md border border-slate-300 px-2 text-lg focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-100"
             />
             <button

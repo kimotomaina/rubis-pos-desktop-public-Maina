@@ -330,7 +330,15 @@ describe('AdminScreen > Integrations > Printer', () => {
 })
 
 describe('AdminScreen > Overview > Shift cash fields', () => {
-  it('Ending Cash (counted) — mode numeric, and typing + Confirm sends it', async () => {
+  /**
+   * DELIBERATE TEST CHANGE (docs/phase-156): phase-155 gave the cash
+   * fields `mode: 'numeric'` (no decimal point at all), which was wrong
+   * for a KES amount with cents — phase-156 added `'decimal'` and moved
+   * Starting/Ending Cash to it.
+   *   Old assertion: `request?.mode` is `'numeric'`.
+   *   New assertion: `request?.mode` is `'decimal'`.
+   */
+  it('Ending Cash (counted) — mode decimal, and typing + Confirm sends it', async () => {
     stubApi()
     await mount()
     // getCurrentShift is stubbed open, so "Close Shift" is already available.
@@ -339,7 +347,7 @@ describe('AdminScreen > Overview > Shift cash fields', () => {
     const input = inputByLabel('Ending Cash (counted)')
     expect(input.readOnly).toBe(true)
     act(() => input.click())
-    expect(useKeyboardStore.getState().request?.mode).toBe('numeric')
+    expect(useKeyboardStore.getState().request?.mode).toBe('decimal')
     act(() => useKeyboardStore.getState().request?.onChange('950'))
     expect(inputByLabel('Ending Cash (counted)').value).toBe('950')
 

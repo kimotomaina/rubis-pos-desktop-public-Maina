@@ -586,10 +586,19 @@ export default function PaymentModal({ total, onPaid, onCancel }: PaymentModalPr
             </span>
             <input
               type="tel"
+              readOnly
               value={localPhoneInput}
-              onChange={(e) => setLocalPhoneInput(e.target.value.replace(/\D/g, '').slice(0, 10))}
+              onClick={() =>
+                useKeyboardStore.getState().open({
+                  value: localPhoneInput,
+                  onChange: (next) => setLocalPhoneInput(next.replace(/\D/g, '').slice(0, 10)),
+                  label: 'Phone Number',
+                  mode: 'numeric'
+                })
+              }
               placeholder="712345678 or 0712345678"
               disabled={stkLoading}
+              aria-label="Phone Number"
               className="w-full border-0 px-3 py-3 text-xl focus:outline-none disabled:bg-slate-50"
             />
           </div>

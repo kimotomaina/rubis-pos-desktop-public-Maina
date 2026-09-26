@@ -282,3 +282,65 @@ describe('which setup fields mask their echo', () => {
     expect(input('etims-password').type).toBe('password')
   })
 })
+
+/**
+ * `'decimal'` mode (docs/phase-156) — `VirtualNumpad` with one decimal
+ * point allowed, unlike `'numeric'` (no decimal point) and distinct from
+ * `'ip'` (many decimal points). Covers the mode itself, in isolation from
+ * any one field that requests it (`AdminScreen`'s cash fields,
+ * `CartLineItem`/`PosCheckoutPanel`'s price/discount fields,
+ * `StockTakePage`'s threshold field all request it — see their own
+ * component tests for that wiring).
+ */
+describe('decimal mode', () => {
+  it('renders the numpad (not the alphanumeric keyboard)', async () => {
+    await open({ mode: 'decimal' })
+
+    expect(key('Submit')).toBeDefined()
+    expect(container.querySelector('[aria-label="Decimal point"]')).not.toBeNull()
+    expect(keys().find((b) => b.textContent === 'Q')).toBeUndefined()
+  })
+
+  it('accepts one decimal point', async () => {
+    await open({ mode: 'decimal' })
+
+    typeKeys(['4', '9', '.', '5'])
+
+    expect(echo().textContent).toBe('49.5')
+  })
+
+  it('ignores a second decimal point, same as numeric', async () => {
+    let value = ''
+    await open({ mode: 'decimal', value: '4.5', onChange: (next) => { value = next } })
+
+    tap(container.querySelector('[aria-label="Decimal point"]') as HTMLButtonElement)
+
+    expect(value).toBe('')
+    expect(echo().textContent).toBe('4.5')
+  })
+
+  it('does not let the decimal key be pressed more than once, unlike ip', async () => {
+    await open({ mode: 'decimal', value: '1.2' })
+
+    tap(container.querySelector('[aria-label="Decimal point"]') as HTMLButtonElement)
+
+    expect(echo().textContent).toBe('1.2')
+  })
+})
+
+describe('numeric and ip modes are unaffected by adding decimal', () => {
+  it('numeric still has no decimal key at all', async () => {
+    await open({ mode: 'numeric' })
+
+    const decimalKey = container.querySelector('[aria-label="Decimal point"]') as HTMLButtonElement
+    expect(decimalKey.disabled).toBe(true)
+  })
+
+  it('ip still allows the decimal key more than once', async () => {
+    await open({ mode: 'ip', value: '192.168' })
+
+    typeKeys(['.'])
+
+    expect(echo().textContent).toBe('192.168.')
+  })
+})

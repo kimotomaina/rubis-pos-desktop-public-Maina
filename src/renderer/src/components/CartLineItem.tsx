@@ -6,6 +6,7 @@ import {
   requiresManagerPinForDiscount,
   validatePriceOverride
 } from '../lib/checkoutMath.js'
+import { useKeyboardStore } from '../stores/keyboardStore.js'
 import { TrashIcon } from './icons.js'
 
 interface CartLineItemProps {
@@ -61,6 +62,16 @@ export default function CartLineItem({
     setPriceInput(String(item.price))
     requestManagerPin(`Override price for ${item.title}`, () => setEditor('price'))
   }
+
+  /** Opens the shared on-screen keyboard for the price override, decimal mode (a currency amount). */
+  const openPriceKeyboard = () =>
+    useKeyboardStore.getState().open({ value: priceInput, onChange: setPriceInput, label: 'New price', mode: 'decimal' })
+
+  /** Opens the shared on-screen keyboard for the discount value, decimal mode (a percent or a KES amount, both possibly fractional). */
+  const openDiscountKeyboard = () =>
+    useKeyboardStore
+      .getState()
+      .open({ value: discountValue, onChange: setDiscountValue, label: 'Discount amount', mode: 'decimal' })
 
   const savePrice = () => {
     const price = parseFloat(priceInput)
@@ -191,12 +202,13 @@ export default function CartLineItem({
       {editor === 'price' && (
         <div className="mt-2 flex items-center gap-2 rounded-lg bg-slate-50 p-2">
           <input
-            type="number"
-            min="0"
-            step="0.01"
+            type="text"
+            readOnly
             value={priceInput}
-            onChange={(e) => setPriceInput(e.target.value)}
+            onClick={openPriceKeyboard}
+            onFocus={openPriceKeyboard}
             autoFocus
+            aria-label="New price"
             className="h-11 w-28 rounded-md border border-slate-300 px-2 text-lg focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-100"
           />
           <button
@@ -227,12 +239,13 @@ export default function CartLineItem({
             <option value="fixed">Ksh</option>
           </select>
           <input
-            type="number"
-            min="0"
-            step="0.01"
+            type="text"
+            readOnly
             value={discountValue}
-            onChange={(e) => setDiscountValue(e.target.value)}
+            onClick={openDiscountKeyboard}
+            onFocus={openDiscountKeyboard}
             autoFocus
+            aria-label="Discount amount"
             className="h-11 w-24 rounded-md border border-slate-300 px-2 text-lg focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-100"
           />
           <button

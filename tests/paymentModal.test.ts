@@ -163,6 +163,84 @@ describe('PaymentModal renders by mode', () => {
   })
 })
 
+/**
+ * The Daraja phone-number field's on-screen-keypad conversion
+ * (docs/phase-156): `readOnly`, opens the shared keyboard
+ * (`useKeyboardStore`), numeric mode — same pattern as the M-Pesa manual
+ * code field above (mode `caps`) and `AdminScreen.tsx`'s fields
+ * (docs/phase-155). The existing `254` prefix handling and
+ * `PHONE_PATTERN` validation are untouched — only the input method
+ * changed.
+ */
+describe('Daraja phone number field', () => {
+  it('is readOnly and opens the keyboard, numeric mode', async () => {
+    stubApi({ manualCodeSupported: false, manualEntryEnabled: false, mode: 'daraja' })
+    await mount()
+
+    const input = container.querySelector('[aria-label="Phone Number"]') as HTMLInputElement
+    expect(input.readOnly).toBe(true)
+    act(() => input.click())
+    expect(useKeyboardStore.getState().request?.mode).toBe('numeric')
+  })
+
+  it('typing a number (with the leading 0 stripped, as before) and sending the push uses the same phoneNumber as before', async () => {
+    stubApi({ manualCodeSupported: false, manualEntryEnabled: false, mode: 'daraja' })
+    window.api.initiateMpesaStkPush = vi.fn().mockResolvedValue({
+      success: true,
+      data: { checkoutRequestId: 'ws_1', merchantRequestId: 'mr_1' }
+    })
+    window.api.logMpesaTransaction = vi.fn().mockResolvedValue({ success: true })
+    await mount()
+
+    const input = container.querySelector('[aria-label="Phone Number"]') as HTMLInputElement
+    act(() => input.click())
+    act(() => useKeyboardStore.getState().request?.onChange('0712345678'))
+    expect((container.querySelector('[aria-label="Phone Number"]') as HTMLInputElement).value).toBe(
+      '0712345678'
+    )
+
+    await act(async () => {
+      button('Send Request').click()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(window.api.initiateMpesaStkPush).toHaveBeenCalledWith(
+      expect.objectContaining({ phoneNumber: '254712345678' })
+    )
+  })
+
+  /**
+   * Relay mutation check (docs/phase-156, same protocol as phase-155):
+   * every other test here drives the keyboard with one
+   * `onChange(fullString)` call, which would still pass even if
+   * `keyboardStore.ts`'s relay stopped keeping `request.value` in sync.
+   * This one types digit by digit, reading `request.value` back between
+   * keystrokes like the real `VirtualNumpad` does.
+   *
+   * Verified: temporarily removing the relay's `set(...)` line in
+   * `keyboardStore.ts` made this fail (accumulation collapsed to the
+   * last digit) while the single-shot test above kept passing; restored
+   * immediately after, `git diff` on `keyboardStore.ts` clean.
+   */
+  it('consecutive keystrokes accumulate on the phone field, not just a single replacement', async () => {
+    stubApi({ manualCodeSupported: false, manualEntryEnabled: false, mode: 'daraja' })
+    await mount()
+
+    const input = container.querySelector('[aria-label="Phone Number"]') as HTMLInputElement
+    act(() => input.click())
+
+    for (const digit of ['0', '7', '1', '2']) {
+      const current = useKeyboardStore.getState().request!.value
+      act(() => useKeyboardStore.getState().request!.onChange(current + digit))
+    }
+
+    expect((container.querySelector('[aria-label="Phone Number"]') as HTMLInputElement).value).toBe(
+      '0712'
+    )
+  })
+})
+
 describe('manual mode completes with no manager PIN (docs/phase-150.md step 3)', () => {
   it('completes a manual sale with no PIN, entering the code via the on-screen keyboard', async () => {
     stubApi({ manualCodeSupported: false, manualEntryEnabled: true, mode: 'manual' })

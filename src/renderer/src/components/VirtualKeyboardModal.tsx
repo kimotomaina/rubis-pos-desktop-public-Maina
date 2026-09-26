@@ -57,7 +57,7 @@ export default function VirtualKeyboardModal() {
   if (!request) return null
 
   const mode = request.mode ?? 'caps'
-  const numeric = mode === 'numeric' || mode === 'ip'
+  const numeric = mode === 'numeric' || mode === 'decimal' || mode === 'ip'
 
   const keys = numeric ? (
     <VirtualNumpad
@@ -65,7 +65,7 @@ export default function VirtualKeyboardModal() {
       onChange={request.onChange}
       onEnter={close}
       enterLabel="Submit"
-      allowDecimal={mode === 'ip'}
+      allowDecimal={mode === 'decimal' || mode === 'ip'}
       multipleDecimals={mode === 'ip'}
     />
   ) : (

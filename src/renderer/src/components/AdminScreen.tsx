@@ -2022,8 +2022,8 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
                 type="text"
                 readOnly
                 value={startingCashInput}
-                onClick={() => openField(startingCashInput, setStartingCashInput, 'Starting Cash', { mode: 'numeric' })}
-                onFocus={() => openField(startingCashInput, setStartingCashInput, 'Starting Cash', { mode: 'numeric' })}
+                onClick={() => openField(startingCashInput, setStartingCashInput, 'Starting Cash', { mode: 'decimal' })}
+                onFocus={() => openField(startingCashInput, setStartingCashInput, 'Starting Cash', { mode: 'decimal' })}
                 className="w-32 h-12 rounded-lg border border-slate-300 px-3 text-xl focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-100"
                 autoFocus
               />
@@ -2068,8 +2068,8 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
                 type="text"
                 readOnly
                 value={endingCashInput}
-                onClick={() => openField(endingCashInput, setEndingCashInput, 'Ending Cash (counted)', { mode: 'numeric' })}
-                onFocus={() => openField(endingCashInput, setEndingCashInput, 'Ending Cash (counted)', { mode: 'numeric' })}
+                onClick={() => openField(endingCashInput, setEndingCashInput, 'Ending Cash (counted)', { mode: 'decimal' })}
+                onFocus={() => openField(endingCashInput, setEndingCashInput, 'Ending Cash (counted)', { mode: 'decimal' })}
                 className="w-32 h-12 rounded-lg border border-slate-300 px-3 text-xl focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-100"
                 autoFocus
               />

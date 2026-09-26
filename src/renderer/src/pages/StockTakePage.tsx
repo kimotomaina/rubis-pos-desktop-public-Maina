@@ -15,10 +15,21 @@ import {
 } from '../lib/stockTake.js'
 import { useAuthStore } from '../stores/authStore.js'
 import { useProductStore } from '../stores/productStore.js'
+import { useKeyboardStore } from '../stores/keyboardStore.js'
 import ManagerPinModal from '../components/ManagerPinModal.js'
 
 /** Which manager PIN the open modal is collecting, if any. */
 type PinPurpose = 'commit' | 'secondApprover' | 'discard' | 'settings' | null
+
+/** Opens the shared on-screen keyboard for a readOnly numeric field (docs/phase-156) — same helper as `AdminScreen.tsx`'s. */
+function openField(
+  value: string,
+  onChange: (next: string) => void,
+  label: string,
+  mode: 'numeric' | 'decimal'
+): void {
+  useKeyboardStore.getState().open({ value, onChange, label, mode })
+}
 
 /** A verified first approver, held while the second approver is collected. */
 interface PendingApproval {
@@ -398,12 +409,16 @@ export default function StockTakePage() {
                       Counted quantity for {selected.label}
                     </label>
                     <input
+                      readOnly
                       value={countedQty}
-                      inputMode="numeric"
-                      onChange={(e) => setCountedQty(e.target.value.replace(/[^0-9]/g, ''))}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter') handleCount()
-                      }}
+                      onClick={() =>
+                        openField(
+                          countedQty,
+                          (next) => setCountedQty(next.replace(/[^0-9]/g, '')),
+                          `Counted quantity for ${selected.label}`,
+                          'numeric'
+                        )
+                      }
                       className="h-14 w-full rounded-lg border border-slate-300 px-3 text-2xl focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-100"
                     />
                   </div>
@@ -627,9 +642,16 @@ export default function StockTakePage() {
               Second-approver limit (KES)
             </label>
             <input
+              readOnly
               value={thresholdInput}
-              inputMode="decimal"
-              onChange={(e) => setThresholdInput(e.target.value.replace(/[^0-9.]/g, ''))}
+              onClick={() =>
+                openField(
+                  thresholdInput,
+                  (next) => setThresholdInput(next.replace(/[^0-9.]/g, '')),
+                  'Second-approver limit (KES)',
+                  'decimal'
+                )
+              }
               className="h-14 w-48 rounded-lg border border-slate-300 px-3 text-lg focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-100"
             />
           </div>
@@ -638,9 +660,16 @@ export default function StockTakePage() {
               Count expires after (hours)
             </label>
             <input
+              readOnly
               value={expiryInput}
-              inputMode="numeric"
-              onChange={(e) => setExpiryInput(e.target.value.replace(/[^0-9]/g, ''))}
+              onClick={() =>
+                openField(
+                  expiryInput,
+                  (next) => setExpiryInput(next.replace(/[^0-9]/g, '')),
+                  'Count expires after (hours)',
+                  'numeric'
+                )
+              }
               className="h-14 w-40 rounded-lg border border-slate-300 px-3 text-lg focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-100"
             />
           </div>

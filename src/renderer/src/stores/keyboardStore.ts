@@ -27,10 +27,13 @@ import { create } from 'zustand'
  *   KRA PIN and company-name fields have always used.
  * - `text`: lower and upper case plus the symbols a URL, an API token or
  *   a device password needs.
- * - `numeric`: `VirtualNumpad` with no decimal point (ports, PINs).
+ * - `numeric`: `VirtualNumpad` with no decimal point (ports, PINs, counted
+ *   quantities, a phone number).
+ * - `decimal`: `VirtualNumpad` with one decimal point allowed (cash
+ *   amounts, a price override, a discount, a KES threshold).
  * - `ip`: `VirtualNumpad` whose decimal key can be pressed more than once.
  */
-export type KeyboardMode = 'caps' | 'text' | 'numeric' | 'ip'
+export type KeyboardMode = 'caps' | 'text' | 'numeric' | 'decimal' | 'ip'
 
 /** What a field hands the keyboard when it opens. */
 export interface KeyboardRequest {
