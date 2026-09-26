@@ -14,6 +14,7 @@
 
 import { z } from 'zod'
 import { MPESA_SMS_PARSER_READY } from './mpesaSms.js'
+import { REPORT_RANGE_PRESETS } from '../services/reports.js'
 
 /** A discount payload, shared by line items and the cart-level discount. */
 const discountSchema = z.object({
@@ -340,6 +341,55 @@ export const approveDayReportSchema = managerAuthzSchema
     },
     { message: 'The same entry id was given more than once', path: ['approvedIds'] }
   )
+
+/**
+ * `reports:z-report` request payload (docs/phase-158) — previously this
+ * channel took a bare `shiftId: number` off the request with no zod
+ * schema at all (docs/phase-157 Part 3), the only reports handler with
+ * none.
+ */
+export const zReportRequestSchema = z.object({
+  shiftId: z.number().int().positive()
+})
+
+/**
+ * One of the fixed Nairobi-local date-range presets a Reports screen
+ * offers as a button (docs/phase-158) — never free text, so there is no
+ * date string to parse or validate at this boundary.
+ */
+export const reportRangePresetSchema = z.enum(REPORT_RANGE_PRESETS)
+
+/** `reports:shifts-list` request payload — shift history, one page at a time. */
+export const shiftsListSchema = z.object({
+  page: z.number().int().positive().default(1)
+})
+
+/** `reports:sales-summary` request payload. */
+export const salesSummarySchema = z.object({
+  preset: reportRangePresetSchema
+})
+
+/** `reports:fiscal-by-day` request payload. */
+export const fiscalByDaySchema = z.object({
+  preset: reportRangePresetSchema
+})
+
+/** `reports:invoice-list` request payload — one page of a preset's orders. */
+export const invoiceListSchema = z.object({
+  preset: reportRangePresetSchema,
+  page: z.number().int().positive().default(1)
+})
+
+/**
+ * `reports:export-csv` request payload. `kind` picks which of the two
+ * files this call produces — the renderer's Export screen has two
+ * separate buttons ("Export orders CSV" / "Export lines CSV"), each its
+ * own save dialog, rather than one call producing two files at once.
+ */
+export const exportCsvSchema = z.object({
+  preset: reportRangePresetSchema,
+  kind: z.enum(['orders', 'lines'])
+})
 
 /** `stocktake:get` / `stocktake:submit` request payload. */
 export const stockTakeSessionIdSchema = z.object({

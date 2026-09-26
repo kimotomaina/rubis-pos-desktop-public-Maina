@@ -36,7 +36,14 @@ import type {
   StockTakeSettings
 } from '../main/services/stock-take.js'
 import type { ReceiptPrintResult } from '../main/services/printer.js'
-import type { ZReport, DailySummary, EndOfDayReport } from '../main/services/reports.js'
+import type {
+  ZReport,
+  DailySummary,
+  EndOfDayReport,
+  SalesSummary,
+  FiscalStatusDayCount,
+  ReportRangePreset
+} from '../main/services/reports.js'
 import type { UpdateStatus } from '../main/services/updater.js'
 import type {
   StkPushRequest,
@@ -166,6 +173,32 @@ export interface PosApi {
     managerPin: string
     note?: string
   }) => Promise<ServiceResult<ApproveMpesaEntriesResult>>
+  /** One page of shift history, most recently opened first (docs/phase-158). */
+  getShiftsList: (
+    page: number
+  ) => Promise<ServiceResult<{ shifts: ShiftRow[]; total: number; page: number }>>
+  /** A sales summary for one of the fixed Nairobi date-range presets. */
+  getSalesSummary: (preset: ReportRangePreset) => Promise<ServiceResult<SalesSummary>>
+  /** Order counts by fiscal status, one row per Nairobi calendar day within the preset. */
+  getFiscalStatusByDay: (
+    preset: ReportRangePreset
+  ) => Promise<ServiceResult<FiscalStatusDayCount[]>>
+  /** One page of orders (CU and trader invoice numbers included) for the invoice list. */
+  getInvoiceList: (
+    preset: ReportRangePreset,
+    page: number
+  ) => Promise<
+    ServiceResult<{
+      invoices: Array<{ order: OrderRow; traderInvoiceNumber: string }>
+      total: number
+      page: number
+    }>
+  >
+  /** Exports orders or line items for a preset as CSV, via the OS save dialog. */
+  exportReportsCsv: (
+    preset: ReportRangePreset,
+    kind: 'orders' | 'lines'
+  ) => Promise<ServiceResult<{ saved: boolean; filePath?: string }>>
   /** Triggers an update check against the configured update feed. */
   checkForUpdates: () => Promise<ServiceResult<void>>
   /** Quits and relaunches the app to install a downloaded update. */

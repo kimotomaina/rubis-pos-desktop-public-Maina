@@ -338,7 +338,7 @@ export function renderZReport(
   client.bold(true)
   client.println(`Total Revenue: ${formatCurrency(report.totalRevenue)}`)
   client.bold(false)
-  client.println(`Total Tax: ${formatCurrency(report.totalTax)}`)
+  client.println(`VAT included (calculated at 16%): ${formatCurrency(report.vatIncluded)}`)
   client.drawLine()
 
   client.println(`Expected Cash: ${formatCurrency(report.expectedCash)}`)

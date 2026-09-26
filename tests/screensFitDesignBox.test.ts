@@ -41,12 +41,19 @@ import { useAuthStore } from '../src/renderer/src/stores/authStore.js'
  * — or leave `npm run typecheck` broken.
  */
 
-/** Files this check covers: the three E2(g) screens, plus the checkout stack E2(b) leaves untouched. */
+/**
+ * Files this check covers: the three E2(g) screens, the checkout stack
+ * E2(b) leaves untouched, and — docs/phase-158 — `ZReportModal.tsx`
+ * (whose old `min-h-[75vh]`/internal-scroll sizing was never on this
+ * list, docs/phase-157 Part 3 G15) plus the new Admin Reports tab.
+ */
 const FILES = [
   join('src', 'renderer', 'src', 'components', 'ManagerPinModal.tsx'),
   join('src', 'renderer', 'src', 'components', 'LoginScreen.tsx'),
   join('src', 'renderer', 'src', 'components', 'LocationConfirmScreen.tsx'),
-  join('src', 'renderer', 'src', 'components', 'PosCheckoutPanel.tsx')
+  join('src', 'renderer', 'src', 'components', 'PosCheckoutPanel.tsx'),
+  join('src', 'renderer', 'src', 'components', 'ZReportModal.tsx'),
+  join('src', 'renderer', 'src', 'pages', 'ReportsPage.tsx')
 ]
 
 /** An arbitrary Tailwind pixel value, e.g. `h-[900px]` or `w-[1400px]`. */

@@ -10,6 +10,7 @@ import { describe, it, expect, vi } from 'vitest'
 import {
   generateZReport,
   generateDailySummary,
+  generateSalesSummary,
   getUtcDayRange
 } from '../src/main/services/reports.js'
 import type { RubisDatabase, OrderRow, ShiftRow, StaffRow } from '../src/main/services/database.js'
@@ -43,12 +44,16 @@ function fakeDb(options: {
   staff?: StaffRow
   ordersForShift?: OrderRow[]
   ordersForRange?: OrderRow[]
+  mpesaPaymentsForShift?: Array<{ mode: string; amount: number; status: string }>
+  mpesaPaymentsForRange?: Array<{ mode: string; amount: number; status: string }>
 }) {
   return {
     getShiftById: vi.fn(() => options.shift),
     getStaffById: vi.fn(() => options.staff),
     getOrdersForShift: vi.fn(() => options.ordersForShift ?? []),
-    getOrdersForDateRange: vi.fn(() => options.ordersForRange ?? [])
+    getOrdersForDateRange: vi.fn(() => options.ordersForRange ?? []),
+    getMpesaPaymentsForShift: vi.fn(() => options.mpesaPaymentsForShift ?? []),
+    getMpesaPaymentsForDateRange: vi.fn(() => options.mpesaPaymentsForRange ?? [])
   } as unknown as RubisDatabase
 }
 
@@ -101,7 +106,17 @@ describe('generateZReport', () => {
     expect(report.totalRevenue).toBe(115)
   })
 
-  it('computes total tax from the store tax rate, not stored per order', () => {
+  /**
+   * DELIBERATE TEST CHANGE (docs/phase-158, correcting docs/phase-157
+   * Part 3 G2): the field was renamed `totalTax` -> `vatIncluded` and the
+   * formula changed from adding tax on top of revenue (`total * rate`,
+   * wrong for a VAT-inclusive shelf price) to extracting the VAT already
+   * included in it (`total * rate / (1 + rate)`).
+   *   Old assertion: `report.totalTax` is close to `8` (100 * 0.08).
+   *   New assertion: `report.vatIncluded` is close to `7.41`
+   *     (100 * 0.08 / 1.08).
+   */
+  it('extracts VAT already included in revenue, not stored per order', () => {
     const db = fakeDb({
       shift: closedShift,
       staff: admin,
@@ -110,7 +125,24 @@ describe('generateZReport', () => {
 
     const report = generateZReport(db, 1, 0.08)
 
-    expect(report.totalTax).toBeCloseTo(8, 5)
+    expect(report.vatIncluded).toBeCloseTo(7.41, 2)
+  })
+
+  it('splits the shift\'s M-Pesa revenue by manual vs Daraja', () => {
+    const db = fakeDb({
+      shift: closedShift,
+      staff: admin,
+      ordersForShift: [order({ payment_method: 'mpesa', total: 50 })],
+      mpesaPaymentsForShift: [
+        { mode: 'manual', amount: 20, status: 'pending_sync' },
+        { mode: 'daraja', amount: 30, status: 'pending_sync' },
+        { mode: 'manual', amount: 999, status: 'voided' }
+      ]
+    })
+
+    const report = generateZReport(db, 1, 0)
+
+    expect(report.mpesaByMode).toEqual({ manual: 20, daraja: 30 })
   })
 
   it('uses the persisted expected/ending cash and discrepancy for a closed shift', () => {
@@ -174,7 +206,10 @@ describe('generateDailySummary', () => {
 
     expect(summary.orderCount).toBe(2)
     expect(summary.totalRevenue).toBe(50)
-    expect(summary.totalTax).toBeCloseTo(5, 5)
+    // DELIBERATE TEST CHANGE (docs/phase-158, same reason as generateZReport's
+    // equivalent test above): old `summary.totalTax` close to `5` (50 * 0.1)
+    // -> new `summary.vatIncluded` close to `4.55` (50 * 0.1 / 1.1).
+    expect(summary.vatIncluded).toBeCloseTo(4.5454545, 2)
     expect(summary.totalsByMethod).toEqual({ cash: 20, mpesa: 0, card: 30 })
   })
 
@@ -182,6 +217,52 @@ describe('generateDailySummary', () => {
     const db = fakeDb({ ordersForRange: [] })
     generateDailySummary(db, 0)
     expect(db.getOrdersForDateRange).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('generateSalesSummary (docs/phase-158)', () => {
+  const range = {
+    startIso: '2026-09-01T00:00:00.000Z',
+    endIso: '2026-09-02T00:00:00.000Z',
+    label: 'Today (2026-09-01)'
+  }
+
+  it('excludes voided orders from every figure', () => {
+    const db = fakeDb({
+      ordersForRange: [
+        order({ payment_method: 'cash', total: 50, status: 'synced' }),
+        order({ payment_method: 'cash', total: 999, status: 'voided' })
+      ]
+    })
+
+    const summary = generateSalesSummary(db, 0.16, range)
+
+    expect(summary.orderCount).toBe(1)
+    expect(summary.totalRevenue).toBe(50)
+    expect(summary.totalsByMethod).toEqual({ cash: 50, mpesa: 0, card: 0 })
+  })
+
+  it('splits M-Pesa revenue by manual vs Daraja, excluding a voided one', () => {
+    const db = fakeDb({
+      ordersForRange: [order({ payment_method: 'mpesa', total: 80 })],
+      mpesaPaymentsForRange: [
+        { mode: 'manual', amount: 30, status: 'synced' },
+        { mode: 'daraja', amount: 50, status: 'synced' },
+        { mode: 'manual', amount: 999, status: 'voided' }
+      ]
+    })
+
+    const summary = generateSalesSummary(db, 0.16, range)
+
+    expect(summary.mpesaByMode).toEqual({ manual: 30, daraja: 50 })
+  })
+
+  it('carries the range label through unchanged', () => {
+    const db = fakeDb({ ordersForRange: [] })
+    const summary = generateSalesSummary(db, 0.16, range)
+    expect(summary.label).toBe('Today (2026-09-01)')
+    expect(summary.startIso).toBe(range.startIso)
+    expect(summary.endIso).toBe(range.endIso)
   })
 })
 

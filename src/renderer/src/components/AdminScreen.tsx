@@ -10,6 +10,7 @@ import MpesaLogsPage from '../pages/MpesaLogsPage.js'
 import NeedsAttentionPage from '../pages/NeedsAttentionPage.js'
 import StockTakePage from '../pages/StockTakePage.js'
 import EndOfDayPage from '../pages/EndOfDayPage.js'
+import ReportsPage from '../pages/ReportsPage.js'
 import RestartCountdownModal from './RestartCountdownModal.js'
 import { useKeyboardStore, type KeyboardMode } from '../stores/keyboardStore.js'
 import type { DailySummary, ZReport } from '../../../main/services/reports.js'
@@ -133,6 +134,7 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
     | 'needsAttention'
     | 'stockTake'
     | 'endOfDay'
+    | 'reports'
     | 'system'
   >(initialTab ?? 'overview')
   /**
@@ -1029,6 +1031,15 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
         </button>
         <button
           type="button"
+          onClick={() => setActiveTab('reports')}
+          className={`flex h-14 min-w-32 flex-1 items-center justify-center rounded-md px-6 text-lg font-semibold transition ${
+            activeTab === 'reports' ? 'bg-white text-rose-700 shadow-sm' : 'text-slate-500'
+          }`}
+        >
+          Reports
+        </button>
+        <button
+          type="button"
           onClick={() => setActiveTab('system')}
           className={`flex h-14 min-w-32 flex-1 items-center justify-center rounded-md px-6 text-lg font-semibold transition ${
             activeTab === 'system' ? 'bg-white text-rose-700 shadow-sm' : 'text-slate-500'
@@ -1045,6 +1056,8 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
       {activeTab === 'stockTake' && <StockTakePage />}
 
       {activeTab === 'endOfDay' && <EndOfDayPage />}
+
+      {activeTab === 'reports' && <ReportsPage />}
 
       {activeTab === 'system' && (
         <section className="rounded-xl border border-slate-200 bg-white p-4">

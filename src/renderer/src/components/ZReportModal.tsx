@@ -13,6 +13,14 @@ interface ZReportModalProps {
  * mirroring the printed Z-report layout — with a button to send the
  * same report to the thermal printer.
  *
+ * Sized to fit the 1366x772 design box with no internal scroll
+ * (docs/phase-158, Phase E's own no-scroll rule — the previous
+ * `min-h-[75vh]`/`overflow-y-auto` combination was never guarded by
+ * `screensFitDesignBox.test.ts`, see docs/phase-157 Part 3 G15). The
+ * report's own content is a fixed handful of lines, so a plain
+ * `max-w-2xl` box that sizes to its content is enough — no pagination
+ * needed here, unlike a list screen.
+ *
  * @param {ZReportModalProps} props
  * @returns {JSX.Element}
  */
@@ -60,7 +68,7 @@ export default function ZReportModal({ report, onClose }: ZReportModalProps) {
       onClick={onClose}
     >
       <div
-        className="flex max-h-[90vh] min-h-[75vh] w-full min-w-[75vw] max-w-3xl flex-col rounded-2xl bg-white shadow-xl"
+        className="flex w-full max-w-2xl flex-col rounded-2xl bg-white shadow-xl"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex shrink-0 items-center justify-between border-b border-slate-200 p-4">
@@ -75,8 +83,8 @@ export default function ZReportModal({ report, onClose }: ZReportModalProps) {
           </button>
         </div>
 
-        <div className="flex-1 overflow-y-auto p-4 text-base">
-          <div className="mb-4 space-y-1 text-slate-600">
+        <div className="p-4 text-base">
+          <div className="mb-3 space-y-1 text-slate-600">
             <p>Shift #{report.shiftId}</p>
             <p>Opened: {new Date(report.openedAt).toLocaleString()}</p>
             <p>
@@ -86,7 +94,7 @@ export default function ZReportModal({ report, onClose }: ZReportModalProps) {
             <p>Cashier: {report.staffName}</p>
           </div>
 
-          <div className="mb-4 space-y-2 rounded-lg bg-slate-50 p-3">
+          <div className="mb-3 space-y-1.5 rounded-lg bg-slate-50 p-3">
             <div className="flex justify-between">
               <span className="text-slate-600">Starting Cash</span>
               <span className="font-medium">{formatCurrency(report.startingCash)}</span>
@@ -99,28 +107,34 @@ export default function ZReportModal({ report, onClose }: ZReportModalProps) {
               <span className="text-slate-600">M-Pesa Sales</span>
               <span className="font-medium">{formatCurrency(report.totalsByMethod.mpesa)}</span>
             </div>
+            <div className="flex justify-between pl-4 text-sm text-slate-500">
+              <span>Manual / Daraja</span>
+              <span>
+                {formatCurrency(report.mpesaByMode.manual)} / {formatCurrency(report.mpesaByMode.daraja)}
+              </span>
+            </div>
             <div className="flex justify-between">
               <span className="text-slate-600">Card Sales</span>
               <span className="font-medium">{formatCurrency(report.totalsByMethod.card)}</span>
             </div>
-            <div className="flex justify-between border-t border-slate-200 pt-2">
+            <div className="flex justify-between border-t border-slate-200 pt-1.5">
               <span className="text-slate-600">Orders</span>
               <span className="font-medium">{report.orderCount}</span>
             </div>
           </div>
 
-          <div className="mb-4 space-y-2 rounded-lg bg-slate-50 p-3">
+          <div className="mb-3 space-y-1.5 rounded-lg bg-slate-50 p-3">
             <div className="flex justify-between text-lg font-semibold">
               <span>Total Revenue</span>
               <span>{formatCurrency(report.totalRevenue)}</span>
             </div>
             <div className="flex justify-between">
-              <span className="text-slate-600">Total Tax</span>
-              <span className="font-medium">{formatCurrency(report.totalTax)}</span>
+              <span className="text-slate-600">VAT included (calculated at 16%)</span>
+              <span className="font-medium">{formatCurrency(report.vatIncluded)}</span>
             </div>
           </div>
 
-          <div className="mb-4 space-y-2 rounded-lg border border-slate-200 p-3">
+          <div className="mb-3 space-y-1.5 rounded-lg border border-slate-200 p-3">
             <div className="flex justify-between">
               <span className="text-slate-600">Expected Cash</span>
               <span className="font-medium">{formatCurrency(report.expectedCash)}</span>
@@ -131,7 +145,7 @@ export default function ZReportModal({ report, onClose }: ZReportModalProps) {
                 {report.endingCash !== null ? formatCurrency(report.endingCash) : 'Pending'}
               </span>
             </div>
-            <div className="flex justify-between border-t border-slate-200 pt-2 text-lg font-semibold">
+            <div className="flex justify-between border-t border-slate-200 pt-1.5 text-lg font-semibold">
               <span>Discrepancy</span>
               <span className={discrepancyColor}>
                 {report.discrepancy !== null ? formatCurrency(report.discrepancy) : 'Pending'}

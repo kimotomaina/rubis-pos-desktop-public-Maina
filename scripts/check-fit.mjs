@@ -7,10 +7,14 @@
  * supported window size. This is the real, pixel-accurate check `jsdom`
  * cannot do; the unit-test suite covers everything else.
  *
- * Currently covers the POS/catalog screen only (Cash and M-Pesa, an empty
- * cart and a populated one) — the screen this was built to fix. Extending
- * it to the rest of the app (the full Phase E3 scope) is future work; the
- * screen list and the allow-list below are where that extension plugs in.
+ * Covers the POS/catalog screen (Cash and M-Pesa, an empty cart and a
+ * populated one — the screen this was built to fix) and, since
+ * docs/phase-158, the Admin Reports tab's five sub-views
+ * (`checkReportsTab`, best-effort — skipped with a note rather than
+ * failing the run if the seed account isn't an admin). Extending this
+ * further to the rest of the app (the full Phase E3 scope) is future
+ * work; the screen list and the allow-list below are where that
+ * extension plugs in.
  *
  * WINDOW SIZING: Electron's CDP implementation has no `Browser.
  * setWindowBounds` on a desktop `BrowserWindow` (confirmed empirically
@@ -199,6 +203,56 @@ JSON.stringify((() => {
 
 async function measureCheckout(cmd) {
   return JSON.parse(await evaluate(cmd, MEASURE_CHECKOUT_EXPR))
+}
+
+/**
+ * Admin > Reports tab check (docs/phase-158) — navigates from the POS
+ * screen (where the two scenarios above leave the window) into the
+ * admin-only Reports tab and censuses each of its five sub-views for
+ * the same page-overflow/inner-scroller signals. Best-effort: if the
+ * "Admin" nav button or the "Reports" tab is not found (e.g. a
+ * non-admin seed account), this is skipped with a note rather than
+ * failing the whole run — the two scenarios above already prove the
+ * base app fits.
+ */
+async function checkReportsTab(cmd) {
+  const findings = []
+  let failures = 0
+
+  const openedAdmin = await clickWhereText(cmd, 'button', 'Admin')
+  if (!openedAdmin) {
+    findings.push('  (Admin Reports: no "Admin" nav button found — skipping, this account may not be an admin)')
+    return { findings, failures }
+  }
+  await new Promise((r) => setTimeout(r, 400))
+
+  const openedReports = await clickWhereText(cmd, 'button', 'Reports')
+  if (!openedReports) {
+    findings.push('  (Admin Reports: "Reports" tab button not found after opening Admin — skipping)')
+    return { findings, failures }
+  }
+  await new Promise((r) => setTimeout(r, 400))
+
+  const subViews = ['Shift History', 'Sales Summary', 'Fiscal Status', 'Invoice List', 'Export']
+  for (const label of subViews) {
+    const clicked = await clickWhereText(cmd, 'button', label)
+    if (!clicked) {
+      findings.push(`✖ Admin Reports > ${label}: sub-nav button not found`)
+      failures++
+      continue
+    }
+    await new Promise((r) => setTimeout(r, 500))
+
+    const result = await census(cmd)
+    const unexpectedScrollers = result.scrollers.filter((s) => !SCROLL_ALLOW_LIST.includes(s.cls))
+    const ok = !result.pageOverflowX && !result.pageOverflowY && unexpectedScrollers.length === 0
+    if (!ok) failures++
+
+    const line = `${ok ? '✔' : '✖'} Admin Reports > ${label}: page ${result.scrollWidth}x${result.scrollHeight} vs client ${result.clientWidth}x${result.clientHeight}${unexpectedScrollers.length ? `, ${unexpectedScrollers.length} inner scroller(s): ${JSON.stringify(unexpectedScrollers)}` : ''}`
+    findings.push(line)
+  }
+
+  return { findings, failures }
 }
 
 async function clickWhereText(cmd, selector, text) {
@@ -424,6 +478,11 @@ async function runCase(testCase, outDir) {
         findings.push(`  (screenshot failed: ${err.message})`)
       }
     }
+
+    const reportsResult = await checkReportsTab(cmd)
+    findings.push(...reportsResult.findings)
+    for (const line of reportsResult.findings) log(line)
+    failures += reportsResult.failures
 
     return { findings, failures }
   } finally {

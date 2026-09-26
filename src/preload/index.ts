@@ -26,7 +26,14 @@ import type {
   StockTakeSettings
 } from '../main/services/stock-take.js'
 import type { ReceiptPrintResult } from '../main/services/printer.js'
-import type { ZReport, DailySummary, EndOfDayReport } from '../main/services/reports.js'
+import type {
+  ZReport,
+  DailySummary,
+  EndOfDayReport,
+  SalesSummary,
+  FiscalStatusDayCount,
+  ReportRangePreset
+} from '../main/services/reports.js'
 import type { UpdateStatus } from '../main/services/updater.js'
 import type { FiscalConnectionTestResult } from '../main/services/integrations/fiscal-connection-test.js'
 import type {
@@ -431,6 +438,72 @@ const api = {
     note?: string
   }): Promise<ServiceResult<ApproveMpesaEntriesResult>> =>
     ipcRenderer.invoke('reports:approve-day', request),
+
+  /**
+   * One page of shift history, most recently opened first (docs/phase-158).
+   *
+   * @param {number} page — 1-indexed
+   * @returns {Promise<ServiceResult<{ shifts: ShiftRow[]; total: number; page: number }>>}
+   */
+  getShiftsList: (
+    page: number
+  ): Promise<ServiceResult<{ shifts: ShiftRow[]; total: number; page: number }>> =>
+    ipcRenderer.invoke('reports:shifts-list', { page }),
+
+  /**
+   * A sales summary for one of the fixed Nairobi date-range presets.
+   *
+   * @param {ReportRangePreset} preset
+   * @returns {Promise<ServiceResult<SalesSummary>>}
+   */
+  getSalesSummary: (preset: ReportRangePreset): Promise<ServiceResult<SalesSummary>> =>
+    ipcRenderer.invoke('reports:sales-summary', { preset }),
+
+  /**
+   * Order counts by fiscal status, one row per Nairobi calendar day
+   * within the preset.
+   *
+   * @param {ReportRangePreset} preset
+   * @returns {Promise<ServiceResult<FiscalStatusDayCount[]>>}
+   */
+  getFiscalStatusByDay: (
+    preset: ReportRangePreset
+  ): Promise<ServiceResult<FiscalStatusDayCount[]>> =>
+    ipcRenderer.invoke('reports:fiscal-by-day', { preset }),
+
+  /**
+   * One page of orders (CU and trader invoice numbers included) for the
+   * invoice list.
+   *
+   * @param {ReportRangePreset} preset
+   * @param {number} page — 1-indexed
+   * @returns {Promise<ServiceResult<{ orders: OrderRow[]; total: number; page: number }>>}
+   */
+  getInvoiceList: (
+    preset: ReportRangePreset,
+    page: number
+  ): Promise<
+    ServiceResult<{
+      invoices: Array<{ order: OrderRow; traderInvoiceNumber: string }>
+      total: number
+      page: number
+    }>
+  > => ipcRenderer.invoke('reports:invoice-list', { preset, page }),
+
+  /**
+   * Exports orders or line items for a preset as CSV, via the OS save
+   * dialog — the user picks where the file is written (e.g. a USB
+   * stick). A cancelled dialog resolves `{ saved: false }`, not an error.
+   *
+   * @param {ReportRangePreset} preset
+   * @param {'orders' | 'lines'} kind
+   * @returns {Promise<ServiceResult<{ saved: boolean; filePath?: string }>>}
+   */
+  exportReportsCsv: (
+    preset: ReportRangePreset,
+    kind: 'orders' | 'lines'
+  ): Promise<ServiceResult<{ saved: boolean; filePath?: string }>> =>
+    ipcRenderer.invoke('reports:export-csv', { preset, kind }),
 
   /**
    * Triggers an update check against the configured GitHub Releases feed.

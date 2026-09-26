@@ -2,7 +2,7 @@ import { app, BrowserWindow, Menu, shell, ipcMain, net, powerMonitor, dialog, se
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 import { randomUUID } from 'node:crypto'
-import { appendFileSync, chmodSync } from 'node:fs'
+import { appendFileSync, chmodSync, writeFileSync } from 'node:fs'
 import { config as loadEnvFile } from 'dotenv'
 import electronUpdater from 'electron-updater'
 
@@ -81,7 +81,8 @@ import type {
   ManualMpesaApproval,
   MpesaPaymentRow,
   StaffSummary,
-  ShiftRow
+  ShiftRow,
+  OrderRow
 } from './services/database.js'
 import {
   MPESA_NOT_CONFIGURED_MESSAGE,
@@ -157,7 +158,13 @@ import {
   stockTakeRemoveSchema,
   stockTakeAbandonSchema,
   stockTakeCommitSchema,
-  stockTakeSettingsSchema
+  stockTakeSettingsSchema,
+  zReportRequestSchema,
+  shiftsListSchema,
+  salesSummarySchema,
+  fiscalByDaySchema,
+  invoiceListSchema,
+  exportCsvSchema
 } from './lib/ipcValidator.js'
 import { checkEtimsCompletion } from './services/etimsSetup.js'
 import type { EtimsCompletionStatus } from './services/etimsSetup.js'
@@ -200,8 +207,29 @@ import {
 } from './services/printer.js'
 import type { PrinterSettings, ReceiptPrintResult, PrinterRegistry } from './services/printer.js'
 import { hashPin, authenticateStaff } from './services/auth.js'
-import { generateZReport, generateDailySummary, generateEndOfDayReport } from './services/reports.js'
-import type { ZReport, DailySummary, EndOfDayReport } from './services/reports.js'
+import {
+  generateZReport,
+  generateDailySummary,
+  generateEndOfDayReport,
+  generateSalesSummary,
+  generateFiscalStatusByDay,
+  getReportRange
+} from './services/reports.js'
+import type {
+  ZReport,
+  DailySummary,
+  EndOfDayReport,
+  SalesSummary,
+  FiscalStatusDayCount
+} from './services/reports.js'
+import { buildOrdersCsv, buildLinesCsv } from './services/reportsExport.js'
+import { buildTraderSystemInvNum } from './lib/traderSystemInvoiceNumber.js'
+
+/** One invoice-list row (docs/phase-158): an order plus its pre-computed trader invoice number. */
+interface InvoiceListRow {
+  order: OrderRow
+  traderInvoiceNumber: string
+}
 import type { OfflineOrderPayload, ServiceResult } from './services/shopify-types.js'
 import type { ProductSummary } from '../renderer/src/types/shopify.js'
 
@@ -2610,12 +2638,22 @@ app.whenReady().then(async () => {
 
   /**
    * IPC handler that generates the Z-report for a shift.
+   *
+   * `shiftId` is now zod-validated (docs/phase-158) — previously the only
+   * reports handler with no schema at all (docs/phase-157 Part 3).
    */
   ipcMain.handle(
     'reports:z-report',
-    (_event, shiftId: number): ServiceResult<ZReport> => {
+    (_event, request: unknown): ServiceResult<ZReport> => {
+      const validation = validate(zReportRequestSchema, request)
+      if (!validation.success) {
+        return { success: false, error: validation.error }
+      }
       try {
-        return { success: true, data: generateZReport(db, shiftId, printerSettings.taxRate) }
+        return {
+          success: true,
+          data: generateZReport(db, validation.data.shiftId, printerSettings.taxRate)
+        }
       } catch (err) {
         return {
           success: false,
@@ -2628,12 +2666,20 @@ app.whenReady().then(async () => {
   /**
    * IPC handler that generates today's sales summary for the Admin
    * screen, independent of till-shift boundaries.
+   *
+   * Moved to the Nairobi calendar day (docs/phase-158, fixing docs/
+   * phase-157 Part 3 G3) — this used to default to the UTC day, which
+   * disagreed with the end-of-day report's Nairobi day for any sale made
+   * between 00:00 and 03:00 local time.
    */
   ipcMain.handle(
     'reports:daily-summary',
     (): ServiceResult<DailySummary> => {
       try {
-        return { success: true, data: generateDailySummary(db, printerSettings.taxRate) }
+        return {
+          success: true,
+          data: generateDailySummary(db, printerSettings.taxRate, getReportRange('today'))
+        }
       } catch (err) {
         return {
           success: false,
@@ -2648,6 +2694,19 @@ app.whenReady().then(async () => {
    * read-only, open to any logged-in staff exactly like the Z-report and
    * daily-summary handlers above it. Only *approving* the report
    * (`reports:approve-day`, below) is manager-gated.
+   *
+   * KNOWN GAP (docs/phase-158, docs/KNOWN_GAPS.md): the main process has
+   * no concept of "the currently logged-in staff member" — every write
+   * that needs authorization re-verifies a manager PIN passed explicitly
+   * on the request (see `requireAdminPin.ts`); there is no server-side
+   * session to check a role against for a *read*. Every `reports:*`
+   * read channel in this file (this one, `z-report`, `daily-summary`,
+   * and the five below) is therefore reachable by any renderer script
+   * regardless of which screen is showing, even though the UI only
+   * exposes them from the admin-only Reports/Overview screens
+   * (App.tsx). Inventing a session, or adding a PIN prompt to a read,
+   * was explicitly ruled out for this phase — this is recorded as a gap,
+   * not fixed here.
    */
   ipcMain.handle(
     'reports:end-of-day',
@@ -2706,6 +2765,182 @@ app.whenReady().then(async () => {
         return {
           success: false,
           error: err instanceof Error ? err.message : 'Failed to record this review'
+        }
+      }
+    }
+  )
+
+  /** Orders/invoices per page on the Admin Reports shift-history and invoice-list screens. */
+  const REPORTS_PAGE_SIZE = 10
+
+  /**
+   * IPC handler returning one page of shift history, most recently
+   * opened first (docs/phase-158, closing docs/phase-157 Part 3 G1 —
+   * previously only the currently open shift, or one shift already
+   * known by id, could be read at all).
+   */
+  ipcMain.handle(
+    'reports:shifts-list',
+    (_event, request: unknown): ServiceResult<{ shifts: ShiftRow[]; total: number; page: number }> => {
+      const validation = validate(shiftsListSchema, request ?? {})
+      if (!validation.success) {
+        return { success: false, error: validation.error }
+      }
+      try {
+        const { page } = validation.data
+        const offset = (page - 1) * REPORTS_PAGE_SIZE
+        const shifts = db.listShifts(REPORTS_PAGE_SIZE, offset)
+        return { success: true, data: { shifts, total: db.countShifts(), page } }
+      } catch (err) {
+        return {
+          success: false,
+          error: err instanceof Error ? err.message : 'Failed to list shifts'
+        }
+      }
+    }
+  )
+
+  /**
+   * IPC handler generating a sales summary for one of the fixed Nairobi
+   * date-range presets (docs/phase-158) — the multi-day generalisation
+   * of `reports:daily-summary`.
+   */
+  ipcMain.handle(
+    'reports:sales-summary',
+    (_event, request: unknown): ServiceResult<SalesSummary> => {
+      const validation = validate(salesSummarySchema, request)
+      if (!validation.success) {
+        return { success: false, error: validation.error }
+      }
+      try {
+        const range = getReportRange(validation.data.preset)
+        return { success: true, data: generateSalesSummary(db, printerSettings.taxRate, range) }
+      } catch (err) {
+        return {
+          success: false,
+          error: err instanceof Error ? err.message : 'Failed to generate sales summary'
+        }
+      }
+    }
+  )
+
+  /**
+   * IPC handler counting orders by fiscal status, one row per Nairobi
+   * calendar day within the chosen preset (docs/phase-158, closing docs/
+   * phase-157 Part 3 G10's "per day" gap — the live needs-attention list
+   * already existed, but never bucketed by day).
+   */
+  ipcMain.handle(
+    'reports:fiscal-by-day',
+    (_event, request: unknown): ServiceResult<FiscalStatusDayCount[]> => {
+      const validation = validate(fiscalByDaySchema, request)
+      if (!validation.success) {
+        return { success: false, error: validation.error }
+      }
+      try {
+        const range = getReportRange(validation.data.preset)
+        return { success: true, data: generateFiscalStatusByDay(db, range) }
+      } catch (err) {
+        return {
+          success: false,
+          error: err instanceof Error ? err.message : 'Failed to generate fiscal status by day'
+        }
+      }
+    }
+  )
+
+  /**
+   * IPC handler returning one page of orders for the invoice list
+   * (docs/phase-158) — pairs each order's own (CU) fiscal invoice number
+   * with its trader system invoice number, closing docs/phase-157 Part 3
+   * G9. The trader invoice number is computed here (via the shared
+   * `buildTraderSystemInvNum`, the same format `real-etims-provider.ts`
+   * uses — see `traderSystemInvoiceNumber.ts`'s own doc comment for why
+   * it is a guarded duplicate rather than an import of that private
+   * method), not in the renderer, so the format lives in exactly two
+   * places, never three.
+   */
+  ipcMain.handle(
+    'reports:invoice-list',
+    (
+      _event,
+      request: unknown
+    ): ServiceResult<{ invoices: InvoiceListRow[]; total: number; page: number }> => {
+      const validation = validate(invoiceListSchema, request)
+      if (!validation.success) {
+        return { success: false, error: validation.error }
+      }
+      try {
+        const { preset, page } = validation.data
+        const range = getReportRange(preset)
+        const offset = (page - 1) * REPORTS_PAGE_SIZE
+        const { rows, total } = db.getOrderRowsForRange(
+          range.startIso,
+          range.endIso,
+          REPORTS_PAGE_SIZE,
+          offset
+        )
+        const invoices: InvoiceListRow[] = rows.map((order) => {
+          let clientOrderUuid = ''
+          try {
+            clientOrderUuid = (JSON.parse(order.payload_json) as { clientOrderUuid?: string }).clientOrderUuid ?? ''
+          } catch {
+            // Defensive only — every order this app has written has a valid payload_json.
+          }
+          return {
+            order,
+            traderInvoiceNumber: buildTraderSystemInvNum(order.local_id, clientOrderUuid)
+          }
+        })
+        return { success: true, data: { invoices, total, page } }
+      } catch (err) {
+        return {
+          success: false,
+          error: err instanceof Error ? err.message : 'Failed to list invoices'
+        }
+      }
+    }
+  )
+
+  /**
+   * IPC handler exporting one CSV file (orders or line items, per
+   * `kind`) for the chosen preset (docs/phase-158, closing docs/
+   * phase-157 Part 3 G12) — the user picks where to save it via
+   * Electron's own save dialog (e.g. a USB stick), so nothing is written
+   * anywhere without an explicit choice. A cancelled dialog is reported
+   * as `{ saved: false }`, not an error.
+   *
+   * No fiscal or payment code runs here — `buildOrdersCsv`/`buildLinesCsv`
+   * only read already-persisted `orders`/`mpesa_payments` rows.
+   */
+  ipcMain.handle(
+    'reports:export-csv',
+    async (_event, request: unknown): Promise<ServiceResult<{ saved: boolean; filePath?: string }>> => {
+      const validation = validate(exportCsvSchema, request)
+      if (!validation.success) {
+        return { success: false, error: validation.error }
+      }
+      try {
+        const { preset, kind } = validation.data
+        const range = getReportRange(preset)
+        const csv = kind === 'orders'
+          ? buildOrdersCsv(db, range, printerSettings.taxRate)
+          : buildLinesCsv(db, range)
+
+        const result = await dialog.showSaveDialog({
+          title: `Export ${kind} CSV - ${range.label}`,
+          defaultPath: `${kind}-${preset}-${range.startIso.slice(0, 10)}.csv`,
+          filters: [{ name: 'CSV', extensions: ['csv'] }]
+        })
+        if (result.canceled || !result.filePath) {
+          return { success: true, data: { saved: false } }
+        }
+        writeFileSync(result.filePath, csv, 'utf8')
+        return { success: true, data: { saved: true, filePath: result.filePath } }
+      } catch (err) {
+        return {
+          success: false,
+          error: err instanceof Error ? err.message : 'Failed to export CSV'
         }
       }
     }

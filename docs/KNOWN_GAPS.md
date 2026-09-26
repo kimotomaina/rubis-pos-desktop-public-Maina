@@ -199,3 +199,144 @@ fields, wiring up capture (new checkout UI fields, `buildFiscalRequest`,
 **Blast radius**: every B2B invoice (one carrying a `buyerPin`) submitted
 by `submitInvoice`. A B2C walk-in sale (no PIN) is unaffected either way
 — KRA does not require these fields on a B2C receipt.
+
+## Fiscal device daily closure (`DailyReport`) is never sent, and waits on VIL
+
+Found in the docs/phase-157 Reports audit, built on in docs/phase-158.
+The device's daily-closure command family - `DailyReport` (which zeroes
+and records the day in fiscal memory, preceded by an Electronic Journal
+report) and its read-only companions `ReadDailyAmountsByVAT`,
+`ReadEODAmounts`, `ReadEODAmountsByDate`, `ReadFirstEODDate` - is not
+wired into this app at all. `FiscalEndpointPaths`
+(`real-etims-provider.ts`) declares twelve commands; none of these five
+is among them, and no command in this family is ever sent.
+
+Separately, `checkDeviceResponse` (`real-etims-provider.ts`) only names
+one `STE1` value (`52`, "Opened fiscal receipt"). `STE1 = 0x3b` (59
+decimal - "24 hours block, missing Z report", per the protocol) is not
+decoded: it falls through to whatever `STE2` maps to instead, which is
+an unrelated business code (`STE2 = '59'` happens to mean "Wrong client
+PIN" - a coincidental overlap in a different byte column). A cashier
+hitting this condition on a real device would see a misleading message,
+not one naming the actual cause.
+
+**What's still open**: whether and how the daily closure should ever
+run is explicitly a VIL/TSL decision (per the client's own POC scope),
+not an engineering one - sending `DailyReport` zeroes fiscal memory and
+"cannot be undone" (docs/phase-157's own framing). No command in this
+family has been sent, in testing or otherwise, and none should be until
+VIL confirms the cadence and who is authorized to trigger it.
+`VERIFY-ON-DEVICE`: what `STE2` (if any) actually accompanies a real
+`STE1 = 0x3b` response, and the exact cashier-facing wording KRA expects
+for it - the protocol PDF section for this was not available to check
+this against.
+
+**Blast radius**: none today - nothing in this codebase can reach
+`DailyReport`. If it is ever wired in, it would need its own explicit,
+deliberately-triggered IPC channel (never inferred from a report screen
+being opened), and the `STE1 = 0x3b` mapping should be added to
+`checkDeviceResponse` alongside it.
+
+## No fiscal reconciliation report (system amount vs device-validated amount)
+
+Found in the docs/phase-157 Reports audit. Nothing in the fiscal
+submission path (`real-etims-provider.ts`, `xml-utils.ts`,
+`fiscal-retry.ts`, `fiscal-routing.ts`) ever reads back a monetary total
+from the device to compare against the order's own `total` - only the
+invoice number, QR code, and (best-effort, unpersisted) CU serial are
+ever read back. There is nothing to build a system-vs-device
+reconciliation report from without a device/protocol change establishing
+whether the device even returns a comparable validated amount.
+
+**What's still open**: whether the VIL G03 manual's post-implementation
+checklist item 13 (system amount vs device-validated amount per invoice)
+has a device command this app has not yet identified - `VERIFY-ON-DEVICE`
+would need the protocol PDF's own read-back commands re-examined for a
+total/amount field, which was not available to check during the docs/
+phase-157/158 work.
+
+**Blast radius**: none - no code path claims to reconcile these two
+amounts today, so there is no existing behaviour to protect while this
+stays open.
+
+## No profit/margin reporting - no cost data exists anywhere, and Shopify's own route is undocumented
+
+Found in the docs/phase-157 Reports audit (Part 2's cost-price search:
+`grep -rniE "\bcost(Price|PerItem|_price)?\b|unitCost" src` returns
+nothing but two unrelated prose comments). Neither the local schema nor
+any Shopify query this app makes carries a cost figure, so no report -
+till-side or otherwise - can compute margin today.
+
+Shopify does hold cost per item, on `InventoryItem.unitCost` (a
+`MoneyV2`, requiring the "View product costs" permission once granular
+product permissions are enabled - checked against `shopify.dev`'s
+`InventoryItem` reference on 2026-09-26) - but this app has never read
+or requested that field or permission. Separately, Shopify's own
+`orderCreate` mutation reference does not state, either way, whether an
+order created through the Admin API (as every sale from this till is)
+appears in Shopify's built-in profit/analytics reports the same way a
+checkout-created order does - **not in the official documentation**,
+checked 2026-09-26.
+
+**What's still open**: a product-owner decision on whether profit is
+ever reported for this POC, and if so, where - Shopify (contingent on
+the merchant actually maintaining `unitCost` there, and on confirming
+Shopify's own orderCreate-sourced orders actually surface in its profit
+reports, which is unconfirmed) or not at all. The till should not become
+a second source of cost/margin truth either way (Shopify is the only
+stock ledger - a project rule, not a preference).
+
+**Blast radius**: none - no report claims to show profit or margin
+today.
+
+## Refunds, voids and credit notes are absent from every report
+
+Found in the docs/phase-157 Reports audit. Void was deliberately removed
+from the till's UI in Phase 131 (`orders:void`'s handler in `index.ts`
+now refuses every call: "Void was removed from the till because a sale
+may already be filed with KRA and the till cannot issue the credit note
+that would reverse it. The channel stays registered so a stale renderer
+gets a plain refusal, not a missing-handler error.") - the backend
+plumbing (`voids.ts`, the `orders` table's `voided` status) still exists
+and is exercised by tests, but nothing in the renderer can reach it.
+Credit notes are further along at the fiscal-provider level (see this
+file's own "credit/debit notes" entry above) but are, likewise, wired to
+no caller. Because neither path is reachable, no report - including the
+new docs/phase-158 Reports tab - can show a refund, a void, or a credit
+note happening, only their complete absence.
+
+**What's still open**: a product decision on whether/how refunds should
+work on this till at all, given a fiscalised sale cannot be reversed
+without a credit note this app doesn't yet issue live. Until that
+decision is made, no report can be built for data that structurally
+cannot exist.
+
+**Blast radius**: none - this is an absence, not a behaviour to protect.
+
+## `reports:*` read channels have no server-side role check (docs/phase-158)
+
+The Admin Reports tab (and the older Z-report/daily-summary/end-of-day
+screens) are reachable in the renderer only when `currentStaff.role ===
+'admin'` (`App.tsx`), but every `reports:*` **read** IPC channel
+(`z-report`, `daily-summary`, `end-of-day`, and the five docs/phase-158
+additions - `shifts-list`, `sales-summary`, `fiscal-by-day`,
+`invoice-list`, `export-csv`) has no matching check in the main process.
+This was investigated explicitly for docs/phase-158: the main process
+has **no concept of a currently logged-in staff member at all** - every
+privileged write re-verifies a manager PIN passed explicitly on that
+request (`requireAdminPin.ts`), which works for a write but has nothing
+to check a read against, since a read carries no PIN. Inventing a
+session, or bolting a PIN prompt onto a read, was explicitly ruled out
+for docs/phase-158 rather than done as a workaround.
+
+**What's still open**: whether this POC needs a real session concept in
+the main process (so a read can be gated the same way a write is) is a
+product/engineering decision, not something to guess at. Until then, any
+`reports:*` read is reachable by any authenticated renderer script
+regardless of which screen is showing - a low-severity gap today (the
+data is read-only and store-internal), but one that should not silently
+widen as more `reports:*` reads are added.
+
+**Blast radius**: `reports:*` read channels only. No write channel is
+affected - `reports:approve-day` already re-verifies an admin PIN
+server-side and is unchanged.

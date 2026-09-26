@@ -410,6 +410,13 @@ export const SCHEMA = {
   queueIndex: `CREATE INDEX IF NOT EXISTS idx_sync_queue_next_attempt ON sync_queue (next_attempt_at)`,
   barcodeIndex: `CREATE INDEX IF NOT EXISTS idx_products_barcode ON products (barcode)`,
   fiscalInvoiceIndex: `CREATE INDEX IF NOT EXISTS idx_orders_fiscal_invoice_number ON orders (fiscal_invoice_number)`,
+  /**
+   * Every date-range report (`generateDailySummary`/`generateEndOfDayReport`/
+   * `generateSalesSummary`/`generateFiscalStatusByDay`, and the invoice list
+   * — docs/phase-158) filters and sorts `orders` on `created_at`; this was
+   * a full table scan before (docs/phase-157 Part 2's "Indexes" finding).
+   */
+  ordersCreatedAtIndex: `CREATE INDEX IF NOT EXISTS idx_orders_created_at ON orders (created_at)`,
   settings: `CREATE TABLE IF NOT EXISTS settings (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
@@ -1072,6 +1079,7 @@ export class RubisDatabase {
     connection.exec(SCHEMA.mpesaDayExclusionsPaymentIndex)
     migrateOrdersFiscalColumns(connection)
     connection.exec(SCHEMA.fiscalInvoiceIndex)
+    connection.exec(SCHEMA.ordersCreatedAtIndex)
     this.connection = connection
   }
 
@@ -1511,6 +1519,12 @@ export class RubisDatabase {
    * Returns every order created within an ISO-8601 date range
    * (inclusive of `startIso`, exclusive of `endIso`).
    *
+   * Selects the full column set (fiscal fields included, docs/phase-158)
+   * so `generateFiscalStatusByDay` can read `fiscal_status` off the same
+   * rows the revenue reports already fetch, rather than a second query —
+   * every existing caller already used `OrderRow`, so this widens what
+   * was fetched, not what was typed.
+   *
    * @param {string} startIso
    * @param {string} endIso
    * @returns {OrderRow[]}
@@ -1518,9 +1532,48 @@ export class RubisDatabase {
   getOrdersForDateRange(startIso: string, endIso: string): OrderRow[] {
     return this.conn
       .prepare(
-        'SELECT local_id, shopify_order_id, total, status, created_at, payload_json, staff_id, payment_method, tendered_amount, change_due, reference_number, shift_id FROM orders WHERE created_at >= ? AND created_at < ? ORDER BY created_at ASC'
+        `SELECT local_id, shopify_order_id, total, status, created_at, payload_json, staff_id, payment_method,
+                tendered_amount, change_due, reference_number, shift_id, fiscal_invoice_number, fiscal_qr_code,
+                fiscal_fiscalized_at, fiscal_status, fiscal_error_reason, fiscal_error_kind, fiscal_request_json,
+                fiscal_data_issue
+         FROM orders WHERE created_at >= ? AND created_at < ? ORDER BY created_at ASC`
       )
       .all(startIso, endIso) as OrderRow[]
+  }
+
+  /**
+   * One page of orders within an ISO-8601 date range, newest first, plus
+   * the total row count for pagination — the Admin Reports invoice list
+   * and CSV export (docs/phase-158). Distinct from
+   * {@link getOrdersForDateRange}: that one is used for aggregation
+   * (every row, no pagination, since a revenue sum needs all of them
+   * anyway), this one is for display/export of a page at a time.
+   *
+   * @param {string} startIso
+   * @param {string} endIso
+   * @param {number} limit
+   * @param {number} offset
+   * @returns {{ rows: OrderRow[]; total: number }}
+   */
+  getOrderRowsForRange(
+    startIso: string,
+    endIso: string,
+    limit: number,
+    offset: number
+  ): { rows: OrderRow[]; total: number } {
+    const rows = this.conn
+      .prepare(
+        `SELECT local_id, shopify_order_id, total, status, created_at, payload_json, staff_id, payment_method,
+                tendered_amount, change_due, reference_number, shift_id, fiscal_invoice_number, fiscal_qr_code,
+                fiscal_fiscalized_at, fiscal_status, fiscal_error_reason, fiscal_error_kind, fiscal_request_json,
+                fiscal_data_issue
+         FROM orders WHERE created_at >= ? AND created_at < ? ORDER BY created_at DESC LIMIT ? OFFSET ?`
+      )
+      .all(startIso, endIso, limit, offset) as OrderRow[]
+    const { count } = this.conn
+      .prepare('SELECT COUNT(*) as count FROM orders WHERE created_at >= ? AND created_at < ?')
+      .get(startIso, endIso) as { count: number }
+    return { rows, total: count }
   }
 
   /**
@@ -1845,6 +1898,35 @@ export class RubisDatabase {
     return this.conn.prepare('SELECT * FROM shifts WHERE id = ?').get(id) as
       | ShiftRow
       | undefined
+  }
+
+  /**
+   * One page of shift history, most recently opened first — the Admin
+   * Reports shift-history screen (docs/phase-158); previously nothing
+   * queried more than the single open shift (`getOpenShift`) or one shift
+   * by id (docs/phase-157 Part 3, G1).
+   *
+   * @param {number} limit
+   * @param {number} offset
+   * @returns {ShiftRow[]}
+   */
+  listShifts(limit: number, offset: number): ShiftRow[] {
+    return this.conn
+      .prepare('SELECT * FROM shifts ORDER BY id DESC LIMIT ? OFFSET ?')
+      .all(limit, offset) as ShiftRow[]
+  }
+
+  /**
+   * Total number of shifts ever opened — the shift-history screen's page
+   * count.
+   *
+   * @returns {number}
+   */
+  countShifts(): number {
+    const row = this.conn.prepare('SELECT COUNT(*) as count FROM shifts').get() as {
+      count: number
+    }
+    return row.count
   }
 
   /**
@@ -2381,6 +2463,27 @@ export class RubisDatabase {
          ORDER BY o.created_at ASC`
       )
       .all(startIso, endIso) as Array<MpesaPaymentRow & { status: OrderStatus }>
+  }
+
+  /**
+   * Every M-Pesa payment (any mode) whose order belongs to `shiftId`,
+   * with the order's own status carried along as `status` — the
+   * Z-report's manual/Daraja split (docs/phase-158), mirroring
+   * {@link getMpesaPaymentsForDateRange}'s join exactly, keyed by shift
+   * instead of by date range.
+   *
+   * @param {number} shiftId
+   * @returns {Array<MpesaPaymentRow & { status: OrderStatus }>}
+   */
+  getMpesaPaymentsForShift(shiftId: number): Array<MpesaPaymentRow & { status: OrderStatus }> {
+    return this.conn
+      .prepare(
+        `SELECT mp.*, o.status as status FROM mpesa_payments mp
+         JOIN orders o ON o.local_id = mp.order_local_id
+         WHERE o.shift_id = ?
+         ORDER BY o.created_at ASC`
+      )
+      .all(shiftId) as Array<MpesaPaymentRow & { status: OrderStatus }>
   }
 
   /**

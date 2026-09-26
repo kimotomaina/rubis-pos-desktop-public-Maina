@@ -16,6 +16,12 @@ export interface PaymentTotals {
   card: number
 }
 
+/** M-Pesa revenue split by how it was confirmed. */
+export interface MpesaModeTotals {
+  manual: number
+  daraja: number
+}
+
 /** Financial summary of one till shift, mirroring the printed Z-report. */
 export interface ZReport {
   shiftId: number
@@ -25,9 +31,16 @@ export interface ZReport {
   status: 'open' | 'closed'
   startingCash: number
   totalsByMethod: PaymentTotals
+  /** M-Pesa revenue for this shift, split by how it was confirmed (docs/phase-158). */
+  mpesaByMode: MpesaModeTotals
   orderCount: number
   totalRevenue: number
-  totalTax: number
+  /**
+   * VAT extracted from `totalRevenue` (docs/phase-158, replacing the old
+   * `totalTax` field, which wrongly added tax on top of an already
+   * VAT-inclusive shelf price — see {@link computeVatIncluded}).
+   */
+  vatIncluded: number
   expectedCash: number
   endingCash: number | null
   discrepancy: number | null
@@ -39,7 +52,8 @@ export interface DailySummary {
   endIso: string
   orderCount: number
   totalRevenue: number
-  totalTax: number
+  /** See {@link ZReport.vatIncluded} — same extraction, same reasoning. */
+  vatIncluded: number
   totalsByMethod: PaymentTotals
 }
 
@@ -74,6 +88,49 @@ function sumByPaymentMethod(
 }
 
 /**
+ * Sums a set of M-Pesa payments into a manual/Daraja split, ignoring any
+ * other `mode` (e.g. `sms`, which never confirms a sale on its own —
+ * see `mpesaSms.ts`) since only these two ever settle one. Shared by
+ * {@link generateZReport} and {@link generateEndOfDayReport} (docs/
+ * phase-158) — a shift's split and a cashier's split are the same
+ * arithmetic over a different slice of payments, extracted here instead
+ * of copied so the two never drift apart.
+ *
+ * @param {Array<Pick<MpesaPaymentRow, 'mode' | 'amount'>>} payments
+ * @returns {MpesaModeTotals}
+ */
+function sumMpesaByMode(
+  payments: Array<Pick<MpesaPaymentRow, 'mode' | 'amount'>>
+): MpesaModeTotals {
+  const totals: MpesaModeTotals = { manual: 0, daraja: 0 }
+  for (const payment of payments) {
+    if (payment.mode !== 'manual' && payment.mode !== 'daraja') continue
+    totals[payment.mode] += payment.amount
+  }
+  return totals
+}
+
+/**
+ * Extracts the VAT already included in a VAT-inclusive shelf price,
+ * rather than adding tax on top of it (docs/phase-158, correcting the
+ * old `totalRevenue * taxRate` formula — docs/phase-157 Part 3, G2 —
+ * which double-counted: a 1.00 sale would report 1.16 as though 16%
+ * had been added, when the customer paid exactly 1.00 and that 1.00
+ * already contains VAT at the configured rate).
+ *
+ * `vatIncluded = total * rate / (1 + rate)` — the standard inverse of
+ * `priceInclVat = priceExclVat * (1 + rate)`. Rounded to 2 decimal
+ * places, matching every other currency figure this file produces.
+ *
+ * @param {number} total — revenue, as charged (VAT-inclusive)
+ * @param {number} rate — fractional VAT rate (0.16 = 16%)
+ * @returns {number}
+ */
+export function computeVatIncluded(total: number, rate: number): number {
+  return Math.round(((total * rate) / (1 + rate)) * 100) / 100
+}
+
+/**
  * Computes the UTC calendar-day boundaries containing `date`.
  *
  * @param {Date} [date] — defaults to now
@@ -92,14 +149,16 @@ export function getUtcDayRange(date: Date = new Date()): {
 
 /**
  * Generates the Z-report for a till shift: revenue broken down by
- * payment method, total tax (computed from the store's configured
- * tax rate — orders don't store tax individually), and the cash
- * reconciliation (expected vs. counted, with discrepancy) already
- * persisted on the shift row when closed.
+ * payment method (M-Pesa further split by manual/Daraja, docs/
+ * phase-158), the VAT included in that revenue at the store's
+ * configured rate (see {@link computeVatIncluded} — orders don't store
+ * VAT individually), and the cash reconciliation (expected vs.
+ * counted, with discrepancy) already persisted on the shift row when
+ * closed.
  *
  * @param {RubisDatabase} db
  * @param {number} shiftId
- * @param {number} taxRate — fractional store tax rate (0.08 = 8%)
+ * @param {number} taxRate — fractional store tax rate (0.16 = 16%)
  * @returns {ZReport}
  * @throws if the shift does not exist
  */
@@ -117,6 +176,7 @@ export function generateZReport(
   const totalsByMethod = sumByPaymentMethod(orders)
   const totalRevenue = orders.reduce((sum, order) => sum + order.total, 0)
   const staffName = db.getStaffById(shift.staff_id)?.name ?? 'Unknown'
+  const mpesaByMode = sumMpesaByMode(excludeVoided(db.getMpesaPaymentsForShift(shiftId)))
 
   const expectedCash =
     shift.status === 'closed' && shift.expected_cash !== null
@@ -131,9 +191,10 @@ export function generateZReport(
     status: shift.status,
     startingCash: shift.starting_cash,
     totalsByMethod,
+    mpesaByMode,
     orderCount: orders.length,
     totalRevenue,
-    totalTax: totalRevenue * taxRate,
+    vatIncluded: computeVatIncluded(totalRevenue, taxRate),
     expectedCash,
     endingCash: shift.ending_cash,
     discrepancy: shift.discrepancy
@@ -164,7 +225,7 @@ export function generateDailySummary(
     endIso: range.endIso,
     orderCount: orders.length,
     totalRevenue,
-    totalTax: totalRevenue * taxRate,
+    vatIncluded: computeVatIncluded(totalRevenue, taxRate),
     totalsByMethod
   }
 }
@@ -200,6 +261,19 @@ export function getLocalDayRange(localDay: string): { startIso: string; endIso: 
 }
 
 /**
+ * Shifts an ISO instant by the fixed Nairobi offset, so its UTC-named
+ * fields (`getUTCFullYear` etc.) read as Nairobi wall-clock values.
+ * Shared by {@link localDayOf} and {@link formatNairobiDateTime} so
+ * both start from the identical shifted instant.
+ *
+ * @param {string} iso
+ * @returns {Date}
+ */
+function toNairobiWallClock(iso: string): Date {
+  return new Date(new Date(iso).getTime() + NAIROBI_UTC_OFFSET_MINUTES * 60 * 1000)
+}
+
+/**
  * Which Africa/Nairobi calendar day an ISO-8601 instant falls on — the
  * inverse of {@link getLocalDayRange}. Used to label carry-over entries
  * with the day they actually happened on, and to compute "today" for the
@@ -209,11 +283,30 @@ export function getLocalDayRange(localDay: string): { startIso: string; endIso: 
  * @returns {string} `YYYY-MM-DD`
  */
 export function localDayOf(iso: string): string {
-  const shifted = new Date(new Date(iso).getTime() + NAIROBI_UTC_OFFSET_MINUTES * 60 * 1000)
+  const shifted = toNairobiWallClock(iso)
   const y = shifted.getUTCFullYear()
   const m = String(shifted.getUTCMonth() + 1).padStart(2, '0')
   const d = String(shifted.getUTCDate()).padStart(2, '0')
   return `${y}-${m}-${d}`
+}
+
+/**
+ * Formats an ISO-8601 instant as a Nairobi-local `YYYY-MM-DD HH:mm:ss`
+ * string — the CSV export's "date and time (Nairobi)" column
+ * (docs/phase-158).
+ *
+ * @param {string} iso
+ * @returns {string}
+ */
+export function formatNairobiDateTime(iso: string): string {
+  const shifted = toNairobiWallClock(iso)
+  const y = shifted.getUTCFullYear()
+  const mo = String(shifted.getUTCMonth() + 1).padStart(2, '0')
+  const d = String(shifted.getUTCDate()).padStart(2, '0')
+  const h = String(shifted.getUTCHours()).padStart(2, '0')
+  const mi = String(shifted.getUTCMinutes()).padStart(2, '0')
+  const s = String(shifted.getUTCSeconds()).padStart(2, '0')
+  return `${y}-${mo}-${d} ${h}:${mi}:${s}`
 }
 
 /**
@@ -235,7 +328,7 @@ export interface CashierDaySummary {
   orderCount: number
   totalsByMethod: PaymentTotals
   /** M-Pesa revenue this cashier took, split by how it was confirmed. */
-  mpesaByMode: { manual: number; daraja: number }
+  mpesaByMode: MpesaModeTotals
 }
 
 /**
@@ -335,12 +428,11 @@ export function generateEndOfDayReport(
 
   const todaysPayments = excludeVoided(db.getMpesaPaymentsForDateRange(startIso, endIso))
 
-  const mpesaByStaff = new Map<number, { manual: number; daraja: number }>()
+  const paymentsByStaff = new Map<number, Array<MpesaPaymentRow & { status: OrderStatus }>>()
   for (const payment of todaysPayments) {
-    if (payment.mode !== 'manual' && payment.mode !== 'daraja') continue
-    const bucket = mpesaByStaff.get(payment.entered_by_staff_id) ?? { manual: 0, daraja: 0 }
-    bucket[payment.mode] += payment.amount
-    mpesaByStaff.set(payment.entered_by_staff_id, bucket)
+    const list = paymentsByStaff.get(payment.entered_by_staff_id)
+    if (list) list.push(payment)
+    else paymentsByStaff.set(payment.entered_by_staff_id, [payment])
   }
 
   const cashiers: CashierDaySummary[] = Array.from(ordersByStaff.entries()).map(
@@ -349,7 +441,7 @@ export function generateEndOfDayReport(
       staffName: staffName(staffId),
       orderCount: staffOrders.length,
       totalsByMethod: sumByPaymentMethod(staffOrders),
-      mpesaByMode: mpesaByStaff.get(staffId) ?? { manual: 0, daraja: 0 }
+      mpesaByMode: sumMpesaByMode(paymentsByStaff.get(staffId) ?? [])
     })
   )
 
@@ -404,4 +496,219 @@ export function generateEndOfDayReport(
     pendingIds: pending.map((entry) => entry.paymentId),
     pendingManualTotal: pending.reduce((sum, entry) => sum + entry.amount, 0)
   }
+}
+
+/**
+ * A fixed set of Nairobi-local date ranges a report screen can offer as
+ * buttons (docs/phase-158) — a manager picks one, never types a date, so
+ * there is no free-text date input to validate at the IPC boundary.
+ */
+export const REPORT_RANGE_PRESETS = [
+  'today',
+  'yesterday',
+  'thisWeek',
+  'lastWeek',
+  'thisMonth',
+  'lastMonth'
+] as const
+
+export type ReportRangePreset = (typeof REPORT_RANGE_PRESETS)[number]
+
+/** A resolved Nairobi-local date range, ready for the `getOrdersForDateRange`-style queries. */
+export interface ReportRange {
+  startIso: string
+  endIso: string
+  /** Human-readable, e.g. "This week (2026-09-21 to 2026-09-27)". */
+  label: string
+}
+
+/**
+ * Adds (or subtracts) `deltaDays` calendar days to a `YYYY-MM-DD`
+ * string, in UTC so this is pure label arithmetic — the actual
+ * Nairobi-offset conversion happens once, at the end, in
+ * {@link getLocalDayRange}. Mirrors the identical helper in
+ * `EndOfDayPage.tsx` (the renderer's day-picker), duplicated rather
+ * than imported since the main process must not depend on renderer code.
+ *
+ * @param {string} localDay
+ * @param {number} deltaDays
+ * @returns {string}
+ */
+function shiftLocalDay(localDay: string, deltaDays: number): string {
+  const [year, month, day] = localDay.split('-').map(Number)
+  return new Date(Date.UTC(year, month - 1, day + deltaDays)).toISOString().slice(0, 10)
+}
+
+/** 0 (Monday) .. 6 (Sunday) for a `YYYY-MM-DD` string — used to find a week's Monday start. */
+function isoWeekday(localDay: string): number {
+  const [year, month, day] = localDay.split('-').map(Number)
+  const jsDay = new Date(Date.UTC(year, month - 1, day)).getUTCDay() // 0 (Sun) .. 6 (Sat)
+  return (jsDay + 6) % 7
+}
+
+/** The Monday on or before `localDay`. */
+function mostRecentMonday(localDay: string): string {
+  return shiftLocalDay(localDay, -isoWeekday(localDay))
+}
+
+const MONTH_NAMES = [
+  'January', 'February', 'March', 'April', 'May', 'June',
+  'July', 'August', 'September', 'October', 'November', 'December'
+]
+
+/** `YYYY-MM-01` and the last day of that same month, as `YYYY-MM-DD` strings. */
+function monthBounds(year: number, month1Indexed: number): { first: string; last: string } {
+  const mm = String(month1Indexed).padStart(2, '0')
+  const first = `${year}-${mm}-01`
+  // Date.UTC's day-0 rolls back to the last day of the previous 0-indexed
+  // month — passing the 1-indexed target month as the 0-indexed "next"
+  // month is the standard trick, not an off-by-one.
+  const lastDayNum = new Date(Date.UTC(year, month1Indexed, 0)).getUTCDate()
+  const last = `${year}-${mm}-${String(lastDayNum).padStart(2, '0')}`
+  return { first, last }
+}
+
+/**
+ * Resolves a fixed preset into a concrete Nairobi-local date range.
+ * Built entirely on {@link getLocalDayRange}/{@link localDayOf} — no
+ * fresh UTC-offset arithmetic here — so it inherits their no-DST
+ * reasoning (Kenya has kept a fixed UTC+3 offset since 1960, see the
+ * comment above {@link getLocalDayRange}) rather than repeating it.
+ *
+ * @param {ReportRangePreset} preset
+ * @param {Date} [now] — defaults to the current instant
+ * @returns {ReportRange}
+ */
+export function getReportRange(preset: ReportRangePreset, now: Date = new Date()): ReportRange {
+  const today = todayLocalDay(now)
+
+  const dayRange = (day: string, label: string): ReportRange => ({
+    ...getLocalDayRange(day),
+    label: `${label} (${day})`
+  })
+
+  const spanRange = (start: string, end: string, label: string): ReportRange => ({
+    startIso: getLocalDayRange(start).startIso,
+    endIso: getLocalDayRange(end).endIso,
+    label: `${label} (${start} to ${end})`
+  })
+
+  switch (preset) {
+    case 'today':
+      return dayRange(today, 'Today')
+    case 'yesterday':
+      return dayRange(shiftLocalDay(today, -1), 'Yesterday')
+    case 'thisWeek': {
+      const monday = mostRecentMonday(today)
+      return spanRange(monday, shiftLocalDay(monday, 6), 'This week')
+    }
+    case 'lastWeek': {
+      const lastMonday = shiftLocalDay(mostRecentMonday(today), -7)
+      return spanRange(lastMonday, shiftLocalDay(lastMonday, 6), 'Last week')
+    }
+    case 'thisMonth': {
+      const [year, month] = today.split('-').map(Number)
+      const { first, last } = monthBounds(year, month)
+      return {
+        startIso: getLocalDayRange(first).startIso,
+        endIso: getLocalDayRange(last).endIso,
+        label: `This month (${MONTH_NAMES[month - 1]} ${year})`
+      }
+    }
+    case 'lastMonth': {
+      const [year, month] = today.split('-').map(Number)
+      const prevYear = month === 1 ? year - 1 : year
+      const prevMonth = month === 1 ? 12 : month - 1
+      const { first, last } = monthBounds(prevYear, prevMonth)
+      return {
+        startIso: getLocalDayRange(first).startIso,
+        endIso: getLocalDayRange(last).endIso,
+        label: `Last month (${MONTH_NAMES[prevMonth - 1]} ${prevYear})`
+      }
+    }
+  }
+}
+
+/** A date-range sales summary (docs/phase-158) — the multi-day generalisation of {@link DailySummary}. */
+export interface SalesSummary {
+  startIso: string
+  endIso: string
+  label: string
+  orderCount: number
+  totalRevenue: number
+  vatIncluded: number
+  totalsByMethod: PaymentTotals
+  mpesaByMode: MpesaModeTotals
+}
+
+/**
+ * Aggregates every order (and its M-Pesa payments) within a resolved
+ * {@link ReportRange} — the same shape {@link generateDailySummary}
+ * returns, plus the M-Pesa manual/Daraja split, over any of the fixed
+ * presets rather than only "today".
+ *
+ * @param {RubisDatabase} db
+ * @param {number} taxRate
+ * @param {ReportRange} range
+ * @returns {SalesSummary}
+ */
+export function generateSalesSummary(
+  db: RubisDatabase,
+  taxRate: number,
+  range: ReportRange
+): SalesSummary {
+  const orders = excludeVoided(db.getOrdersForDateRange(range.startIso, range.endIso))
+  const totalsByMethod = sumByPaymentMethod(orders)
+  const totalRevenue = orders.reduce((sum, order) => sum + order.total, 0)
+  const payments = excludeVoided(db.getMpesaPaymentsForDateRange(range.startIso, range.endIso))
+
+  return {
+    startIso: range.startIso,
+    endIso: range.endIso,
+    label: range.label,
+    orderCount: orders.length,
+    totalRevenue,
+    vatIncluded: computeVatIncluded(totalRevenue, taxRate),
+    totalsByMethod,
+    mpesaByMode: sumMpesaByMode(payments)
+  }
+}
+
+/** One Nairobi calendar day's fiscal-status counts. */
+export interface FiscalStatusDayCount {
+  localDay: string
+  fiscalized: number
+  waiting: number
+  needsFixing: number
+}
+
+/**
+ * Counts orders by fiscal status, one row per Nairobi calendar day
+ * within `range` — grouped in JS via {@link localDayOf}, not a SQL
+ * `GROUP BY`, since "which Nairobi day" is not something SQLite's date
+ * functions can compute without duplicating that offset logic in SQL.
+ *
+ * Deliberately **not** run through {@link excludeVoided}: a fiscalised
+ * sale stays filed with KRA even if it is later voided (voiding cannot
+ * un-file it — docs/phase-157 Part 3, G13), so a fiscal-compliance view
+ * should keep counting it rather than hide a real filing.
+ *
+ * @param {RubisDatabase} db
+ * @param {ReportRange} range
+ * @returns {FiscalStatusDayCount[]} sorted oldest day first
+ */
+export function generateFiscalStatusByDay(db: RubisDatabase, range: ReportRange): FiscalStatusDayCount[] {
+  const orders = db.getOrdersForDateRange(range.startIso, range.endIso)
+  const byDay = new Map<string, FiscalStatusDayCount>()
+
+  for (const order of orders) {
+    const day = localDayOf(order.created_at)
+    const bucket = byDay.get(day) ?? { localDay: day, fiscalized: 0, waiting: 0, needsFixing: 0 }
+    if (order.fiscal_status === 'fiscalized') bucket.fiscalized += 1
+    else if (order.fiscal_status === 'waiting') bucket.waiting += 1
+    else if (order.fiscal_status === 'needs_fixing') bucket.needsFixing += 1
+    byDay.set(day, bucket)
+  }
+
+  return Array.from(byDay.values()).sort((a, b) => a.localDay.localeCompare(b.localDay))
 }
