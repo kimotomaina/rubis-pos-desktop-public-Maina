@@ -172,7 +172,19 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
     Boolean(etimsDevicePort.trim()) &&
     etimsPasswordConfigured
   const [integrationsLoading, setIntegrationsLoading] = useState(false)
-  const [integrationsMessage, setIntegrationsMessage] = useState<string | null>(null)
+  /**
+   * One message/saving flag per Admin Integrations save action (Phase
+   * 148 step 1) — M-Pesa, Fiscal Device and Store Details used to share
+   * a single `integrationsMessage` because one handler saved all three
+   * together. Each is now independent so a failure or restart prompt in
+   * one section never appears under, or is caused by, another.
+   */
+  const [mpesaMessage, setMpesaMessage] = useState<string | null>(null)
+  const [mpesaSaving, setMpesaSaving] = useState(false)
+  const [fiscalMessage, setFiscalMessage] = useState<string | null>(null)
+  const [fiscalSaving, setFiscalSaving] = useState(false)
+  const [storeIdentityMessage, setStoreIdentityMessage] = useState<string | null>(null)
+  const [storeIdentitySaving, setStoreIdentitySaving] = useState(false)
 
   const [printers, setPrinters] = useState<PrinterConfig[]>([])
   const [printersLoading, setPrintersLoading] = useState(false)
@@ -208,26 +220,11 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
   const [startupConfigMessage, setStartupConfigMessage] = useState<string | null>(null)
   const [showRestartModal, setShowRestartModal] = useState(false)
 
-  const loadIntegrationsConfig = async () => {
-    setIntegrationsLoading(true)
-    const [
-      mpesaResult,
-      etimsResult,
-      tokenStatusResult,
-      storeUrlResult,
-      configStatusResult,
-      mpesaCredStatusResult,
-      etimsSecretStatusResult,
-      storeIdentityResult
-    ] = await Promise.all([
+  /** M-Pesa's own slice of the Integrations tab — reloaded after an M-Pesa save, never after a Fiscal or Store Details one. */
+  const loadMpesaConfig = async () => {
+    const [mpesaResult, mpesaCredStatusResult] = await Promise.all([
       window.api.getIntegrationConfig('mpesa'),
-      window.api.getIntegrationConfig('etims'),
-      window.api.getShopifyTokenStatus(),
-      window.api.getShopifyStoreUrl(),
-      window.api.getConfigStatus(),
-      window.api.getMpesaCredentialStatus(),
-      window.api.getEtimsSecretStatus(),
-      window.api.getStoreIdentity()
+      window.api.getMpesaCredentialStatus()
     ])
     if (mpesaResult.success && mpesaResult.data) {
       setMpesaConsumerKey(String(mpesaResult.data.consumerKey ?? ''))
@@ -242,6 +239,14 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
       setMpesaConsumerSecretConfigured(mpesaCredStatusResult.data.consumerSecretConfigured)
       setMpesaPasskeyConfigured(mpesaCredStatusResult.data.passkeyConfigured)
     }
+  }
+
+  /** Fiscal device's own slice of the Integrations tab — reloaded after a Fiscal save, never after an M-Pesa or Store Details one. */
+  const loadFiscalConfig = async () => {
+    const [etimsResult, etimsSecretStatusResult] = await Promise.all([
+      window.api.getIntegrationConfig('etims'),
+      window.api.getEtimsSecretStatus()
+    ])
     if (etimsResult.success && etimsResult.data) {
       const config = etimsResult.data
       setEtimsBaseUrl(String(config.baseUrl ?? ''))
@@ -256,20 +261,49 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
     if (etimsSecretStatusResult.success && etimsSecretStatusResult.data) {
       setEtimsPasswordConfigured(etimsSecretStatusResult.data.passwordConfigured)
     }
+  }
+
+  /** Store Details' own slice of the Integrations tab — reloaded after a Store Details save, never after an M-Pesa or Fiscal one. */
+  const loadStoreIdentityConfig = async () => {
+    const storeIdentityResult = await window.api.getStoreIdentity()
     if (storeIdentityResult.success && storeIdentityResult.data) {
       setStoreName(storeIdentityResult.data.storeName)
       setStoreKraPin(storeIdentityResult.data.storeKraPin)
     }
-    if (tokenStatusResult.success && tokenStatusResult.data) {
-      setShopifyTokenConfigured(tokenStatusResult.data.configured)
-    }
-    if (storeUrlResult.success && storeUrlResult.data) {
-      setShopifyStoreUrlInput(storeUrlResult.data.storeUrl ?? '')
-    }
-    if (configStatusResult.success && configStatusResult.data?.config) {
-      setCurrentLocationId(configStatusResult.data.config.locationId)
-      setCurrentLocationName(configStatusResult.data.config.locationName)
-    }
+  }
+
+  /**
+   * Initial paint of the whole Integrations tab: fires every section's
+   * loader together, purely for a fast first render — this is not the
+   * cross-section reload the split above removes. No save handler calls
+   * this; each calls only its own section's loader (see above).
+   */
+  const loadIntegrationsConfig = async () => {
+    setIntegrationsLoading(true)
+    await Promise.all([
+      loadMpesaConfig(),
+      loadFiscalConfig(),
+      loadStoreIdentityConfig(),
+      (async () => {
+        const tokenStatusResult = await window.api.getShopifyTokenStatus()
+        if (tokenStatusResult.success && tokenStatusResult.data) {
+          setShopifyTokenConfigured(tokenStatusResult.data.configured)
+        }
+      })(),
+      (async () => {
+        const storeUrlResult = await window.api.getShopifyStoreUrl()
+        if (storeUrlResult.success && storeUrlResult.data) {
+          setShopifyStoreUrlInput(storeUrlResult.data.storeUrl ?? '')
+        }
+      })(),
+      (async () => {
+        const configStatusResult = await window.api.getConfigStatus()
+        if (configStatusResult.success && configStatusResult.data?.config) {
+          setCurrentLocationId(configStatusResult.data.config.locationId)
+          setCurrentLocationName(configStatusResult.data.config.locationName)
+        }
+      })()
+    ])
     setIntegrationsLoading(false)
   }
 
@@ -444,19 +478,87 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
   }
 
   /**
-   * Routes through `ManagerPinModal` so both provider
-   * `setIntegrationConfig` calls can forward a re-verifiable
-   * `managerId`/`managerPin` to the main process.
+   * Saves only the M-Pesa integration row (Phase 148 step 1 — this used
+   * to be bundled with Fiscal Device and Store Details behind one
+   * handler and one fiscal-only validation gate, so a till could not
+   * save M-Pesa settings at all until its fiscal device IP/port were
+   * already valid; phase-147 Part 6 #5). Validates only M-Pesa's own
+   * fields — it must succeed with the fiscal fields blank or invalid.
+   *
+   * M-Pesa's resolved provider and credentials are read once at boot
+   * (phase-147 §2.6: no `applyMpesaConfigToProvider` exists), so unlike
+   * the Fiscal save this cannot hot-apply — it prompts for a restart
+   * instead of claiming "Settings saved." while the old values are
+   * still live.
    */
-  const handleSaveIntegrationsConfig = () => {
-    setIntegrationsMessage(null)
-    setEtimsTestResult(null)
-    setEtimsTestError(null)
+  const handleSaveMpesaConfig = () => {
+    setMpesaMessage(null)
     const consumerKey = mpesaConsumerKey.trim()
     const shortcode = mpesaShortcode.trim()
     const callbackUrl = mpesaCallbackUrl.trim()
     const consumerSecret = mpesaConsumerSecretInput.trim()
     const passkey = mpesaPasskeyInput.trim()
+
+    requestManagerPin('Save M-Pesa settings', (managerId, managerPin) => {
+      void (async () => {
+        setMpesaSaving(true)
+        try {
+          const calls = [
+            window.api.setIntegrationConfig(
+              'mpesa',
+              {
+                consumerKey,
+                shortcode,
+                environment: mpesaEnvironment,
+                callbackUrl: callbackUrl || undefined,
+                confirmationMethod: mpesaConfirmationMethod,
+                smsInboxPath: mpesaSmsInboxPath.trim() || undefined,
+                manualEntryEnabled: mpesaManualEntryEnabled
+              },
+              managerId,
+              managerPin
+            )
+          ]
+          // A blank box means "leave the stored value alone", so a
+          // credential call is only made when something was typed.
+          if (consumerSecret || passkey) {
+            calls.push(
+              window.api.setMpesaCredentials(
+                { consumerSecret: consumerSecret || undefined, passkey: passkey || undefined },
+                managerId,
+                managerPin
+              )
+            )
+          }
+
+          const results = await Promise.all(calls)
+          const failed = results.find((result) => !result.success)
+          if (failed) {
+            setMpesaMessage(failed.error ?? 'Failed to save M-Pesa settings')
+            return
+          }
+          setMpesaConsumerSecretInput('')
+          setMpesaPasskeyInput('')
+          await loadMpesaConfig()
+          setShowRestartModal(true)
+        } finally {
+          setMpesaSaving(false)
+        }
+      })()
+    })
+  }
+
+  /**
+   * Saves only the Fiscal Device integration row (Phase 148 step 1).
+   * Validates only fiscal fields — an M-Pesa field is never read here.
+   * Fiscal changes hot-apply via `applyEtimsConfigToProvider()`
+   * server-side, so this keeps the immediate "Settings saved." message
+   * rather than the M-Pesa save's restart prompt.
+   */
+  const handleSaveFiscalConfig = () => {
+    setFiscalMessage(null)
+    setEtimsTestResult(null)
+    setEtimsTestError(null)
     const baseUrl = etimsBaseUrl.trim() || DEFAULT_ETIMS_BASE_URL
     const deviceIp = etimsDeviceIp.trim()
     const devicePort = etimsDevicePort.trim() || DEFAULT_ETIMS_DEVICE_PORT
@@ -472,65 +574,68 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
       setEtimsFieldErrors(
         Object.fromEntries(fieldErrors.map((error) => [error.field, error.message]))
       )
-      setIntegrationsMessage('Check the highlighted fiscal device details above.')
+      setFiscalMessage('Check the highlighted fiscal device details above.')
       return
     }
     setEtimsFieldErrors({})
 
-    requestManagerPin('Save integration settings', (managerId, managerPin) => {
+    requestManagerPin('Save fiscal device settings', (managerId, managerPin) => {
       void (async () => {
-        const calls = [
-          window.api.setIntegrationConfig(
-            'mpesa',
-            {
-              consumerKey,
-              shortcode,
-              environment: mpesaEnvironment,
-              callbackUrl: callbackUrl || undefined,
-              confirmationMethod: mpesaConfirmationMethod,
-              smsInboxPath: mpesaSmsInboxPath.trim() || undefined,
-              manualEntryEnabled: mpesaManualEntryEnabled
-            },
-            managerId,
-            managerPin
-          ),
-          window.api.setIntegrationConfig(
-            'etims',
-            { baseUrl, deviceIp, devicePort, defaultVatClass },
-            managerId,
-            managerPin
-          ),
-          window.api.setStoreIdentity(
+        setFiscalSaving(true)
+        try {
+          const calls = [
+            window.api.setIntegrationConfig(
+              'etims',
+              { baseUrl, deviceIp, devicePort, defaultVatClass },
+              managerId,
+              managerPin
+            )
+          ]
+          // A blank password box means "leave the stored one alone", so it
+          // is only sent when the manager actually typed a new one.
+          if (password) {
+            calls.push(window.api.setEtimsPassword(password, managerId, managerPin))
+          }
+
+          const results = await Promise.all(calls)
+          const failed = results.find((result) => !result.success)
+          setFiscalMessage(
+            failed ? (failed.error ?? 'Failed to save fiscal device settings') : 'Settings saved.'
+          )
+          if (!failed) {
+            setEtimsPassword('')
+            await loadFiscalConfig()
+          }
+        } finally {
+          setFiscalSaving(false)
+        }
+      })()
+    })
+  }
+
+  /**
+   * Saves only the store name/KRA PIN printed on receipts (Phase 148
+   * step 1 — split out of the combined save so a failing Store Details
+   * write, e.g. a bad KRA-PIN format server-side, cannot be mistaken for
+   * an M-Pesa or Fiscal Device failure, and vice versa).
+   */
+  const handleSaveStoreIdentity = () => {
+    setStoreIdentityMessage(null)
+    requestManagerPin('Save store details', (managerId, managerPin) => {
+      void (async () => {
+        setStoreIdentitySaving(true)
+        try {
+          const result = await window.api.setStoreIdentity(
             { storeName: storeName.trim(), storeKraPin: storeKraPin.trim() },
             managerId,
             managerPin
           )
-        ]
-        // A blank password box means "leave the stored one alone", so it
-        // is only sent when the manager actually typed a new one.
-        if (password) {
-          calls.push(window.api.setEtimsPassword(password, managerId, managerPin))
-        }
-        if (consumerSecret || passkey) {
-          calls.push(
-            window.api.setMpesaCredentials(
-              { consumerSecret: consumerSecret || undefined, passkey: passkey || undefined },
-              managerId,
-              managerPin
-            )
+          setStoreIdentityMessage(
+            result.success ? 'Store details saved.' : (result.error ?? 'Failed to save store details')
           )
-        }
-
-        const results = await Promise.all(calls)
-        const failed = results.find((result) => !result.success)
-        setIntegrationsMessage(
-          failed ? (failed.error ?? 'Failed to save integration settings') : 'Settings saved.'
-        )
-        if (!failed) {
-          setMpesaConsumerSecretInput('')
-          setMpesaPasskeyInput('')
-          setEtimsPassword('')
-          await loadIntegrationsConfig()
+          if (result.success) await loadStoreIdentityConfig()
+        } finally {
+          setStoreIdentitySaving(false)
         }
       })()
     })
@@ -1013,12 +1118,12 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
          * One section on screen at a time (Phase E2(e)) — Shopify,
          * Location, Fiscal device, M-Pesa and Printer used to render
          * stacked together here, measuring ~2200-2529px tall at scale 1
-         * (phase-142). No section's own state, validation or save
-         * handler changed; `handleSaveIntegrationsConfig` still submits
-         * M-Pesa + Fiscal device + Store Details together exactly as
-         * before; it appears on both sections that feed it so either one
-         * saves the same combined settings without needing to flip
-         * between them for one save.
+         * (phase-142). M-Pesa, Fiscal Device and Store Details save
+         * independently as of phase-148 step 1 — `handleSaveMpesaConfig`,
+         * `handleSaveFiscalConfig` and `handleSaveStoreIdentity` each
+         * validate, PIN-gate and message only their own fields, so a
+         * till can save M-Pesa settings with the fiscal device fields
+         * blank, and vice versa (phase-147 Part 6 #5 fixed).
          */
         <div className="space-y-4">
           <div className="flex flex-wrap gap-2 rounded-lg bg-slate-50 p-1">
@@ -1324,15 +1429,21 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
                 </div>
               </div>
 
-              {integrationsMessage && (
-                <p className="mt-4 text-base text-slate-500">{integrationsMessage}</p>
+              <p className="mt-4 text-sm text-slate-500">
+                M-Pesa settings are read once when the till starts, so saving here applies them
+                after a restart.
+              </p>
+
+              {mpesaMessage && (
+                <p className="mt-2 text-base text-slate-500">{mpesaMessage}</p>
               )}
               <button
                 type="button"
-                onClick={() => void handleSaveIntegrationsConfig()}
-                className="mt-3 rounded-lg bg-rose-600 px-4 py-2 text-base font-semibold text-white hover:bg-rose-700"
+                disabled={mpesaSaving}
+                onClick={() => void handleSaveMpesaConfig()}
+                className="mt-3 rounded-lg bg-rose-600 px-4 py-2 text-base font-semibold text-white hover:bg-rose-700 disabled:cursor-not-allowed disabled:opacity-50"
               >
-                Save Integration Settings
+                {mpesaSaving ? 'Saving…' : 'Save & Restart'}
               </button>
                 </section>
               )}
@@ -1511,6 +1622,18 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
                   </div>
                 )}
 
+              {fiscalMessage && (
+                <p className="mt-4 text-base text-slate-500">{fiscalMessage}</p>
+              )}
+              <button
+                type="button"
+                disabled={fiscalSaving}
+                onClick={() => void handleSaveFiscalConfig()}
+                className="mt-3 rounded-lg bg-rose-600 px-4 py-2 text-base font-semibold text-white hover:bg-rose-700 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {fiscalSaving ? 'Saving…' : 'Save Fiscal Device Settings'}
+              </button>
+
               <div className="mt-4 border-t border-slate-100 pt-4">
                 <h4 className="mb-2 text-xl font-semibold text-slate-700">Store Details</h4>
                 <p className="mb-3 text-sm text-slate-500">
@@ -1548,15 +1671,16 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
                 </div>
               </div>
 
-              {integrationsMessage && (
-                <p className="mt-4 text-base text-slate-500">{integrationsMessage}</p>
+              {storeIdentityMessage && (
+                <p className="mt-4 text-base text-slate-500">{storeIdentityMessage}</p>
               )}
               <button
                 type="button"
-                onClick={() => void handleSaveIntegrationsConfig()}
-                className="mt-3 rounded-lg bg-rose-600 px-4 py-2 text-base font-semibold text-white hover:bg-rose-700"
+                disabled={storeIdentitySaving}
+                onClick={() => void handleSaveStoreIdentity()}
+                className="mt-3 rounded-lg bg-rose-600 px-4 py-2 text-base font-semibold text-white hover:bg-rose-700 disabled:cursor-not-allowed disabled:opacity-50"
               >
-                Save Integration Settings
+                {storeIdentitySaving ? 'Saving…' : 'Save Store Details'}
               </button>
                 </section>
               )}

@@ -71,13 +71,86 @@ describe('AdminScreen > Integrations: five sections, shown one at a time', () =>
     expect(ADMIN_SCREEN).toMatch(/}, \[activeTab, integrationSection\]\)/)
   })
 
-  it('keeps Save Integration Settings reachable from both M-Pesa and Fiscal Device, same handler, no new one', () => {
-    const saveCalls = [
-      ...INTEGRATIONS_BLOCK.matchAll(/onClick=\{\(\) => void handleSaveIntegrationsConfig\(\)\}/g)
-    ]
-    expect(saveCalls).toHaveLength(2)
-    // No section invented a second save handler for the same combined settings.
-    expect(INTEGRATIONS_BLOCK).not.toMatch(/handleSave(Mpesa|Fiscal)(Only)?Config/)
+  /**
+   * Phase 148 step 1 deliberately reverses this test's old assertion.
+   * It used to require exactly ONE shared `handleSaveIntegrationsConfig`
+   * reachable from both the M-Pesa and Fiscal Device sections — that
+   * shared handler is why a till could not save M-Pesa settings at all
+   * until its fiscal device IP/port were already valid (phase-147 Part 6
+   * #5). The client's decoupling decision (phase-148) requires the
+   * opposite: three independent handlers, each validating and saving
+   * only its own section, with no cross-validation between them.
+   *   Old assertion: `handleSaveIntegrationsConfig` called from exactly
+   *     2 places; no `handleSave(Mpesa|Fiscal)Config` exists.
+   *   New assertion: `handleSaveIntegrationsConfig` no longer exists at
+   *     all; `handleSaveMpesaConfig`, `handleSaveFiscalConfig` and
+   *     `handleSaveStoreIdentity` each exist and are called exactly once.
+   */
+  it('saves M-Pesa, Fiscal Device and Store Details independently — no shared handler', () => {
+    expect(ADMIN_SCREEN).not.toContain('handleSaveIntegrationsConfig')
+    for (const handler of ['handleSaveMpesaConfig', 'handleSaveFiscalConfig', 'handleSaveStoreIdentity']) {
+      const calls = [
+        ...INTEGRATIONS_BLOCK.matchAll(new RegExp(`onClick=\\{\\(\\) => void ${handler}\\(\\)\\}`, 'g'))
+      ]
+      expect(calls).toHaveLength(1)
+    }
+  })
+
+  it("does not let the M-Pesa save's validation depend on the Fiscal Device fields", () => {
+    const mpesaHandlerBody = ADMIN_SCREEN.slice(
+      ADMIN_SCREEN.indexOf('const handleSaveMpesaConfig = () => {'),
+      ADMIN_SCREEN.indexOf('const handleSaveFiscalConfig = () => {')
+    )
+    expect(mpesaHandlerBody).not.toContain('validateEtimsConnection')
+    expect(mpesaHandlerBody).not.toContain('etimsBaseUrl')
+    expect(mpesaHandlerBody).not.toContain('etimsDeviceIp')
+    expect(mpesaHandlerBody).not.toContain('etimsDevicePort')
+  })
+
+  it('gives the M-Pesa save an honest restart prompt instead of a hot-apply claim', () => {
+    const mpesaHandlerBody = ADMIN_SCREEN.slice(
+      ADMIN_SCREEN.indexOf('const handleSaveMpesaConfig = () => {'),
+      ADMIN_SCREEN.indexOf('const handleSaveFiscalConfig = () => {')
+    )
+    expect(mpesaHandlerBody).toContain('setShowRestartModal(true)')
+    expect(INTEGRATIONS_BLOCK).toContain('Save & Restart')
+  })
+
+  it('never sends an M-Pesa field from the Fiscal Device save', () => {
+    const fiscalHandlerBody = ADMIN_SCREEN.slice(
+      ADMIN_SCREEN.indexOf('const handleSaveFiscalConfig = () => {'),
+      ADMIN_SCREEN.indexOf('const handleSaveStoreIdentity = () => {')
+    )
+    expect(fiscalHandlerBody).not.toContain("setIntegrationConfig(\n              'mpesa'")
+    expect(fiscalHandlerBody).not.toContain('mpesaConsumerKey')
+    expect(fiscalHandlerBody).not.toContain('mpesaShortcode')
+    expect(fiscalHandlerBody).not.toContain('setMpesaCredentials')
+  })
+
+  it('keeps a failing Store Details save from touching M-Pesa or Fiscal Device state', () => {
+    const storeIdentityHandlerBody = ADMIN_SCREEN.slice(
+      ADMIN_SCREEN.indexOf('const handleSaveStoreIdentity = () => {'),
+      ADMIN_SCREEN.indexOf('/**\n   * Runs the three-hop fiscal device check')
+    )
+    expect(storeIdentityHandlerBody).not.toContain('setMpesaMessage')
+    expect(storeIdentityHandlerBody).not.toContain('setFiscalMessage')
+    expect(storeIdentityHandlerBody).not.toContain('loadMpesaConfig')
+    expect(storeIdentityHandlerBody).not.toContain('loadFiscalConfig')
+    expect(storeIdentityHandlerBody).toContain('setStoreIdentityMessage')
+  })
+
+  it('shows each Integrations section its own save message, not a shared one', () => {
+    const mpesaStart = INTEGRATIONS_BLOCK.indexOf("integrationSection === 'mpesa'")
+    const fiscalStart = INTEGRATIONS_BLOCK.indexOf("integrationSection === 'fiscal'")
+    const printerStart = INTEGRATIONS_BLOCK.indexOf("integrationSection === 'printer'")
+    const mpesaSection = INTEGRATIONS_BLOCK.slice(mpesaStart, fiscalStart)
+    const fiscalSection = INTEGRATIONS_BLOCK.slice(fiscalStart, printerStart)
+    expect(mpesaSection).toContain('{mpesaMessage &&')
+    expect(mpesaSection).not.toContain('{fiscalMessage &&')
+    expect(mpesaSection).not.toContain('{storeIdentityMessage &&')
+    expect(fiscalSection).toContain('{fiscalMessage &&')
+    expect(fiscalSection).toContain('{storeIdentityMessage &&')
+    expect(fiscalSection).not.toContain('{mpesaMessage &&')
   })
 
   it('folds Store Details into Fiscal Device rather than inventing an unlisted sixth section', () => {

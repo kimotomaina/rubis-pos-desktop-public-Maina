@@ -10,11 +10,14 @@ interface RestartCountdownModalProps {
 
 /**
  * Full-screen prompt shown after saving a configuration change that
- * only takes effect on relaunch (e.g. the M-Pesa/eTIMS mock toggles,
- * which select a provider constructed once at startup). Restarts
- * automatically after {@link RESTART_COUNTDOWN_MS}, or immediately on
- * "Restart Now"; "Cancel" stops the countdown without discarding the
- * already-persisted change.
+ * only takes effect on relaunch — the M-Pesa/eTIMS mock toggles (which
+ * select a provider constructed once at startup) and, since phase-148
+ * step 1, the M-Pesa Admin save itself (Daraja credentials/shortcode/
+ * environment/confirmation method are all read once at boot too, with
+ * no live re-apply). Restarts automatically after
+ * {@link RESTART_COUNTDOWN_MS}, or immediately on "Restart Now";
+ * "Cancel" stops the countdown without discarding the already-persisted
+ * change.
  *
  * @param {RestartCountdownModalProps} props
  * @returns {JSX.Element}
