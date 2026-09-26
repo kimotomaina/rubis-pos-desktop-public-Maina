@@ -295,20 +295,51 @@ export const endOfDayReportSchema = z.object({
   localDay: localDaySchema.optional()
 })
 
+/** One manual entry a manager deliberately leaves pending during a day review (docs/phase-153), with why. */
+const excludedEntrySchema = z.object({
+  paymentId: z.number().int().positive(),
+  reason: z.string().max(200, 'Keep the reason under 200 characters').optional()
+})
+
 /**
  * `reports:approve-day` request payload (manager re-authorization
  * required).
  *
- * `paymentIds` is exactly the set of ids the report the manager is
- * looking at displayed — never inferred server-side from `localDay`
- * alone — so an entry recorded after that report was generated can never
- * be swept into this approval (see `RubisDatabase.approveMpesaEntries`).
+ * `approvedIds`/`excluded` are exactly the ids the report the manager is
+ * looking at displayed, split into what to approve and what to leave
+ * pending — never inferred server-side from `localDay` alone, so an
+ * entry recorded after that report was generated can never be swept into
+ * this review (see `RubisDatabase.approveMpesaEntries`). Either array may
+ * be empty (docs/phase-153 decision 4: a manager may leave every entry
+ * out, which still records the review and its reasons), but not both,
+ * and no id may appear twice or in both lists — each entry is approved,
+ * left out, or untouched, never more than one of those.
  */
-export const approveDayReportSchema = managerAuthzSchema.extend({
-  localDay: localDaySchema,
-  paymentIds: z.array(z.number().int().positive()).min(1, 'Select at least one entry to approve'),
-  note: z.string().max(500, 'Keep the note under 500 characters').optional()
-})
+export const approveDayReportSchema = managerAuthzSchema
+  .extend({
+    localDay: localDaySchema,
+    approvedIds: z.array(z.number().int().positive()),
+    excluded: z.array(excludedEntrySchema),
+    note: z.string().max(500, 'Keep the note under 500 characters').optional()
+  })
+  .refine((data) => data.approvedIds.length > 0 || data.excluded.length > 0, {
+    message: 'Nothing to record — approve at least one entry, or leave one out with a reason',
+    path: ['approvedIds']
+  })
+  .refine(
+    (data) => {
+      const excludedIds = new Set(data.excluded.map((entry) => entry.paymentId))
+      return !data.approvedIds.some((id) => excludedIds.has(id))
+    },
+    { message: 'An entry cannot be both approved and left out', path: ['excluded'] }
+  )
+  .refine(
+    (data) => {
+      const allIds = [...data.approvedIds, ...data.excluded.map((entry) => entry.paymentId)]
+      return new Set(allIds).size === allIds.length
+    },
+    { message: 'The same entry id was given more than once', path: ['approvedIds'] }
+  )
 
 /** `stocktake:get` / `stocktake:submit` request payload. */
 export const stockTakeSessionIdSchema = z.object({

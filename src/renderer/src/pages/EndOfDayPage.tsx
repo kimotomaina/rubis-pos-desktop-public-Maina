@@ -6,8 +6,19 @@ import { useAuthStore } from '../stores/authStore.js'
 import { useKeyboardStore } from '../stores/keyboardStore.js'
 import ManagerPinModal from '../components/ManagerPinModal.js'
 
-/** Manual entries and carry-over rows per page — keeps a long list within the design box (Phase E). */
-const ENTRIES_PER_PAGE = 8
+/**
+ * Manual entries and carry-over rows per page — keeps a long list within
+ * the design box (Phase E). Lower than a plain read-only list would need
+ * (phase-152 used 8) because a pending row can now grow a second line for
+ * its reason field (docs/phase-153).
+ */
+const ENTRIES_PER_PAGE = 6
+
+/** A manager's in-progress tick/reason choice for one still-pending entry. */
+interface Selection {
+  ticked: boolean
+  reason: string
+}
 
 /**
  * Adds `deltaDays` calendar days to a `YYYY-MM-DD` string, in UTC so the
@@ -24,36 +35,104 @@ function shiftLocalDay(localDay: string, deltaDays: number): string {
   return new Date(Date.UTC(year, month - 1, day + deltaDays)).toISOString().slice(0, 10)
 }
 
-/** One row shared by the "today" and "carry-over" tables. */
-function EntryRow({ entry, showDay }: { entry: ManualMpesaEntrySummary; showDay: boolean }) {
+/**
+ * One row shared by the "today" and "carry-over" tables. A pending entry
+ * gets a tick box (ticked by default) and, once unticked, a reason field
+ * beneath it; an approved entry gets a plain check mark instead — nothing
+ * left to decide about it here.
+ */
+function EntryRow({
+  entry,
+  showDay,
+  selection,
+  onToggle,
+  onOpenReason
+}: {
+  entry: ManualMpesaEntrySummary
+  showDay: boolean
+  /** Present only for a still-pending entry — an approved one has nothing to tick. */
+  selection?: Selection
+  onToggle?: (paymentId: number) => void
+  onOpenReason?: (paymentId: number) => void
+}) {
+  const columns = showDay ? 8 : 7
+  const pending = !entry.approved
+
   return (
-    <tr className="border-t border-slate-200/60">
-      {showDay && <td className="py-2 pr-2 text-slate-500">{entry.localDay}</td>}
-      <td className="py-2 pr-2 text-slate-500">{new Date(entry.createdAt).toLocaleTimeString()}</td>
-      <td className="py-2 pr-2 text-slate-500">#{entry.orderLocalId}</td>
-      <td className="py-2 pr-2 text-slate-800">{entry.staffName}</td>
-      <td className="py-2 pr-2 font-medium tracking-wide text-slate-800">{entry.reference}</td>
-      <td className="py-2 pr-2 text-right text-slate-800">{formatCurrency(entry.amount)}</td>
-      <td className="py-2 text-right">
-        {entry.approved ? (
-          <span className="rounded-full bg-emerald-50 px-2 py-1 text-sm font-medium text-emerald-700">
-            Approved{entry.reconciledByStaffName ? ` — ${entry.reconciledByStaffName}` : ''}
-          </span>
-        ) : (
-          <span className="rounded-full bg-amber-50 px-2 py-1 text-sm font-medium text-amber-700">
-            Pending
-          </span>
-        )}
-      </td>
-    </tr>
+    <>
+      <tr className="border-t border-slate-200/60">
+        <td className="py-2 pr-2">
+          {pending ? (
+            <input
+              type="checkbox"
+              checked={selection?.ticked ?? true}
+              onChange={() => onToggle?.(entry.paymentId)}
+              aria-label={`Include ${entry.reference} in this review`}
+              className="h-5 w-5"
+            />
+          ) : (
+            <span aria-hidden="true" className="text-lg text-emerald-600">
+              ✓
+            </span>
+          )}
+        </td>
+        {showDay && <td className="py-2 pr-2 text-slate-500">{entry.localDay}</td>}
+        <td className="py-2 pr-2 text-slate-500">{new Date(entry.createdAt).toLocaleTimeString()}</td>
+        <td className="py-2 pr-2 text-slate-500">#{entry.orderLocalId}</td>
+        <td className="py-2 pr-2 text-slate-800">{entry.staffName}</td>
+        <td className="py-2 pr-2 font-medium tracking-wide text-slate-800">{entry.reference}</td>
+        <td className="py-2 pr-2 text-right text-slate-800">{formatCurrency(entry.amount)}</td>
+        <td className="py-2 text-right">
+          {entry.approved ? (
+            <span className="rounded-full bg-emerald-50 px-2 py-1 text-sm font-medium text-emerald-700">
+              Approved{entry.reconciledByStaffName ? ` — ${entry.reconciledByStaffName}` : ''}
+            </span>
+          ) : (
+            <span className="rounded-full bg-amber-50 px-2 py-1 text-sm font-medium text-amber-700">
+              Pending
+            </span>
+          )}
+        </td>
+      </tr>
+      {entry.approved && entry.sameApproverAsRecorder && (
+        <tr>
+          <td colSpan={columns} className="pb-2 pl-9 text-sm italic text-amber-700">
+            Recorded and approved by the same person.
+          </td>
+        </tr>
+      )}
+      {entry.lastExclusion && (
+        <tr>
+          <td colSpan={columns} className="pb-2 pl-9 text-sm italic text-slate-500">
+            Left out on {entry.lastExclusion.localDay} by {entry.lastExclusion.staffName}
+            {entry.lastExclusion.reason ? `: ${entry.lastExclusion.reason}` : ''}
+          </td>
+        </tr>
+      )}
+      {pending && selection && !selection.ticked && (
+        <tr>
+          <td colSpan={columns} className="pb-3 pl-9">
+            <input
+              readOnly
+              value={selection.reason}
+              onClick={() => onOpenReason?.(entry.paymentId)}
+              placeholder="Reason for leaving this out (optional)"
+              className="h-10 w-full max-w-md rounded-lg border border-slate-300 px-3 text-sm focus:border-rose-400 focus:outline-none"
+            />
+          </td>
+        </tr>
+      )}
+    </>
   )
 }
 
 /**
  * End-of-day report (docs/phase-150.md deferred approval to this;
- * docs/phase-151/152 design it): per-cashier totals for one Africa/Nairobi
+ * docs/phase-151/152 built the day approval; docs/phase-153 lets a
+ * manager leave individual entries out with a reason instead of an
+ * all-or-nothing approval): per-cashier totals for one Africa/Nairobi
  * calendar day, that day's manual M-Pesa entries, and any manual entry
- * from an earlier day still awaiting a manager's approval.
+ * from an earlier day still awaiting a manager's review.
  *
  * Replaces the per-payment Reconciliation tab for the POC — that page
  * (`MpesaReconciliationPage.tsx`) and its tests are untouched, just no
@@ -74,6 +153,13 @@ export default function EndOfDayPage() {
   const [note, setNote] = useState('')
   const [entriesPage, setEntriesPage] = useState(1)
   const [carryOverPage, setCarryOverPage] = useState(1)
+  /**
+   * One tick/reason choice per currently-pending entry, keyed by payment
+   * id — deliberately state that outlives which page is showing, so
+   * paging back and forth never loses a manager's in-progress choices
+   * (docs/phase-153's own "ticks and reasons survive paging" test).
+   */
+  const [selections, setSelections] = useState<Map<number, Selection>>(new Map())
 
   useEffect(() => {
     if (staffList.length === 0) void fetchStaffList()
@@ -88,6 +174,10 @@ export default function EndOfDayPage() {
         setReport(result.data)
         setEntriesPage(1)
         setCarryOverPage(1)
+        // Every pending entry starts ticked (decision 1) — a fresh
+        // report always resets choices, since the pending set itself
+        // may have changed (a new sale, a just-recorded review).
+        setSelections(new Map(result.data.pendingIds.map((id) => [id, { ticked: true, reason: '' }])))
       } else {
         setError(result.error ?? 'Failed to load the end-of-day report')
       }
@@ -106,11 +196,37 @@ export default function EndOfDayPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
+  const toggleEntry = (paymentId: number): void => {
+    setSelections((prev) => {
+      const next = new Map(prev)
+      const current = next.get(paymentId)
+      if (current) next.set(paymentId, { ...current, ticked: !current.ticked })
+      return next
+    })
+  }
+
+  const openReasonKeyboard = (paymentId: number): void => {
+    useKeyboardStore.getState().open({
+      value: selections.get(paymentId)?.reason ?? '',
+      onChange: (next) =>
+        setSelections((prev) => {
+          const updated = new Map(prev)
+          const current = updated.get(paymentId)
+          if (current) updated.set(paymentId, { ...current, reason: next })
+          return updated
+        }),
+      label: 'Reason for leaving this entry out (optional)',
+      maxLength: 200,
+      mode: 'text',
+      docked: true
+    })
+  }
+
   const openNoteKeyboard = (): void => {
     useKeyboardStore.getState().open({
       value: note,
       onChange: setNote,
-      label: 'Note for this approval (optional)',
+      label: 'Note for this review (optional)',
       maxLength: 500,
       mode: 'text',
       docked: true
@@ -124,6 +240,17 @@ export default function EndOfDayPage() {
     setCollectingPin(false)
     if (!report) return
 
+    const allPending = [...report.manualEntries, ...report.carryOver].filter((entry) => !entry.approved)
+    const approvedIds = allPending
+      .filter((entry) => selections.get(entry.paymentId)?.ticked ?? true)
+      .map((entry) => entry.paymentId)
+    const excluded = allPending
+      .filter((entry) => !(selections.get(entry.paymentId)?.ticked ?? true))
+      .map((entry) => ({
+        paymentId: entry.paymentId,
+        reason: selections.get(entry.paymentId)?.reason.trim() || undefined
+      }))
+
     void (async () => {
       setApproving(true)
       setError(null)
@@ -131,27 +258,28 @@ export default function EndOfDayPage() {
       try {
         const result = await window.api.approveDayReport({
           localDay: report.localDay,
-          paymentIds: report.pendingIds,
+          approvedIds,
+          excluded,
           managerId,
           managerPin,
           note: note.trim() || undefined
         })
         if (result.success && result.data) {
-          const { approvedCount, alreadyApproved, approval } = result.data
+          const { approvedCount, excludedCount, alreadyApproved, approval } = result.data
           setNotice(
             alreadyApproved
               ? approval
                 ? `Already approved on ${new Date(approval.approved_at).toLocaleString()} by ${staffName(approval.approved_by_staff_id)}.`
-                : 'Already checked against the statement one-by-one — nothing left to approve.'
-              : `${approvedCount} ${approvedCount === 1 ? 'entry' : 'entries'} approved.`
+                : 'Already checked against the statement one-by-one — nothing left to record.'
+              : `${approvedCount} approved, ${excludedCount} left out.`
           )
           setNote('')
           await load(report.localDay)
         } else {
-          setError(result.error ?? 'Failed to approve this day')
+          setError(result.error ?? 'Failed to record this review')
         }
       } catch (err) {
-        setError(err instanceof Error ? err.message : 'Failed to approve this day')
+        setError(err instanceof Error ? err.message : 'Failed to record this review')
       } finally {
         setApproving(false)
       }
@@ -165,6 +293,12 @@ export default function EndOfDayPage() {
   const entriesPageResult = paginate(report.manualEntries, entriesPage, ENTRIES_PER_PAGE)
   const carryOverPageResult = paginate(report.carryOver, carryOverPage, ENTRIES_PER_PAGE)
 
+  const allPending = [...report.manualEntries, ...report.carryOver].filter((entry) => !entry.approved)
+  const tickedEntries = allPending.filter((entry) => selections.get(entry.paymentId)?.ticked ?? true)
+  const approvingCount = tickedEntries.length
+  const approvingTotal = tickedEntries.reduce((sum, entry) => sum + entry.amount, 0)
+  const leftOutCount = allPending.length - approvingCount
+
   return (
     <div className="space-y-4">
       <section className="rounded-xl border border-slate-200 bg-white p-4">
@@ -173,7 +307,8 @@ export default function EndOfDayPage() {
             <h3 className="text-xl font-semibold text-slate-900">End of Day — {report.localDay}</h3>
             <p className="mt-1 max-w-2xl text-base text-slate-500">
               Every manual M-Pesa entry is recorded on the cashier&rsquo;s own authority, with no PIN
-              at the till. This report, and a manager approving it, is the only check they get.
+              at the till. This review — approve what matches the statement, leave out what
+              doesn&rsquo;t with a reason — is the only check they get.
             </p>
           </div>
           <div className="flex gap-2">
@@ -266,6 +401,7 @@ export default function EndOfDayPage() {
             <table className="w-full text-left text-base">
               <thead className="text-slate-500">
                 <tr>
+                  <th className="py-2 pr-2">Include</th>
                   <th className="py-2 pr-2">Time</th>
                   <th className="py-2 pr-2">Sale</th>
                   <th className="py-2 pr-2">Cashier</th>
@@ -276,7 +412,14 @@ export default function EndOfDayPage() {
               </thead>
               <tbody>
                 {entriesPageResult.items.map((entry) => (
-                  <EntryRow key={entry.paymentId} entry={entry} showDay={false} />
+                  <EntryRow
+                    key={entry.paymentId}
+                    entry={entry}
+                    showDay={false}
+                    selection={selections.get(entry.paymentId)}
+                    onToggle={toggleEntry}
+                    onOpenReason={openReasonKeyboard}
+                  />
                 ))}
               </tbody>
             </table>
@@ -317,6 +460,7 @@ export default function EndOfDayPage() {
           <table className="w-full text-left text-base">
             <thead className="text-slate-500">
               <tr>
+                <th className="py-2 pr-2">Include</th>
                 <th className="py-2 pr-2">Day</th>
                 <th className="py-2 pr-2">Time</th>
                 <th className="py-2 pr-2">Sale</th>
@@ -328,7 +472,14 @@ export default function EndOfDayPage() {
             </thead>
             <tbody>
               {carryOverPageResult.items.map((entry) => (
-                <EntryRow key={entry.paymentId} entry={entry} showDay />
+                <EntryRow
+                  key={entry.paymentId}
+                  entry={entry}
+                  showDay
+                  selection={selections.get(entry.paymentId)}
+                  onToggle={toggleEntry}
+                  onOpenReason={openReasonKeyboard}
+                />
               ))}
             </tbody>
           </table>
@@ -360,15 +511,15 @@ export default function EndOfDayPage() {
 
       <section className="rounded-xl border border-slate-200 bg-white p-4">
         <div className="mb-3 flex items-center justify-between">
-          <span className="text-lg font-medium text-slate-700">Pending approval</span>
-          <span className="text-xl font-semibold text-slate-900">
-            {formatCurrency(report.pendingManualTotal)} ({report.pendingIds.length}{' '}
-            {report.pendingIds.length === 1 ? 'entry' : 'entries'})
+          <span className="text-lg font-medium text-slate-700">
+            Approving {approvingCount} of {allPending.length}{' '}
+            {allPending.length === 1 ? 'entry' : 'entries'}. {leftOutCount} left out.
           </span>
+          <span className="text-xl font-semibold text-slate-900">{formatCurrency(approvingTotal)}</span>
         </div>
 
         <label className="mb-1 block text-base font-medium text-slate-600">
-          Note for this approval (optional)
+          Note for this review (optional)
         </label>
         <input
           readOnly
@@ -385,16 +536,24 @@ export default function EndOfDayPage() {
           className="h-14 w-full rounded-xl bg-rose-600 text-lg font-semibold text-white transition active:scale-95 disabled:cursor-not-allowed disabled:opacity-50"
         >
           {approving
-            ? 'Approving…'
+            ? 'Working…'
             : report.pendingIds.length === 0
               ? 'Nothing pending'
-              : 'Approve day'}
+              : approvingCount === 0
+                ? 'Record review'
+                : 'Approve'}
         </button>
       </section>
 
       {collectingPin && (
         <ManagerPinModal
-          title={`Approve ${report.pendingIds.length} manual M-Pesa ${report.pendingIds.length === 1 ? 'entry' : 'entries'} for ${report.localDay}`}
+          title={
+            approvingCount > 0
+              ? `Approve ${approvingCount} ${approvingCount === 1 ? 'entry' : 'entries'}${
+                  leftOutCount > 0 ? `, leave ${leftOutCount} out` : ''
+                } for ${report.localDay}`
+              : `Record a review leaving out ${leftOutCount} ${leftOutCount === 1 ? 'entry' : 'entries'} for ${report.localDay}`
+          }
           onAuthorized={handleApproved}
           onCancel={() => setCollectingPin(false)}
         />

@@ -407,13 +407,16 @@ const api = {
     ipcRenderer.invoke('reports:end-of-day', { localDay }),
 
   /**
-   * A manager's "Approve day" action: approves exactly the manual M-Pesa
-   * entries named by `paymentIds` (the ids the caller's own report
-   * displayed), requiring a re-verified admin Manager PIN.
+   * A manager's end-of-day review: approves exactly the manual M-Pesa
+   * entries named by `approvedIds`, and records why each id in
+   * `excluded` was deliberately left pending (docs/phase-153) — both are
+   * the ids/reasons the caller's own report displayed. Requires a
+   * re-verified admin Manager PIN.
    *
    * @param {object} request
    * @param {string} request.localDay
-   * @param {number[]} request.paymentIds
+   * @param {number[]} request.approvedIds
+   * @param {Array<{ paymentId: number; reason?: string }>} request.excluded
    * @param {number} request.managerId
    * @param {string} request.managerPin
    * @param {string} [request.note]
@@ -421,7 +424,8 @@ const api = {
    */
   approveDayReport: (request: {
     localDay: string
-    paymentIds: number[]
+    approvedIds: number[]
+    excluded: Array<{ paymentId: number; reason?: string }>
     managerId: number
     managerPin: string
     note?: string

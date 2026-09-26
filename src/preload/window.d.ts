@@ -157,10 +157,11 @@ export interface PosApi {
   getDailySummary: () => Promise<ServiceResult<DailySummary>>
   /** Generates the end-of-day report for one Africa/Nairobi calendar day (defaults to today). Read-only. */
   getEndOfDayReport: (localDay?: string) => Promise<ServiceResult<EndOfDayReport>>
-  /** A manager's "Approve day" action on exactly the manual M-Pesa entries named by `paymentIds`. */
+  /** A manager's end-of-day review: approves `approvedIds` and records why each `excluded` entry was left pending. */
   approveDayReport: (request: {
     localDay: string
-    paymentIds: number[]
+    approvedIds: number[]
+    excluded: Array<{ paymentId: number; reason?: string }>
     managerId: number
     managerPin: string
     note?: string

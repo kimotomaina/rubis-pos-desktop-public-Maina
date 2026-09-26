@@ -345,6 +345,21 @@ function migrateOrdersFiscalColumns(connection: SqliteConnection): void {
 }
 
 /**
+ * Adds `excluded_count` to a `mpesa_day_approvals` table created before
+ * docs/phase-153 introduced per-entry exclusions — a fresh table already
+ * has the column via {@link SCHEMA.mpesaDayApprovals}, so this is a no-op
+ * there; the `try/catch` is the same idempotent pattern
+ * {@link migrateOrdersFiscalColumns} uses.
+ */
+function migrateMpesaDayApprovalsColumns(connection: SqliteConnection): void {
+  try {
+    connection.exec('ALTER TABLE mpesa_day_approvals ADD COLUMN excluded_count INTEGER NOT NULL DEFAULT 0')
+  } catch {
+    // Column already exists.
+  }
+}
+
+/**
  * DDL for all database tables.  Kept as named constants so tests can
  * assert the exact schema statements executed at startup.
  */
@@ -611,10 +626,26 @@ export const SCHEMA = {
     approved_by_staff_id INTEGER NOT NULL,
     approved_at TEXT NOT NULL,
     entry_count INTEGER NOT NULL,
+    excluded_count INTEGER NOT NULL DEFAULT 0,
     total_amount REAL NOT NULL,
     note TEXT
   )`,
-  mpesaDayApprovalsLocalDayIndex: `CREATE INDEX IF NOT EXISTS idx_mpesa_day_approvals_local_day ON mpesa_day_approvals (local_day)`
+  mpesaDayApprovalsLocalDayIndex: `CREATE INDEX IF NOT EXISTS idx_mpesa_day_approvals_local_day ON mpesa_day_approvals (local_day)`,
+  /**
+   * One manual entry a manager reviewed and deliberately left out of an
+   * approval (docs/phase-153) — e.g. a code not on the M-Pesa statement.
+   * `mpesa_payments` is untouched for these: `reconciled_at` stays NULL,
+   * so the entry surfaces again, still pending, on the next report's
+   * carry-over — this table only records *why* it was skipped and by
+   * which approval review, so that history isn't silently lost.
+   */
+  mpesaDayExclusions: `CREATE TABLE IF NOT EXISTS mpesa_day_exclusions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    approval_id INTEGER NOT NULL REFERENCES mpesa_day_approvals(id),
+    payment_id INTEGER NOT NULL,
+    reason TEXT
+  )`,
+  mpesaDayExclusionsPaymentIndex: `CREATE INDEX IF NOT EXISTS idx_mpesa_day_exclusions_payment ON mpesa_day_exclusions (payment_id)`
 } as const
 
 /** Options accepted by {@link createDatabase}. */
@@ -850,8 +881,21 @@ export interface MpesaDayApprovalRow {
   approved_by_staff_id: number
   approved_at: string
   entry_count: number
+  excluded_count: number
   total_amount: number
   note: string | null
+}
+
+/**
+ * Row shape of the `mpesa_day_exclusions` table — one manual entry a
+ * manager deliberately left pending during a day review (docs/phase-153),
+ * with an optional reason.
+ */
+export interface MpesaDayExclusionRow {
+  id: number
+  approval_id: number
+  payment_id: number
+  reason: string | null
 }
 
 /**
@@ -865,6 +909,7 @@ export interface MpesaDayApprovalRow {
 export interface ApproveMpesaEntriesResult {
   approval: MpesaDayApprovalRow | null
   approvedCount: number
+  excludedCount: number
   alreadyApproved: boolean
 }
 
@@ -1022,6 +1067,9 @@ export class RubisDatabase {
     connection.exec(SCHEMA.mpesaPaymentsUnreconciledIndex)
     connection.exec(SCHEMA.mpesaDayApprovals)
     connection.exec(SCHEMA.mpesaDayApprovalsLocalDayIndex)
+    migrateMpesaDayApprovalsColumns(connection)
+    connection.exec(SCHEMA.mpesaDayExclusions)
+    connection.exec(SCHEMA.mpesaDayExclusionsPaymentIndex)
     migrateOrdersFiscalColumns(connection)
     connection.exec(SCHEMA.fiscalInvoiceIndex)
     this.connection = connection
@@ -2369,12 +2417,44 @@ export class RubisDatabase {
   }
 
   /**
-   * Applies one approval's UPDATE to the manual payments it covers.
+   * The most recent exclusion recorded for each of the given payment ids
+   * (docs/phase-153), if any — carry-over uses this to show why an entry
+   * was left out last time, and by which day/approval. `id = MAX(id)`
+   * per `payment_id` picks the latest one when an entry has been left
+   * out more than once across several review cycles.
+   *
+   * @param {number[]} paymentIds
+   * @returns {Array<{ payment_id: number; reason: string | null; local_day: string; approved_by_staff_id: number }>}
+   */
+  getLatestExclusionsForPayments(
+    paymentIds: number[]
+  ): Array<{ payment_id: number; reason: string | null; local_day: string; approved_by_staff_id: number }> {
+    if (paymentIds.length === 0) return []
+    const placeholders = paymentIds.map(() => '?').join(', ')
+    return this.conn
+      .prepare(
+        `SELECT e.payment_id, e.reason, a.local_day, a.approved_by_staff_id
+         FROM mpesa_day_exclusions e
+         JOIN mpesa_day_approvals a ON a.id = e.approval_id
+         WHERE e.payment_id IN (${placeholders})
+           AND e.id = (SELECT MAX(id) FROM mpesa_day_exclusions e2 WHERE e2.payment_id = e.payment_id)`
+      )
+      .all(...paymentIds) as Array<{
+      payment_id: number
+      reason: string | null
+      local_day: string
+      approved_by_staff_id: number
+    }>
+  }
+
+  /**
+   * Applies one approval's UPDATE to the manual payments it approved.
    *
    * Split out from {@link RubisDatabase.approveMpesaEntries} only so a
    * test can force a mid-transaction failure right here and prove the
-   * whole approval — including the `mpesa_day_approvals` row
-   * `approveMpesaEntries` inserts just before calling this — rolls back
+   * whole review — including the `mpesa_day_approvals` row
+   * `approveMpesaEntries` inserts just before calling this, and any
+   * `mpesa_day_exclusions` rows it inserts just after — rolls back
    * together. better-sqlite3's `transaction()` wrapper rolls back
    * everything since the last commit on any throw, not only the
    * statement that threw; this method's only job is to be that
@@ -2401,95 +2481,23 @@ export class RubisDatabase {
   }
 
   /**
-   * A manager's end-of-day approval of a batch of manual M-Pesa entries
-   * (docs/phase-150.md deferred approval to this; docs/phase-151/152
-   * design this action) — the only check these entries get, since Step 3
-   * removed the per-sale manager PIN.
+   * Looks up the earlier day approval that already covers every one of
+   * `ids` — the phase-152 "already approved, nothing to redo" path,
+   * unchanged by phase-153's per-entry exclusions. `null` when those ids
+   * were instead settled one-by-one on the older per-payment
+   * Reconciliation page, which writes no `Approved in day report #…`
+   * note this can trace back to.
    *
-   * Approval is bound to exactly the ids passed in — the ids an
-   * end-of-day report actually displayed — never "every unapproved
-   * manual entry as of now". An entry recorded after that report was
-   * generated is therefore never swept in by it; it stays pending and
-   * appears on the next report instead.
-   *
-   * Idempotent per id via the same `reconciled_at IS NULL` guard
-   * {@link RubisDatabase.markMpesaPaymentReconciled} already uses: if
-   * every given id is already reconciled, no new `mpesa_day_approvals`
-   * row is created, and the caller is told which earlier approval
-   * covered them — backed by the `mpesa_day_approvals` row that
-   * approval created, not only by "0 rows changed" this time.
-   *
-   * @param {number[]} paymentIds — exactly the ids the report displayed
-   * @param {number} managerId — the re-verified admin's id
-   * @param {string} localDay — which day's report this approval is for
-   * @param {string | null} note — optional manager note, stored once on the approval, not repeated per row
+   * @param {number[]} ids
    * @returns {ApproveMpesaEntriesResult}
-   * @throws if `paymentIds` is empty
    */
-  approveMpesaEntries(
-    paymentIds: number[],
-    managerId: number,
-    localDay: string,
-    note: string | null
-  ): ApproveMpesaEntriesResult {
-    const uniqueIds = Array.from(new Set(paymentIds))
-    if (uniqueIds.length === 0) {
-      throw new Error('No entries given to approve')
-    }
-    const placeholders = uniqueIds.map(() => '?').join(', ')
-
-    const run = this.conn.transaction(() => {
-      const pending = this.conn
-        .prepare(
-          `SELECT id, amount FROM mpesa_payments WHERE id IN (${placeholders}) AND mode = 'manual' AND reconciled_at IS NULL`
-        )
-        .all(...uniqueIds) as Array<{ id: number; amount: number }>
-
-      if (pending.length === 0) {
-        return null
-      }
-
-      const nowIso = new Date().toISOString()
-      const totalAmount = pending.reduce((sum, row) => sum + row.amount, 0)
-
-      const insert = this.conn
-        .prepare(
-          'INSERT INTO mpesa_day_approvals (local_day, approved_by_staff_id, approved_at, entry_count, total_amount, note) VALUES (?, ?, ?, ?, ?, ?)'
-        )
-        .run(localDay, managerId, nowIso, pending.length, totalAmount, note)
-      const approvalId = Number(insert.lastInsertRowid)
-
-      this.markMpesaPaymentsApproved(
-        pending.map((row) => row.id),
-        managerId,
-        `Approved in day report #${approvalId}`,
-        nowIso
-      )
-
-      return approvalId
-    })
-
-    const createdApprovalId = run()
-    if (createdApprovalId !== null) {
-      const approval = this.getMpesaDayApprovalById(createdApprovalId)
-      if (!approval) {
-        throw new Error(`Approval ${createdApprovalId} vanished immediately after being recorded`)
-      }
-      return { approval, approvedCount: approval.entry_count, alreadyApproved: false }
-    }
-
-    // Every given id was already reconciled. `markMpesaPaymentsApproved`
-    // always writes a `reconciliation_note` naming the approval id, so a
-    // row reconciled through *this* method can be traced back to it — a
-    // row reconciled through the older per-payment Reconciliation page
-    // instead has some other note (or none), and `priorApproval` stays
-    // `null`: still correctly "already approved", just not by a day
-    // approval this method can name.
+  private lookupPriorDayApproval(ids: number[]): ApproveMpesaEntriesResult {
+    const placeholders = ids.map(() => '?').join(', ')
     const priorNoteRow = this.conn
       .prepare(
         `SELECT reconciliation_note FROM mpesa_payments WHERE id IN (${placeholders}) AND reconciliation_note LIKE 'Approved in day report #%' ORDER BY reconciled_at DESC LIMIT 1`
       )
-      .get(...uniqueIds) as { reconciliation_note: string } | undefined
+      .get(...ids) as { reconciliation_note: string } | undefined
 
     const priorApprovalId = priorNoteRow
       ? Number(priorNoteRow.reconciliation_note.replace('Approved in day report #', ''))
@@ -2497,7 +2505,146 @@ export class RubisDatabase {
     const priorApproval =
       priorApprovalId !== null ? (this.getMpesaDayApprovalById(priorApprovalId) ?? null) : null
 
-    return { approval: priorApproval, approvedCount: 0, alreadyApproved: true }
+    return { approval: priorApproval, approvedCount: 0, excludedCount: 0, alreadyApproved: true }
+  }
+
+  /**
+   * A manager's end-of-day review of a batch of manual M-Pesa entries
+   * (docs/phase-150.md deferred approval to this; docs/phase-151/152
+   * built the day approval; docs/phase-153 lets the manager leave
+   * individual entries out) — the only check these entries get, since
+   * Step 3 removed the per-sale manager PIN.
+   *
+   * Bound to exactly the ids passed in — the ids an end-of-day report
+   * actually displayed — never "every unapproved manual entry as of
+   * now". An entry recorded after that report was generated is
+   * therefore never swept in by it; it stays pending and appears on the
+   * next report instead. Left-out entries stay pending too, by design —
+   * `mpesa_payments` is never touched for them — but the exclusion
+   * itself, and why, is recorded so that decision isn't silently lost.
+   *
+   * Every id in `approvedIds`/`excluded` must currently be a manual,
+   * still-pending entry, or the whole call is refused — **except** the
+   * one case phase-152 already handled: `excluded` empty and every
+   * `approvedId` already reconciled, which is reported as already
+   * approved (see {@link RubisDatabase.lookupPriorDayApproval}) rather
+   * than refused, so a manager re-opening an already-approved report and
+   * pressing the button again doesn't hit an error.
+   *
+   * `approvedIds` and `excluded` may not both be empty — the caller
+   * (`approveDayReportSchema`) already enforces this, along with no id
+   * appearing twice or in both lists; this method still refuses an empty
+   * call defensively, since it is also reachable directly (as tests do).
+   *
+   * @param {number[]} approvedIds — exactly the ids to approve
+   * @param {Array<{ paymentId: number; reason: string | null }>} excluded — entries deliberately left pending, with why
+   * @param {number} managerId — the re-verified admin's id
+   * @param {string} localDay — which day's report this review is for
+   * @param {string | null} note — optional manager note, stored once on the approval, not repeated per row
+   * @returns {ApproveMpesaEntriesResult}
+   * @throws if both `approvedIds` and `excluded` are empty, or if any
+   *   given id is not a currently-pending manual entry (outside the
+   *   already-approved exception above)
+   */
+  approveMpesaEntries(
+    approvedIds: number[],
+    excluded: Array<{ paymentId: number; reason: string | null }>,
+    managerId: number,
+    localDay: string,
+    note: string | null
+  ): ApproveMpesaEntriesResult {
+    const uniqueApprovedIds = Array.from(new Set(approvedIds))
+    const uniqueExcludedIds = Array.from(new Set(excluded.map((entry) => entry.paymentId)))
+
+    if (uniqueApprovedIds.length === 0 && uniqueExcludedIds.length === 0) {
+      throw new Error('No entries given to record')
+    }
+
+    const allIds = Array.from(new Set([...uniqueApprovedIds, ...uniqueExcludedIds]))
+    const placeholders = allIds.map(() => '?').join(', ')
+    const rows = this.conn
+      .prepare(`SELECT id, mode, reconciled_at, amount FROM mpesa_payments WHERE id IN (${placeholders})`)
+      .all(...allIds) as Array<{
+      id: number
+      mode: MpesaPaymentMode
+      reconciled_at: string | null
+      amount: number
+    }>
+    const byId = new Map(rows.map((row) => [row.id, row]))
+
+    const isPendingManual = (id: number): boolean => {
+      const row = byId.get(id)
+      return row !== undefined && row.mode === 'manual' && row.reconciled_at === null
+    }
+
+    const everyApprovedAlreadyDone =
+      uniqueApprovedIds.length > 0 &&
+      uniqueApprovedIds.every((id) => {
+        const row = byId.get(id)
+        return row !== undefined && row.mode === 'manual' && row.reconciled_at !== null
+      })
+
+    if (uniqueExcludedIds.length === 0 && everyApprovedAlreadyDone) {
+      return this.lookupPriorDayApproval(uniqueApprovedIds)
+    }
+
+    if (!allIds.every(isPendingManual)) {
+      throw new Error(
+        'One or more entries are not a manual, still-pending payment — refresh the report and try again'
+      )
+    }
+
+    const run = this.conn.transaction(() => {
+      const nowIso = new Date().toISOString()
+      const totalAmount = uniqueApprovedIds.reduce((sum, id) => sum + (byId.get(id)?.amount ?? 0), 0)
+
+      const insert = this.conn
+        .prepare(
+          'INSERT INTO mpesa_day_approvals (local_day, approved_by_staff_id, approved_at, entry_count, excluded_count, total_amount, note) VALUES (?, ?, ?, ?, ?, ?, ?)'
+        )
+        .run(
+          localDay,
+          managerId,
+          nowIso,
+          uniqueApprovedIds.length,
+          uniqueExcludedIds.length,
+          totalAmount,
+          note
+        )
+      const approvalId = Number(insert.lastInsertRowid)
+
+      if (uniqueApprovedIds.length > 0) {
+        this.markMpesaPaymentsApproved(
+          uniqueApprovedIds,
+          managerId,
+          `Approved in day report #${approvalId}`,
+          nowIso
+        )
+      }
+
+      if (excluded.length > 0) {
+        const insertExclusion = this.conn.prepare(
+          'INSERT INTO mpesa_day_exclusions (approval_id, payment_id, reason) VALUES (?, ?, ?)'
+        )
+        for (const entry of excluded) {
+          insertExclusion.run(approvalId, entry.paymentId, entry.reason)
+        }
+      }
+
+      return approvalId
+    })
+
+    const approvalId = run()
+    const approval = this.getMpesaDayApprovalById(approvalId)
+    if (!approval) {
+      throw new Error(`Approval ${approvalId} vanished immediately after being recorded`)
+    }
+    return {
+      approval,
+      approvedCount: uniqueApprovedIds.length,
+      excludedCount: uniqueExcludedIds.length,
+      alreadyApproved: false
+    }
   }
 
   /**

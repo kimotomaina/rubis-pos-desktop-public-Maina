@@ -256,6 +256,18 @@ export interface ManualMpesaEntrySummary {
   reconciledAt: string | null
   reconciledByStaffId: number | null
   reconciledByStaffName: string | null
+  /**
+   * True only for an approved entry whose approver was the same person
+   * who recorded it (docs/phase-153 decision 6) — display only, changes
+   * no rule: self-approval stays allowed for the POC.
+   */
+  sameApproverAsRecorder: boolean
+  /**
+   * The most recent time a manager reviewed this entry and deliberately
+   * left it pending instead of approving it (docs/phase-153), if ever —
+   * carry-over shows this so the reason isn't lost between review cycles.
+   */
+  lastExclusion: { localDay: string; staffName: string; reason: string | null } | null
 }
 
 /**
@@ -341,6 +353,21 @@ export function generateEndOfDayReport(
     })
   )
 
+  const todaysManualPayments = todaysPayments.filter((payment) => payment.mode === 'manual')
+  const carryOverPayments = excludeVoided(db.getUnapprovedManualPaymentsBefore(startIso))
+
+  const allPaymentIds = [...todaysManualPayments, ...carryOverPayments].map((payment) => payment.id)
+  const lastExclusionByPaymentId = new Map(
+    db.getLatestExclusionsForPayments(allPaymentIds).map((exclusion) => [
+      exclusion.payment_id,
+      {
+        localDay: exclusion.local_day,
+        staffName: staffName(exclusion.approved_by_staff_id),
+        reason: exclusion.reason
+      }
+    ])
+  )
+
   const toSummary = (
     payment: MpesaPaymentRow & { status: OrderStatus }
   ): ManualMpesaEntrySummary => ({
@@ -356,11 +383,15 @@ export function generateEndOfDayReport(
     reconciledAt: payment.reconciled_at,
     reconciledByStaffId: payment.reconciled_by_staff_id,
     reconciledByStaffName:
-      payment.reconciled_by_staff_id !== null ? staffName(payment.reconciled_by_staff_id) : null
+      payment.reconciled_by_staff_id !== null ? staffName(payment.reconciled_by_staff_id) : null,
+    sameApproverAsRecorder:
+      payment.reconciled_by_staff_id !== null &&
+      payment.reconciled_by_staff_id === payment.entered_by_staff_id,
+    lastExclusion: lastExclusionByPaymentId.get(payment.id) ?? null
   })
 
-  const manualEntries = todaysPayments.filter((payment) => payment.mode === 'manual').map(toSummary)
-  const carryOver = excludeVoided(db.getUnapprovedManualPaymentsBefore(startIso)).map(toSummary)
+  const manualEntries = todaysManualPayments.map(toSummary)
+  const carryOver = carryOverPayments.map(toSummary)
 
   const pending = [...manualEntries, ...carryOver].filter((entry) => !entry.approved)
 

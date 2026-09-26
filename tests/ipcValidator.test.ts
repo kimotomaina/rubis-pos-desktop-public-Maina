@@ -849,43 +849,119 @@ describe('endOfDayReportSchema', () => {
   })
 })
 
+/**
+ * `approveDayReportSchema` (docs/phase-153): rewritten from a single
+ * `paymentIds` array to `approvedIds`/`excluded`, so a manager can leave
+ * individual entries out of a review with a reason instead of an
+ * all-or-nothing approval.
+ *   Old assertions (phase-152): a well-formed `{ paymentIds: [...] }`
+ *     payload was accepted; an empty `paymentIds` was refused
+ *     unconditionally.
+ *   New assertions: a well-formed `{ approvedIds, excluded }` payload is
+ *     accepted; either array may be empty on its own (docs/phase-153
+ *     decision 4 — a manager may leave every entry out), but not both;
+ *     no id may appear in both lists or twice within one list.
+ *   Decision that required it: docs/phase-153, "STEP 4 FOLLOW-UP (Part
+ *     A2): let the manager leave individual entries out of an approval."
+ */
 describe('approveDayReportSchema', () => {
-  const approval = {
+  const review = {
     managerId: 2,
     managerPin: '2222',
     localDay: '2026-09-10',
-    paymentIds: [1, 2, 3]
+    approvedIds: [1, 2],
+    excluded: [{ paymentId: 3, reason: 'not on statement' }]
   }
 
-  it('accepts a well-formed approval', () => {
-    expect(validate(approveDayReportSchema, approval).success).toBe(true)
+  it('accepts a well-formed review with both approved and excluded entries', () => {
+    expect(validate(approveDayReportSchema, review).success).toBe(true)
+  })
+
+  it('accepts approvedIds with no excluded entries (the phase-152 all-approved case)', () => {
+    expect(
+      validate(approveDayReportSchema, { ...review, approvedIds: [1, 2, 3], excluded: [] }).success
+    ).toBe(true)
+  })
+
+  it('accepts an empty approvedIds when every entry is excluded (docs/phase-153 decision 4)', () => {
+    expect(
+      validate(approveDayReportSchema, {
+        ...review,
+        approvedIds: [],
+        excluded: [{ paymentId: 1 }, { paymentId: 2 }, { paymentId: 3 }]
+      }).success
+    ).toBe(true)
+  })
+
+  it('an excluded entry needs no reason — it is optional', () => {
+    expect(
+      validate(approveDayReportSchema, { ...review, excluded: [{ paymentId: 3 }] }).success
+    ).toBe(true)
   })
 
   it('refuses a payload with no manager credentials, exactly like every other privileged action', () => {
-    const { managerId: _id, managerPin: _pin, ...anonymous } = approval
+    const { managerId: _id, managerPin: _pin, ...anonymous } = review
     expect(validate(approveDayReportSchema, anonymous).success).toBe(false)
   })
 
-  it('refuses an empty paymentIds list — there is nothing to approve without at least one id', () => {
-    expect(validate(approveDayReportSchema, { ...approval, paymentIds: [] }).success).toBe(false)
+  it('refuses when both approvedIds and excluded are empty — nothing to record', () => {
+    expect(
+      validate(approveDayReportSchema, { ...review, approvedIds: [], excluded: [] }).success
+    ).toBe(false)
   })
 
-  it('refuses a non-integer or non-positive payment id', () => {
-    expect(validate(approveDayReportSchema, { ...approval, paymentIds: [1.5] }).success).toBe(false)
-    expect(validate(approveDayReportSchema, { ...approval, paymentIds: [0] }).success).toBe(false)
-    expect(validate(approveDayReportSchema, { ...approval, paymentIds: [-1] }).success).toBe(false)
+  it('refuses an id present in both approvedIds and excluded', () => {
+    expect(
+      validate(approveDayReportSchema, {
+        ...review,
+        approvedIds: [1, 3],
+        excluded: [{ paymentId: 3, reason: 'not on statement' }]
+      }).success
+    ).toBe(false)
+  })
+
+  it('refuses the same id given twice within approvedIds', () => {
+    expect(
+      validate(approveDayReportSchema, { ...review, approvedIds: [1, 1, 2] }).success
+    ).toBe(false)
+  })
+
+  it('refuses the same id given twice within excluded', () => {
+    expect(
+      validate(approveDayReportSchema, {
+        ...review,
+        excluded: [{ paymentId: 3 }, { paymentId: 3, reason: 'again' }]
+      }).success
+    ).toBe(false)
+  })
+
+  it('refuses a non-integer or non-positive id in either list', () => {
+    expect(validate(approveDayReportSchema, { ...review, approvedIds: [1.5] }).success).toBe(false)
+    expect(validate(approveDayReportSchema, { ...review, approvedIds: [0] }).success).toBe(false)
+    expect(
+      validate(approveDayReportSchema, { ...review, excluded: [{ paymentId: -1 }] }).success
+    ).toBe(false)
   })
 
   it('refuses a malformed localDay', () => {
-    expect(validate(approveDayReportSchema, { ...approval, localDay: '2026/09/10' }).success).toBe(
+    expect(validate(approveDayReportSchema, { ...review, localDay: '2026/09/10' }).success).toBe(
       false
     )
   })
 
-  it('accepts an optional note, capped at 500 characters', () => {
-    expect(validate(approveDayReportSchema, { ...approval, note: 'checked' }).success).toBe(true)
+  it('caps an exclusion reason at 200 characters', () => {
     expect(
-      validate(approveDayReportSchema, { ...approval, note: 'x'.repeat(501) }).success
+      validate(approveDayReportSchema, { ...review, excluded: [{ paymentId: 3, reason: 'x'.repeat(200) }] })
+        .success
+    ).toBe(true)
+    expect(
+      validate(approveDayReportSchema, { ...review, excluded: [{ paymentId: 3, reason: 'x'.repeat(201) }] })
+        .success
     ).toBe(false)
+  })
+
+  it('accepts an optional note, capped at 500 characters', () => {
+    expect(validate(approveDayReportSchema, { ...review, note: 'checked' }).success).toBe(true)
+    expect(validate(approveDayReportSchema, { ...review, note: 'x'.repeat(501) }).success).toBe(false)
   })
 })

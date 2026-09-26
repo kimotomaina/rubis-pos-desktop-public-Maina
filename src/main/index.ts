@@ -2671,13 +2671,15 @@ app.whenReady().then(async () => {
   )
 
   /**
-   * IPC handler for a manager's "Approve day" action. Requires a
+   * IPC handler for a manager's end-of-day review. Requires a
    * re-verified admin Manager PIN — this is the only check a manual
    * M-Pesa entry gets, now that phase-150 removed the per-sale PIN.
    *
-   * `paymentIds` must be exactly the ids the renderer's report displayed;
-   * `approveMpesaEntries` only ever touches those, never "every
-   * unapproved entry as of now" (see its own doc comment).
+   * `approvedIds`/`excluded` must be exactly the ids the renderer's
+   * report displayed, split into what to approve and what to leave
+   * pending (docs/phase-153); `approveMpesaEntries` only ever touches
+   * those, never "every unapproved entry as of now" (see its own doc
+   * comment).
    */
   ipcMain.handle(
     'reports:approve-day',
@@ -2691,13 +2693,19 @@ app.whenReady().then(async () => {
         return { success: false, error: authz.error }
       }
       try {
-        const { localDay, paymentIds, managerId, note } = validation.data
-        const result = db.approveMpesaEntries(paymentIds, managerId, localDay, note?.trim() || null)
+        const { localDay, approvedIds, excluded, managerId, note } = validation.data
+        const result = db.approveMpesaEntries(
+          approvedIds,
+          excluded.map((entry) => ({ paymentId: entry.paymentId, reason: entry.reason?.trim() || null })),
+          managerId,
+          localDay,
+          note?.trim() || null
+        )
         return { success: true, data: result }
       } catch (err) {
         return {
           success: false,
-          error: err instanceof Error ? err.message : 'Failed to approve these entries'
+          error: err instanceof Error ? err.message : 'Failed to record this review'
         }
       }
     }

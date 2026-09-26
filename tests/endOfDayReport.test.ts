@@ -232,7 +232,7 @@ describe('RubisDatabase.approveMpesaEntries', () => {
     seedManual(db, ann, 40, 'BBB2222222', '2026-09-10T09:10:00.000Z')
     const report = generateEndOfDayReport(db, '2026-09-10')
 
-    const result = db.approveMpesaEntries(report.pendingIds, manager, '2026-09-10', 'end of day')
+    const result = db.approveMpesaEntries(report.pendingIds, [], manager, '2026-09-10', 'end of day')
 
     expect(result.alreadyApproved).toBe(false)
     expect(result.approvedCount).toBe(2)
@@ -256,7 +256,7 @@ describe('RubisDatabase.approveMpesaEntries', () => {
     // A second sale lands after the report was generated but before it is approved.
     seedManual(db, ann, 45, 'DDD4444444', '2026-09-10T09:05:00.000Z')
 
-    const result = db.approveMpesaEntries(reportBefore.pendingIds, manager, '2026-09-10', null)
+    const result = db.approveMpesaEntries(reportBefore.pendingIds, [], manager, '2026-09-10', null)
     expect(result.approvedCount).toBe(1)
 
     const reportAfter = generateEndOfDayReport(db, '2026-09-10')
@@ -271,10 +271,10 @@ describe('RubisDatabase.approveMpesaEntries', () => {
     seedManual(db, ann, 60, 'EEE5555555', '2026-09-10T09:00:00.000Z')
     const report = generateEndOfDayReport(db, '2026-09-10')
 
-    const first = db.approveMpesaEntries(report.pendingIds, manager, '2026-09-10', 'first pass')
+    const first = db.approveMpesaEntries(report.pendingIds, [], manager, '2026-09-10', 'first pass')
     expect(first.alreadyApproved).toBe(false)
 
-    const second = db.approveMpesaEntries(report.pendingIds, manager, '2026-09-10', 'second pass')
+    const second = db.approveMpesaEntries(report.pendingIds, [], manager, '2026-09-10', 'second pass')
     expect(second.alreadyApproved).toBe(true)
     expect(second.approvedCount).toBe(0)
     expect(second.approval?.id).toBe(first.approval?.id)
@@ -289,7 +289,7 @@ describe('RubisDatabase.approveMpesaEntries', () => {
     const paymentId = db.listUnreconciledMpesaPayments()[0].id
     db.markMpesaPaymentReconciled(paymentId, manager, 'checked against the statement')
 
-    const result = db.approveMpesaEntries([paymentId], manager, '2026-09-10', null)
+    const result = db.approveMpesaEntries([paymentId], [], manager, '2026-09-10', null)
 
     expect(result.alreadyApproved).toBe(true)
     expect(result.approvedCount).toBe(0)
@@ -309,7 +309,7 @@ describe('RubisDatabase.approveMpesaEntries', () => {
       })
 
     expect(() =>
-      db.approveMpesaEntries(report.pendingIds, manager, '2026-09-10', null)
+      db.approveMpesaEntries(report.pendingIds, [], manager, '2026-09-10', null)
     ).toThrow('simulated failure mid-transaction')
     spy.mockRestore()
 
@@ -323,13 +323,167 @@ describe('RubisDatabase.approveMpesaEntries', () => {
 
     // A real, non-forced retry still succeeds — the failure above did not
     // corrupt anything.
-    const retried = db.approveMpesaEntries(report.pendingIds, manager, '2026-09-10', null)
+    const retried = db.approveMpesaEntries(report.pendingIds, [], manager, '2026-09-10', null)
     expect(retried.approvedCount).toBe(1)
   })
 
-  it('throws when given no ids', () => {
+  it('rolls back the exclusion rows too when the update fails mid-transaction', () => {
+    const db = freshDb()
+    const { ann, manager } = seedStaff(db)
+    seedManual(db, ann, 60, 'HHH8888888', '2026-09-10T09:00:00.000Z')
+    seedManual(db, ann, 25, 'III9999999', '2026-09-10T09:05:00.000Z')
+    const report = generateEndOfDayReport(db, '2026-09-10')
+    const [approveId, excludeId] = report.pendingIds
+
+    const spy = vi
+      .spyOn(db as unknown as { markMpesaPaymentsApproved: () => void }, 'markMpesaPaymentsApproved')
+      .mockImplementation(() => {
+        throw new Error('simulated failure mid-transaction')
+      })
+
+    expect(() =>
+      db.approveMpesaEntries(
+        [approveId],
+        [{ paymentId: excludeId, reason: 'not on statement' }],
+        manager,
+        '2026-09-10',
+        null
+      )
+    ).toThrow('simulated failure mid-transaction')
+    spy.mockRestore()
+
+    const after = generateEndOfDayReport(db, '2026-09-10')
+    expect(after.pendingIds.sort()).toEqual([approveId, excludeId].sort())
+    expect(db.getLatestExclusionsForPayments([excludeId])).toEqual([])
+  })
+
+  it('throws when given no ids in either list', () => {
     const db = freshDb()
     const { manager } = seedStaff(db)
-    expect(() => db.approveMpesaEntries([], manager, '2026-09-10', null)).toThrow(/no entries/i)
+    expect(() => db.approveMpesaEntries([], [], manager, '2026-09-10', null)).toThrow(/no entries/i)
+  })
+})
+
+describe('RubisDatabase.approveMpesaEntries — per-entry exclusions (docs/phase-153)', () => {
+  it('unticking one entry approves the others and leaves it pending, with its reason recorded', () => {
+    const db = freshDb()
+    const { ann, manager } = seedStaff(db)
+    seedManual(db, ann, 60, 'JJJ1010101', '2026-09-10T09:00:00.000Z')
+    seedManual(db, ann, 25, 'KKK2020202', '2026-09-10T09:05:00.000Z')
+    const report = generateEndOfDayReport(db, '2026-09-10')
+    const approved = report.manualEntries.find((e) => e.reference === 'JJJ1010101')!
+    const leftOut = report.manualEntries.find((e) => e.reference === 'KKK2020202')!
+
+    const result = db.approveMpesaEntries(
+      [approved.paymentId],
+      [{ paymentId: leftOut.paymentId, reason: 'not on statement' }],
+      manager,
+      '2026-09-10',
+      null
+    )
+
+    expect(result.approvedCount).toBe(1)
+    expect(result.excludedCount).toBe(1)
+    expect(result.approval?.entry_count).toBe(1)
+    expect(result.approval?.excluded_count).toBe(1)
+    expect(result.approval?.total_amount).toBe(60) // only the approved entry's amount
+
+    const after = generateEndOfDayReport(db, '2026-09-10')
+    expect(after.manualEntries.find((e) => e.reference === 'JJJ1010101')!.approved).toBe(true)
+    expect(after.manualEntries.find((e) => e.reference === 'KKK2020202')!.approved).toBe(false)
+    expect(after.pendingIds).toEqual([leftOut.paymentId])
+  })
+
+  it('the left-out entry surfaces its reason, day, and manager name on the next report\'s carry-over', () => {
+    const db = freshDb()
+    const { ann, manager } = seedStaff(db)
+    seedManual(db, ann, 25, 'LLL3030303', '2026-09-08T09:00:00.000Z')
+    const report = generateEndOfDayReport(db, '2026-09-10')
+    const entry = report.carryOver[0]
+
+    db.approveMpesaEntries([], [{ paymentId: entry.paymentId, reason: 'not on statement' }], manager, '2026-09-10', null)
+
+    const next = generateEndOfDayReport(db, '2026-09-11')
+    const carried = next.carryOver.find((e) => e.paymentId === entry.paymentId)!
+    expect(carried.approved).toBe(false)
+    expect(carried.lastExclusion).toEqual({
+      localDay: '2026-09-10',
+      staffName: 'Manager Mo',
+      reason: 'not on statement'
+    })
+  })
+
+  it('unticking every entry records a review with 0 approved and every exclusion stored — nothing approved', () => {
+    const db = freshDb()
+    const { ann, manager } = seedStaff(db)
+    seedManual(db, ann, 60, 'MMM4040404', '2026-09-10T09:00:00.000Z')
+    seedManual(db, ann, 25, 'NNN5050505', '2026-09-10T09:05:00.000Z')
+    const report = generateEndOfDayReport(db, '2026-09-10')
+
+    const result = db.approveMpesaEntries(
+      [],
+      report.pendingIds.map((id) => ({ paymentId: id, reason: 'pending statement check' })),
+      manager,
+      '2026-09-10',
+      null
+    )
+
+    expect(result.alreadyApproved).toBe(false)
+    expect(result.approvedCount).toBe(0)
+    expect(result.excludedCount).toBe(2)
+    expect(result.approval?.entry_count).toBe(0)
+    expect(result.approval?.excluded_count).toBe(2)
+    expect(result.approval?.total_amount).toBe(0)
+
+    const after = generateEndOfDayReport(db, '2026-09-10')
+    expect(after.pendingIds.sort()).toEqual([...report.pendingIds].sort())
+    expect(after.manualEntries.every((e) => !e.approved)).toBe(true)
+  })
+
+  // An id present in both lists, a duplicate id, and an empty submission
+  // are all refused at the wire boundary (`approveDayReportSchema`,
+  // tested in `tests/ipcValidator.test.ts`) — the database method itself
+  // dedupes each list independently and has no way to know a caller
+  // meant two different things by the same id, so it is not this
+  // method's job to catch that particular mistake.
+
+  it('refuses a non-manual id', () => {
+    const db = freshDb()
+    const { ann, manager } = seedStaff(db)
+    const daraja = seedDaraja(db, ann, 40, 'PPP7070707', '2026-09-10T09:00:00.000Z')
+    const darajaPaymentId = db.listMpesaPayments().find((p) => p.order_local_id === daraja.localId)!.id
+
+    expect(() =>
+      db.approveMpesaEntries([darajaPaymentId], [], manager, '2026-09-10', null)
+    ).toThrow(/manual, still-pending/i)
+  })
+
+  it('refuses an already-approved id given as an exclusion', () => {
+    const db = freshDb()
+    const { ann, manager } = seedStaff(db)
+    seedManual(db, ann, 60, 'QQQ8080808', '2026-09-10T09:00:00.000Z')
+    const report = generateEndOfDayReport(db, '2026-09-10')
+    db.approveMpesaEntries(report.pendingIds, [], manager, '2026-09-10', null)
+
+    expect(() =>
+      db.approveMpesaEntries([], [{ paymentId: report.pendingIds[0], reason: 'changed my mind' }], manager, '2026-09-10', null)
+    ).toThrow(/manual, still-pending/i)
+  })
+
+  it('the "same person" marker appears only when the approver recorded that entry themselves', () => {
+    const db = freshDb()
+    const { ann, manager } = seedStaff(db)
+    seedManual(db, ann, 60, 'RRR9090909', '2026-09-10T09:00:00.000Z')
+    seedManual(db, manager, 40, 'SSS0101010', '2026-09-10T09:05:00.000Z')
+    const report = generateEndOfDayReport(db, '2026-09-10')
+    db.approveMpesaEntries(report.pendingIds, [], manager, '2026-09-10', null)
+
+    const after = generateEndOfDayReport(db, '2026-09-10')
+    expect(after.manualEntries.find((e) => e.reference === 'RRR9090909')!.sameApproverAsRecorder).toBe(
+      false
+    )
+    expect(after.manualEntries.find((e) => e.reference === 'SSS0101010')!.sameApproverAsRecorder).toBe(
+      true
+    )
   })
 })
