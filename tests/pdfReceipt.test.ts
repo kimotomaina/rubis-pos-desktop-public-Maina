@@ -99,4 +99,61 @@ describe('generatePdfReceipt', () => {
 
     expect(existsSync(filePath)).toBe(true)
   })
+
+  /**
+   * docs/phase-164 — the CU date/time/serial block and the DUPLICATE
+   * stamp, shared with `printer.ts` via `buildFiscalBlockLines`
+   * (`tests/receiptFiscalBlock.test.ts` asserts the actual line content
+   * that function produces, since it's a plain string array; PDF output
+   * itself isn't text-assertable here, per this file's own note above —
+   * these tests only prove each shape reaches `generatePdfReceipt`
+   * without throwing, the same way the discount tests above do.
+   */
+  it('accepts a fiscalized order with a device CU date/time and serial, and still produces a PDF', async () => {
+    const fiscalOrder: ReceiptOrder = {
+      ...order,
+      fiscalInvoiceNumber: 'KRA-0010',
+      fiscalizedAt: '27-08-2026 09:15:00',
+      fiscalizedAtSource: 'device',
+      cuSerial: 'CU-SERIAL-0010'
+    }
+
+    const filePath = await generatePdfReceipt(fiscalOrder, items, settings)
+
+    expect(existsSync(filePath)).toBe(true)
+  })
+
+  it('accepts a fiscalized order with a local-fallback timestamp and no serial, and still produces a PDF', async () => {
+    const fiscalOrder: ReceiptOrder = {
+      ...order,
+      fiscalInvoiceNumber: 'KRA-0011',
+      fiscalizedAt: '2026-08-27T09:15:00.000Z',
+      fiscalizedAtSource: 'local-fallback'
+    }
+
+    const filePath = await generatePdfReceipt(fiscalOrder, items, settings)
+
+    expect(existsSync(filePath)).toBe(true)
+  })
+
+  it('accepts an unfiled order (no fiscalInvoiceNumber) and still produces a PDF', async () => {
+    const unfiledOrder: ReceiptOrder = {
+      ...order,
+      fiscalizedAt: '27-08-2026 09:15:00',
+      fiscalizedAtSource: 'device',
+      cuSerial: 'CU-SERIAL-0012'
+    }
+
+    const filePath = await generatePdfReceipt(unfiledOrder, items, settings)
+
+    expect(existsSync(filePath)).toBe(true)
+  })
+
+  it('accepts isDuplicate:true and still produces a PDF', async () => {
+    const duplicateOrder: ReceiptOrder = { ...order, isDuplicate: true }
+
+    const filePath = await generatePdfReceipt(duplicateOrder, items, settings)
+
+    expect(existsSync(filePath)).toBe(true)
+  })
 })

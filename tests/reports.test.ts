@@ -39,6 +39,7 @@ const order = (overrides: Partial<OrderRow> = {}): OrderRow => ({
   fiscal_vat_groups_json: null,
   fiscal_fiscalized_at_source: null,
   fiscal_cu_serial: null,
+  receipt_printed_at: null,
   ...overrides
 })
 

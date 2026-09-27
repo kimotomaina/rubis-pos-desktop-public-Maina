@@ -28,6 +28,7 @@ import { formatCurrency } from './currency.js'
 import { generatePdfReceipt } from './pdf-receipt.js'
 import { computeReceiptTotals } from '../lib/receiptTotals.js'
 import type { ReceiptTotalsLineItem } from '../lib/receiptTotals.js'
+import { buildFiscalBlockLines } from '../lib/receiptFiscalBlock.js'
 
 /** Store-level configuration resolved once at startup from env vars / settings. */
 export interface PrinterSettings {
@@ -63,6 +64,21 @@ export interface ReceiptOrder {
   fiscalInvoiceNumber?: string
   /** Base64 QR code payload returned (or generated) at fiscalization time. */
   fiscalQrCode?: string
+  /** The control unit's own date/time stamp, stored verbatim (docs/phase-164). See {@link buildFiscalBlockLines}. */
+  fiscalizedAt?: string
+  /** Where {@link fiscalizedAt} came from (docs/phase-164). */
+  fiscalizedAtSource?: 'device' | 'local-fallback'
+  /** The control unit's own serial number (docs/phase-164). */
+  cuSerial?: string
+  /**
+   * True when this is not the first successful print of this sale's
+   * receipt (docs/phase-164) — stamps "DUPLICATE" at the top and bottom
+   * so a reprint can never be mistaken for the original. Decided by the
+   * caller (`main/index.ts`'s `receipt:print` handler), from whether
+   * `orders.receipt_printed_at` was already set before this attempt —
+   * never guessed here.
+   */
+  isDuplicate?: boolean
   /** The amount actually charged (docs/phase-161) - printed verbatim, never recomputed. See {@link computeReceiptTotals}. */
   total: number
   /** Cart-level discount applied at checkout, when any (docs/phase-161). */
@@ -231,6 +247,14 @@ export async function renderReceipt(
   )
 
   client.alignCenter()
+  // docs/phase-164, post-implementation checklist item 11: any print past
+  // the first successful one for this sale is stamped a duplicate, top
+  // and bottom, so it can never be mistaken for the original receipt.
+  if (order.isDuplicate) {
+    client.bold(true)
+    client.println('*** DUPLICATE ***')
+    client.bold(false)
+  }
   client.bold(true)
   client.println(settings.storeName)
   client.bold(false)
@@ -238,7 +262,7 @@ export async function renderReceipt(
     client.println(`PIN: ${settings.storeKraPin}`)
   }
   client.println(`Order #${order.localId}`)
-  client.println(new Date(order.createdAt).toLocaleString())
+  client.println(`Sale time: ${new Date(order.createdAt).toLocaleString()}`)
   client.println(`Cashier: ${order.cashierName}`)
   if (order.customerPin) {
     client.println(`Customer PIN: ${order.customerPin}`)
@@ -274,14 +298,25 @@ export async function renderReceipt(
   client.alignCenter()
   client.println('Thank you!')
 
-  if (order.fiscalInvoiceNumber || order.fiscalQrCode) {
+  // docs/phase-164: CU invoice number, date/time and serial — the VIL G03
+  // manual's "details received from control unit" — shared with the PDF
+  // fallback via buildFiscalBlockLines. Empty for a non-fiscalized order,
+  // so the block (and the drawLine below) never appears for one.
+  const fiscalLines = buildFiscalBlockLines(order)
+  if (fiscalLines.length > 0 || order.fiscalQrCode) {
     client.drawLine()
-    if (order.fiscalInvoiceNumber) {
-      client.println(`Fiscal Inv: ${order.fiscalInvoiceNumber}`)
+    for (const line of fiscalLines) {
+      client.println(line)
     }
     if (order.fiscalQrCode) {
       await printFiscalQrCode(client, order.fiscalQrCode, order.fiscalInvoiceNumber)
     }
+  }
+
+  if (order.isDuplicate) {
+    client.bold(true)
+    client.println('*** DUPLICATE ***')
+    client.bold(false)
   }
 
   client.cut()

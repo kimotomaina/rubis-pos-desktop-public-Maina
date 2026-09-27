@@ -114,6 +114,18 @@ export interface OrderRow {
    * time, or the order was fiscalized before this column existed.
    */
   fiscal_cu_serial: string | null
+  /**
+   * When this sale's receipt was first successfully printed (physical
+   * print OR the PDF fallback — either counts, since both produce a real
+   * receipt), or `null` if never printed (docs/phase-164). Write-once,
+   * like the fiscal fields above: the FIRST successful print sets it, and
+   * every later print of the same sale sees it already set, so it can be
+   * stamped "DUPLICATE" rather than mistaken for the original. Set by
+   * {@link RubisDatabase.markReceiptPrinted}, read by
+   * {@link RubisDatabase.hasReceiptPrinted}. Applies to every sale
+   * receipt, fiscalized or not — unrelated to fiscal status.
+   */
+  receipt_printed_at: string | null
 }
 
 /** Role assignable to a staff account. */
@@ -384,6 +396,20 @@ function migrateOrdersFiscalColumns(connection: SqliteConnection): void {
 }
 
 /**
+ * Adds `receipt_printed_at` to a pre-existing `orders` table (docs/
+ * phase-164) — kept separate from {@link migrateOrdersFiscalColumns}
+ * since it is not a fiscal column (it applies to every sale receipt,
+ * fiscalized or not); same idempotent `ALTER TABLE` pattern.
+ */
+function migrateOrdersReceiptColumns(connection: SqliteConnection): void {
+  try {
+    connection.exec('ALTER TABLE orders ADD COLUMN receipt_printed_at TEXT')
+  } catch {
+    // Column already exists — table was created with the current schema.
+  }
+}
+
+/**
  * Adds `excluded_count` to a `mpesa_day_approvals` table created before
  * docs/phase-153 introduced per-entry exclusions — a fresh table already
  * has the column via {@link SCHEMA.mpesaDayApprovals}, so this is a no-op
@@ -436,7 +462,8 @@ export const SCHEMA = {
     fiscal_data_issue TEXT,
     fiscal_vat_groups_json TEXT,
     fiscal_fiscalized_at_source TEXT CHECK (fiscal_fiscalized_at_source IN ('device', 'local-fallback')),
-    fiscal_cu_serial TEXT
+    fiscal_cu_serial TEXT,
+    receipt_printed_at TEXT
   )`,
   syncQueue: `CREATE TABLE IF NOT EXISTS sync_queue (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1120,6 +1147,7 @@ export class RubisDatabase {
     connection.exec(SCHEMA.mpesaDayExclusions)
     connection.exec(SCHEMA.mpesaDayExclusionsPaymentIndex)
     migrateOrdersFiscalColumns(connection)
+    migrateOrdersReceiptColumns(connection)
     connection.exec(SCHEMA.fiscalInvoiceIndex)
     connection.exec(SCHEMA.ordersCreatedAtIndex)
     this.connection = connection
@@ -1458,9 +1486,44 @@ export class RubisDatabase {
   getOrder(localId: number): OrderRow | undefined {
     return this.conn
       .prepare(
-        'SELECT local_id, shopify_order_id, total, status, created_at, payload_json, staff_id, payment_method, tendered_amount, change_due, reference_number, shift_id, fiscal_invoice_number, fiscal_qr_code, fiscal_fiscalized_at, fiscal_status, fiscal_error_reason, fiscal_error_kind, fiscal_request_json, fiscal_data_issue, fiscal_vat_groups_json, fiscal_fiscalized_at_source, fiscal_cu_serial FROM orders WHERE local_id = ?'
+        'SELECT local_id, shopify_order_id, total, status, created_at, payload_json, staff_id, payment_method, tendered_amount, change_due, reference_number, shift_id, fiscal_invoice_number, fiscal_qr_code, fiscal_fiscalized_at, fiscal_status, fiscal_error_reason, fiscal_error_kind, fiscal_request_json, fiscal_data_issue, fiscal_vat_groups_json, fiscal_fiscalized_at_source, fiscal_cu_serial, receipt_printed_at FROM orders WHERE local_id = ?'
       )
       .get(localId) as OrderRow | undefined
+  }
+
+  /**
+   * Whether this sale's receipt has already been printed once
+   * (docs/phase-164) — the "original vs duplicate" question the
+   * `receipt:print` IPC handler asks before rendering, since it is the
+   * single call site for every print of a sale's receipt (the very first
+   * one and any later reprint alike; see docs/phase-164's audit — there
+   * is no separate "print on checkout" code path to tell them apart by).
+   *
+   * @param {number} localId
+   * @returns {boolean}
+   */
+  hasReceiptPrinted(localId: number): boolean {
+    const row = this.conn
+      .prepare('SELECT receipt_printed_at FROM orders WHERE local_id = ?')
+      .get(localId) as { receipt_printed_at: string | null } | undefined
+    return !!row?.receipt_printed_at
+  }
+
+  /**
+   * Records this sale's receipt as printed — write-once via
+   * `COALESCE(receipt_printed_at, ?)`, so calling this again after a
+   * reprint leaves the original print's timestamp in place. The caller
+   * (`main/index.ts`) calls this only AFTER a print actually succeeds
+   * (physical print or the PDF fallback) — a failed attempt (printer
+   * offline AND the PDF fallback also failed) leaves this unset, so the
+   * next attempt is still correctly treated as the original.
+   *
+   * @param {number} localId
+   */
+  markReceiptPrinted(localId: number): void {
+    this.conn
+      .prepare('UPDATE orders SET receipt_printed_at = COALESCE(receipt_printed_at, ?) WHERE local_id = ?')
+      .run(new Date().toISOString(), localId)
   }
 
   /**
@@ -1619,7 +1682,7 @@ export class RubisDatabase {
   getOrderByFiscalInvoiceNumber(invoiceNumber: string): OrderRow | undefined {
     return this.conn
       .prepare(
-        'SELECT local_id, shopify_order_id, total, status, created_at, payload_json, staff_id, payment_method, tendered_amount, change_due, reference_number, shift_id, fiscal_invoice_number, fiscal_qr_code, fiscal_fiscalized_at, fiscal_status, fiscal_error_reason, fiscal_error_kind, fiscal_request_json, fiscal_data_issue, fiscal_vat_groups_json, fiscal_fiscalized_at_source, fiscal_cu_serial FROM orders WHERE fiscal_invoice_number = ?'
+        'SELECT local_id, shopify_order_id, total, status, created_at, payload_json, staff_id, payment_method, tendered_amount, change_due, reference_number, shift_id, fiscal_invoice_number, fiscal_qr_code, fiscal_fiscalized_at, fiscal_status, fiscal_error_reason, fiscal_error_kind, fiscal_request_json, fiscal_data_issue, fiscal_vat_groups_json, fiscal_fiscalized_at_source, fiscal_cu_serial, receipt_printed_at FROM orders WHERE fiscal_invoice_number = ?'
       )
       .get(invoiceNumber) as OrderRow | undefined
   }
@@ -1659,7 +1722,8 @@ export class RubisDatabase {
         `SELECT local_id, shopify_order_id, total, status, created_at, payload_json, staff_id, payment_method,
                 tendered_amount, change_due, reference_number, shift_id, fiscal_invoice_number, fiscal_qr_code,
                 fiscal_fiscalized_at, fiscal_status, fiscal_error_reason, fiscal_error_kind, fiscal_request_json,
-                fiscal_data_issue, fiscal_vat_groups_json, fiscal_fiscalized_at_source, fiscal_cu_serial
+                fiscal_data_issue, fiscal_vat_groups_json, fiscal_fiscalized_at_source, fiscal_cu_serial,
+                receipt_printed_at
          FROM orders WHERE created_at >= ? AND created_at < ? ORDER BY created_at ASC`
       )
       .all(startIso, endIso) as OrderRow[]
@@ -1690,7 +1754,8 @@ export class RubisDatabase {
         `SELECT local_id, shopify_order_id, total, status, created_at, payload_json, staff_id, payment_method,
                 tendered_amount, change_due, reference_number, shift_id, fiscal_invoice_number, fiscal_qr_code,
                 fiscal_fiscalized_at, fiscal_status, fiscal_error_reason, fiscal_error_kind, fiscal_request_json,
-                fiscal_data_issue, fiscal_vat_groups_json, fiscal_fiscalized_at_source, fiscal_cu_serial
+                fiscal_data_issue, fiscal_vat_groups_json, fiscal_fiscalized_at_source, fiscal_cu_serial,
+                receipt_printed_at
          FROM orders WHERE created_at >= ? AND created_at < ? ORDER BY created_at DESC LIMIT ? OFFSET ?`
       )
       .all(startIso, endIso, limit, offset) as OrderRow[]
@@ -1796,7 +1861,7 @@ export class RubisDatabase {
   getOrders(limit = 50, offset = 0): OrderRow[] {
     return this.conn
       .prepare(
-        'SELECT local_id, shopify_order_id, total, status, created_at, payload_json, fiscal_invoice_number, fiscal_qr_code, fiscal_fiscalized_at, fiscal_status, fiscal_error_reason, fiscal_error_kind, fiscal_request_json, fiscal_data_issue, fiscal_vat_groups_json, fiscal_fiscalized_at_source, fiscal_cu_serial FROM orders ORDER BY created_at DESC LIMIT ? OFFSET ?'
+        'SELECT local_id, shopify_order_id, total, status, created_at, payload_json, fiscal_invoice_number, fiscal_qr_code, fiscal_fiscalized_at, fiscal_status, fiscal_error_reason, fiscal_error_kind, fiscal_request_json, fiscal_data_issue, fiscal_vat_groups_json, fiscal_fiscalized_at_source, fiscal_cu_serial, receipt_printed_at FROM orders ORDER BY created_at DESC LIMIT ? OFFSET ?'
       )
       .all(limit, offset) as OrderRow[]
   }

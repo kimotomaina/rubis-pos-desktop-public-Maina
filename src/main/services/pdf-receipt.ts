@@ -16,6 +16,7 @@ import { formatCurrency } from './currency.js'
 import { formatVatRateLabel } from './reports.js'
 import { computeReceiptTotals } from '../lib/receiptTotals.js'
 import type { ReceiptTotalsLineItem } from '../lib/receiptTotals.js'
+import { buildFiscalBlockLines } from '../lib/receiptFiscalBlock.js'
 
 /** Narrow receipt-page width (points) approximating an 80mm thermal roll. */
 const PAGE_WIDTH = 280
@@ -56,10 +57,18 @@ export async function generatePdfReceipt(
     doc.on('error', reject)
     doc.pipe(stream)
 
+    // docs/phase-164, post-implementation checklist item 11: any print
+    // past the first successful one for this sale is stamped a duplicate,
+    // top and bottom, so it can never be mistaken for the original
+    // receipt — same rule as the thermal path in `printer.ts`.
+    if (order.isDuplicate) {
+      doc.font('Helvetica-Bold').text('*** DUPLICATE ***', { align: 'center' })
+      doc.font('Helvetica')
+    }
     doc.font('Helvetica-Bold').fontSize(14).text(settings.storeName, { align: 'center' })
     doc.font('Helvetica').fontSize(9)
     doc.text(`Order #${order.localId}`, { align: 'center' })
-    doc.text(new Date(order.createdAt).toLocaleString(), { align: 'center' })
+    doc.text(`Sale time: ${new Date(order.createdAt).toLocaleString()}`, { align: 'center' })
     doc.text(`Cashier: ${order.cashierName}`)
     if (order.customerPin) {
       doc.text(`Customer PIN: ${order.customerPin}`)
@@ -88,6 +97,24 @@ export async function generatePdfReceipt(
     }
     doc.text(DASHED_LINE)
     doc.text('Thank you!', { align: 'center' })
+
+    // docs/phase-164: CU invoice number, date/time and serial — the same
+    // shared helper `printer.ts`'s thermal path uses, so both surfaces
+    // agree on content and wording. Empty for a non-fiscalized order, so
+    // nothing prints here at all in that case. No QR image in the PDF
+    // fallback — it never carried one before this phase either.
+    const fiscalLines = buildFiscalBlockLines(order)
+    if (fiscalLines.length > 0) {
+      doc.text(DASHED_LINE)
+      for (const line of fiscalLines) {
+        doc.text(line)
+      }
+    }
+
+    if (order.isDuplicate) {
+      doc.font('Helvetica-Bold').text('*** DUPLICATE ***', { align: 'center' })
+      doc.font('Helvetica')
+    }
 
     doc.end()
   })

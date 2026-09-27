@@ -179,7 +179,8 @@ describe('RubisDatabase.closeShift', () => {
     fiscal_data_issue: null,
     fiscal_vat_groups_json: null,
     fiscal_fiscalized_at_source: null,
-    fiscal_cu_serial: null
+    fiscal_cu_serial: null,
+    receipt_printed_at: null
   })
 
   const mpesaOrder = (total: number): OrderRow => ({

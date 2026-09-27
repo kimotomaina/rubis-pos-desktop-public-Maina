@@ -161,7 +161,10 @@ describe('renderReceipt', () => {
     await renderReceipt(client, order, items, settings)
 
     const lineTexts = calls.filter((c) => c.method === 'println').map((c) => c.args[0])
-    expect(lineTexts.some((t) => typeof t === 'string' && t.startsWith('Fiscal Inv:'))).toBe(false)
+    // DELIBERATE TEST CHANGE (docs/phase-164): the printed label is now
+    // "CU Invoice No:" (the VIL G03 manual's own term, matching the new
+    // "CU Date/Time"/"CU Serial No" lines), not the old "Fiscal Inv:".
+    expect(lineTexts.some((t) => typeof t === 'string' && t.startsWith('CU Invoice No:'))).toBe(false)
   })
 
   it('prints the fiscal invoice number and the QR code as an image when supported', async () => {
@@ -176,7 +179,9 @@ describe('renderReceipt', () => {
     await renderReceipt(client, fiscalOrder, items, settings)
 
     const lineTexts = calls.filter((c) => c.method === 'println').map((c) => c.args[0])
-    expect(lineTexts).toContain('Fiscal Inv: KRA-0001')
+    // DELIBERATE TEST CHANGE (docs/phase-164): "Fiscal Inv: KRA-0001" ->
+    // "CU Invoice No: KRA-0001" — see the test above.
+    expect(lineTexts).toContain('CU Invoice No: KRA-0001')
     expect(printImageBuffer).toHaveBeenCalledTimes(1)
     expect(printImageBuffer).toHaveBeenCalledWith(Buffer.from('fake-png-bytes'))
     expect(lineTexts.some((t) => typeof t === 'string' && t.startsWith('[QR CODE:'))).toBe(false)
@@ -218,7 +223,9 @@ describe('renderReceipt', () => {
     await renderReceipt(client, fiscalOrder, items, settings)
 
     const lineTexts = calls.filter((c) => c.method === 'println').map((c) => c.args[0])
-    expect(lineTexts).toContain('Fiscal Inv: KRA-0004')
+    // DELIBERATE TEST CHANGE (docs/phase-164): "Fiscal Inv: KRA-0004" ->
+    // "CU Invoice No: KRA-0004".
+    expect(lineTexts).toContain('CU Invoice No: KRA-0004')
     expect(lineTexts.some((t) => typeof t === 'string' && t.startsWith('[QR CODE:'))).toBe(false)
   })
 
@@ -243,6 +250,131 @@ describe('renderReceipt', () => {
 
     const lineTexts = calls.filter((c) => c.method === 'println').map((c) => c.args[0])
     expect(lineTexts.some((t) => typeof t === 'string' && t.startsWith('Discount:'))).toBe(false)
+  })
+
+  it('prefixes the order-creation line "Sale time:" (docs/phase-164)', async () => {
+    const { client, calls } = createFakePrinter()
+    await renderReceipt(client, order, items, settings)
+
+    const lineTexts = calls.filter((c) => c.method === 'println').map((c) => c.args[0])
+    expect(lineTexts).toContain(`Sale time: ${new Date(order.createdAt).toLocaleString()}`)
+  })
+})
+
+describe('renderReceipt — CU date/time/serial block (docs/phase-164)', () => {
+  it('prints "CU Date/Time" when the timestamp came from the device', async () => {
+    const { client, calls } = createFakePrinter()
+    const fiscalOrder: ReceiptOrder = {
+      ...order,
+      fiscalInvoiceNumber: 'KRA-0010',
+      fiscalizedAt: '27-08-2026 09:15:00',
+      fiscalizedAtSource: 'device'
+    }
+
+    await renderReceipt(client, fiscalOrder, items, settings)
+
+    const lineTexts = calls.filter((c) => c.method === 'println').map((c) => c.args[0])
+    expect(lineTexts).toContain('CU Date/Time: 27-08-2026 09:15:00')
+    expect(lineTexts.some((t) => typeof t === 'string' && t.startsWith('Till time'))).toBe(false)
+  })
+
+  it('labels a local-fallback timestamp as till time, not a device time', async () => {
+    const { client, calls } = createFakePrinter()
+    const fiscalOrder: ReceiptOrder = {
+      ...order,
+      fiscalInvoiceNumber: 'KRA-0011',
+      fiscalizedAt: '2026-08-27T09:15:00.000Z',
+      fiscalizedAtSource: 'local-fallback'
+    }
+
+    await renderReceipt(client, fiscalOrder, items, settings)
+
+    const lineTexts = calls.filter((c) => c.method === 'println').map((c) => c.args[0])
+    expect(lineTexts).toContain('Till time (device time unavailable): 2026-08-27T09:15:00.000Z')
+    expect(lineTexts.some((t) => typeof t === 'string' && t.startsWith('CU Date/Time'))).toBe(false)
+  })
+
+  it('labels a missing/unknown source (an order fiscalized before this phase) as till time too', async () => {
+    const { client, calls } = createFakePrinter()
+    const fiscalOrder: ReceiptOrder = {
+      ...order,
+      fiscalInvoiceNumber: 'KRA-0012',
+      fiscalizedAt: '2026-08-27T09:15:00.000Z'
+      // fiscalizedAtSource deliberately omitted.
+    }
+
+    await renderReceipt(client, fiscalOrder, items, settings)
+
+    const lineTexts = calls.filter((c) => c.method === 'println').map((c) => c.args[0])
+    expect(lineTexts).toContain('Till time (device time unavailable): 2026-08-27T09:15:00.000Z')
+  })
+
+  it('prints the CU serial number when present', async () => {
+    const { client, calls } = createFakePrinter()
+    const fiscalOrder: ReceiptOrder = {
+      ...order,
+      fiscalInvoiceNumber: 'KRA-0013',
+      cuSerial: 'CU-SERIAL-0013'
+    }
+
+    await renderReceipt(client, fiscalOrder, items, settings)
+
+    const lineTexts = calls.filter((c) => c.method === 'println').map((c) => c.args[0])
+    expect(lineTexts).toContain('CU Serial No: CU-SERIAL-0013')
+  })
+
+  it('omits the serial line entirely when absent, rather than printing it blank', async () => {
+    const { client, calls } = createFakePrinter()
+    const fiscalOrder: ReceiptOrder = { ...order, fiscalInvoiceNumber: 'KRA-0014' }
+
+    await renderReceipt(client, fiscalOrder, items, settings)
+
+    const lineTexts = calls.filter((c) => c.method === 'println').map((c) => c.args[0])
+    expect(lineTexts.some((t) => typeof t === 'string' && t.startsWith('CU Serial No:'))).toBe(false)
+  })
+
+  it('prints no CU block at all for an unfiled order, whatever fiscal fields it happens to carry', async () => {
+    const { client, calls } = createFakePrinter()
+    // Not fiscalized (no fiscalInvoiceNumber) — the other fiscal fields
+    // must never appear on a receipt without an invoice number gating them.
+    const unfiledOrder: ReceiptOrder = {
+      ...order,
+      fiscalizedAt: '27-08-2026 09:15:00',
+      fiscalizedAtSource: 'device',
+      cuSerial: 'CU-SERIAL-0015'
+    }
+
+    await renderReceipt(client, unfiledOrder, items, settings)
+
+    const lineTexts = calls.filter((c) => c.method === 'println').map((c) => c.args[0])
+    expect(lineTexts.some((t) => typeof t === 'string' && t.startsWith('CU '))).toBe(false)
+  })
+})
+
+describe('renderReceipt — duplicate labelling (docs/phase-164, post-implementation checklist item 11)', () => {
+  it('stamps DUPLICATE at the top and bottom when isDuplicate is set', async () => {
+    const { client, calls } = createFakePrinter()
+    const duplicateOrder: ReceiptOrder = { ...order, isDuplicate: true }
+
+    await renderReceipt(client, duplicateOrder, items, settings)
+
+    const lineTexts = calls.filter((c) => c.method === 'println').map((c) => c.args[0])
+    const stampIndexes = lineTexts
+      .map((t, i) => (t === '*** DUPLICATE ***' ? i : -1))
+      .filter((i) => i >= 0)
+    expect(stampIndexes).toHaveLength(2)
+    // One stamp before the store name (near the top), one at/near the end.
+    expect(lineTexts[stampIndexes[0] + 1]).toBe(settings.storeName)
+    expect(stampIndexes[1]).toBeGreaterThan(lineTexts.indexOf('Thank you!'))
+  })
+
+  it('prints no DUPLICATE stamp for an original (first) print', async () => {
+    const { client, calls } = createFakePrinter()
+
+    await renderReceipt(client, order, items, settings)
+
+    const lineTexts = calls.filter((c) => c.method === 'println').map((c) => c.args[0])
+    expect(lineTexts).not.toContain('*** DUPLICATE ***')
   })
 })
 

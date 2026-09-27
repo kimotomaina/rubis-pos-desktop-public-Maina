@@ -2478,36 +2478,52 @@ app.whenReady().then(async () => {
 
       try {
         const payload = JSON.parse(order.payload_json) as OfflineOrderPayload
-        return openPdfFallbackIfPresent(
-          await printReceiptToType(
-            {
-              localId: order.local_id,
-              createdAt: order.created_at,
-              cashierName: payload.staffName,
-              paymentMethod: payload.paymentMethod,
-              tenderedAmount: payload.tenderedAmount,
-              changeDue: payload.changeDue,
-              referenceNumber: payload.referenceNumber,
-              customerPin: payload.customerPin,
-              fiscalInvoiceNumber: order.fiscal_invoice_number ?? undefined,
-              fiscalQrCode: order.fiscal_qr_code ?? undefined,
-              // docs/phase-161: the stored total/discounts, no longer
-              // stripped before reaching the printer.
-              total: order.total,
-              cartDiscount: payload.cartDiscount
-            },
-            payload.lineItems.map((line) => ({
-              title: line.title,
-              variantTitle: line.variantTitle ?? '',
-              quantity: line.quantity,
-              unitPrice: line.unitPrice,
-              discount: line.discount
-            })),
-            printerRegistry,
-            printerSettings,
-            request.printerType ?? 'receipt'
-          )
+        // docs/phase-164: decided from whether THIS order's receipt was
+        // already printed once before — never from which button was
+        // pressed, since `receipt:print` is the single call site for
+        // both the first print and any later reprint (see docs/phase-164's
+        // audit of every receipt:print/printReceipt call site).
+        const isDuplicate = db.hasReceiptPrinted(localId)
+        const result = await printReceiptToType(
+          {
+            localId: order.local_id,
+            createdAt: order.created_at,
+            cashierName: payload.staffName,
+            paymentMethod: payload.paymentMethod,
+            tenderedAmount: payload.tenderedAmount,
+            changeDue: payload.changeDue,
+            referenceNumber: payload.referenceNumber,
+            customerPin: payload.customerPin,
+            fiscalInvoiceNumber: order.fiscal_invoice_number ?? undefined,
+            fiscalQrCode: order.fiscal_qr_code ?? undefined,
+            fiscalizedAt: order.fiscal_fiscalized_at ?? undefined,
+            fiscalizedAtSource: order.fiscal_fiscalized_at_source ?? undefined,
+            cuSerial: order.fiscal_cu_serial ?? undefined,
+            isDuplicate,
+            // docs/phase-161: the stored total/discounts, no longer
+            // stripped before reaching the printer.
+            total: order.total,
+            cartDiscount: payload.cartDiscount
+          },
+          payload.lineItems.map((line) => ({
+            title: line.title,
+            variantTitle: line.variantTitle ?? '',
+            quantity: line.quantity,
+            unitPrice: line.unitPrice,
+            discount: line.discount
+          })),
+          printerRegistry,
+          printerSettings,
+          request.printerType ?? 'receipt'
         )
+        // Marked AFTER a successful print (physical or PDF fallback) —
+        // never before, so an attempt that fails entirely (printer offline
+        // AND the PDF fallback also throws) leaves this unset and the
+        // next attempt is still correctly treated as the original.
+        if (result.success) {
+          db.markReceiptPrinted(localId)
+        }
+        return openPdfFallbackIfPresent(result)
       } catch (err) {
         return {
           success: false,
