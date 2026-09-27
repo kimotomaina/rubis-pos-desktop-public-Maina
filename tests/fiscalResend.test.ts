@@ -113,6 +113,30 @@ describe('resendFiscalization', () => {
     expect(order?.fiscal_error_kind).toBeNull()
   })
 
+  /** docs/phase-163, Commit 1 — the manual-resend path also forwards vatGroups to storage. */
+  it('a successful resend stores the VAT-group amounts from that attempt', async () => {
+    const db = freshDb()
+    const staffId = seedStaff(db)
+    const { localId } = seedOrderWithStoredRequest(db, staffId, { clientOrderUuid: 'uuid-resend-vatgroups' })
+    db.setOrderFiscalFailure(localId, 'needs_fixing', 'some prior rejection', 'data')
+
+    const submitInvoice = vi.fn().mockResolvedValue({
+      ok: true,
+      data: {
+        invoiceNumber: 'KRA-RESEND-VG',
+        qrCode: 'base64qr',
+        fiscalizedAt: '2026-01-01T00:00:00.000Z',
+        vatGroups: { A: '60.00', B: '40.00' }
+      }
+    })
+
+    await resendFiscalization({ db, fiscalizationProvider: { submitInvoice } }, localId)
+
+    const stored = db.getOrder(localId)?.fiscal_vat_groups_json
+    expect(stored).not.toBeNull()
+    expect(JSON.parse(stored as string)).toEqual({ A: '60.00', B: '40.00' })
+  })
+
   it('reuses the stored TraderSystemInvNum — proven against the REAL provider, not a mock', async () => {
     const db = freshDb()
     const staffId = seedStaff(db)

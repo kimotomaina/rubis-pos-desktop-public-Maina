@@ -26,7 +26,12 @@
  */
 
 import type { FiscalResendResult, FiscalStatus } from './database.js'
-import type { FiscalFailureKind, FiscalInvoiceRequest, FiscalSubmitOutcome } from './integrations/etims.js'
+import type {
+  FiscalFailureKind,
+  FiscalInvoiceRequest,
+  FiscalSubmitOutcome,
+  FiscalVatGroupAmounts
+} from './integrations/etims.js'
 import type { Logger } from './logger.js'
 import { routeFiscalOutcome } from './fiscal-routing.js'
 
@@ -108,7 +113,12 @@ export interface FiscalResendOrder extends FiscalRetryOrder {
 /** Structural slice of {@link RubisDatabase} `resendFiscalization` depends on. */
 export interface FiscalResendDb extends FiscalRetryDb {
   getOrder(localId: number): FiscalResendOrder | undefined
-  setOrderFiscalInfo(localId: number, invoiceNumber: string, qrCode: string): void
+  setOrderFiscalInfo(
+    localId: number,
+    invoiceNumber: string,
+    qrCode: string,
+    vatGroups?: FiscalVatGroupAmounts
+  ): void
   setOrderFiscalFailure(
     localId: number,
     status: Exclude<FiscalStatus, 'fiscalized'>,
@@ -183,7 +193,7 @@ export async function resendFiscalization(
   const outcome = await attemptFiscalRetry(deps, localId, storedRequest)
 
   if (outcome.ok) {
-    deps.db.setOrderFiscalInfo(localId, outcome.data.invoiceNumber, outcome.data.qrCode)
+    deps.db.setOrderFiscalInfo(localId, outcome.data.invoiceNumber, outcome.data.qrCode, outcome.data.vatGroups)
     logger.log(`[rubis-pos] Sale ${localId}: resent, fiscalized (invoice ${outcome.data.invoiceNumber})`)
   } else {
     const { status, enqueue } = routeFiscalOutcome(outcome)

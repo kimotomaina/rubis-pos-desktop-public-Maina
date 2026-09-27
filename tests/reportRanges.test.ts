@@ -120,7 +120,8 @@ describe('a sale at 00:30 Nairobi lands on the Nairobi day, not the UTC day it f
       fiscal_error_reason: null,
       fiscal_error_kind: null,
       fiscal_request_json: null,
-      fiscal_data_issue: null
+      fiscal_data_issue: null,
+      fiscal_vat_groups_json: null
     }
     const db = { getOrdersForDateRange: vi.fn(() => [order]) } as unknown as RubisDatabase
 

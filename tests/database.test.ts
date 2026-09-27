@@ -519,7 +519,11 @@ describe('RubisDatabase.markFiscalQueueItemSynced', () => {
     expect(updates).toHaveLength(1)
     expect(updates[0].params[0]).toBe('KRA-0001')
     expect(updates[0].params[1]).toBe('base64qr')
-    expect(updates[0].params[3]).toBe(7)
+    // docs/phase-163: params[3] is now the JSON-serialized vatGroups
+    // (null here — the call above passes none), and the localId shifts
+    // from params[3] to params[4].
+    expect(updates[0].params[3]).toBe(null)
+    expect(updates[0].params[4]).toBe(7)
     expect(fake.callsFor('run', 'DELETE FROM sync_queue')[0].params).toEqual([4])
   })
 
@@ -559,7 +563,9 @@ describe('RubisDatabase.setOrderFiscalInfo', () => {
     // previously stored fixable-rejection tag (e.g. a wrong-PIN flag
     // from an earlier failed attempt on this same sale).
     expect(updates[0].sql).toContain('fiscal_data_issue = NULL')
-    expect(updates[0].params).toEqual(['KRA-0001', 'base64qr', expect.any(String), 7])
+    // docs/phase-163: a fifth param (the JSON-serialized vatGroups, null
+    // when omitted) was added ahead of localId.
+    expect(updates[0].params).toEqual(['KRA-0001', 'base64qr', expect.any(String), null, 7])
   })
 })
 

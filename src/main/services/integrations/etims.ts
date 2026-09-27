@@ -48,7 +48,10 @@ export interface FiscalInvoiceRequest {
   items: FiscalInvoiceLine[]
   /** Grand total including tax, in KES. */
   total: number
-  /** Total tax portion of `total`. */
+  /**
+   * Calculated by the till, added on top. Not sent to the device. Do
+   * not use for reports; prices include VAT (docs/phase-159 B1.3).
+   */
   taxAmount: number
   /** Buyer's KRA PIN, when captured (optional for walk-in retail sales). */
   buyerPin?: string
@@ -120,6 +123,24 @@ export interface CreditNoteDetails {
   traderSystemInvNum: string
 }
 
+/**
+ * One order's per-VAT-group subtotal amounts from `ReadCurrentReceiptInfo`
+ * (Step 5), exactly as the device returned them — raw strings, never
+ * parsed or summed here (docs/phase-159 B1.1/B1.2, docs/phase-163). Keyed
+ * by VAT class letter, the same vocabulary `FiscalInvoiceLine.vatClass`
+ * already uses. A group absent from the device's response (no
+ * `SubtotalAmountVATG<letter>` field at all) is simply absent here too —
+ * never defaulted to `'0.00'`, which would misrepresent "the device
+ * didn't say" as "the device said zero".
+ */
+export interface FiscalVatGroupAmounts {
+  A?: string
+  B?: string
+  C?: string
+  D?: string
+  E?: string
+}
+
 /** Result of a successful (or previously successful) fiscalization. */
 export interface FiscalInvoiceResult {
   /** KRA-assigned invoice number, or a local placeholder while queued. */
@@ -164,6 +185,16 @@ export interface FiscalInvoiceResult {
    * that don't surface it (e.g. the mock).
    */
   defVerStatus?: DefVersionStatus
+  /**
+   * The five raw per-VAT-group subtotal strings read at Step 5
+   * (`ReadCurrentReceiptInfo`), for the fiscal reconciliation report
+   * (docs/phase-163). Set only on a fresh `submitInvoice` success that
+   * actually performed Step 5 — `undefined` on the mock provider, and on
+   * the `verifyAlreadyFiled` "already-filed" recovery path, which never
+   * re-reads the receipt (no extra device command is sent to fetch it
+   * after the fact).
+   */
+  vatGroups?: FiscalVatGroupAmounts
 }
 
 /**

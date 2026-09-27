@@ -33,7 +33,12 @@
  */
 
 import type { FiscalStatus, FiscalQueueItem } from './database.js'
-import type { FiscalFailureKind, FiscalInvoiceRequest, FiscalSubmitOutcome } from './integrations/etims.js'
+import type {
+  FiscalFailureKind,
+  FiscalInvoiceRequest,
+  FiscalSubmitOutcome,
+  FiscalVatGroupAmounts
+} from './integrations/etims.js'
 import type { Logger } from './logger.js'
 import { attemptFiscalRetry } from './fiscal-retry.js'
 import type { FiscalRetryOrder } from './fiscal-retry.js'
@@ -48,7 +53,12 @@ import { routeFiscalOutcome } from './fiscal-routing.js'
  */
 export interface FiscalEngineDatabase {
   getPendingFiscalQueue(now: number): FiscalQueueItem[]
-  markFiscalQueueItemSynced(queueId: number, invoiceNumber: string, qrCode: string): void
+  markFiscalQueueItemSynced(
+    queueId: number,
+    invoiceNumber: string,
+    qrCode: string,
+    vatGroups?: FiscalVatGroupAmounts
+  ): void
   recordFiscalQueueFailure(queueId: number, error: string): { exhausted: boolean }
   removeFiscalQueueItem(queueId: number): void
   setOrderFiscalFailure(
@@ -126,7 +136,7 @@ export function createFiscalEngine(options: FiscalEngineOptions): FiscalEngine {
         const result = await attemptFiscalRetry({ db, fiscalizationProvider: { submitInvoice } }, item.entity_id, item.payload)
 
         if (result.ok) {
-          db.markFiscalQueueItemSynced(item.id, result.data.invoiceNumber, result.data.qrCode)
+          db.markFiscalQueueItemSynced(item.id, result.data.invoiceNumber, result.data.qrCode, result.data.vatGroups)
           logger.log(
             `[rubis-pos] Sale ${item.entity_id}: queued retry succeeded, fiscalized (invoice ${result.data.invoiceNumber})`
           )

@@ -37,7 +37,8 @@ import type {
 import type {
   FiscalFailureKind,
   FiscalInvoiceRequest,
-  FiscalSubmitOutcome
+  FiscalSubmitOutcome,
+  FiscalVatGroupAmounts
 } from './integrations/etims.js'
 import type { ManualCodeVerification, ManualCodeVerificationResult } from './integrations/mpesa.js'
 import type { ServiceResult } from './shopify-types.js'
@@ -74,7 +75,12 @@ export interface CheckoutDb {
   ): { localId: number; queueId: number } | null
   queueOrder(input: QueueOrderInput): { localId: number; queueId: number }
   getOrder(localId: number): OrderRow | undefined
-  setOrderFiscalInfo(localId: number, invoiceNumber: string, qrCode: string): void
+  setOrderFiscalInfo(
+    localId: number,
+    invoiceNumber: string,
+    qrCode: string,
+    vatGroups?: FiscalVatGroupAmounts
+  ): void
   setOrderFiscalFailure(
     localId: number,
     status: Exclude<FiscalStatus, 'fiscalized'>,
@@ -545,7 +551,7 @@ export async function runCheckout(
 
       if (invoice.ok) {
         fiscal = { invoiceNumber: invoice.data.invoiceNumber, qrCode: invoice.data.qrCode }
-        db.setOrderFiscalInfo(localId, invoice.data.invoiceNumber, invoice.data.qrCode)
+        db.setOrderFiscalInfo(localId, invoice.data.invoiceNumber, invoice.data.qrCode, invoice.data.vatGroups)
       } else {
         const { status, enqueue } = routeFiscalOutcome(invoice)
         if (enqueue) {

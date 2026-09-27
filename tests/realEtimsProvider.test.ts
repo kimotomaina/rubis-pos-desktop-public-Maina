@@ -23,6 +23,7 @@ import {
   mapFiscalDeviceError,
   mapFiscalServerError,
   sumVatGroupSubtotals,
+  extractVatGroupAmounts,
   DAILY_CLOSURE_BLOCK_REASON,
   UNVERIFIABLE_RETRY_REASON
 } from '../src/main/services/integrations/real-etims-provider.js'
@@ -235,6 +236,32 @@ describe('sumVatGroupSubtotals', () => {
   it('treats absent or non-numeric groups as zero', () => {
     expect(sumVatGroupSubtotals({})).toBe(0)
     expect(sumVatGroupSubtotals({ SubtotalAmountVATGA: '', SubtotalAmountVATGB: 'n/a' })).toBe(0)
+  })
+})
+
+describe('extractVatGroupAmounts (docs/phase-163)', () => {
+  it('reads the raw strings verbatim, keyed by VAT class letter', () => {
+    expect(
+      extractVatGroupAmounts({
+        SubtotalAmountVATGA: '120.00',
+        SubtotalAmountVATGB: '0.00',
+        SubtotalAmountVATGC: '0.00',
+        SubtotalAmountVATGD: '0.00',
+        SubtotalAmountVATGE: '0.00'
+      })
+    ).toEqual({ A: '120.00', B: '0.00', C: '0.00', D: '0.00', E: '0.00' })
+  })
+
+  it('leaves a group out entirely when the response has no field for it — never defaults to "0.00"', () => {
+    expect(extractVatGroupAmounts({ SubtotalAmountVATGA: '219.20' })).toEqual({ A: '219.20' })
+  })
+
+  it('returns an empty object for a response with no VAT-group fields at all', () => {
+    expect(extractVatGroupAmounts({})).toEqual({})
+  })
+
+  it('does not parse or sum — a non-numeric string is carried through unchanged', () => {
+    expect(extractVatGroupAmounts({ SubtotalAmountVATGA: 'n/a' })).toEqual({ A: 'n/a' })
   })
 })
 
@@ -1088,6 +1115,10 @@ describe('OpenInvoice duplicate-filing recovery via ReadCUinvoiceNumber (phase-7
     expect(commandSequence(post)).toContain('ReadCUinvoiceNumber')
     expect(commandSequence(post)).not.toContain('SellPLUfromExtDB')
     expect(commandSequence(post)).not.toContain('CloseReceipt')
+    // docs/phase-163: this recovery never runs Step 5 (ReadCurrentReceiptInfo)
+    // again, so it carries no vatGroups — the caller stores NULL, never a
+    // guessed or re-fetched figure.
+    expect(result.ok && result.data.vatGroups).toBeUndefined()
   })
 
   it('on a RETRY, when the device does NOT know this invoice either, the rejection is a genuine failure — NOT falsely marked fiscalized', async () => {
@@ -1629,6 +1660,25 @@ describe('CloseReceipt handling', () => {
 
     expect(result.ok && result.data.invoiceNumber).toBe('KRA-0001')
     expect(result.ok && result.data.qrCode).toBe('base64qr')
+  })
+
+  /**
+   * docs/phase-163, Commit 1 — Step 5's raw per-VAT-group strings are
+   * carried through on a normal success, verbatim (no parsing, no
+   * defaulting the two groups the mock response never mentions).
+   */
+  it('carries Step 5\'s raw VAT-group amounts through on success, exactly as returned', async () => {
+    const provider = new RealFiscalizationProvider({ ...TEST_DEVICE,
+      httpClient: makeMockClient(makeSuccessfulPostImpl())
+    })
+
+    const result = await provider.submitInvoice(SAMPLE_REQUEST)
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    // makeSuccessfulPostImpl's ReadCurrentReceiptInfo only sets GA/GB —
+    // C/D/E are absent here too, never defaulted to '0.00'.
+    expect(result.data.vatGroups).toEqual({ A: '219.20', B: '0.00' })
   })
 
   it('reads InvoiceNum/QRcode from Name/Value attribute-style Res children too', async () => {

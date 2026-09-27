@@ -78,8 +78,11 @@ describe('FiscalEngine.tick', () => {
 
     expect(db.getPendingFiscalQueue).toHaveBeenCalledWith(1_700_000_000_000)
     expect(submitInvoice).toHaveBeenCalledTimes(2)
-    expect(db.markFiscalQueueItemSynced).toHaveBeenNthCalledWith(1, 1, 'KRA-0001', 'base64qr')
-    expect(db.markFiscalQueueItemSynced).toHaveBeenNthCalledWith(2, 2, 'KRA-0001', 'base64qr')
+    // docs/phase-163: a fourth arg (vatGroups) is now forwarded from the
+    // outcome's data — undefined here, since this test's stub success
+    // result carries none.
+    expect(db.markFiscalQueueItemSynced).toHaveBeenNthCalledWith(1, 1, 'KRA-0001', 'base64qr', undefined)
+    expect(db.markFiscalQueueItemSynced).toHaveBeenNthCalledWith(2, 2, 'KRA-0001', 'base64qr', undefined)
     expect(db.recordFiscalQueueFailure).not.toHaveBeenCalled()
   })
 
@@ -177,7 +180,10 @@ describe('FiscalEngine.tick — retry safety (phase-75, Part B)', () => {
     await engine.tick()
 
     expect(submitInvoice).not.toHaveBeenCalled()
-    expect(db.markFiscalQueueItemSynced).toHaveBeenCalledWith(1, 'KRA-WON-THE-RACE', 'base64qr')
+    // docs/phase-163: the already-fiscalized race guard's stored outcome
+    // carries no vatGroups (it never re-reads the device), so the
+    // forwarded fourth arg is undefined.
+    expect(db.markFiscalQueueItemSynced).toHaveBeenCalledWith(1, 'KRA-WON-THE-RACE', 'base64qr', undefined)
     expect(db.recordFiscalQueueFailure).not.toHaveBeenCalled()
   })
 })

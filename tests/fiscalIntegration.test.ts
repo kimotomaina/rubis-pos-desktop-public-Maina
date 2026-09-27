@@ -26,6 +26,8 @@
  */
 
 import { describe, it, expect, vi } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import type { AxiosInstance } from 'axios'
 import { RubisDatabase } from '../src/main/services/database.js'
 import { RealFiscalizationProvider } from '../src/main/services/integrations/real-etims-provider.js'
@@ -686,6 +688,103 @@ describe('Scenario E — device TCP password rejected (Code 31)', () => {
 
     expect(result.ok).toBe(false)
     expect(!result.ok && result.reason).toMatch(/TCP password/i)
+  })
+})
+
+/**
+ * docs/phase-163, Commit 1 — the device's per-VAT-group amounts (Step 5,
+ * `ReadCurrentReceiptInfo`) are stored verbatim on the order for the
+ * fiscal reconciliation report, on every path that can produce them.
+ */
+describe('Scenario I — fiscal_vat_groups_json storage (docs/phase-163)', () => {
+  /** Reads a captured wire-response fixture from tests/fixtures/wire/. */
+  function readWireFixture(name: string): string {
+    return readFileSync(join(__dirname, 'fixtures', 'wire', name), 'utf8')
+  }
+
+  it('a successful checkout stores the device VAT-group amounts verbatim (the readcurrentreceiptinfo-ok.xml fixture: GA "120.00")', async () => {
+    const db = freshDb()
+    const staffId = seedStaff(db)
+    const clientOrderUuid = 'uuid-vatgroups-success'
+
+    const post = vi.fn().mockImplementation((_path: string, body: string) => {
+      const command = /<Command Name="([^"]+)"/.exec(String(body))?.[1] ?? ''
+      switch (command) {
+        case 'ReadStatus':
+          return Promise.resolve({
+            data: '<Res Code="0"><CU_fiscalized>1</CU_fiscalized><Paired_with_TIMS>1</Paired_with_TIMS></Res>'
+          })
+        case 'ReadCurrentReceiptInfo':
+          return Promise.resolve({ data: readWireFixture('readcurrentreceiptinfo-ok.xml') })
+        case 'CloseReceipt':
+          return Promise.resolve({
+            data: '<Res Code="0"><InvoiceNum>KRA-0163</InvoiceNum><QRcode>base64qr</QRcode></Res>'
+          })
+        default:
+          return Promise.resolve({ data: '<Res Code="0"/>' })
+      }
+    })
+    const httpClient = {
+      post,
+      get: vi.fn().mockResolvedValue({ data: '<Res Code="0"/>' }),
+      defaults: { baseURL: 'http://localhost:4444/' }
+    } as unknown as AxiosInstance
+    const provider = new RealFiscalizationProvider({ ...TEST_DEVICE, httpClient })
+
+    const { localId } = await attemptFiscalization({ db, provider, staffId, clientOrderUuid })
+
+    const stored = db.getOrder(localId)?.fiscal_vat_groups_json
+    expect(stored).not.toBeNull()
+    expect(JSON.parse(stored as string)).toEqual({
+      A: '120.00',
+      B: '0.00',
+      C: '0.00',
+      D: '0.00',
+      E: '0.00'
+    })
+  })
+
+  it('a failed fiscalization attempt stores no VAT-group amounts', async () => {
+    const db = freshDb()
+    const staffId = seedStaff(db)
+    const clientOrderUuid = 'uuid-vatgroups-failure'
+    const submitInvoice = vi
+      .fn()
+      .mockResolvedValue({ ok: false, reason: 'device unreachable', kind: 'technical', retryable: true })
+    const provider = makeProvider(submitInvoice)
+
+    const { localId } = await attemptFiscalization({ db, provider, staffId, clientOrderUuid })
+
+    expect(db.getOrder(localId)?.fiscal_vat_groups_json).toBeNull()
+  })
+
+  it('a queued retry that succeeds stores the VAT-group amounts from THAT attempt', async () => {
+    const db = freshDb()
+    const staffId = seedStaff(db)
+    const clientOrderUuid = 'uuid-vatgroups-retry'
+    const submitInvoice = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('ECONNREFUSED'))
+      .mockResolvedValueOnce({
+        ok: true,
+        data: {
+          invoiceNumber: 'KRA-0164',
+          qrCode: 'base64qr',
+          fiscalizedAt: '2026-08-27T10:05:00.000Z',
+          vatGroups: { A: '150.00' }
+        }
+      })
+    const provider = makeProvider(submitInvoice)
+
+    const { localId } = await attemptFiscalization({ db, provider, staffId, clientOrderUuid })
+    expect(db.getOrder(localId)?.fiscal_vat_groups_json).toBeNull()
+
+    const fiscalEngine = createFiscalEngine({ db, submitInvoice })
+    await fiscalEngine.tick()
+
+    const stored = db.getOrder(localId)?.fiscal_vat_groups_json
+    expect(stored).not.toBeNull()
+    expect(JSON.parse(stored as string)).toEqual({ A: '150.00' })
   })
 })
 

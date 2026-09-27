@@ -54,6 +54,7 @@ import type {
   FiscalInvoiceRequest,
   FiscalInvoiceResult,
   FiscalSubmitOutcome,
+  FiscalVatGroupAmounts,
   FiscalizationProvider
 } from './etims.js'
 import {
@@ -1077,7 +1078,11 @@ export class RealFiscalizationProvider implements FiscalizationProvider {
         fiscalizedAt: deviceDateTime ?? new Date().toISOString(),
         fiscalizedAtSource: deviceDateTime ? 'device' : 'local-fallback',
         cuSerialNumber,
-        defVerStatus
+        defVerStatus,
+        // Step 5 (ReadCurrentReceiptInfo) already read these — carried
+        // through verbatim for the fiscal reconciliation report
+        // (docs/phase-163), not re-fetched with any extra command.
+        vatGroups: extractVatGroupAmounts(receiptInfo)
       }
     }
   }
@@ -1638,6 +1643,34 @@ export function sumVatGroupSubtotals(receiptInfo: Record<string, string>): numbe
     const parsed = Number(receiptInfo[field])
     return total + (Number.isFinite(parsed) ? parsed : 0)
   }, 0)
+}
+
+/**
+ * `SUBTOTAL_FIELDS`, in order, paired with the VAT class letter each one
+ * carries — the same letters `FiscalInvoiceLine.vatClass` already uses.
+ */
+const VAT_GROUP_LETTERS = ['A', 'B', 'C', 'D', 'E'] as const
+
+/**
+ * Reads `ReadCurrentReceiptInfo`'s five per-VAT-group subtotals as raw
+ * strings, exactly as the device returned them (docs/phase-163) — no
+ * parsing, no summing (that is {@link sumVatGroupSubtotals}'s job, for
+ * the read-VAT validation gate, a different purpose). A group with no
+ * field at all in the response (rather than an explicit `'0.00'`) is left
+ * out of the result entirely, never defaulted.
+ *
+ * @param {Record<string, string>} receiptInfo
+ * @returns {FiscalVatGroupAmounts}
+ */
+export function extractVatGroupAmounts(receiptInfo: Record<string, string>): FiscalVatGroupAmounts {
+  const amounts: FiscalVatGroupAmounts = {}
+  SUBTOTAL_FIELDS.forEach((field, index) => {
+    const raw = receiptInfo[field]
+    if (raw !== undefined) {
+      amounts[VAT_GROUP_LETTERS[index]] = raw
+    }
+  })
+  return amounts
 }
 
 /**
