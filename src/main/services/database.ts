@@ -1994,17 +1994,27 @@ export class RubisDatabase {
 
   /**
    * Re-queues a failed or pending order for sync. A `pending_sync` order
-   * still has its original `'order'` queue row, which is made due now; a
-   * `failed` order's row was deleted when its attempts ran out, so a
-   * fresh one is created from the stored payload.
+   * still has its original `'order'` queue row, which is made due now
+   * with its attempt count reset to 0; a `failed` order's row was
+   * deleted when its attempts ran out, so a fresh one is created from
+   * the stored payload.
    *
    * Never a second row for the same sale: two rows made the next tick
    * push the sale twice, creating two Shopify orders (docs/phase-168
    * finding 3).
    *
+   * Attempts are reset on a manual retry (docs/phase-169-1 commit B),
+   * unlike the automatic backoff `recordQueueFailure` drives: a person
+   * pressing Retry Sync is a deliberate, informed decision to try again
+   * now, not a background retry that should count toward the same
+   * exhaustion budget. The push marker (`recordPushStarted`,
+   * `shopify_push_count`/`shopify_last_push_at`) is untouched — that
+   * marker's whole purpose is knowing whether Shopify may already have
+   * this sale, which a manual retry does not change.
+   *
    * @param {number} localId
    * @returns {{ queueId: number }} the reused or newly created row's id
-   * @throws if the order is already synced or does not exist
+   * @throws if the order is already synced, voided, or does not exist
    */
   retryOrderSync(localId: number): { queueId: number } {
     const order = this.conn
@@ -2017,6 +2027,9 @@ export class RubisDatabase {
     if (order.status === 'synced') {
       throw new Error(`Order ${localId} is already synced`)
     }
+    if (order.status === 'voided') {
+      throw new Error(`Order ${localId} is voided and cannot be resynced`)
+    }
 
     const createdAt = new Date().toISOString()
     const settle = this.conn.transaction(() => {
@@ -2024,14 +2037,12 @@ export class RubisDatabase {
         .prepare('UPDATE orders SET status = ? WHERE local_id = ?')
         .run('pending_sync', localId)
 
-      // `attempts` is deliberately left as it is: a retry is not a fresh
-      // sale, and the backoff/exhaustion count should say so.
       const existing = this.conn
         .prepare("SELECT id FROM sync_queue WHERE entity_type = 'order' AND entity_id = ? ORDER BY id ASC LIMIT 1")
         .get(localId) as { id: number } | undefined
       if (existing) {
         this.conn
-          .prepare('UPDATE sync_queue SET next_attempt_at = ? WHERE id = ?')
+          .prepare('UPDATE sync_queue SET attempts = 0, next_attempt_at = ? WHERE id = ?')
           .run(Date.now(), existing.id)
         return { queueId: existing.id }
       }

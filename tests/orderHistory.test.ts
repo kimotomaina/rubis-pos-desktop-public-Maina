@@ -295,4 +295,51 @@ describe('RubisDatabase.retryOrderSync keeps one queue row per sale (real SQLite
 
     expect(rowsFor(db, localId)).toHaveLength(1)
   })
+
+  /**
+   * docs/phase-169-1 commit B: `retryOrderSync` refuses a voided sale
+   * (docs/phase-169 §7's own finding), and resets a reused row's
+   * `attempts` back to 0 — a manual retry is a fresh decision, not
+   * another automatic backoff step.
+   */
+  it('voided: refused, and no row is created', async () => {
+    const db = await realDb()
+    const localId = seedSale(db)
+    db.voidOrder(localId)
+
+    expect(() => db.retryOrderSync(localId)).toThrow(/voided/i)
+    expect(rowsFor(db, localId)).toHaveLength(0)
+    expect(db.getOrder(localId)?.status).toBe('voided')
+  })
+
+  it('a reused row has attempts reset to 0 and is due now', async () => {
+    const db = await realDb()
+    const localId = seedSale(db)
+    const [original] = rowsFor(db, localId)
+    db.recordQueueFailure(original.id, 'timed out')
+    db.recordQueueFailure(original.id, 'timed out again')
+    expect(rowsFor(db, localId)[0].attempts).toBe(2)
+
+    db.retryOrderSync(localId)
+
+    const [reused] = rowsFor(db, localId)
+    expect(reused.attempts).toBe(0)
+    expect(db.getPendingSyncQueue(Date.now()).map((row) => row.id)).toEqual([reused.id])
+  })
+
+  it('the push marker is unchanged by a retry', async () => {
+    const db = await realDb()
+    const localId = seedSale(db)
+    db.recordPushStarted(localId)
+    db.recordPushStarted(localId)
+    expect(db.getShopifyPushMarker(localId)).toEqual(
+      expect.objectContaining({ count: 2 })
+    )
+
+    db.retryOrderSync(localId)
+
+    expect(db.getShopifyPushMarker(localId)).toEqual(
+      expect.objectContaining({ count: 2 })
+    )
+  })
 })
