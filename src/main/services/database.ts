@@ -915,6 +915,23 @@ export interface NeedsAttentionRow {
   fiscal_data_issue: 'wrong-pin' | null
 }
 
+/**
+ * One local sale the Shopify reconciliation check (docs/phase-170) has
+ * reason to look at: either it may already be in Shopify under a lost
+ * response (`status` is `pending_sync`/`failed` and it has been pushed
+ * at least once), or it claims to already be synced and needs its
+ * Shopify order confirmed still to exist.
+ */
+export interface ReconciliationCandidateRow {
+  local_id: number
+  status: OrderStatus
+  shopify_order_id: string | null
+  shopify_push_count: number
+  created_at: string
+  /** Parsed from `payload_json` server-side, so no caller re-parses it. */
+  client_order_uuid: string
+}
+
 /** Shape passed into {@link RubisDatabase.logMpesaTransaction}. */
 export interface LogMpesaTransactionInput {
   orderLocalId?: number
@@ -1865,6 +1882,46 @@ export class RubisDatabase {
   }
 
   /**
+   * The Shopify reconciliation check's one write (docs/phase-170 commit
+   * 2, design docs/phase-168 section 2.3): a local sale whose push
+   * reply was lost, but which turns out to already exist in Shopify as
+   * exactly one order, is marked `synced` with that order's id and its
+   * `'order'` queue row is removed - the same shape
+   * {@link markQueueItemSynced} already writes for an ordinary
+   * successful push, so a linked sale is indistinguishable from one
+   * that synced normally.
+   *
+   * `WHERE status IN ('pending_sync', 'failed')` is the whole safety
+   * property: a `voided` or already-`synced` sale can never be
+   * relinked by this method, whatever the caller passes in. Only
+   * `entity_type = 'order'` queue rows are removed - a fiscal retry
+   * queued under `'etims_invoice'` for the same `local_id` is
+   * untouched.
+   *
+   * @param {number} localId
+   * @param {string} shopifyOrderId
+   * @returns {{ linked: boolean }} `false` when the sale's status had
+   *   already moved on (a race with something else) - the caller
+   *   should not report a link that did not happen.
+   */
+  linkOrderToShopify(localId: number, shopifyOrderId: string): { linked: boolean } {
+    const settle = this.conn.transaction(() => {
+      const info = this.conn
+        .prepare(
+          "UPDATE orders SET status = 'synced', shopify_order_id = ? WHERE local_id = ? AND status IN ('pending_sync', 'failed')"
+        )
+        .run(shopifyOrderId, localId)
+      if (info.changes > 0) {
+        this.conn
+          .prepare("DELETE FROM sync_queue WHERE entity_type = 'order' AND entity_id = ?")
+          .run(localId)
+      }
+      return { linked: info.changes > 0 }
+    })
+    return settle()
+  }
+
+  /**
    * Records a failed push: increments the attempt counter, stores the
    * last error, and schedules the next attempt with exponential backoff.
    * When the attempt budget is exhausted the order is marked `failed`
@@ -1990,6 +2047,64 @@ export class RubisDatabase {
       )
       .get() as { count: number }
     return row.count
+  }
+
+  /**
+   * Every sale in `sinceIso..now` the Shopify reconciliation check
+   * needs to look at (docs/phase-170, design docs/phase-168 section
+   * 2.3): a `pending_sync`/`failed` sale that has been pushed at least
+   * once (`shopify_push_count > 0` - the lost-response case), or a
+   * `synced` sale (to confirm its Shopify order still exists). A
+   * `voided` sale is never a candidate for either check - it must
+   * never be filed, and it was never expected to still be in Shopify.
+   *
+   * `client_order_uuid` is parsed out of `payload_json` here, once,
+   * rather than by every caller - a malformed payload (should not
+   * exist, but this reads real installs) is skipped rather than
+   * thrown, since one bad row must never abort the whole check.
+   *
+   * @param {string} sinceIso - the window's start (this till's own clock)
+   * @returns {ReconciliationCandidateRow[]} oldest first
+   */
+  getReconciliationCandidates(sinceIso: string): ReconciliationCandidateRow[] {
+    const rows = this.conn
+      .prepare(
+        `SELECT local_id, status, shopify_order_id, shopify_push_count, created_at, payload_json
+         FROM orders
+         WHERE created_at >= ?
+           AND (
+             (status IN ('pending_sync', 'failed') AND shopify_push_count > 0)
+             OR (status = 'synced' AND shopify_order_id IS NOT NULL)
+           )
+         ORDER BY local_id ASC`
+      )
+      .all(sinceIso) as Array<{
+      local_id: number
+      status: OrderStatus
+      shopify_order_id: string | null
+      shopify_push_count: number
+      created_at: string
+      payload_json: string
+    }>
+
+    const candidates: ReconciliationCandidateRow[] = []
+    for (const row of rows) {
+      try {
+        const payload = JSON.parse(row.payload_json) as { clientOrderUuid?: string }
+        if (!payload.clientOrderUuid) continue
+        candidates.push({
+          local_id: row.local_id,
+          status: row.status,
+          shopify_order_id: row.shopify_order_id,
+          shopify_push_count: row.shopify_push_count,
+          created_at: row.created_at,
+          client_order_uuid: payload.clientOrderUuid
+        })
+      } catch {
+        // Malformed payload_json on a real install - skip this one row rather than fail the whole check.
+      }
+    }
+    return candidates
   }
 
   /**

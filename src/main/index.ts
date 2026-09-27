@@ -197,6 +197,8 @@ import type {
   ApproveMpesaEntriesResult
 } from './services/database.js'
 import { createSyncEngine } from './services/sync-engine.js'
+import { createReconciliationRunner } from './services/reconciliation.js'
+import type { ReconciliationResult } from './services/reconciliation.js'
 import { createFiscalEngine } from './services/fiscal-engine.js'
 import { runCheckout } from './services/checkout.js'
 import {
@@ -872,6 +874,46 @@ app.whenReady().then(async () => {
       : `[DEBUG-ETIMS] Startup: using RealFiscalizationProvider, baseUrl = ${etimsConfig.baseUrl || `(default) ${DEFAULT_ETIMS_BASE_URL}`}, deviceIp = ${etimsConfig.deviceIp || '(not configured)'}, devicePort = ${etimsConfig.devicePort || '(not configured)'}, password = ${etimsPasswordResolution.password ? `**** (from ${etimsPasswordResolution.source})` : '(not configured)'}, endpoints = ${JSON.stringify(etimsConfig.endpoints)}`
   )
 
+  /**
+   * Builds this till's current Shopify client, or `null` when the
+   * store URL/token are not configured - the same resolution
+   * `pushOrder` below already uses, factored out so the reconciliation
+   * runner (docs/phase-170) can call it fresh on every check/guard
+   * too, rather than a client baked in once at startup that would go
+   * stale after an Admin-screen credential save.
+   */
+  const getShopifyClient = () => {
+    const env = shopifyEnv()
+    return env ? createShopifyClient(env.storeUrl, env.token) : null
+  }
+
+  /**
+   * The Shopify sales-safety check's latest result (docs/phase-170),
+   * kept in memory only - read by Admin's "Shopify check" card via IPC
+   * (commit 3), and never persisted, so a restart simply waits for the
+   * next check to run rather than showing a stale one.
+   */
+  let lastReconciliationResult: ReconciliationResult | null = null
+
+  /**
+   * Never constructed in check:fit mode (docs/phase-169-1): the check
+   * is gated on `checkDue`, itself only ever set by `engine.start()`/
+   * `engine.notifyOnline()` (both skipped below), so passing this in
+   * would already be inert there - `undefined` here removes it a
+   * second, structural way, matching this app's own belt-and-braces
+   * pattern for check:fit.
+   */
+  const reconciliationRunner = shouldStartBackgroundSenders(checkFitSendingDisabled)
+    ? createReconciliationRunner({
+        db,
+        getClient: getShopifyClient,
+        onResult: (result) => {
+          lastReconciliationResult = result
+        },
+        logger: console
+      })
+    : undefined
+
   const engine = createSyncEngine({
     db,
     isOnline: () => net.isOnline(),
@@ -885,8 +927,23 @@ app.whenReady().then(async () => {
       }
       return pushOrderToShopify(createShopifyClient(env.storeUrl, env.token), payload)
     },
-    intervalMs: 30_000
+    intervalMs: 30_000,
+    reconciliation: reconciliationRunner
   })
+
+  /**
+   * IPC handler returning the Shopify sales-safety check's latest
+   * result (docs/phase-170) - `null` before the first check has run
+   * (including permanently, in check:fit mode, where the check never
+   * runs at all). Read-only; the Admin "Shopify check" card (docs/
+   * phase-170 commit 3) polls this rather than needing its own push
+   * channel, since a result only ever changes once every few minutes
+   * at most.
+   */
+  ipcMain.handle('shopify:get-reconciliation-status', (): ServiceResult<ReconciliationResult | null> => ({
+    success: true,
+    data: lastReconciliationResult
+  }))
 
   /**
    * eTIMS fiscalization store-and-forward queue — kept as its own

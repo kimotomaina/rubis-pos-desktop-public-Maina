@@ -11,6 +11,7 @@ import type { SyncEngineDatabase } from '../src/main/services/sync-engine.js'
 import { RubisDatabase } from '../src/main/services/database.js'
 import type { SyncQueueItem } from '../src/main/services/database.js'
 import type { OfflineOrderPayload } from '../src/main/services/shopify-types.js'
+import type { GuardDecision } from '../src/main/services/reconciliation.js'
 
 const makePayload = (uuid: string): OfflineOrderPayload => ({
   clientOrderUuid: uuid,
@@ -424,6 +425,172 @@ describe('SyncEngine push marker', () => {
     db.retryOrderSync(localId)
 
     expect(db.getShopifyPushMarker(localId)?.count).toBe(1)
+  })
+})
+
+/**
+ * The Shopify sales-safety check's wiring inside the sync engine
+ * (docs/phase-170 commit 2). `reconciliation` here is a hand-rolled
+ * fake satisfying `ReconciliationRunner` - the business logic itself
+ * (candidate classification, linking, the guard's own decisions) is
+ * tested against the real runner in `tests/reconciliation.test.ts`;
+ * these tests are only about *when* the engine calls it.
+ */
+describe('SyncEngine reconciliation wiring', () => {
+  function makeReconciliation(overrides: {
+    runCheck?: (signal: AbortSignal) => Promise<{ ok: boolean }>
+    guardPush?: (item: SyncQueueItem) => Promise<GuardDecision>
+  } = {}) {
+    return {
+      beginTick: vi.fn(),
+      runCheck: vi.fn(overrides.runCheck ?? (async () => ({ ok: true }))),
+      guardPush: vi.fn(overrides.guardPush ?? (async () => ({ action: 'push' as const })))
+    }
+  }
+
+  it('check:fit mode (engine never started/notified): the check never runs, even if tick() is somehow called', async () => {
+    const { db, pushOrder } = makeEngine({ items: [makeItem(1)] })
+    const reconciliation = makeReconciliation()
+    const engine = createSyncEngine({
+      db: db as unknown as SyncEngineDatabase,
+      isOnline: () => true,
+      pushOrder: pushOrder as never,
+      reconciliation
+    })
+
+    await engine.tick()
+
+    expect(reconciliation.runCheck).not.toHaveBeenCalled()
+    expect(pushOrder).toHaveBeenCalledTimes(1) // ordinary items still push - only the check itself is gated
+  })
+
+  it('start() runs the check; offline skips it entirely; notifyOnline() runs it again on reconnect', async () => {
+    let online = false
+    const { db, pushOrder } = makeEngine({ items: [] })
+    const reconciliation = makeReconciliation()
+    const engine = createSyncEngine({
+      db: db as unknown as SyncEngineDatabase,
+      isOnline: () => online,
+      pushOrder: pushOrder as never,
+      reconciliation
+    })
+
+    engine.start()
+    await Promise.resolve()
+    expect(reconciliation.runCheck).not.toHaveBeenCalled() // offline: tick() returns before the check
+
+    online = true
+    engine.notifyOnline()
+    await Promise.resolve()
+    expect(reconciliation.runCheck).toHaveBeenCalledTimes(1)
+  })
+
+  it('sync waits for the check to finish before pushing anything', async () => {
+    let releaseCheck!: () => void
+    const checkGate = new Promise<void>((resolve) => {
+      releaseCheck = resolve
+    })
+    const { db, pushOrder } = makeEngine({ items: [makeItem(1)] })
+    const reconciliation = makeReconciliation({
+      runCheck: async () => {
+        await checkGate
+        return { ok: true }
+      }
+    })
+    const engine = createSyncEngine({
+      db: db as unknown as SyncEngineDatabase,
+      isOnline: () => true,
+      pushOrder: pushOrder as never,
+      reconciliation
+    })
+
+    engine.start()
+    await Promise.resolve()
+    expect(pushOrder).not.toHaveBeenCalled()
+
+    releaseCheck()
+    await vi.waitFor(() => expect(pushOrder).toHaveBeenCalledTimes(1))
+  })
+
+  it('a timed-out check still lets a fresh item push, while a held item stays held', async () => {
+    const { db, pushOrder } = makeEngine({ items: [makeItem(1), makeItem(2)] })
+    const reconciliation = makeReconciliation({
+      runCheck: async () => ({ ok: false }), // simulates the 45s time limit being hit
+      guardPush: async (item) => (item.id === 1 ? { action: 'push' } : { action: 'hold', reason: 'held for test' })
+    })
+    const engine = createSyncEngine({
+      db: db as unknown as SyncEngineDatabase,
+      isOnline: () => true,
+      pushOrder: pushOrder as never,
+      reconciliation
+    })
+
+    await engine.tick()
+
+    expect(pushOrder).toHaveBeenCalledTimes(1)
+    expect(db.recordQueueFailure).not.toHaveBeenCalled() // the held item was skipped, not failed
+  })
+
+  it('a held item is skipped without ever calling recordPushStarted or pushOrder', async () => {
+    const { db, pushOrder } = makeEngine({ items: [makeItem(1)] })
+    const reconciliation = makeReconciliation({ guardPush: async () => ({ action: 'hold', reason: 'held for test' }) })
+    const engine = createSyncEngine({
+      db: db as unknown as SyncEngineDatabase,
+      isOnline: () => true,
+      pushOrder: pushOrder as never,
+      reconciliation
+    })
+
+    await engine.tick()
+
+    expect(pushOrder).not.toHaveBeenCalled()
+    expect(db.recordPushStarted).not.toHaveBeenCalled()
+    expect(db.recordQueueFailure).not.toHaveBeenCalled()
+  })
+
+  it('a linked item is dequeued by the guard itself, never pushed and never a recorded failure', async () => {
+    const { db, pushOrder } = makeEngine({ items: [makeItem(1)] })
+    const reconciliation = makeReconciliation({ guardPush: async () => ({ action: 'linked', shopifyOrderId: 'gid://shopify/Order/1' }) })
+    const engine = createSyncEngine({
+      db: db as unknown as SyncEngineDatabase,
+      isOnline: () => true,
+      pushOrder: pushOrder as never,
+      reconciliation
+    })
+
+    await engine.tick()
+
+    expect(pushOrder).not.toHaveBeenCalled()
+    expect(db.markQueueItemSynced).not.toHaveBeenCalled() // the guard/reconciliation module already did its own write
+    expect(db.recordQueueFailure).not.toHaveBeenCalled()
+  })
+
+  it('after a failed/timed-out check, checkDue stays satisfied by the retry timer, not by re-running every tick', async () => {
+    let clock = 1_700_000_000_000
+    const { db, pushOrder } = makeEngine({ items: [] })
+    const reconciliation = makeReconciliation({ runCheck: async () => ({ ok: false }) })
+    const engine = createSyncEngine({
+      db: db as unknown as SyncEngineDatabase,
+      isOnline: () => true,
+      pushOrder: pushOrder as never,
+      reconciliation,
+      now: () => clock,
+      checkRetryIntervalMs: 10 * 60_000
+    })
+
+    await engine.tick() // checkDue not set (start()/notifyOnline() never called) - this proves the earlier check:fit-mode test's mechanism from a different angle: no start(), no check.
+    expect(reconciliation.runCheck).not.toHaveBeenCalled()
+
+    engine.notifyOnline()
+    await Promise.resolve()
+    expect(reconciliation.runCheck).toHaveBeenCalledTimes(1) // failed -> nextCheckRetryAt = now + 10 min
+
+    await engine.tick() // immediately again - too soon for the 10 minute retry
+    expect(reconciliation.runCheck).toHaveBeenCalledTimes(1)
+
+    clock += 10 * 60_000 + 1
+    await engine.tick() // now due again, with no reconnect in between
+    expect(reconciliation.runCheck).toHaveBeenCalledTimes(2)
   })
 })
 

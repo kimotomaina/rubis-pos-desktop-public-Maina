@@ -343,3 +343,102 @@ describe('RubisDatabase.retryOrderSync keeps one queue row per sale (real SQLite
     )
   })
 })
+
+/**
+ * docs/phase-170 commit 2: `linkOrderToShopify` is the reconciliation
+ * check's one write - a lost-response sale is marked `synced` with the
+ * matching Shopify order id, and its `'order'` queue row (never its
+ * `'etims_invoice'` row) is removed. Real SQLite, same reasoning as the
+ * `retryOrderSync` describe block above: proving a row count needs a
+ * real transaction, not a recording fake.
+ */
+describe('RubisDatabase.linkOrderToShopify (real SQLite)', () => {
+  const realDb = async (maxAttempts?: number): Promise<RubisDatabase> => {
+    const { default: RealSqlite } = await vi.importActual<{ default: typeof BetterSqlite3 }>('better-sqlite3')
+    const db = new RubisDatabase({ dbPath: ':memory:', DatabaseFactory: RealSqlite, maxAttempts })
+    db.init()
+    return db
+  }
+
+  const seedSale = (db: RubisDatabase): number =>
+    db.queueOrder({
+      items: [],
+      total: 10,
+      clientOrderUuid: 'uuid-link-1',
+      staffId: 1,
+      staffName: 'Alex',
+      paymentMethod: 'cash',
+      tenderedAmount: 10,
+      changeDue: 0
+    }).localId
+
+  const rowsFor = (db: RubisDatabase, localId: number) =>
+    db.getPendingSyncQueue(Number.MAX_SAFE_INTEGER).filter((row) => row.entity_id === localId)
+
+  it('links a pending_sync sale: synced, shopify_order_id set, its order queue row removed', async () => {
+    const db = await realDb()
+    const localId = seedSale(db)
+
+    const { linked } = db.linkOrderToShopify(localId, 'gid://shopify/Order/900')
+
+    expect(linked).toBe(true)
+    const order = db.getOrder(localId)
+    expect(order?.status).toBe('synced')
+    expect(order?.shopify_order_id).toBe('gid://shopify/Order/900')
+    expect(rowsFor(db, localId)).toHaveLength(0)
+  })
+
+  it('links a failed sale the same way, even with no queue row left', async () => {
+    const db = await realDb(1)
+    const localId = seedSale(db)
+    db.recordQueueFailure(rowsFor(db, localId)[0].id, 'always fails')
+    expect(db.getOrder(localId)?.status).toBe('failed')
+
+    const { linked } = db.linkOrderToShopify(localId, 'gid://shopify/Order/901')
+
+    expect(linked).toBe(true)
+    expect(db.getOrder(localId)?.status).toBe('synced')
+  })
+
+  it('refuses a voided sale: no write, no queue row removed', async () => {
+    const db = await realDb()
+    const localId = seedSale(db)
+    db.voidOrder(localId)
+
+    const { linked } = db.linkOrderToShopify(localId, 'gid://shopify/Order/902')
+
+    expect(linked).toBe(false)
+    expect(db.getOrder(localId)?.status).toBe('voided')
+    expect(db.getOrder(localId)?.shopify_order_id).toBeNull()
+  })
+
+  it('refuses an already-synced sale: does not overwrite its existing shopify_order_id', async () => {
+    const db = await realDb()
+    const localId = seedSale(db)
+    db.linkOrderToShopify(localId, 'gid://shopify/Order/original')
+
+    const { linked } = db.linkOrderToShopify(localId, 'gid://shopify/Order/different')
+
+    expect(linked).toBe(false)
+    expect(db.getOrder(localId)?.shopify_order_id).toBe('gid://shopify/Order/original')
+  })
+
+  it('removes only the order queue row, never an etims_invoice row for the same sale', async () => {
+    const db = await realDb()
+    const localId = seedSale(db)
+    db.queueFiscalInvoice(localId, {
+      clientOrderUuid: 'uuid-link-1',
+      items: [],
+      total: 10,
+      taxAmount: 0.8
+    })
+
+    db.linkOrderToShopify(localId, 'gid://shopify/Order/903')
+
+    const remaining = db
+      .getPendingFiscalQueue(Number.MAX_SAFE_INTEGER)
+      .filter((row) => row.entity_id === localId)
+    expect(remaining).toHaveLength(1)
+    expect(remaining[0].entity_type).toBe('etims_invoice')
+  })
+})

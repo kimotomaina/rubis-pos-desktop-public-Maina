@@ -16,6 +16,7 @@
 import type { OfflineOrderPayload, ServiceResult } from './shopify-types.js'
 import type { SyncQueueItem } from './database.js'
 import type { OrderCreateResult } from './orders.js'
+import type { ReconciliationRunner } from './reconciliation.js'
 
 /**
  * Structural slice of {@link RubisDatabase} the engine depends on.
@@ -42,6 +43,19 @@ export interface SyncEngineOptions {
   intervalMs?: number
   /** Injectable clock for tests. */
   now?: () => number
+  /**
+   * The Shopify sales-safety check (docs/phase-170 commit 2). Optional
+   * so every existing caller/test that omits it keeps exactly today's
+   * behaviour: no check ever runs, and every due item is pushed
+   * exactly as before - matching check:fit mode, where the engine is
+   * never even started (docs/phase-169-1), so this is never
+   * constructed there either.
+   */
+  reconciliation?: ReconciliationRunner
+  /** Overall time limit for one check run (default 45 s, docs/phase-168 section 2.1). */
+  checkTimeLimitMs?: number
+  /** How long to wait before retrying a failed/timed-out check with no reconnect in between (default 10 minutes, docs/phase-168 section 2.1). */
+  checkRetryIntervalMs?: number
 }
 
 /** Handle returned by {@link createSyncEngine}. */
@@ -65,17 +79,64 @@ export interface SyncEngine {
  * @returns {SyncEngine}
  */
 export function createSyncEngine(options: SyncEngineOptions): SyncEngine {
-  const { db, isOnline, pushOrder } = options
+  const { db, isOnline, pushOrder, reconciliation } = options
   const intervalMs = options.intervalMs ?? 30_000
   const now = options.now ?? Date.now
+  const checkTimeLimitMs = options.checkTimeLimitMs ?? 45_000
+  const checkRetryIntervalMs = options.checkRetryIntervalMs ?? 10 * 60_000
 
   let timer: ReturnType<typeof setInterval> | null = null
   let running = false
 
   /**
-   * One sync pass: fetches due queue items and, while online, pushes
-   * each one in order — marking successes synced and scheduling
-   * backoff on failures.
+   * Whether the Shopify sales-safety check should run on the next
+   * tick - set by `start()`/`notifyOnline()` (docs/phase-168 section
+   * 2.1's own trigger set: app start, and reconnect). Left `false`
+   * otherwise, including on every `onCheckoutMade()`/interval tick, so
+   * an ordinary background drain never re-runs the check on its own.
+   */
+  let checkDue = false
+  /**
+   * When a check fails or times out, the next automatic retry - even
+   * with no reconnect in between (docs/phase-168 section 2.1: "retry
+   * later"). `Infinity` until the first failure, so a fresh install
+   * with `checkDue` still `false` never runs a check it was never
+   * asked to run.
+   */
+  let nextCheckRetryAt = Number.POSITIVE_INFINITY
+
+  /**
+   * Runs the periodic check, bounded by {@link checkTimeLimitMs}. A
+   * timeout aborts the runner's own in-flight Shopify calls (the
+   * runner honours the signal at every wait/request,
+   * `shopify-reconcile.ts`), so this never blocks `tick()` past the
+   * limit even if a single HTTP call itself would have hung longer.
+   */
+  async function runCheckWithTimeLimit(): Promise<void> {
+    if (!reconciliation) return
+    const controller = new AbortController()
+    const timer2 = setTimeout(() => controller.abort(), checkTimeLimitMs)
+    try {
+      const outcome = await reconciliation.runCheck(controller.signal)
+      if (outcome.ok) {
+        checkDue = false
+        nextCheckRetryAt = Number.POSITIVE_INFINITY
+      } else {
+        nextCheckRetryAt = now() + checkRetryIntervalMs
+      }
+    } finally {
+      clearTimeout(timer2)
+    }
+  }
+
+  /**
+   * One sync pass: runs the Shopify sales-safety check when due, then
+   * fetches due queue items and, while online, pushes each one in
+   * order — marking successes synced and scheduling backoff on
+   * failures. The check always runs to completion (or times out)
+   * before a single item is pushed this tick (docs/phase-168's own
+   * hard rule: "the sync engine must not push any held sale until the
+   * check has finished or timed out").
    */
   async function tick(): Promise<void> {
     if (running) return
@@ -83,9 +144,20 @@ export function createSyncEngine(options: SyncEngineOptions): SyncEngine {
     try {
       if (!isOnline()) return
 
+      reconciliation?.beginTick()
+
+      if (reconciliation && (checkDue || now() >= nextCheckRetryAt)) {
+        await runCheckWithTimeLimit()
+      }
+
       const pending = db.getPendingSyncQueue(now())
       for (const item of pending) {
         if (!isOnline()) break
+
+        if (reconciliation) {
+          const decision = await reconciliation.guardPush(item)
+          if (decision.action !== 'push') continue // 'linked' or 'hold' - never a recorded failure, never a push
+        }
 
         // Before the request, never after: a sale whose request went out
         // but whose reply was lost must still read as "possibly already in
@@ -122,6 +194,7 @@ export function createSyncEngine(options: SyncEngineOptions): SyncEngine {
   return {
     start(): void {
       if (timer) return
+      checkDue = true
       timer = setInterval(() => void tick(), intervalMs)
       void tick()
     },
@@ -136,6 +209,7 @@ export function createSyncEngine(options: SyncEngineOptions): SyncEngine {
     tick,
 
     notifyOnline(): void {
+      checkDue = true
       void tick()
     },
 
