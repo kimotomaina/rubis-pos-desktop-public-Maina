@@ -204,7 +204,8 @@ import {
   printReceiptToType,
   printZReport,
   printTestPage,
-  buildPrinterRegistry
+  buildPrinterRegistry,
+  shouldMarkReceiptPrinted
 } from './services/printer.js'
 import type { PrinterSettings, ReceiptPrintResult, PrinterRegistry } from './services/printer.js'
 import { hashPin, authenticateStaff } from './services/auth.js'
@@ -2516,11 +2517,9 @@ app.whenReady().then(async () => {
           printerSettings,
           request.printerType ?? 'receipt'
         )
-        // Marked AFTER a successful print (physical or PDF fallback) —
-        // never before, so an attempt that fails entirely (printer offline
-        // AND the PDF fallback also throws) leaves this unset and the
-        // next attempt is still correctly treated as the original.
-        if (result.success) {
+        // docs/phase-164-1: marked only when the CU block actually went
+        // out on paper — see shouldMarkReceiptPrinted.
+        if (shouldMarkReceiptPrinted(result, order.fiscal_invoice_number)) {
           db.markReceiptPrinted(localId)
         }
         return openPdfFallbackIfPresent(result)

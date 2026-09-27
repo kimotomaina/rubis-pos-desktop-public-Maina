@@ -115,15 +115,19 @@ export interface OrderRow {
    */
   fiscal_cu_serial: string | null
   /**
-   * When this sale's receipt was first successfully printed (physical
-   * print OR the PDF fallback — either counts, since both produce a real
-   * receipt), or `null` if never printed (docs/phase-164). Write-once,
-   * like the fiscal fields above: the FIRST successful print sets it, and
-   * every later print of the same sale sees it already set, so it can be
+   * The fiscal receipt physically printed at — set only when BOTH: the
+   * print was a real physical print (never the PDF fallback), AND the
+   * order was fiscalised, so the printed page actually carried the CU
+   * block (docs/phase-164-1; narrowed from docs/phase-164's original
+   * "any successful print, PDF fallback included" meaning — a PDF or a
+   * plain, unfiled sale's slip is never THE fiscal receipt going out on
+   * paper, so neither one may claim to be "the original"). `null` until
+   * that happens, however many times the sale is printed before then.
+   * Write-once: the FIRST such print sets it, and every later print of
+   * the same sale (of any kind) sees it already set, so it can be
    * stamped "DUPLICATE" rather than mistaken for the original. Set by
    * {@link RubisDatabase.markReceiptPrinted}, read by
-   * {@link RubisDatabase.hasReceiptPrinted}. Applies to every sale
-   * receipt, fiscalized or not — unrelated to fiscal status.
+   * {@link RubisDatabase.hasReceiptPrinted}.
    */
   receipt_printed_at: string | null
 }
@@ -397,9 +401,10 @@ function migrateOrdersFiscalColumns(connection: SqliteConnection): void {
 
 /**
  * Adds `receipt_printed_at` to a pre-existing `orders` table (docs/
- * phase-164) — kept separate from {@link migrateOrdersFiscalColumns}
- * since it is not a fiscal column (it applies to every sale receipt,
- * fiscalized or not); same idempotent `ALTER TABLE` pattern.
+ * phase-164, meaning narrowed docs/phase-164-1) — kept in its own
+ * migration, separate from {@link migrateOrdersFiscalColumns}'s array,
+ * since the column itself was never part of that array's original set;
+ * same idempotent `ALTER TABLE` pattern.
  */
 function migrateOrdersReceiptColumns(connection: SqliteConnection): void {
   try {
@@ -1492,12 +1497,15 @@ export class RubisDatabase {
   }
 
   /**
-   * Whether this sale's receipt has already been printed once
-   * (docs/phase-164) — the "original vs duplicate" question the
-   * `receipt:print` IPC handler asks before rendering, since it is the
-   * single call site for every print of a sale's receipt (the very first
-   * one and any later reprint alike; see docs/phase-164's audit — there
-   * is no separate "print on checkout" code path to tell them apart by).
+   * Whether this sale's FISCAL receipt has already been physically
+   * printed once (docs/phase-164, narrowed docs/phase-164-1) — the
+   * "original vs duplicate" question the `receipt:print` IPC handler asks
+   * before rendering, since it is the single call site for every print of
+   * a sale's receipt (the very first one and any later reprint alike; see
+   * docs/phase-164's audit — there is no separate "print on checkout" code
+   * path to tell them apart by). `false` for a sale that has only ever
+   * been printed as a PDF fallback, or only while still unfiled — see
+   * {@link markReceiptPrinted}.
    *
    * @param {number} localId
    * @returns {boolean}
@@ -1510,13 +1518,20 @@ export class RubisDatabase {
   }
 
   /**
-   * Records this sale's receipt as printed — write-once via
-   * `COALESCE(receipt_printed_at, ?)`, so calling this again after a
-   * reprint leaves the original print's timestamp in place. The caller
-   * (`main/index.ts`) calls this only AFTER a print actually succeeds
-   * (physical print or the PDF fallback) — a failed attempt (printer
-   * offline AND the PDF fallback also failed) leaves this unset, so the
-   * next attempt is still correctly treated as the original.
+   * Records this sale's FISCAL receipt as physically printed — write-once
+   * via `COALESCE(receipt_printed_at, ?)`, so calling this again after a
+   * reprint leaves the original print's timestamp in place.
+   *
+   * The caller (`main/index.ts`) calls this only when BOTH conditions
+   * hold (docs/phase-164-1 — narrower than docs/phase-164's original "any
+   * successful print"): the print was a real physical print (`result.data
+   * ?.mode !== 'pdf'`), AND the order was fiscalised at print time
+   * (`order.fiscal_invoice_number` set), so the page that came out of the
+   * printer actually carried the CU block. A PDF fallback, or a plain
+   * slip for a still-unfiled sale, never marks this — so the eventual
+   * first PHYSICAL, FISCALISED print of that same sale is still correctly
+   * treated as the original, however many PDF or plain prints came before
+   * it.
    *
    * @param {number} localId
    */

@@ -15,7 +15,8 @@ import {
   renderReceipt,
   renderZReport,
   defaultPrinterFactory,
-  PRINTER_CONNECT_TIMEOUT_MS
+  PRINTER_CONNECT_TIMEOUT_MS,
+  shouldMarkReceiptPrinted
 } from '../src/main/services/printer.js'
 import type {
   PrinterSettings,
@@ -540,5 +541,41 @@ describe('defaultPrinterFactory', () => {
         options: { timeout: PRINTER_CONNECT_TIMEOUT_MS }
       })
     )
+  })
+})
+
+describe('shouldMarkReceiptPrinted (docs/phase-164-1)', () => {
+  it('is true for a physical print of a fiscalised order', () => {
+    expect(
+      shouldMarkReceiptPrinted({ success: true, data: { printed: true, mock: false } }, 'KRA-0001')
+    ).toBe(true)
+  })
+
+  it('is true for a mock-mode print of a fiscalised order (mock stands in for the real printer, not the PDF fallback)', () => {
+    expect(
+      shouldMarkReceiptPrinted({ success: true, data: { printed: true, mock: true } }, 'KRA-0001')
+    ).toBe(true)
+  })
+
+  it('is false for a PDF fallback print, even of a fiscalised order', () => {
+    expect(
+      shouldMarkReceiptPrinted(
+        { success: true, data: { printed: false, mock: false, mode: 'pdf', filePath: 'C:\\Desktop\\r.pdf' } },
+        'KRA-0001'
+      )
+    ).toBe(false)
+  })
+
+  it('is false for a physical print of an unfiled order (no fiscalInvoiceNumber)', () => {
+    expect(
+      shouldMarkReceiptPrinted({ success: true, data: { printed: true, mock: false } }, undefined)
+    ).toBe(false)
+    expect(
+      shouldMarkReceiptPrinted({ success: true, data: { printed: true, mock: false } }, null)
+    ).toBe(false)
+  })
+
+  it('is false for a failed print attempt, whatever the order', () => {
+    expect(shouldMarkReceiptPrinted({ success: false, error: 'Printer offline' }, 'KRA-0001')).toBe(false)
   })
 })

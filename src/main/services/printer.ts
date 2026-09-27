@@ -106,6 +106,30 @@ export interface ReceiptPrintResult {
 }
 
 /**
+ * Whether a `receipt:print` attempt's outcome should mark this sale's
+ * receipt as physically printed (docs/phase-164-1) — true only when BOTH:
+ * the print was a real physical print (`result.data.mode !== 'pdf'` —
+ * mock-mode counts as physical, since it stands in for the real printer
+ * rather than the PDF fallback), AND the order was fiscalised at print
+ * time, so the page that came out actually carried the CU block.
+ *
+ * Extracted as its own pure function, rather than left inline in
+ * `main/index.ts`'s `receipt:print` handler, specifically so this exact
+ * gating is directly testable — that handler's IPC wiring itself is not
+ * unit tested anywhere in this codebase (docs/phase-164-1's audit).
+ *
+ * @param {ServiceResult<ReceiptPrintResult>} result
+ * @param {string | null | undefined} fiscalInvoiceNumber
+ * @returns {boolean}
+ */
+export function shouldMarkReceiptPrinted(
+  result: ServiceResult<ReceiptPrintResult>,
+  fiscalInvoiceNumber: string | null | undefined
+): boolean {
+  return result.success && result.data?.mode !== 'pdf' && !!fiscalInvoiceNumber
+}
+
+/**
  * Narrow surface of `node-thermal-printer`'s client this service
  * depends on. Real instances satisfy it structurally; tests substitute
  * a recording fake.
