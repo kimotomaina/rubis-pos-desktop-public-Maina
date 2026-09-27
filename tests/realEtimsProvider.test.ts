@@ -22,9 +22,12 @@ import {
   DEFAULT_FISCAL_ENDPOINTS,
   mapFiscalDeviceError,
   mapFiscalServerError,
-  sumVatGroupSubtotals
+  sumVatGroupSubtotals,
+  DAILY_CLOSURE_BLOCK_REASON,
+  UNVERIFIABLE_RETRY_REASON
 } from '../src/main/services/integrations/real-etims-provider.js'
 import { EXPECTED_DEF_VERSION } from '../src/main/services/integrations/http-client.js'
+import { routeFiscalOutcome } from '../src/main/services/fiscal-routing.js'
 import type { FiscalInvoiceRequest } from '../src/main/services/integrations/etims.js'
 
 /**
@@ -1881,5 +1884,225 @@ describe('provider logging (phase-80)', () => {
     expect(result.ok).toBe(true)
     expect(logger.log).toHaveBeenCalledWith(expect.stringContaining('Sale 43'))
     expect(logger.log).toHaveBeenCalledWith(expect.stringContaining('0000000005555555'))
+  })
+})
+
+/**
+ * docs/phase-162-1, Test A. `submitInvoice` has no built-in queue — a
+ * "retry" is simply a later, separate call with `isRetry: true` and the
+ * same `localId` (so `buildTraderSystemInvNum` produces the same
+ * `TraderSystemInvNum`). These tests drive three such calls against one
+ * shared `post` mock/provider to prove what actually happens when a
+ * STE1=59 block persists across a retry and then clears.
+ */
+describe('TEST A: retry while the device is still blocked, then recovers when the block clears (docs/phase-162-1)', () => {
+  /**
+   * `OpenInvoiceWithFreeCustomerData` is blocked (STE1=59) on its first
+   * two calls, then succeeds. `ReadCUinvoiceNumber` — `verifyAlreadyFiled`'s
+   * own probe — hits the SAME block on the one retry that calls it (the
+   * realistic pairing for a device-wide condition, not a coincidence).
+   */
+  function makeBlockedThenClearedPost(): ReturnType<typeof vi.fn> {
+    let openInvoiceCalls = 0
+    return vi.fn().mockImplementation((path: string, body: string) => {
+      const command = commandNameOf([path, body])
+      if (command === 'OpenInvoiceWithFreeCustomerData') {
+        openInvoiceCalls += 1
+        if (openInvoiceCalls <= 2) {
+          return Promise.resolve({ data: xmlCommandError(0, 'irrelevant', 59) })
+        }
+      }
+      if (command === 'ReadCUinvoiceNumber' && openInvoiceCalls === 2) {
+        return Promise.resolve({ data: xmlCommandError(0, 'irrelevant', 59) })
+      }
+      return makeSuccessfulPostImpl()(path, body)
+    })
+  }
+
+  it('under the newer definitions (defVer=2509041522): recovers automatically, exactly one CloseReceipt, one invoice number', async () => {
+    const post = makeBlockedThenClearedPost()
+    const provider = new RealFiscalizationProvider({
+      ...TEST_DEVICE,
+      httpClient: makeMockClient(post, makeSettingsGet(EXPECTED_DEF_VERSION))
+    })
+    const request = { ...SAMPLE_REQUEST, localId: 900 }
+
+    // Attempt 1 — first attempt, not yet a retry.
+    const attempt1 = await provider.submitInvoice(request)
+    expect(attempt1.ok).toBe(false)
+    if (attempt1.ok) return
+    expect(attempt1.reason).toBe(DAILY_CLOSURE_BLOCK_REASON)
+    expect(attempt1.kind).toBe('technical')
+    expect(attempt1.retryable).toBe(true)
+    expect(routeFiscalOutcome(attempt1)).toEqual({ status: 'waiting', enqueue: true })
+
+    // Attempt 2 — a queued retry; OpenInvoice AND ReadCUinvoiceNumber both
+    // still hit the block. `verifyAlreadyFiled`'s branches
+    // (real-etims-provider.ts): `support` resolves to `'available'` for
+    // this defVer, so `if (support === 'available' || deviceNeverSawIt)`
+    // is true regardless of `deviceNeverSawIt` — the failed recovery read
+    // is treated as `'genuine-failure'`, which is NOT one of the two
+    // outcomes `submitInvoice`'s retry branch returns early for
+    // (`'already-filed'`/`'unverifiable'`), so it falls through to
+    // `classifyDeviceFailure(openResult, ...)` — the ORIGINAL OpenInvoice
+    // rejection's own `retryable: true`/reason, unchanged.
+    const attempt2 = await provider.submitInvoice({ ...request, isRetry: true })
+    expect(attempt2.ok).toBe(false)
+    if (attempt2.ok) return
+    expect(attempt2.reason).toBe(DAILY_CLOSURE_BLOCK_REASON)
+    expect(attempt2.kind).toBe('technical')
+    expect(attempt2.retryable).toBe(true)
+    expect(routeFiscalOutcome(attempt2)).toEqual({ status: 'waiting', enqueue: true })
+
+    // Attempt 3 — block cleared; the full sequence completes.
+    const attempt3 = await provider.submitInvoice({ ...request, isRetry: true })
+    expect(attempt3.ok).toBe(true)
+    if (!attempt3.ok) return
+    expect(attempt3.data.invoiceNumber).toBe('KRA-0001')
+    expect(routeFiscalOutcome(attempt3)).toEqual({ status: 'fiscalized', enqueue: false })
+
+    expect(commandSequence(post).filter((c) => c === 'CloseReceipt')).toHaveLength(1)
+    expect(commandSequence(post).filter((c) => c === 'OpenInvoiceWithFreeCustomerData')).toHaveLength(3)
+    expect(commandSequence(post).filter((c) => c === 'ReadCUinvoiceNumber')).toHaveLength(1)
+  })
+
+  /**
+   * FINDING (docs/phase-162-1.md): with a blank/unrecognized defVer,
+   * `verifyAlreadyFiled`'s branches resolve differently. `support` is
+   * `'unknown'` and `deviceNeverSawIt` is `false` (a Code 40 device
+   * response never sets `serverFailure`), so
+   * `if (support === 'available' || deviceNeverSawIt)` is FALSE, and the
+   * function falls to its last line:
+   * `return { outcome: 'unverifiable', reason: recovery.error ?? '...' }`.
+   * `submitInvoice`'s retry branch returns early for `'unverifiable'` with
+   * `kind: 'system'`, `retryable: false` — the ORIGINAL OpenInvoice
+   * rejection's own `retryable: true` and daily-closure reason are
+   * discarded. Attempt 2 lands on `needs_fixing`, so the background queue
+   * (`enqueue: false`) stops retrying it automatically; a person must
+   * manually resend (simulated by attempt 3) even though nothing about
+   * this sale's data was ever wrong — see this phase's report for the
+   * proposed (not built) fix.
+   */
+  it('under an unrecognized/blank defVer: attempt 2 does NOT recover automatically (needs_fixing) — a manual resend still succeeds, no duplicate filing', async () => {
+    const post = makeBlockedThenClearedPost()
+    const provider = new RealFiscalizationProvider({ ...TEST_DEVICE, httpClient: makeMockClient(post) })
+    const request = { ...SAMPLE_REQUEST, localId: 901 }
+
+    const attempt1 = await provider.submitInvoice(request)
+    expect(attempt1.ok).toBe(false)
+    if (attempt1.ok) return
+    expect(attempt1.retryable).toBe(true)
+
+    const attempt2 = await provider.submitInvoice({ ...request, isRetry: true })
+    expect(attempt2.ok).toBe(false)
+    if (attempt2.ok) return
+    expect(attempt2.reason).toBe(UNVERIFIABLE_RETRY_REASON)
+    expect(attempt2.kind).toBe('system')
+    expect(attempt2.retryable).toBe(false)
+    expect(routeFiscalOutcome(attempt2)).toEqual({ status: 'needs_fixing', enqueue: false })
+
+    // A manual resend (still `isRetry: true`, the same guarded path) once
+    // the closure clears — recovers cleanly, no duplicate filing.
+    const attempt3 = await provider.submitInvoice({ ...request, isRetry: true })
+    expect(attempt3.ok).toBe(true)
+    if (!attempt3.ok) return
+    expect(attempt3.data.invoiceNumber).toBe('KRA-0001')
+
+    expect(commandSequence(post).filter((c) => c === 'CloseReceipt')).toHaveLength(1)
+  })
+})
+
+/**
+ * docs/phase-162-1, Test B. Once `CloseReceipt` has actually succeeded,
+ * nothing that runs afterward should be able to turn a filed sale back
+ * into `waiting`/`needs_fixing` — `submitInvoice` only ever returns
+ * `invoiceNumber` from the block after `closeResult.success` is already
+ * confirmed true.
+ */
+describe('TEST B: nothing after a successful CloseReceipt can mark a filed sale for retry (docs/phase-162-1)', () => {
+  /** Fails ReadDateTime only, in the given way; CloseReceipt (and everything else) succeeds normally. */
+  function makeReadDateTimeFailingPost(kind: 'daily-closure' | 'other-error' | 'timeout'): ReturnType<typeof vi.fn> {
+    const success = makeSuccessfulPostImpl()
+    return vi.fn().mockImplementation((path: string, body: string) => {
+      if (commandNameOf([path, body]) === 'ReadDateTime') {
+        if (kind === 'daily-closure') {
+          return Promise.resolve({ data: xmlCommandError(0, 'irrelevant', 59) })
+        }
+        if (kind === 'other-error') {
+          return Promise.resolve({ data: xmlCommandError(64, 'HS code is not valid') })
+        }
+        return Promise.reject(new Error('ETIMEDOUT'))
+      }
+      return success(path, body)
+    })
+  }
+
+  it.each(['daily-closure', 'other-error', 'timeout'] as const)(
+    'ReadDateTime failing with %s AFTER a successful CloseReceipt: still ok:true, routes to fiscalized, invoice number intact',
+    async (kind) => {
+      const post = makeReadDateTimeFailingPost(kind)
+      const provider = new RealFiscalizationProvider({ ...TEST_DEVICE, httpClient: makeMockClient(post) })
+
+      const result = await provider.submitInvoice(SAMPLE_REQUEST)
+
+      expect(result.ok).toBe(true)
+      if (!result.ok) return
+      expect(result.data.invoiceNumber).toBe('KRA-0001')
+      expect(result.data.fiscalizedAtSource).toBe('local-fallback')
+      expect(routeFiscalOutcome(result)).toEqual({ status: 'fiscalized', enqueue: false })
+      expect(commandSequence(post).filter((c) => c === 'CloseReceipt')).toHaveLength(1)
+    }
+  )
+
+  /**
+   * Resolves docs/phase-162's internal contradiction: its "How it
+   * currently works" section said every command "except the best-effort
+   * ReadDateTime" goes through `sendCommand`; its own §7/"Observed but not
+   * changed" said `checkDeviceResponse` is called for every command
+   * "including ReadDateTime". The code settles it in ReadDateTime's
+   * favour of the SECOND statement — proven here, not just read: Step 7's
+   * call is `this.sendCommand(this.endpoints.readDateTime, 'ReadDateTime',
+   * {})`, the identical helper every other step uses, so it inherits
+   * `sendCommand`'s own Code-53 ("settings missing") re-handshake-and-
+   * retry-once behaviour, which only `sendCommand` implements — a command
+   * that "skipped" it could not exhibit this. "Best-effort" describes
+   * `submitInvoice` never inspecting `dateTimeResult.success` for a
+   * failure branch afterward (see the `it.each` above), not that parsing
+   * is skipped.
+   */
+  it('ReadDateTime goes through sendCommand, proven by its Code-53 re-handshake-and-retry firing exactly as it does for every other command', async () => {
+    let readDateTimeCalls = 0
+    const post = vi.fn().mockImplementation((path: string, body: string) => {
+      if (commandNameOf([path, body]) === 'ReadDateTime') {
+        readDateTimeCalls += 1
+        if (readDateTimeCalls === 1) {
+          return Promise.resolve({ data: xmlServerError('53', 'Client settings not initialized') })
+        }
+        return Promise.resolve({ data: xmlResponse({ DateTime: '01-01-2026 09:30' }) })
+      }
+      return makeSuccessfulPostImpl()(path, body)
+    })
+    const get = vi.fn().mockResolvedValue({ data: '<Res Code="0"/>' })
+    const provider = new RealFiscalizationProvider({ ...TEST_DEVICE, httpClient: makeMockClient(post, get) })
+
+    const result = await provider.submitInvoice(SAMPLE_REQUEST)
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.data.fiscalizedAtSource).toBe('device')
+    expect(readDateTimeCalls).toBe(2)
+    expect(get).toHaveBeenCalledTimes(2)
+  })
+
+  it('ReadCUnumbers runs once, near the start of the session — never after CloseReceipt, so it cannot be "the thing that runs after the close"', async () => {
+    const post = makeSuccessfulPostImpl()
+    const provider = new RealFiscalizationProvider({ ...TEST_DEVICE, httpClient: makeMockClient(post) })
+
+    await provider.submitInvoice(SAMPLE_REQUEST)
+
+    const sequence = commandSequence(post)
+    expect(sequence.indexOf('ReadCUnumbers')).toBeGreaterThanOrEqual(0)
+    expect(sequence.indexOf('ReadCUnumbers')).toBeLessThan(sequence.indexOf('CloseReceipt'))
+    expect(sequence.filter((c) => c === 'ReadCUnumbers')).toHaveLength(1)
   })
 })
