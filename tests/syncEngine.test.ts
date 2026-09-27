@@ -380,14 +380,14 @@ describe('SyncEngine push marker', () => {
     expect(db.getShopifyPushMarker(localId)).toEqual({ count: 0, lastPushAt: null })
   })
 
-  it('a push that throws still leaves count 1', async () => {
+  it('a push that throws still leaves count 1, and is recorded as a failure, not an unhandled rejection (docs/phase-169-1 commit C)', async () => {
     const { db, localId } = seeded()
     const pushOrder = vi.fn(async () => {
       throw new Error('socket hang up')
     })
     const engine = createSyncEngine({ db, isOnline: () => true, pushOrder })
 
-    await expect(engine.tick()).rejects.toThrow('socket hang up')
+    await expect(engine.tick()).resolves.toBeUndefined()
 
     const marker = db.getShopifyPushMarker(localId)
     expect(marker?.count).toBe(1)
@@ -424,6 +424,85 @@ describe('SyncEngine push marker', () => {
     db.retryOrderSync(localId)
 
     expect(db.getShopifyPushMarker(localId)?.count).toBe(1)
+  })
+})
+
+/**
+ * docs/phase-169-1 commit C: a `pushOrder` that throws is recorded as
+ * an ordinary queue failure, not left as an unhandled rejection, and
+ * the loop continues to the next item.
+ */
+describe('SyncEngine tick — a throwing pushOrder', () => {
+  it('records a failure with a plain message, and still pushes the next item', async () => {
+    const { db, engine } = makeEngine({ items: [makeItem(1), makeItem(2)] })
+    const pushOrder = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('socket hang up'))
+      .mockResolvedValueOnce({
+        success: true,
+        data: { shopifyOrderId: 'gid://shopify/Order/1', orderName: '#1001' }
+      })
+    const throwingEngine = createSyncEngine({
+      db: db as unknown as SyncEngineDatabase,
+      isOnline: () => true,
+      pushOrder: pushOrder as never
+    })
+    void engine // unused — this test builds its own engine to inject the throwing pushOrder
+
+    await throwingEngine.tick()
+
+    expect(pushOrder).toHaveBeenCalledTimes(2)
+    expect(db.recordQueueFailure).toHaveBeenCalledWith(1, 'socket hang up')
+    expect(db.markQueueItemSynced).toHaveBeenCalledWith(2, 'gid://shopify/Order/1')
+  })
+
+  it('uses a generic message when the thrown value is not an Error', async () => {
+    const { db } = makeEngine({ items: [makeItem(1)] })
+    const pushOrder = vi.fn().mockRejectedValueOnce('socket hang up')
+    const engine = createSyncEngine({
+      db: db as unknown as SyncEngineDatabase,
+      isOnline: () => true,
+      pushOrder: pushOrder as never
+    })
+
+    await engine.tick()
+
+    expect(db.recordQueueFailure).toHaveBeenCalledWith(1, 'Unknown sync error')
+  })
+
+  it('raises no unhandled rejection (real SQLite)', async () => {
+    const dbReal = new RubisDatabase({ dbPath: ':memory:' })
+    dbReal.init()
+    const { localId } = dbReal.queueOrder({
+      items: [],
+      total: 10,
+      clientOrderUuid: 'uuid-throw-1',
+      staffId: 1,
+      staffName: 'Alex',
+      paymentMethod: 'cash',
+      tenderedAmount: 10,
+      changeDue: 0
+    })
+    const pushOrder = vi.fn(async () => {
+      throw new Error('socket hang up')
+    })
+    const engine = createSyncEngine({ db: dbReal, isOnline: () => true, pushOrder })
+
+    const unhandled = vi.fn()
+    process.on('unhandledRejection', unhandled)
+    try {
+      await engine.tick()
+      // Any unhandled rejection from the awaited tick() above would
+      // already have been thrown by the `await`; this second tick, one
+      // microtask turn later, is what would catch a rejection that
+      // escaped asynchronously instead.
+      await Promise.resolve()
+    } finally {
+      process.off('unhandledRejection', unhandled)
+    }
+
+    expect(unhandled).not.toHaveBeenCalled()
+    expect(dbReal.getOrder(localId)?.status).toBe('pending_sync')
   })
 })
 

@@ -92,7 +92,21 @@ export function createSyncEngine(options: SyncEngineOptions): SyncEngine {
         // Shopify" (docs/phase-168 section 2.4). Synchronous, so it is
         // committed before `pushOrder` starts.
         db.recordPushStarted(item.entity_id)
-        const result = await pushOrder(item.payload)
+
+        // docs/phase-169-1 commit C: `pushOrder` is documented as never
+        // throwing (orders.ts's own doc comment — it always resolves a
+        // ServiceResult), but an injected implementation (or a future
+        // change to it) that throws anyway must not escape `tick()`: an
+        // uncaught rejection here would abandon the rest of `pending`
+        // silently and surface as an unhandled rejection at the process
+        // level, rather than as this item's own recorded failure.
+        let result: Awaited<ReturnType<PushOrderFn>>
+        try {
+          result = await pushOrder(item.payload)
+        } catch (err) {
+          db.recordQueueFailure(item.id, err instanceof Error ? err.message : 'Unknown sync error')
+          continue
+        }
 
         if (result.success && result.data) {
           db.markQueueItemSynced(item.id, result.data.shopifyOrderId)
