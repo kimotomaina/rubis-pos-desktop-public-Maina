@@ -90,6 +90,14 @@ const api = {
   getAppVersion: (): Promise<string> => ipcRenderer.invoke('app:get-version'),
 
   /**
+   * Test-hook-only (docs/phase-166 Commit E3): which screen/overlay
+   * `check:fit` wants force-shown, or `null` on every real launch. See
+   * `main/index.ts`'s `checkFit:getForcedScreen` handler.
+   * @returns {Promise<string | null>}
+   */
+  getCheckFitForcedScreen: (): Promise<string | null> => ipcRenderer.invoke('checkFit:getForcedScreen'),
+
+  /**
    * Opens the given external URL in the OS default browser.
    * @param {string} url
    */

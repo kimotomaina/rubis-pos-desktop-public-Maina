@@ -87,6 +87,8 @@ export interface PosApi {
   ping: () => Promise<string>
   /** Application version from the main process. */
   getAppVersion: () => Promise<string>
+  /** Test-hook-only (docs/phase-166 Commit E3): which screen/overlay check:fit wants force-shown, or null on every real launch. */
+  getCheckFitForcedScreen: () => Promise<string | null>
   /** Opens an external URL in the OS default browser. */
   openExternal: (url: string) => void
   /** Fetches the active Shopify product catalog. */

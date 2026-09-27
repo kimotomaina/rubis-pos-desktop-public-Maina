@@ -1013,6 +1013,18 @@ app.whenReady().then(async () => {
   ipcMain.handle('ping', () => 'pong')
 
   /**
+   * Test-hook-only channel (docs/phase-166 Commit E3): tells the
+   * renderer which screen/overlay `check:fit` wants force-shown, for the
+   * handful of states a normal click-driven flow can't reach (an
+   * intermediate onboarding-gate state, or the fiscal notice/toast-stack
+   * pairing). Reads `RUBIS_CHECK_FIT_SCREEN` directly — absent in every
+   * real launch (see `parseCheckFitSize`'s own doc comment on the
+   * sibling `RUBIS_CHECK_FIT_SIZE` variable), so this always resolves to
+   * `null` outside `scripts/check-fit.mjs`.
+   */
+  ipcMain.handle('checkFit:getForcedScreen', () => process.env['RUBIS_CHECK_FIT_SCREEN'] ?? null)
+
+  /**
    * IPC handler that triggers a Shopify product fetch from the renderer.
    * Credentials are read from the process environment — the renderer
    * never sees them directly, only the resulting product data.

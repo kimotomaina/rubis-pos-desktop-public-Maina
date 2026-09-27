@@ -146,6 +146,52 @@ export default function App() {
     })
   }, [demoMode])
 
+  /**
+   * check:fit's own force-show hook (docs/phase-166 Commit E3) — always
+   * resolves to `null` in a real launch (see `getCheckFitForcedScreen`'s
+   * own doc comment). When set, it overrides the gates below and seeds a
+   * little demo state, so the fit-check harness can reach a screen a
+   * normal click-driven flow can't: an intermediate onboarding-gate
+   * state (`'locationPending'`, `'etimsGate'`), or the fiscal notice
+   * paired with two routine toasts at the stack's cap
+   * (`'fiscalNoticeAndToastLimit'`).
+   */
+  const [checkFitForcedScreen, setCheckFitForcedScreen] = useState<string | null>(null)
+  useEffect(() => {
+    window.api
+      .getCheckFitForcedScreen?.()
+      .then(setCheckFitForcedScreen)
+      .catch(() => {})
+  }, [])
+
+  useEffect(() => {
+    if (checkFitForcedScreen !== 'fiscalNoticeAndToastLimit') return
+    useCartStore.setState({
+      lastReceipt: {
+        localId: 999999,
+        mode: 'synced',
+        fiscalStatus: 'needs_fixing',
+        fiscalErrorReason: 'Wrong client PIN',
+        fiscalErrorKind: 'data',
+        fiscalDataIssue: 'wrong-pin'
+      }
+    })
+    useToastStore.getState().show({
+      id: 'check-fit-demo-toast-1',
+      tone: 'info',
+      message: 'Demo toast 1 (check:fit)',
+      timeoutMs: null,
+      onDismiss: () => {}
+    })
+    useToastStore.getState().show({
+      id: 'check-fit-demo-toast-2',
+      tone: 'info',
+      message: 'Demo toast 2 (check:fit)',
+      timeoutMs: null,
+      onDismiss: () => {}
+    })
+  }, [checkFitForcedScreen])
+
   const refreshConfigStatus = () =>
     window.api.getConfigStatus().then((result) => {
       setConfigStatus(result.success && result.data?.hasConfig ? 'ready' : 'unconfigured')
@@ -338,6 +384,14 @@ export default function App() {
         <LoginScreen />
       </>
     )
+  }
+
+  if (checkFitForcedScreen === 'locationPending') {
+    return <LocationPendingScreen onLogout={() => void logout()} />
+  }
+
+  if (checkFitForcedScreen === 'etimsGate') {
+    return <EtimsSetupGate onComplete={() => setEtimsComplete(true)} />
   }
 
   if (!demoMode && !locationConfirmed) {
