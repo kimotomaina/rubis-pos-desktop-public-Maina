@@ -34,15 +34,17 @@
  * skipped. docs/phase-169 commit 3 removed those attempts: the synthetic
  * cases below measure the same three screens at all 9 sizes, every run.
  *
- * Three screens are measured with entirely synthetic, renderer-only
- * data (docs/phase-167 Part B item 1; `App.tsx`'s
- * `CHECK_FIT_SYNTHETIC_Z_REPORT`/`CHECK_FIT_SYNTHETIC_PRODUCT`, never a
- * database write, not even against the throwaway copy) — run at ALL 9
- * sizes, same as the main sweep, via the `RUBIS_CHECK_FIT_SCREEN`
- * renderer hook: the docked keyboard on a synthetic manual M-Pesa code
- * field (`'mpesaManualKeyboard'`), a synthetic closed shift's Z-report
- * with an M-Pesa split (`'zReport'`), and a synthetic 6-variant
- * product's VariantModal (`'variantModal'`).
+ * Four screens are measured with entirely synthetic, renderer-only
+ * data (docs/phase-167 Part B item 1, extended docs/phase-170 commit 3;
+ * `App.tsx`'s `CHECK_FIT_SYNTHETIC_Z_REPORT`/`CHECK_FIT_SYNTHETIC_PRODUCT`/
+ * `CHECK_FIT_SYNTHETIC_RECONCILIATION_RESULT`, never a database write,
+ * not even against the throwaway copy) — run at ALL 9 sizes, same as
+ * the main sweep, via the `RUBIS_CHECK_FIT_SCREEN` renderer hook: the
+ * docked keyboard on a synthetic manual M-Pesa code field
+ * (`'mpesaManualKeyboard'`), a synthetic closed shift's Z-report with
+ * an M-Pesa split (`'zReport'`), a synthetic 6-variant product's
+ * VariantModal (`'variantModal'`), and the Admin "Shopify check" card
+ * with one of every finding kind at once (`'shopifyCheckCard'`).
  *
  * Four more screens a normal click-driven flow cannot reach at all are
  * each run ONCE, at the single tightest case only (not across all 9 —
@@ -987,7 +989,8 @@ async function main() {
   const syntheticScreens = [
     ['mpesaManualKeyboard', 'Keyboard (docked sheet, synthetic manual M-Pesa)'],
     ['zReport', 'ZReportModal (synthetic closed shift, M-Pesa split)'],
-    ['variantModal', 'VariantModal (synthetic 6-variant product)']
+    ['variantModal', 'VariantModal (synthetic 6-variant product)'],
+    ['shopifyCheckCard', 'Shopify check card (synthetic findings, docs/phase-170)']
   ]
   for (const [screenId, label] of syntheticScreens) {
     for (const testCase of CASES) {

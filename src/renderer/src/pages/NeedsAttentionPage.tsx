@@ -7,6 +7,8 @@ import { paginate } from '../lib/paginate.js'
 import Pager from '../components/Pager.js'
 import { useKeyboardStore } from '../stores/keyboardStore.js'
 import { useUnfiledCountStore } from '../stores/unfiledCountStore.js'
+import ShopifyCheckCard from '../components/ShopifyCheckCard.js'
+import type { ReconciliationResult } from '../../../main/services/reconciliation.js'
 
 /** Rows per page (docs/phase-166 Commit E4) — replaces this screen's reliance on the outer Admin wrapper scrolling. */
 export const NEEDS_ATTENTION_PAGE_SIZE = 10
@@ -34,9 +36,16 @@ const STATUS_BADGE_CLASSES: Record<NeedsAttentionRow['fiscal_status'], string> =
  * show more rows than fit; Phase E's no-scroll rule replaces that with
  * paging instead.
  *
+ * Also carries the Shopify sales-safety check's own card (docs/
+ * phase-170) - a separate concern (Shopify vs the fiscal device), but
+ * the same "don't let a sale go unnoticed" screen is where both belong.
+ *
+ * @param {{ shopifyCheckOverride?: ReconciliationResult }} [props] - `shopifyCheckOverride` is check:fit-only synthetic data (see `ShopifyCheckCard`'s own doc comment); never set on a real launch.
  * @returns {JSX.Element}
  */
-export default function NeedsAttentionPage() {
+export default function NeedsAttentionPage({
+  shopifyCheckOverride
+}: { shopifyCheckOverride?: ReconciliationResult } = {}) {
   const [rows, setRows] = useState<NeedsAttentionRow[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -130,6 +139,8 @@ export default function NeedsAttentionPage() {
 
   return (
     <div className="w-full space-y-4">
+      <ShopifyCheckCard resultOverride={shopifyCheckOverride} />
+
       <div className="flex items-center justify-between">
         <h3 className="text-2xl font-bold text-slate-800">Sales Needing Attention</h3>
         <button

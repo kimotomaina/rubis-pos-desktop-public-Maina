@@ -46,6 +46,7 @@ import type {
 } from '../main/services/integrations/mpesa.js'
 import type { UnmatchedMpesaPayment } from '../main/services/integrations/sms-mpesa-provider.js'
 import type { MpesaConfirmationMethod } from '../main/services/mpesa-provider-factory.js'
+import type { ReconciliationResult } from '../main/services/reconciliation.js'
 
 /** Status payload broadcast over the `network:status` channel. */
 export interface NetworkStatusPayload {
@@ -1218,7 +1219,21 @@ const api = {
     managerId: number,
     managerPin: string
   ): Promise<ServiceResult<void>> =>
-    ipcRenderer.invoke('stocktake:save-settings', { ...settings, managerId, managerPin })
+    ipcRenderer.invoke('stocktake:save-settings', { ...settings, managerId, managerPin }),
+
+  /** The Shopify sales-safety check's latest result (docs/phase-170), or `null` before the first check has run. */
+  getShopifyReconciliationStatus: (): Promise<ServiceResult<ReconciliationResult | null>> =>
+    ipcRenderer.invoke('shopify:get-reconciliation-status'),
+
+  /** Subscribes to a freshly completed Shopify check; returns an unsubscribe fn. */
+  onShopifyReconciliationStatus: (
+    callback: (result: ReconciliationResult) => void
+  ): (() => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, result: ReconciliationResult): void =>
+      callback(result)
+    ipcRenderer.on('shopify-reconciliation:status', listener)
+    return () => ipcRenderer.removeListener('shopify-reconciliation:status', listener)
+  }
 }
 
 if (process.contextIsolated) {

@@ -909,6 +909,11 @@ app.whenReady().then(async () => {
         getClient: getShopifyClient,
         onResult: (result) => {
           lastReconciliationResult = result
+          // `broadcast` (below) is declared later in this same closure but
+          // is already initialized by the time a real check completes
+          // (well after this synchronous setup finishes) - see docs/
+          // phase-170 commit 3's own note on this.
+          broadcast('shopify-reconciliation:status', result)
         },
         logger: console
       })

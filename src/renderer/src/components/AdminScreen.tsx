@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react'
 import { useAuthStore } from '../stores/authStore.js'
 import { useUnfiledCountStore } from '../stores/unfiledCountStore.js'
+import { useShopifyReconciliationStore } from '../stores/shopifyReconciliationStore.js'
+import { countActionableFindings } from '../lib/shopifyReconciliation.js'
 import { formatCurrency } from '../lib/currency.js'
 import EmptyState from './EmptyState.js'
 import ZReportModal from './ZReportModal.js'
@@ -88,12 +90,19 @@ type IntegrationSectionKey = 'shopify' | 'location' | 'fiscal' | 'mpesa' | 'prin
  * The Admin card grid's contents (phase-167 Part A) — icon and title
  * only, per the brief. `unfiledCount` is threaded in so Needs
  * Attention's card can carry the same badge `NavStatusButton` already
- * shows for it, without a second source of truth.
+ * shows for it, without a second source of truth. `shopifyActionCount`
+ * (docs/phase-170 commit 3) adds a held/duplicate/missing Shopify
+ * finding to the same badge - `NavStatusButton`'s own popover is
+ * unchanged (out of this phase's scope), so the two numbers can differ
+ * until a later phase folds them together too.
  *
  * @param {number | null} unfiledCount
+ * @param {number} shopifyActionCount
  * @returns {SectionCard<AdminTabKey>[]}
  */
-function adminSections(unfiledCount: number | null): SectionCard<AdminTabKey>[] {
+function adminSections(unfiledCount: number | null, shopifyActionCount: number): SectionCard<AdminTabKey>[] {
+  const needsAttentionBadge =
+    unfiledCount === null && shopifyActionCount === 0 ? undefined : (unfiledCount ?? 0) + shopifyActionCount
   return [
     { key: 'overview', label: 'Overview', icon: <ChartBarIcon className="h-8 w-8" /> },
     { key: 'integrations', label: 'Integrations', icon: <LinkIcon className="h-8 w-8" /> },
@@ -103,7 +112,7 @@ function adminSections(unfiledCount: number | null): SectionCard<AdminTabKey>[] 
       key: 'needsAttention',
       label: 'Needs Attention',
       icon: <WarningIcon className="h-8 w-8" />,
-      badge: unfiledCount ?? undefined
+      badge: needsAttentionBadge
     },
     { key: 'stockTake', label: 'Stock Take', icon: <PackageIcon className="h-8 w-8" /> },
     { key: 'endOfDay', label: 'End of Day', icon: <CalendarIcon className="h-8 w-8" /> },
@@ -165,6 +174,7 @@ interface AdminScreenProps {
 export default function AdminScreen({ requestManagerPin, initialTab }: AdminScreenProps) {
   const currentStaff = useAuthStore((state) => state.currentStaff)
   const unfiledCount = useUnfiledCountStore((state) => state.count)
+  const shopifyActionCount = useShopifyReconciliationStore((state) => countActionableFindings(state.result))
 
   const [dailySummary, setDailySummary] = useState<DailySummary | null>(null)
   const [currentShift, setCurrentShift] = useState<ShiftRow | null>(null)
@@ -1030,7 +1040,7 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
   return (
     <div className="h-full min-h-full w-full space-y-6">
       {activeTab === null ? (
-        <SectionCardGrid sections={adminSections(unfiledCount)} onSelect={setActiveTab} />
+        <SectionCardGrid sections={adminSections(unfiledCount, shopifyActionCount)} onSelect={setActiveTab} />
       ) : (
         <BackButton label="Back to Admin" onClick={() => setActiveTab(null)} />
       )}

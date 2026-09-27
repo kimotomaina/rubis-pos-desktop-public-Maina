@@ -55,6 +55,7 @@ import type {
 } from '../main/services/integrations/mpesa.js'
 import type { UnmatchedMpesaPayment } from '../main/services/integrations/sms-mpesa-provider.js'
 import type { MpesaConfirmationMethod } from '../main/services/mpesa-provider-factory.js'
+import type { ReconciliationResult } from '../main/services/reconciliation.js'
 
 /** Payload of the `network:status` broadcast / `network:get-status` invoke. */
 export interface NetworkStatusPayload {
@@ -438,6 +439,10 @@ export interface PosApi {
     managerId: number,
     managerPin: string
   ) => Promise<ServiceResult<void>>
+  /** The Shopify sales-safety check's latest result (docs/phase-170), or `null` before the first check has run. */
+  getShopifyReconciliationStatus: () => Promise<ServiceResult<ReconciliationResult | null>>
+  /** Subscribes to a freshly completed Shopify check; returns an unsubscribe fn. */
+  onShopifyReconciliationStatus: (callback: (result: ReconciliationResult) => void) => () => void
 }
 
 declare global {

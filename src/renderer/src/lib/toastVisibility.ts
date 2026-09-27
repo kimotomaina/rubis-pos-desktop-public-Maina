@@ -6,7 +6,8 @@
  * Replaces the old "unlimited toasts, scroll if they overflow" design
  * (`ToastStack`'s `max-h-[70vh] overflow-y-auto`): Phase E's no-scroll
  * rule means the stack must instead simply stop showing more than fit.
- * A pinned toast (FiscalNotice) is never one of the ones dropped.
+ * A pinned toast (FiscalNotice, and since docs/phase-170 also
+ * ShopifyCheckNotice) is never one of the ones dropped.
  */
 
 /** At most this many toasts are ever shown at once. */

@@ -186,7 +186,7 @@ export function createReconciliationRunner(options: ReconciliationRunnerOptions)
         return { ok: false }
       }
 
-      const sinceIso = isoDaysAgo(now, RECONCILIATION_WINDOW_DAYS)
+      const sinceIso = isoDaysAgo(now, Math.min(RECONCILIATION_WINDOW_DAYS, RECONCILIATION_MAX_AGE_DAYS))
       const candidates = db.getReconciliationCandidates(sinceIso)
       const findings: ReconciliationFinding[] = []
       let synchedCount = 0

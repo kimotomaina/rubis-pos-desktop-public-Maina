@@ -26,9 +26,12 @@ import type { ConnectivityIntegration } from './types/connectivity'
 import ConnectivityModal from './components/ConnectivityModal'
 import NavStatusButton from './components/NavStatusButton'
 import { useUnfiledCountStore } from './stores/unfiledCountStore'
+import { useShopifyReconciliationStore } from './stores/shopifyReconciliationStore'
 import { useFiscalModeStore } from './stores/fiscalModeStore'
 import ConnectivityToast from './components/ConnectivityToast'
 import FiscalNotice from './components/FiscalNotice'
+import ShopifyCheckNotice from './components/ShopifyCheckNotice'
+import NeedsAttentionPage from './pages/NeedsAttentionPage'
 import SaleCompleteToast from './components/SaleCompleteToast'
 import ToastStack from './components/ToastStack'
 import { useToastStore } from './stores/toastStore'
@@ -37,6 +40,7 @@ import { WarningIcon } from './components/icons'
 import { useKeyboardStore } from './stores/keyboardStore'
 import ZReportModal from './components/ZReportModal'
 import type { ZReport } from '../../main/services/reports.js'
+import type { ReconciliationResult } from '../../main/services/reconciliation.js'
 import rubisLogo from './assets/logo-rubis.png'
 
 /**
@@ -79,6 +83,30 @@ const CHECK_FIT_SYNTHETIC_PRODUCT: ProductSummary = {
     image: null,
     barcode: null
   }))
+}
+
+/**
+ * check:fit-only synthetic data (docs/phase-170 commit 3) - see
+ * {@link CHECK_FIT_SYNTHETIC_Z_REPORT}'s own doc comment. Covers every
+ * finding kind the Admin "Shopify check" card can show, so all of them
+ * are actually measured at every supported size, not just whichever
+ * ones happen to exist in this dev environment's own copied database.
+ */
+const CHECK_FIT_SYNTHETIC_RECONCILIATION_RESULT: ReconciliationResult = {
+  checkedAt: new Date('2026-01-01T08:05:00.000Z').getTime(),
+  ok: true,
+  findings: [
+    { kind: 'linked', localId: 101, shopifyOrderId: 'gid://shopify/Order/9001', shopifyName: '#1043' },
+    {
+      kind: 'duplicate',
+      localId: 102,
+      shopifyIds: ['gid://shopify/Order/9002', 'gid://shopify/Order/9003'],
+      shopifyNames: ['#1050', '#1051']
+    },
+    { kind: 'held-cancelled', localId: 103, shopifyId: 'gid://shopify/Order/9004' },
+    { kind: 'missing', localId: 104, shopifyOrderId: 'gid://shopify/Order/9005' }
+  ],
+  otherTillsCount: 340
 }
 
 /** A pending manager-gated action awaiting PIN authorization. */
@@ -201,13 +229,16 @@ export default function App() {
    * `'etimsGate'`), the fiscal notice paired with two routine toasts at
    * the stack's cap (`'fiscalNoticeAndToastLimit'`), the manual M-Pesa
    * code field with its docked keyboard open (`'mpesaManualKeyboard'`),
-   * a closed shift's Z-report (`'zReport'`), or a six-variant product's
-   * picker (`'variantModal'`) — the last three with entirely synthetic,
-   * renderer-only data (`CHECK_FIT_SYNTHETIC_Z_REPORT`/
-   * `CHECK_FIT_SYNTHETIC_PRODUCT` above), never a database write, not
-   * even against the throwaway copy `check:fit` otherwise launches
-   * against — this till's real M-Pesa mode/shift history/catalog cannot
-   * be relied on to have the shape any of these three need.
+   * a closed shift's Z-report (`'zReport'`), a six-variant product's
+   * picker (`'variantModal'`), or the Admin "Shopify check" card with
+   * every finding kind at once (`'shopifyCheckCard'`, docs/phase-170
+   * commit 3) — the last four with entirely synthetic, renderer-only
+   * data (`CHECK_FIT_SYNTHETIC_Z_REPORT`/`CHECK_FIT_SYNTHETIC_PRODUCT`/
+   * `CHECK_FIT_SYNTHETIC_RECONCILIATION_RESULT` above), never a
+   * database write, not even against the throwaway copy `check:fit`
+   * otherwise launches against — this till's real M-Pesa mode/shift
+   * history/catalog/Shopify check result cannot be relied on to have
+   * the shape any of these four need.
    */
   const [checkFitForcedScreen, setCheckFitForcedScreen] = useState<string | null>(null)
   useEffect(() => {
@@ -310,6 +341,7 @@ export default function App() {
 
   const unfiledCount = useUnfiledCountStore((state) => state.count)
   const initUnfiledCount = useUnfiledCountStore((state) => state.init)
+  const initShopifyReconciliation = useShopifyReconciliationStore((state) => state.init)
   const initFiscalMode = useFiscalModeStore((state) => state.init)
   const [adminInitialTab, setAdminInitialTab] = useState<'needsAttention' | undefined>(undefined)
 
@@ -350,6 +382,10 @@ export default function App() {
   useEffect(() => {
     void initUnfiledCount()
   }, [initUnfiledCount])
+
+  useEffect(() => {
+    void initShopifyReconciliation()
+  }, [initShopifyReconciliation])
 
   useEffect(() => {
     void initFiscalMode()
@@ -701,6 +737,18 @@ export default function App() {
         <VariantModal product={CHECK_FIT_SYNTHETIC_PRODUCT} onSelectVariant={() => {}} onClose={() => {}} />
       )}
 
+      {checkFitForcedScreen === 'shopifyCheckCard' && (
+        // Deliberately no internally-scrolling class here — Phase E's
+        // no-scroll rule (`noUnexpectedScroll.test.ts`'s own
+        // `ZERO_SCROLL_FILES` for App.tsx) applies here too, and
+        // `NeedsAttentionPage` already keeps its own content within the
+        // viewport via pagination, exactly as the normal Admin >
+        // Needs Attention navigation path already proves.
+        <div className="fixed inset-0 z-50 bg-slate-50 p-6">
+          <NeedsAttentionPage shopifyCheckOverride={CHECK_FIT_SYNTHETIC_RECONCILIATION_RESULT} />
+        </div>
+      )}
+
       {pinGate && (
         <ManagerPinModal
           title={pinGate.title}
@@ -721,6 +769,7 @@ export default function App() {
       <UpdateToast />
       <ConnectivityToast />
       <FiscalNotice />
+      <ShopifyCheckNotice />
       <SaleCompleteToast />
       <ToastStack />
     </div>
