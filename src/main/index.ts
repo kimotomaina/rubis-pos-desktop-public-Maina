@@ -41,7 +41,12 @@ import {
   buildDevContentSecurityPolicy
 } from './window-factory.js'
 import { applyAutoZoom } from './lib/scale.js'
-import { resolveCheckFitForcedScreen } from './lib/checkFit.js'
+import {
+  resolveCheckFitForcedScreen,
+  resolveCheckFitSendingDisabled,
+  guardCheckFitSending,
+  shouldStartBackgroundSenders
+} from './lib/checkFit.js'
 import { initAutoUpdater, checkForUpdates } from './services/updater.js'
 import type { UpdateStatus } from './services/updater.js'
 import { createFileErrorLogger, installGlobalErrorHandlers } from './services/errorHandler.js'
@@ -464,6 +469,20 @@ app.whenReady().then(async () => {
   const dbPath = join(app.getPath('userData'), 'rubis-pos.db')
   const db = createDatabase({ dbPath })
   db.init()
+
+  /**
+   * docs/phase-169-1 commit A: `scripts/check-fit.mjs` sets
+   * `RUBIS_CHECK_FIT` on every one of its throwaway launches. When set,
+   * nothing real may ever be sent — no Shopify push, no fiscal device
+   * command, no M-Pesa STK push, no non-mock print — regardless of what
+   * the copied database/vault happen to contain. Never set on a real
+   * launch (mirrors `RUBIS_CHECK_FIT_SIZE`/`RUBIS_CHECK_FIT_SCREEN`
+   * above). Read once, here, before anything that could send is built.
+   */
+  const checkFitSendingDisabled = resolveCheckFitSendingDisabled(process.env['RUBIS_CHECK_FIT'])
+  if (checkFitSendingDisabled) {
+    console.log('[rubis-pos] check:fit mode: all sending disabled.')
+  }
 
   /**
    * One-time seed of the M-Pesa/eTIMS mock-vs-real toggles from
@@ -895,7 +914,12 @@ app.whenReady().then(async () => {
     intervalMs: 5_000,
     emit: (online) => {
       broadcast('network:status', { online })
-      if (online) {
+      // docs/phase-169-1 commit A: an offline → online transition is the
+      // one trigger neither engine's own `.start()` gate (below) covers
+      // — `notifyOnline()` is a method on the already-constructed engine
+      // object, reachable regardless of whether `.start()` ran. Read-only
+      // connectivity display is unaffected: the broadcast above still runs.
+      if (online && shouldStartBackgroundSenders(checkFitSendingDisabled)) {
         engine.notifyOnline()
         fiscalEngine.notifyOnline()
       }
@@ -904,8 +928,14 @@ app.whenReady().then(async () => {
 
   powerMonitor.on('resume', () => monitor.checkNow())
   monitor.start()
-  engine.start()
-  fiscalEngine.start()
+  // docs/phase-169-1 commit A: never start either engine while check:fit
+  // has sending disabled — read-only connectivity/status screens still
+  // need `monitor`/`connectivityMonitor` running, so only these two are
+  // gated.
+  if (shouldStartBackgroundSenders(checkFitSendingDisabled)) {
+    engine.start()
+    fiscalEngine.start()
+  }
 
   /**
    * The confirmation-message reader runs only on a till that confirms
@@ -937,7 +967,12 @@ app.whenReady().then(async () => {
           'reports this to the cashier.'
       )
     }
-    mpesaSmsInbox.start()
+    // docs/phase-169-1 commit A: this reader only reads confirmation
+    // files, it sends nothing — skipped anyway, matching the task's own
+    // "or any other background sender" instruction literally.
+    if (shouldStartBackgroundSenders(checkFitSendingDisabled)) {
+      mpesaSmsInbox.start()
+    }
   }
 
   /**
@@ -1102,6 +1137,13 @@ app.whenReady().then(async () => {
   ipcMain.handle(
     'orders:checkout',
     async (_event, request: unknown): Promise<ServiceResult<CheckoutReceipt>> => {
+      // docs/phase-169-1 commit A: a check:fit launch may never complete
+      // a real sale — refused before validation even runs, since nothing
+      // downstream (the queue write, fiscalization, the Shopify push) may
+      // happen at all.
+      const sendingGuard = guardCheckFitSending(checkFitSendingDisabled)
+      if (sendingGuard) return sendingGuard
+
       const validation = validate(checkoutRequestSchema, request)
       if (!validation.success) {
         return { success: false, error: validation.error }
@@ -2301,6 +2343,11 @@ app.whenReady().then(async () => {
   ipcMain.handle(
     'orders:retrySync',
     async (_event, localId: number) => {
+      // docs/phase-169-1 commit A: retrying still calls engine.tick()
+      // below, which would push straight to Shopify.
+      const sendingGuard = guardCheckFitSending(checkFitSendingDisabled)
+      if (sendingGuard) return sendingGuard
+
       try {
         const { queueId } = db.retryOrderSync(localId)
         if (monitor.isOnline()) {
@@ -2326,6 +2373,13 @@ app.whenReady().then(async () => {
   ipcMain.handle(
     'fiscal:correct-pin-and-resend',
     async (_event, request: unknown): Promise<ServiceResult<FiscalResendResult>> => {
+      // docs/phase-169-1 commit A: not one of the task's four named
+      // handlers, added alongside them because it resends to the same
+      // real fiscal device via the same guarded submitInvoice path as
+      // fiscal:resend below — see docs/phase-169-1.md for why.
+      const sendingGuard = guardCheckFitSending(checkFitSendingDisabled)
+      if (sendingGuard) return sendingGuard
+
       const validation = validate(correctPinAndResendSchema, request)
       if (!validation.success) {
         return { success: false, error: validation.error }
@@ -2357,6 +2411,11 @@ app.whenReady().then(async () => {
   ipcMain.handle(
     'fiscal:resend',
     async (_event, request: unknown): Promise<ServiceResult<FiscalResendResult>> => {
+      // docs/phase-169-1 commit A: this sends a real command to the
+      // fiscal device (submitInvoice) exactly like a normal sale would.
+      const sendingGuard = guardCheckFitSending(checkFitSendingDisabled)
+      if (sendingGuard) return sendingGuard
+
       const validation = validate(resendFiscalizationSchema, request)
       if (!validation.success) {
         return { success: false, error: validation.error }
@@ -2463,6 +2522,15 @@ app.whenReady().then(async () => {
   ipcMain.handle(
     'receipt:print',
     async (_event, request: unknown): Promise<ServiceResult<ReceiptPrintResult>> => {
+      // docs/phase-169-1 commit A: refused only for a REAL printer — the
+      // mock printer touches no hardware (it logs, and for the PDF
+      // fallback writes a local file only), so it stays available for
+      // check:fit's own screens.
+      const sendingGuard = guardCheckFitSending(checkFitSendingDisabled, {
+        skipWhenMock: printerSettings.mock === true
+      })
+      if (sendingGuard) return sendingGuard
+
       const validation = validate(receiptPrintRequestSchema, request)
       if (!validation.success) {
         return { success: false, error: validation.error }

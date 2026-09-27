@@ -103,6 +103,7 @@ import { tmpdir, homedir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import electronPath from 'electron'
+import BetterSqlite3 from 'better-sqlite3'
 
 const REPO_ROOT = fileURLToPath(new URL('..', import.meta.url))
 const { name: APP_NAME } = JSON.parse(await readFile(join(REPO_ROOT, 'package.json'), 'utf8'))
@@ -481,17 +482,75 @@ async function censusLabelled(cmd, label) {
   return { ok, line }
 }
 
-/** Copies only the app's own state (never Chromium's cache, which may be locked by an already-running real instance and is irrelevant here) into `dest`. */
+/**
+ * A closed loopback port — nothing ever answers here, so any attempt
+ * to reach it fails at connect time (ECONNREFUSED), never at a real
+ * device or store. Used by both belt-and-braces redirects below.
+ */
+const UNREACHABLE_HOST = '127.0.0.1'
+const UNREACHABLE_PORT = '1'
+
+/**
+ * Rewrites the COPIED database's `etims` integration row so any fiscal
+ * command would dial {@link UNREACHABLE_HOST}, never the real device —
+ * docs/phase-169-1 commit A, belt and braces alongside `RUBIS_CHECK_FIT`
+ * disabling every sender in `main/index.ts` itself.
+ *
+ * Deliberately does NOT touch the device password (still copied via
+ * `secret-vault.json`/`Local State` below) or remove the row: an
+ * earlier version of this fix stripped the vault entirely, which also
+ * made `RealFiscalizationProvider.isConfigured()` (real-etims-
+ * provider.ts, requires `deviceIp && devicePort && password`) false —
+ * and this app's own EtimsSetupGate onboarding screen then replaced the
+ * normal catalog view with "Set up the fiscal device" on every launch,
+ * breaking `check:fit`'s own main sweep (confirmed empirically: the
+ * catalog became unreachable). Keeping `deviceIp`/`devicePort`/`baseUrl`
+ * present (just pointed nowhere real) keeps that gate exactly as the
+ * real till already has it, while still making a real command
+ * physically unable to reach the real device.
+ *
+ * @param {string} dest — the scratch userData directory `copyAppState` copied into
+ */
+function sanitizeCopiedFiscalAddress(dest) {
+  const dbFile = join(dest, 'rubis-pos.db')
+  if (!existsSync(dbFile)) return
+  const db = new BetterSqlite3(dbFile)
+  try {
+    const row = db.prepare('SELECT config_json FROM integrations WHERE provider = ?').get('etims')
+    if (!row) return
+    const config = JSON.parse(row.config_json)
+    if (!config.deviceIp && !config.devicePort && !config.baseUrl) return
+    config.deviceIp = UNREACHABLE_HOST
+    config.devicePort = UNREACHABLE_PORT
+    config.baseUrl = `http://${UNREACHABLE_HOST}:${UNREACHABLE_PORT}/`
+    db.prepare('UPDATE integrations SET config_json = ? WHERE provider = ?').run(
+      JSON.stringify(config),
+      'etims'
+    )
+  } catch (err) {
+    log(`  (could not sanitize the copied fiscal device address: ${err.message})`)
+  } finally {
+    db.close()
+  }
+}
+
+/**
+ * Copies only the app's own state (never Chromium's cache, which may be
+ * locked by an already-running real instance and is irrelevant here)
+ * into `dest`, then redirects the copy's fiscal device address (see
+ * {@link sanitizeCopiedFiscalAddress}).
+ *
+ * `Local State` carries Chromium's OSCrypt key (DPAPI-protected on
+ * Windows) that `secret-vault.json`'s ciphertext was encrypted under —
+ * without it Electron mints a fresh key on first use and every existing
+ * secret fails to decrypt.
+ */
 function copyAppState(dest) {
   const realUserData = resolveRealUserDataPath()
   if (!existsSync(realUserData)) {
     log('No existing userData found — launching unconfigured (onboarding will show).')
     return
   }
-  // `Local State` carries Chromium's OSCrypt key (DPAPI-protected on
-  // Windows) that `secret-vault.json`'s ciphertext was encrypted under —
-  // without it Electron mints a fresh key on first use and every existing
-  // secret fails to decrypt.
   const APP_STATE_FILES = [
     'rubis-pos.db',
     'rubis-pos.db-shm',
@@ -509,6 +568,7 @@ function copyAppState(dest) {
       }
     }
   }
+  sanitizeCopiedFiscalAddress(dest)
 }
 
 /** Kills `pid`'s whole process tree — never an image-name-wide kill (see this file's header). */
@@ -573,6 +633,16 @@ async function runCase(testCase, outDir) {
     // ignored.
     delete childEnv.ELECTRON_RUN_AS_NODE
     childEnv.RUBIS_CHECK_FIT_SIZE = `${testCase.width}x${testCase.height}`
+    // docs/phase-169-1 commit A: the primary guard — every real sender
+    // in main/index.ts checks this and refuses/stays off.
+    childEnv.RUBIS_CHECK_FIT = '1'
+    // Belt and braces (second layer): even a real, copied Shopify token
+    // can reach nothing real once the store URL itself resolves to a
+    // closed loopback port — `resolveShopifyStoreUrl` (shopify.ts) always
+    // prefers this env var over the copied database's own stored URL,
+    // and dotenv (main/index.ts's own `loadEnvFile`) never overwrites a
+    // variable already present, so this wins over anything in `.env` too.
+    childEnv.VITE_SHOPIFY_STORE_URL = `http://${UNREACHABLE_HOST}:${UNREACHABLE_PORT}`
 
     child = spawn(
       electronPath,
@@ -751,6 +821,10 @@ async function launchAndConnect(scratchUserData, extraEnv) {
   const childEnv = { ...process.env, ...extraEnv }
   // See runCase's identical guard for why this must be deleted, not emptied.
   delete childEnv.ELECTRON_RUN_AS_NODE
+  // docs/phase-169-1 commit A: every relaunch through this helper too.
+  childEnv.RUBIS_CHECK_FIT = '1'
+  // See runCase's identical belt-and-braces comment.
+  childEnv.VITE_SHOPIFY_STORE_URL = `http://${UNREACHABLE_HOST}:${UNREACHABLE_PORT}`
 
   const child = spawn(
     electronPath,
