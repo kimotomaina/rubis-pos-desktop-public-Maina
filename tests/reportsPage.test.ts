@@ -58,7 +58,9 @@ function stubApi(overrides: Record<string, unknown> = {}): void {
         vatIncluded: 20.69,
         vatRate: 0.16,
         totalsByMethod: { cash: 100, mpesa: 50, card: 0 },
-        mpesaByMode: { manual: 20, daraja: 30 }
+        mpesaByMode: { manual: 20, daraja: 30 },
+        vatFromDeviceGroups: 13.79,
+        vatFromDeviceGroupsCoverage: { ordersWithFigure: 2, ordersFiscalized: 3 }
       })
     ),
     getFiscalStatusByDay: vi.fn().mockResolvedValue(
@@ -234,7 +236,9 @@ describe('ReportsPage > Sales Summary', () => {
         vatIncluded: 20.69,
         vatRate: 0.16,
         totalsByMethod: { cash: 100, mpesa: 50, card: 0 },
-        mpesaByMode: { manual: 20, daraja: 30 }
+        mpesaByMode: { manual: 20, daraja: 30 },
+        vatFromDeviceGroups: 13.79,
+        vatFromDeviceGroupsCoverage: { ordersWithFigure: 2, ordersFiscalized: 3 }
       })
     )
     stubApi({ getSalesSummary })
@@ -249,6 +253,31 @@ describe('ReportsPage > Sales Summary', () => {
     expect(getSalesSummary).toHaveBeenCalledWith('thisWeek')
   })
 
+  /** docs/phase-163-1 — the coverage caption shown next to "VAT from device groups". */
+  it('shows the "VAT from device groups" coverage caption', async () => {
+    const getSalesSummary = vi.fn().mockResolvedValue(
+      ok({
+        startIso: '2026-09-26T00:00:00.000Z',
+        endIso: '2026-09-27T00:00:00.000Z',
+        label: 'Today (2026-09-26)',
+        orderCount: 15,
+        totalRevenue: 150,
+        vatIncluded: 20.69,
+        vatRate: 0.16,
+        totalsByMethod: { cash: 100, mpesa: 50, card: 0 },
+        mpesaByMode: { manual: 20, daraja: 30 },
+        vatFromDeviceGroups: 16,
+        vatFromDeviceGroupsCoverage: { ordersWithFigure: 12, ordersFiscalized: 15 }
+      })
+    )
+    stubApi({ getSalesSummary })
+    await mount()
+    await click('Sales Summary')
+
+    expect(container.textContent).toContain('VAT from device groups')
+    expect(container.textContent).toContain('from 12 of 15 sales; group D not included')
+  })
+
   it('labels the VAT figure from the configured rate, not a hardcoded 16% (docs/phase-158-1)', async () => {
     const getSalesSummary = vi.fn().mockResolvedValue(
       ok({
@@ -260,7 +289,9 @@ describe('ReportsPage > Sales Summary', () => {
         vatIncluded: 11.11,
         vatRate: 0.08,
         totalsByMethod: { cash: 100, mpesa: 50, card: 0 },
-        mpesaByMode: { manual: 20, daraja: 30 }
+        mpesaByMode: { manual: 20, daraja: 30 },
+        vatFromDeviceGroups: 5.93,
+        vatFromDeviceGroupsCoverage: { ordersWithFigure: 3, ordersFiscalized: 3 }
       })
     )
     stubApi({ getSalesSummary })

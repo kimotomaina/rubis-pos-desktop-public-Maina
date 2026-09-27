@@ -39,7 +39,7 @@
   - No other existing assertion was changed.
 - **Mutation test:** temporarily removed `vatGroups: extractVatGroupAmounts(receiptInfo)` from `submitInvoice`'s success return. Reran the storage tests: **exactly 2 failed** (`fiscalIntegration.test.ts`'s success-path storage test, and `realEtimsProvider.test.ts`'s direct "carries Step 5's raw VAT-group amounts through" test) - the failure-path, retry-success, and already-filed tests were unaffected (they don't depend on the provider's own return, or exercise a different path entirely), confirming the blast radius was exactly as expected. Restored; reran - all passed again.
 
-## COMMIT 2 - reconciliation report, read-only (`(this commit)`)
+## COMMIT 2 - reconciliation report, read-only (`42a9931`)
 
 ### What was examined
 
@@ -122,7 +122,7 @@
 ## 6. Rollback
 
 ```
-git revert <commit-2-sha>
+git revert 42a9931
 git revert 45d4669
 ```
 (Commit 2 first, since it depends on Commit 1's column/return field.) No data to unwind beyond the new column itself, which is additive and safe to leave in place even if the code reading it is reverted.

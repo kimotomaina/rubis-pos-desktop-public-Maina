@@ -1440,6 +1440,23 @@ export class RubisDatabase {
    * path, which never runs Step 5 again) stores `NULL`, never a guessed
    * or re-fetched value.
    *
+   * WRITE-ONCE (docs/phase-163-1): `fiscal_invoice_number`,
+   * `fiscal_qr_code`, `fiscal_fiscalized_at` and `fiscal_vat_groups_json`
+   * are each guarded with `COALESCE(column, ?)`, so once one is set it
+   * can never be replaced by a later call — only a still-`NULL` column
+   * accepts the new value. This function is the single writer for BOTH
+   * a genuine first success AND `fiscal-engine.ts`'s "already fiscalized
+   * (race with a resend)" replay (`attemptFiscalRetry`'s short-circuit,
+   * which echoes the order's OWN already-stored `invoiceNumber`/`qrCode`
+   * back as if it were a fresh result, carrying no `vatGroups` at all).
+   * Without the guard, that replay would silently overwrite a correct,
+   * stored fiscalization timestamp with "now" and a stored
+   * `fiscal_vat_groups_json` with `NULL` — see docs/phase-163-1's audit.
+   * `fiscal_status`/`fiscal_error_*`/`fiscal_data_issue` need no such
+   * guard: setting an already-`'fiscalized'` row to `'fiscalized'` again,
+   * or nulling out fields that are already `NULL` on any fiscalized row,
+   * changes nothing either way.
+   *
    * @param {number} localId
    * @param {string} invoiceNumber
    * @param {string} qrCode
@@ -1453,9 +1470,11 @@ export class RubisDatabase {
   ): void {
     this.conn
       .prepare(
-        `UPDATE orders SET fiscal_invoice_number = ?, fiscal_qr_code = ?, fiscal_fiscalized_at = ?,
+        `UPDATE orders SET fiscal_invoice_number = COALESCE(fiscal_invoice_number, ?),
+         fiscal_qr_code = COALESCE(fiscal_qr_code, ?),
+         fiscal_fiscalized_at = COALESCE(fiscal_fiscalized_at, ?),
          fiscal_status = 'fiscalized', fiscal_error_reason = NULL, fiscal_error_kind = NULL,
-         fiscal_data_issue = NULL, fiscal_vat_groups_json = ?
+         fiscal_data_issue = NULL, fiscal_vat_groups_json = COALESCE(fiscal_vat_groups_json, ?)
          WHERE local_id = ?`
       )
       .run(

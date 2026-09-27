@@ -788,6 +788,110 @@ describe('Scenario I — fiscal_vat_groups_json storage (docs/phase-163)', () =>
   })
 })
 
+/**
+ * docs/phase-163-1 — once an order is fiscalised, its fiscal fields
+ * never change again. Proven against the REAL `fiscal-engine.ts` +
+ * `attemptFiscalRetry` race path: a second `sync_queue` row for an
+ * already-fiscalized order (e.g. a manual resend and the background
+ * engine racing, or a stray leftover queue row) is processed by
+ * `attemptFiscalRetry`'s already-fiscalized short-circuit, which makes
+ * NO device call and echoes the order's OWN stored `invoiceNumber`/
+ * `qrCode` back with no `vatGroups` at all — exactly the shape that,
+ * before this phase, silently overwrote `fiscal_fiscalized_at` with
+ * "now" and `fiscal_vat_groups_json` with `NULL`.
+ */
+describe('Scenario J — fiscal fields are write-once (docs/phase-163-1)', () => {
+  it('a race-path queue replay after the order is already fiscalized leaves invoice number, QR, fiscalized-at, and VAT groups unchanged, and still clears its own queue row', async () => {
+    // Fake timers force a real gap between the two writes below, so this
+    // test cannot pass by coincidence (two `new Date().toISOString()`
+    // calls landing in the same millisecond) — only the write-once guard
+    // itself can make the second write leave the first timestamp in place.
+    vi.useFakeTimers()
+    try {
+      vi.setSystemTime(new Date('2026-08-27T10:05:00.000Z'))
+      const db = freshDb()
+      const staffId = seedStaff(db)
+      const clientOrderUuid = 'uuid-write-once-race'
+
+      // First attempt fails technically (queued); the queued retry
+      // succeeds — this is the "resend stores figures" step.
+      const submitInvoice = vi
+        .fn()
+        .mockRejectedValueOnce(new Error('ECONNREFUSED'))
+        .mockResolvedValueOnce({
+          ok: true,
+          data: {
+            invoiceNumber: 'KRA-FIRST',
+            qrCode: 'qr-first',
+            fiscalizedAt: '2026-08-27T10:05:00.000Z',
+            vatGroups: { A: '150.00' }
+          }
+        })
+      const provider = makeProvider(submitInvoice)
+      const { localId } = await attemptFiscalization({ db, provider, staffId, clientOrderUuid })
+      expect(db.getPendingFiscalQueue(Date.now())).toHaveLength(1)
+
+      const fiscalEngine = createFiscalEngine({ db, submitInvoice })
+      await fiscalEngine.tick()
+
+      const afterFirstSuccess = db.getOrder(localId)
+      expect(afterFirstSuccess?.fiscal_invoice_number).toBe('KRA-FIRST')
+      expect(afterFirstSuccess?.fiscal_qr_code).toBe('qr-first')
+      // `fiscal_fiscalized_at` is the DB write time (`setOrderFiscalInfo`
+      // takes no `fiscalizedAt` argument at all — it always stamps
+      // `new Date().toISOString()`), not the device's own reported
+      // `fiscalizedAt`.
+      expect(afterFirstSuccess?.fiscal_fiscalized_at).toBe('2026-08-27T10:05:00.000Z')
+      expect(JSON.parse(afterFirstSuccess?.fiscal_vat_groups_json as string)).toEqual({ A: '150.00' })
+
+      // Time moves on, then the race: a second sync_queue row for the
+      // SAME order, processed well after it is already fiscalized.
+      vi.setSystemTime(new Date('2026-08-27T12:00:00.000Z'))
+      db.queueFiscalInvoice(localId, buildFiscalRequest(clientOrderUuid))
+      await fiscalEngine.tick()
+
+      // No device call for the race-path item — attemptFiscalRetry's
+      // already-fiscalized short-circuit answered it locally.
+      expect(submitInvoice).toHaveBeenCalledTimes(2)
+      const afterRace = db.getOrder(localId)
+      expect(afterRace?.fiscal_invoice_number).toBe('KRA-FIRST')
+      expect(afterRace?.fiscal_qr_code).toBe('qr-first')
+      // Unchanged — not overwritten with the new "now" (12:00).
+      expect(afterRace?.fiscal_fiscalized_at).toBe('2026-08-27T10:05:00.000Z')
+      // Unchanged — not overwritten with NULL.
+      expect(JSON.parse(afterRace?.fiscal_vat_groups_json as string)).toEqual({ A: '150.00' })
+      // The race-path queue row is still deleted.
+      expect(db.getPendingFiscalQueue(Date.now())).toHaveLength(0)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('a genuine first success still writes every fiscal field', async () => {
+    const db = freshDb()
+    const staffId = seedStaff(db)
+    const clientOrderUuid = 'uuid-write-once-first-success'
+    const submitInvoice = vi.fn().mockResolvedValue({
+      ok: true,
+      data: {
+        invoiceNumber: 'KRA-NEW',
+        qrCode: 'qr-new',
+        fiscalizedAt: '2026-08-27T11:00:00.000Z',
+        vatGroups: { B: '80.00' }
+      }
+    })
+    const provider = makeProvider(submitInvoice)
+
+    const { localId } = await attemptFiscalization({ db, provider, staffId, clientOrderUuid })
+
+    const order = db.getOrder(localId)
+    expect(order?.fiscal_invoice_number).toBe('KRA-NEW')
+    expect(order?.fiscal_qr_code).toBe('qr-new')
+    expect(order?.fiscal_fiscalized_at).toEqual(expect.any(String))
+    expect(JSON.parse(order?.fiscal_vat_groups_json as string)).toEqual({ B: '80.00' })
+  })
+})
+
 describe('Regression: Shopify sync queue never picks up an etims_invoice row', () => {
   it('getPendingSyncQueue returns empty when the only queued row is an etims_invoice retry', async () => {
     const db = freshDb()

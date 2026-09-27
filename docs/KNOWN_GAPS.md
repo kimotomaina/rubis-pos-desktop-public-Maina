@@ -246,27 +246,46 @@ real device rejects with that code: it is now queued for automatic
 retry with a plain reason, rather than shown as a wrong-PIN/other STE2
 business rejection.
 
-## No fiscal reconciliation report (system amount vs device-validated amount)
+## Fiscal reconciliation report (system amount vs device-validated amount) - built, with two residual caveats
 
-Found in the docs/phase-157 Reports audit. Nothing in the fiscal
-submission path (`real-etims-provider.ts`, `xml-utils.ts`,
-`fiscal-retry.ts`, `fiscal-routing.ts`) ever reads back a monetary total
-from the device to compare against the order's own `total` - only the
-invoice number, QR code, and (best-effort, unpersisted) CU serial are
-ever read back. There is nothing to build a system-vs-device
-reconciliation report from without a device/protocol change establishing
-whether the device even returns a comparable validated amount.
+Found in the docs/phase-157 Reports audit. At the time, nothing in the
+fiscal submission path ever read back a monetary total from the device
+to compare against the order's own `total` - only the invoice number, QR
+code, and (best-effort, unpersisted) CU serial were ever read back.
 
-**What's still open**: whether the VIL G03 manual's post-implementation
-checklist item 13 (system amount vs device-validated amount per invoice)
-has a device command this app has not yet identified - `VERIFY-ON-DEVICE`
-would need the protocol PDF's own read-back commands re-examined for a
-total/amount field, which was not available to check during the docs/
-phase-157/158 work.
+**Update (docs/phase-163, docs/phase-163-1)**: built. `submitInvoice`'s
+existing Step 5 (`ReadCurrentReceiptInfo`, the "read VAT" validation
+gate) already reads the device's five per-VAT-group amounts; docs/
+phase-163 stores them verbatim (`orders.fiscal_vat_groups_json`) and adds
+`generateFiscalReconciliation` (a read-only report comparing each
+fiscalised order's charged total against the sum of those amounts:
+matched, mismatch, or no-device-figure) plus a Reports sub-view, CSV
+columns, and a "VAT from device groups" Sales Summary figure. No new
+device command was needed - VIL checklist item 13 turned out not to
+require the protocol re-examination this entry originally called for.
 
-**Blast radius**: none - no code path claims to reconcile these two
-amounts today, so there is no existing behaviour to protect while this
-stays open.
+**Two residual caveats, not further reduced by docs/phase-163-1**:
+
+1. **VAT-group `'D'` is excluded from every derived VAT figure.** The
+   confirmed VIL manual table (docs/phase-65) gives `'D'` no single rate
+   - "usually free for any other rates" - so `deriveGroupVat` reports its
+   VAT as `'not-known'` rather than guessing one, and the Sales Summary's
+   "VAT from device groups" total simply omits `'D'`'s contribution
+   (docs/phase-163-1 added the coverage caption - "from N of M sales;
+   group D not included" - specifically so this omission is visible next
+   to the figure, not silent).
+2. **The report is only as good as what the device actually returns at
+   Step 5.** "Matched" and "mismatch" are both computed purely from the
+   device's own reported figures - a device that returns a subtly wrong
+   but well-formed number would be reported as a confident match or
+   mismatch with no way for this build to detect the difference, since
+   there is no independent source to check it against. This is the
+   report doing its job (comparing till vs device), not a defect in it,
+   but it means the report cannot itself vouch for the device's own
+   accuracy - only for whether the till and the device agree.
+
+**Blast radius**: read-only reporting output. No fiscal filing, command,
+argument, or sequence is affected by either caveat.
 
 ## No profit/margin reporting - no cost data exists anywhere, and Shopify's own route is undocumented
 

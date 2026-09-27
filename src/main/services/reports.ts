@@ -677,9 +677,16 @@ export interface SalesSummary {
    * recovery, or a non-numeric device value) and excludes VAT-group `'D'`
    * entirely (its rate is not known — see {@link deriveGroupVat}), rather
    * than guessing either. Voided orders are excluded, matching every
-   * other figure on this report.
+   * other figure on this report. See {@link vatFromDeviceGroupsCoverage}
+   * for how much of the range this figure actually covers.
    */
   vatFromDeviceGroups: number
+  /**
+   * Coverage caption for {@link vatFromDeviceGroups} (docs/phase-163-1) —
+   * e.g. "from 12 of 15 sales; group D not included" — so the figure is
+   * never mistaken for covering every fiscalised sale in the range.
+   */
+  vatFromDeviceGroupsCoverage: VatFromDeviceGroupsCoverage
 }
 
 /**
@@ -702,6 +709,7 @@ export function generateSalesSummary(
   const totalsByMethod = sumByPaymentMethod(orders)
   const totalRevenue = orders.reduce((sum, order) => sum + order.total, 0)
   const payments = excludeVoided(db.getMpesaPaymentsForDateRange(range.startIso, range.endIso))
+  const { total: vatFromDeviceGroups, ...vatFromDeviceGroupsCoverage } = sumVatFromDeviceGroups(orders)
 
   return {
     startIso: range.startIso,
@@ -713,7 +721,8 @@ export function generateSalesSummary(
     vatRate: taxRate,
     totalsByMethod,
     mpesaByMode: sumMpesaByMode(payments),
-    vatFromDeviceGroups: sumVatFromDeviceGroups(orders)
+    vatFromDeviceGroups,
+    vatFromDeviceGroupsCoverage
   }
 }
 
@@ -783,38 +792,75 @@ function deriveGroupVat(letter: VatGroupLetter, amount: number): number | 'not-k
 }
 
 /**
- * Best-effort total VAT across a set of orders' stored device figures —
- * the Sales Summary's "VAT from device groups" (docs/phase-163, Commit 2).
- * Silently skips an order with no stored figure, a non-numeric one, or a
- * malformed JSON blob (this is a rough aggregate shown alongside the
- * existing calculated VAT figure, not a compliance check — the fiscal
- * reconciliation report is where a bad figure gets surfaced and logged
- * per order) and excludes VAT-group `'D'` entirely, since
- * {@link deriveGroupVat} has no rate to give it.
+ * How much of a {@link generateSalesSummary}'s `vatFromDeviceGroups`
+ * figure is actually backed by a usable device reading (docs/phase-163-1)
+ * — the "from 12 of 15 sales" caption shown next to it, so the figure is
+ * never read as covering every fiscalised sale in the range when it may
+ * not.
+ */
+export interface VatFromDeviceGroupsCoverage {
+  /** Fiscalised orders in range whose stored device figure could be fully parsed and summed. */
+  ordersWithFigure: number
+  /** Fiscalised orders in range, the coverage's denominator. */
+  ordersFiscalized: number
+}
+
+/**
+ * Best-effort total VAT across a set of orders' stored device figures,
+ * plus how many of them actually contributed to it — the Sales Summary's
+ * "VAT from device groups" (docs/phase-163, Commit 2) and its coverage
+ * caption (docs/phase-163-1). An order counts as "with figure" only when
+ * `fiscal_vat_groups_json` is present, parses, and every group it
+ * contains is numeric — the same all-or-nothing rule
+ * {@link buildReconciliationRow} applies, so the two reports' coverage
+ * language means the same thing; a `'not-known'`-VAT group (`'D'`) still
+ * counts as "with figure" if its own amount was numeric, since the
+ * device DID answer, this file just cannot derive its VAT (rather than
+ * this being treated the same as the device answering nothing at all).
+ * This is a rough aggregate shown alongside the existing calculated VAT
+ * figure, not a compliance check, so a bad or missing figure is skipped
+ * silently here rather than logged — the fiscal reconciliation report is
+ * where that gets surfaced and logged per order.
  *
  * @param {OrderRow[]} orders
- * @returns {number}
+ * @returns {{ total: number } & VatFromDeviceGroupsCoverage}
  */
-function sumVatFromDeviceGroups(orders: OrderRow[]): number {
+function sumVatFromDeviceGroups(
+  orders: OrderRow[]
+): { total: number } & VatFromDeviceGroupsCoverage {
   let total = 0
+  let ordersWithFigure = 0
+  let ordersFiscalized = 0
   for (const order of orders) {
-    if (order.fiscal_status !== 'fiscalized' || !order.fiscal_vat_groups_json) continue
+    if (order.fiscal_status !== 'fiscalized') continue
+    ordersFiscalized += 1
+    if (!order.fiscal_vat_groups_json) continue
     let rawGroups: FiscalVatGroupAmounts
     try {
       rawGroups = JSON.parse(order.fiscal_vat_groups_json) as FiscalVatGroupAmounts
     } catch {
       continue
     }
+    let sawNumericGroup = false
+    let sawNonNumericGroup = false
+    let orderVat = 0
     for (const letter of VAT_GROUP_LETTERS) {
       const raw = rawGroups[letter]
       if (raw === undefined) continue
       const amount = Number(raw)
-      if (!Number.isFinite(amount)) continue
+      if (!Number.isFinite(amount)) {
+        sawNonNumericGroup = true
+        break
+      }
+      sawNumericGroup = true
       const vat = deriveGroupVat(letter, amount)
-      if (vat !== 'not-known') total += vat
+      if (vat !== 'not-known') orderVat += vat
     }
+    if (sawNonNumericGroup || !sawNumericGroup) continue
+    ordersWithFigure += 1
+    total += orderVat
   }
-  return Math.round(total * 100) / 100
+  return { total: Math.round(total * 100) / 100, ordersWithFigure, ordersFiscalized }
 }
 
 /** One VAT-group's amount and derived VAT, for one reconciliation row. */

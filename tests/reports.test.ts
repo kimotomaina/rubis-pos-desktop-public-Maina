@@ -303,9 +303,10 @@ describe('generateSalesSummary (docs/phase-158)', () => {
 
       expect(summary.vatIncluded).toBe(16) // unchanged, calculated figure
       expect(summary.vatFromDeviceGroups).toBe(16) // separate, device-derived figure
+      expect(summary.vatFromDeviceGroupsCoverage).toEqual({ ordersWithFigure: 1, ordersFiscalized: 1 })
     })
 
-    it('excludes group D (no known rate) and skips orders with no stored device figure', () => {
+    it('excludes group D from the VAT total but still counts it as "with figure" (its amount was known, only its VAT rate was not), and excludes orders with no stored device figure from both', () => {
       const db = fakeDb({
         ordersForRange: [
           order({
@@ -321,6 +322,41 @@ describe('generateSalesSummary (docs/phase-158)', () => {
       const summary = generateSalesSummary(db, 0.16, range)
 
       expect(summary.vatFromDeviceGroups).toBe(0)
+      // 2 fiscalized orders (the 'waiting' one doesn't count); only the
+      // group-D order actually had a parseable figure.
+      expect(summary.vatFromDeviceGroupsCoverage).toEqual({ ordersWithFigure: 1, ordersFiscalized: 2 })
+    })
+
+    /** docs/phase-163-1's own worked example: "from 12 of 15 sales". */
+    it('reports coverage matching the task\'s own worked example shape', () => {
+      const fiscalizedWithFigure = Array.from({ length: 12 }, (_, i) =>
+        order({ local_id: i + 1, total: 116, fiscal_status: 'fiscalized', fiscal_vat_groups_json: JSON.stringify({ A: '116.00' }) })
+      )
+      const fiscalizedNoFigure = Array.from({ length: 3 }, (_, i) =>
+        order({ local_id: 100 + i, total: 50, fiscal_status: 'fiscalized', fiscal_vat_groups_json: null })
+      )
+      const db = fakeDb({ ordersForRange: [...fiscalizedWithFigure, ...fiscalizedNoFigure] })
+
+      const summary = generateSalesSummary(db, 0.16, range)
+
+      expect(summary.vatFromDeviceGroupsCoverage).toEqual({ ordersWithFigure: 12, ordersFiscalized: 15 })
+    })
+
+    it('does not count a non-numeric group as "with figure" — matches buildReconciliationRow\'s all-or-nothing rule', () => {
+      const db = fakeDb({
+        ordersForRange: [
+          order({
+            total: 100,
+            fiscal_status: 'fiscalized',
+            fiscal_vat_groups_json: JSON.stringify({ A: 'n/a' })
+          })
+        ]
+      })
+
+      const summary = generateSalesSummary(db, 0.16, range)
+
+      expect(summary.vatFromDeviceGroups).toBe(0)
+      expect(summary.vatFromDeviceGroupsCoverage).toEqual({ ordersWithFigure: 0, ordersFiscalized: 1 })
     })
   })
 })

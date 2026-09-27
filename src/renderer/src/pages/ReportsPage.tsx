@@ -251,6 +251,14 @@ function SalesSummaryView() {
               <p className="text-xl font-semibold text-slate-900">{formatCurrency(summary.vatIncluded)}</p>
             </div>
             <div className="rounded-lg bg-slate-50 p-3">
+              <p className="text-sm text-slate-500">VAT from device groups</p>
+              <p className="text-xl font-semibold text-slate-900">{formatCurrency(summary.vatFromDeviceGroups)}</p>
+              <p className="text-xs text-slate-400">
+                from {summary.vatFromDeviceGroupsCoverage.ordersWithFigure} of{' '}
+                {summary.vatFromDeviceGroupsCoverage.ordersFiscalized} sales; group D not included
+              </p>
+            </div>
+            <div className="rounded-lg bg-slate-50 p-3">
               <p className="text-sm text-slate-500">Cash</p>
               <p className="text-xl font-semibold text-slate-900">{formatCurrency(summary.totalsByMethod.cash)}</p>
             </div>
