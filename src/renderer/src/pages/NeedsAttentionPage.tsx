@@ -3,8 +3,13 @@ import type { NeedsAttentionRow } from '../../../main/services/database.js'
 import { formatCurrency } from '../lib/currency.js'
 import { isValidKraPinFormat, KRA_PIN_MAX_LENGTH } from '../lib/kraPin.js'
 import { describeNeedsAttentionStatus, applyResendResult } from '../lib/needsAttention.js'
+import { paginate } from '../lib/paginate.js'
+import Pager from '../components/Pager.js'
 import { useKeyboardStore } from '../stores/keyboardStore.js'
 import { useUnfiledCountStore } from '../stores/unfiledCountStore.js'
+
+/** Rows per page (docs/phase-166 Commit E4) — replaces this screen's reliance on the outer Admin wrapper scrolling. */
+export const NEEDS_ATTENTION_PAGE_SIZE = 10
 
 /** Tailwind classes for the status pill, keyed by row status. */
 const STATUS_BADGE_CLASSES: Record<NeedsAttentionRow['fiscal_status'], string> = {
@@ -24,6 +29,11 @@ const STATUS_BADGE_CLASSES: Record<NeedsAttentionRow['fiscal_status'], string> =
  * the same `correctPinAndResend` path and on-screen keyboard
  * `FiscalNotice.tsx` uses for the identical fix at the point of sale.
  *
+ * Paginated at {@link NEEDS_ATTENTION_PAGE_SIZE} (docs/phase-166 Commit
+ * E4) — this screen used to rely on the outer Admin wrapper's scroll to
+ * show more rows than fit; Phase E's no-scroll rule replaces that with
+ * paging instead.
+ *
  * @returns {JSX.Element}
  */
 export default function NeedsAttentionPage() {
@@ -34,6 +44,7 @@ export default function NeedsAttentionPage() {
   const [resendError, setResendError] = useState<string | null>(null)
   const [correctingId, setCorrectingId] = useState<number | null>(null)
   const [pinInput, setPinInput] = useState('')
+  const [page, setPage] = useState(1)
 
   const fetchRows = async (): Promise<void> => {
     try {
@@ -115,6 +126,8 @@ export default function NeedsAttentionPage() {
     )
   }
 
+  const pageResult = paginate(rows, page, NEEDS_ATTENTION_PAGE_SIZE)
+
   return (
     <div className="w-full space-y-4">
       <div className="flex items-center justify-between">
@@ -139,7 +152,7 @@ export default function NeedsAttentionPage() {
         <p className="py-8 text-center text-base text-slate-500">No sales need attention.</p>
       ) : (
         <div className="space-y-3">
-          {rows.map((row) => {
+          {pageResult.items.map((row) => {
             const isCorrecting = correctingId === row.local_id
             const trimmedPin = pinInput.trim().toUpperCase()
             const pinFormatValid = trimmedPin.length > 0 && isValidKraPinFormat(trimmedPin)
@@ -229,6 +242,7 @@ export default function NeedsAttentionPage() {
               </div>
             )
           })}
+          <Pager page={pageResult.page} pageCount={pageResult.pageCount} onChange={setPage} />
         </div>
       )}
     </div>

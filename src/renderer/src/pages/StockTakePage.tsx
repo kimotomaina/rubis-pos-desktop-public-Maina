@@ -13,10 +13,15 @@ import {
   STOCK_TAKE_STATUS_LABELS,
   varianceClass
 } from '../lib/stockTake.js'
+import { pageOfIndex, paginate } from '../lib/paginate.js'
+import Pager from '../components/Pager.js'
 import { useAuthStore } from '../stores/authStore.js'
 import { useProductStore } from '../stores/productStore.js'
 import { useKeyboardStore } from '../stores/keyboardStore.js'
 import ManagerPinModal from '../components/ManagerPinModal.js'
+
+/** Counted lines per page (docs/phase-166 Commit E4) — replaces this table's reliance on the outer Admin wrapper scrolling. */
+export const STOCK_TAKE_LINES_PER_PAGE = 10
 
 /** Which manager PIN the open modal is collecting, if any. */
 type PinPurpose = 'commit' | 'secondApprover' | 'discard' | 'settings' | null
@@ -50,6 +55,11 @@ interface PendingApproval {
  * Counting works offline. Pushing does not, and says so — it has to
  * re-read Shopify's current figures first.
  *
+ * The counted-lines table is paginated at {@link STOCK_TAKE_LINES_PER_PAGE}
+ * (docs/phase-166 Commit E4) — recording a count jumps the table to the
+ * page holding that line, same as `PosCartTable`'s identical jump for a
+ * cart add/scan.
+ *
  * @returns {JSX.Element}
  */
 export default function StockTakePage() {
@@ -79,6 +89,10 @@ export default function StockTakePage() {
   const [thresholdInput, setThresholdInput] = useState('')
   const [selfApprovalInput, setSelfApprovalInput] = useState(false)
   const [expiryInput, setExpiryInput] = useState('')
+
+  const [linesPage, setLinesPage] = useState(1)
+  /** Variant id most recently recorded — jumps the lines table to its page (docs/phase-166 Commit E4). */
+  const [lastRecordedVariantId, setLastRecordedVariantId] = useState<string | null>(null)
 
   const session = view?.session ?? null
   const items = view?.items ?? []
@@ -146,6 +160,22 @@ export default function StockTakePage() {
     [items]
   )
 
+  /**
+   * Jumps the lines table to the page holding the just-recorded line
+   * (docs/phase-166 Commit E4) — `items` is deliberately left out of the
+   * dependency list, matching `PosCartTable`'s identical jump effect:
+   * this should fire only when a NEW line is recorded, not on every
+   * incidental refresh of `items` while the last recording is still the
+   * most recent one.
+   */
+  useEffect(() => {
+    if (!lastRecordedVariantId) return
+    const index = items.findIndex((item) => item.variant_id === lastRecordedVariantId)
+    if (index === -1) return
+    setLinesPage(pageOfIndex(index, STOCK_TAKE_LINES_PER_PAGE))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lastRecordedVariantId])
+
   const matches = useMemo(() => {
     const term = search.trim().toLowerCase()
     if (!term) return []
@@ -194,6 +224,7 @@ export default function StockTakePage() {
         setView(data ?? null)
         setSearch('')
         setCountedQty('')
+        setLastRecordedVariantId(selected.variantId)
         setSelectedVariantId(null)
       }
     )
@@ -321,6 +352,7 @@ export default function StockTakePage() {
   }
 
   const pushableLines = preview?.lines.filter((line) => line.delta !== 0 && !line.blockedReason) ?? []
+  const linesPageResult = paginate(items, linesPage, STOCK_TAKE_LINES_PER_PAGE)
 
   return (
     <div className="space-y-4">
@@ -449,7 +481,7 @@ export default function StockTakePage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {items.map((item) => (
+                  {linesPageResult.items.map((item) => (
                     <tr key={item.variant_id} className="border-t border-slate-100">
                       <td className="py-2 pr-2 text-slate-800">{item.variant_label}</td>
                       <td className="py-2 text-right text-slate-500">
@@ -483,6 +515,13 @@ export default function StockTakePage() {
                   ))}
                 </tbody>
               </table>
+              <div className="mt-3">
+                <Pager
+                  page={linesPageResult.page}
+                  pageCount={linesPageResult.pageCount}
+                  onChange={setLinesPage}
+                />
+              </div>
             </div>
           )}
 

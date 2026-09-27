@@ -11,11 +11,13 @@
  * The allow-list is deliberately an exact count per file, not just a
  * ceiling: a file dropping BELOW its listed count (the scroll was
  * fixed but the list wasn't updated) fails just as loudly as one going
- * over, so the list can never quietly drift out of date. It starts as
- * today's legitimate cases (this commit) and Commit E4 shrinks it for
- * every file this phase actually paginates — `PosCartTable` and
- * `ToastStack` are listed here (not omitted) for exactly that reason,
- * so Commit E4's own diff can show them dropping to zero by name.
+ * over, so the list can never quietly drift out of date. Commit E3
+ * started it at every screen/modal's then-current legitimate case;
+ * this commit (E4) shrinks it for every file this phase actually
+ * paginates — `App.tsx`'s Orders wrapper, `PosCartTable` and
+ * `ToastStack` move from the allow-list down to `ZERO_SCROLL_FILES`
+ * here, each a changed assertion in its own right (see docs/phase-166's
+ * report for the old → new → why on each).
  *
  * `overflow-x-auto`/`overflow-x-scroll` (horizontal-only, used for wide
  * data tables in several of these same files) are deliberately NOT
@@ -50,27 +52,27 @@ function countVerticalScrollClasses(relativePath: string): number {
  * render).
  */
 const ALLOW_LIST: Record<string, number> = {
-  [join('src', 'renderer', 'src', 'App.tsx')]: 2, // Orders' and Admin's shared wrappers — both still needed until Order History (Orders') and the rest of Admin (Admin's) are paginated.
-  [join('src', 'renderer', 'src', 'components', 'PosCartTable.tsx')]: 1, // The cart table's own scroll — Commit E4 replaces it with pagination.
-  [join('src', 'renderer', 'src', 'components', 'ToastStack.tsx')]: 1, // The toast column's own scroll — Commit E4 replaces it with a 3-toast cap.
+  [join('src', 'renderer', 'src', 'App.tsx')]: 1, // Admin's shared wrapper — check:fit found it genuinely scrolling on Overview, End of Day, and Integrations' Shopify/Fiscal Device sections at the tightest size; none of those are paginated in this phase.
   [join('src', 'renderer', 'src', 'components', 'OnboardingScreen.tsx')]: 1, // Pre-login; out of scope for this phase.
   [join('src', 'renderer', 'src', 'components', 'LocationConfirmScreen.tsx')]: 1, // Pre-login; out of scope for this phase.
   [join('src', 'renderer', 'src', 'components', 'EtimsSetupGate.tsx')]: 1, // Pre-login; out of scope for this phase.
   [join('src', 'renderer', 'src', 'components', 'VariantModal.tsx')]: 1 // Not in this phase's pagination list.
 }
 
-/** Files expected to have ZERO vertical-scroll classes. */
+/** Files expected to have ZERO vertical-scroll classes — either always have, or (this commit) now do. */
 const ZERO_SCROLL_FILES = [
   join('src', 'renderer', 'src', 'components', 'LoginScreen.tsx'),
   join('src', 'renderer', 'src', 'components', 'LocationPendingScreen.tsx'),
   join('src', 'renderer', 'src', 'components', 'AdminScreen.tsx'),
   join('src', 'renderer', 'src', 'components', 'OrderHistory.tsx'),
+  join('src', 'renderer', 'src', 'components', 'PosCartTable.tsx'),
   join('src', 'renderer', 'src', 'components', 'ZReportModal.tsx'),
   join('src', 'renderer', 'src', 'components', 'ManagerPinModal.tsx'),
   join('src', 'renderer', 'src', 'components', 'PaymentModal.tsx'),
   join('src', 'renderer', 'src', 'components', 'ConnectivityModal.tsx'),
   join('src', 'renderer', 'src', 'components', 'RestartCountdownModal.tsx'),
   join('src', 'renderer', 'src', 'components', 'VirtualKeyboardModal.tsx'),
+  join('src', 'renderer', 'src', 'components', 'ToastStack.tsx'),
   join('src', 'renderer', 'src', 'components', 'FiscalNotice.tsx'),
   join('src', 'renderer', 'src', 'pages', 'NeedsAttentionPage.tsx'),
   join('src', 'renderer', 'src', 'pages', 'MpesaLogsPage.tsx'),

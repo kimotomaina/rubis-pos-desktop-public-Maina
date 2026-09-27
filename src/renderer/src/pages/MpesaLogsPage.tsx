@@ -1,6 +1,11 @@
 import { useEffect, useState } from 'react'
 import type { MpesaTransactionRow, MpesaTransactionStatus } from '../../../main/services/database.js'
 import { formatCurrency } from '../lib/currency.js'
+import { paginate } from '../lib/paginate.js'
+import Pager from '../components/Pager.js'
+
+/** Transactions per page (docs/phase-166 Commit E4) — replaces this screen's reliance on the outer Admin wrapper scrolling. */
+export const MPESA_LOGS_PAGE_SIZE = 10
 
 /** Tailwind classes for a status pill, keyed by transaction status. */
 const STATUS_BADGE_CLASSES: Record<MpesaTransactionStatus, string> = {
@@ -25,6 +30,11 @@ const STATUS_LABEL: Record<MpesaTransactionStatus, string> = {
  * customer claims they paid — via `window.api.queryMpesaStatus`
  * rather than the screen silently hammering the query endpoint.
  *
+ * Paginated at {@link MPESA_LOGS_PAGE_SIZE} (docs/phase-166 Commit E4)
+ * — this screen used to rely on the outer Admin wrapper's scroll to
+ * show more rows than fit; Phase E's no-scroll rule replaces that with
+ * paging instead.
+ *
  * @returns {JSX.Element}
  */
 export default function MpesaLogsPage() {
@@ -33,6 +43,7 @@ export default function MpesaLogsPage() {
   const [error, setError] = useState<string | null>(null)
   const [checkingId, setCheckingId] = useState<number | null>(null)
   const [checkError, setCheckError] = useState<string | null>(null)
+  const [page, setPage] = useState(1)
 
   const fetchTransactions = async () => {
     try {
@@ -88,6 +99,8 @@ export default function MpesaLogsPage() {
     )
   }
 
+  const pageResult = paginate(transactions, page, MPESA_LOGS_PAGE_SIZE)
+
   return (
     <div className="w-full space-y-4">
       <div className="flex items-center justify-between">
@@ -113,56 +126,59 @@ export default function MpesaLogsPage() {
       {transactions.length === 0 ? (
         <p className="py-8 text-center text-base text-slate-500">No M-Pesa transactions yet.</p>
       ) : (
-        <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white">
-          <table className="w-full text-left text-base">
-            <thead className="border-b border-slate-200 bg-slate-50 text-sm text-slate-500">
-              <tr>
-                <th className="px-4 py-3 font-medium">Order</th>
-                <th className="px-4 py-3 font-medium">Phone</th>
-                <th className="px-4 py-3 font-medium">Amount</th>
-                <th className="px-4 py-3 font-medium">Time</th>
-                <th className="px-4 py-3 font-medium">Status</th>
-                <th className="px-4 py-3 font-medium">Receipt No.</th>
-                <th className="px-4 py-3 font-medium">Action</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100">
-              {transactions.map((transaction) => (
-                <tr key={transaction.id}>
-                  <td className="px-4 py-3 text-slate-800">
-                    {transaction.order_local_id ? `#${transaction.order_local_id}` : '—'}
-                  </td>
-                  <td className="px-4 py-3 text-slate-600">{transaction.phone_number}</td>
-                  <td className="px-4 py-3 text-slate-800">{formatCurrency(transaction.amount)}</td>
-                  <td className="px-4 py-3 text-sm text-slate-500">
-                    {new Date(transaction.created_at).toLocaleString()}
-                  </td>
-                  <td className="px-4 py-3">
-                    <span
-                      className={`inline-flex items-center rounded-full px-3 py-1 text-sm font-medium ${STATUS_BADGE_CLASSES[transaction.status]}`}
-                    >
-                      {STATUS_LABEL[transaction.status]}
-                    </span>
-                  </td>
-                  <td className="px-4 py-3 text-slate-600">
-                    {transaction.mpesa_receipt_number ?? '—'}
-                  </td>
-                  <td className="px-4 py-3">
-                    {transaction.status === 'pending' && (
-                      <button
-                        type="button"
-                        disabled={checkingId === transaction.id}
-                        onClick={() => handleCheckStatus(transaction)}
-                        className="h-9 rounded-md border border-slate-300 px-3 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
-                      >
-                        {checkingId === transaction.id ? 'Checking…' : 'Check Status'}
-                      </button>
-                    )}
-                  </td>
+        <div className="space-y-3">
+          <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white">
+            <table className="w-full text-left text-base">
+              <thead className="border-b border-slate-200 bg-slate-50 text-sm text-slate-500">
+                <tr>
+                  <th className="px-4 py-3 font-medium">Order</th>
+                  <th className="px-4 py-3 font-medium">Phone</th>
+                  <th className="px-4 py-3 font-medium">Amount</th>
+                  <th className="px-4 py-3 font-medium">Time</th>
+                  <th className="px-4 py-3 font-medium">Status</th>
+                  <th className="px-4 py-3 font-medium">Receipt No.</th>
+                  <th className="px-4 py-3 font-medium">Action</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {pageResult.items.map((transaction) => (
+                  <tr key={transaction.id}>
+                    <td className="px-4 py-3 text-slate-800">
+                      {transaction.order_local_id ? `#${transaction.order_local_id}` : '—'}
+                    </td>
+                    <td className="px-4 py-3 text-slate-600">{transaction.phone_number}</td>
+                    <td className="px-4 py-3 text-slate-800">{formatCurrency(transaction.amount)}</td>
+                    <td className="px-4 py-3 text-sm text-slate-500">
+                      {new Date(transaction.created_at).toLocaleString()}
+                    </td>
+                    <td className="px-4 py-3">
+                      <span
+                        className={`inline-flex items-center rounded-full px-3 py-1 text-sm font-medium ${STATUS_BADGE_CLASSES[transaction.status]}`}
+                      >
+                        {STATUS_LABEL[transaction.status]}
+                      </span>
+                    </td>
+                    <td className="px-4 py-3 text-slate-600">
+                      {transaction.mpesa_receipt_number ?? '—'}
+                    </td>
+                    <td className="px-4 py-3">
+                      {transaction.status === 'pending' && (
+                        <button
+                          type="button"
+                          disabled={checkingId === transaction.id}
+                          onClick={() => handleCheckStatus(transaction)}
+                          className="h-9 rounded-md border border-slate-300 px-3 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          {checkingId === transaction.id ? 'Checking…' : 'Check Status'}
+                        </button>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <Pager page={pageResult.page} pageCount={pageResult.pageCount} onChange={setPage} />
         </div>
       )}
     </div>

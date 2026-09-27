@@ -56,6 +56,25 @@ export function getAutocompleteMatches(
 }
 
 /**
+ * Whether `query` matches more products than the capped autocomplete
+ * list actually shows (docs/phase-166 Commit E4) — tells the dropdown
+ * whether to hint "refine your search" instead of silently truncating.
+ *
+ * @param {ProductSummary[]} products
+ * @param {string} query
+ * @param {number} [limit]
+ * @returns {boolean}
+ */
+export function hasMoreMatches(
+  products: ProductSummary[],
+  query: string,
+  limit: number = AUTOCOMPLETE_MAX_RESULTS
+): boolean {
+  if (!query.trim()) return false
+  return filterProducts(products, query).length > limit
+}
+
+/**
  * Picks the variant to add for a single-variant product, or `undefined`
  * for a multi-variant product that needs the variant picker instead —
  * the same "only one choice, skip the modal" rule

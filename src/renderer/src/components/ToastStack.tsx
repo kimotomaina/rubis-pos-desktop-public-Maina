@@ -1,4 +1,5 @@
 import { useToastStore } from '../stores/toastStore.js'
+import { visibleToasts } from '../lib/toastVisibility.js'
 import ToastShell from './ToastShell.js'
 
 /**
@@ -10,19 +11,20 @@ import ToastShell from './ToastShell.js'
  *
  * New entries are appended at the end, so an existing toast never jumps
  * position when another one arrives (same order `ConnectivityToast`
- * already used before this unification). `max-h-[70vh]` with a
- * scrolling column, rather than an unbounded stack, keeps the column
- * from growing over the work area even in the (unlikely) worst case of
- * several toasts at once.
+ * already used before this unification). `visibleToasts` (docs/
+ * phase-166 Commit E4) caps the column at 3 rather than letting it grow
+ * and scroll internally — Phase E's no-scroll rule — while always
+ * keeping the pinned FiscalNotice on screen.
  */
 export default function ToastStack() {
   const toasts = useToastStore((state) => state.toasts)
+  const visible = visibleToasts(toasts)
 
-  if (toasts.length === 0) return null
+  if (visible.length === 0) return null
 
   return (
-    <div className="fixed left-1/2 top-4 z-50 flex max-h-[70vh] w-80 -translate-x-1/2 flex-col gap-2 overflow-y-auto">
-      {toasts.map((toast) => (
+    <div className="fixed left-1/2 top-4 z-50 flex w-80 -translate-x-1/2 flex-col gap-2">
+      {visible.map((toast) => (
         <ToastShell key={toast.id} toast={toast} />
       ))}
     </div>

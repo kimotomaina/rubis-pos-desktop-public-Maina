@@ -104,6 +104,10 @@ export default function FiscalNotice() {
       message: notice.message,
       timeoutMs: FISCAL_NOTICE_TIMEOUT_MS,
       onDismiss: dismiss,
+      // Never dropped by the stack's 3-toast cap (docs/phase-166 Commit
+      // E4) — see `toastVisibility.ts` and this toast's own `timeoutMs`
+      // (also never-expiring) for why this one plays by different rules.
+      pinned: true,
       actions:
         notice.fixableAs === 'wrong-pin' ? (
           <div className="flex flex-col gap-2">

@@ -1,9 +1,14 @@
 import { useEffect, useState } from 'react'
 import type { OrderRow } from '../../../main/services/database.js'
 import type { OfflineOrderLine } from '../../../main/services/shopify-types.js'
-import { formatCurrency } from '../lib/currency'
+import { formatCurrency } from '../lib/currency.js'
 import { parseFiscalTimestamp } from '../lib/fiscalDate.js'
+import { paginate } from '../lib/paginate.js'
+import Pager from './Pager.js'
 import etimsLogoSrc from '../assets/logo-etims.png'
+
+/** Orders per page (docs/phase-166 Commit E4) — replaces this screen's reliance on the outer window scrolling. */
+export const ORDER_HISTORY_PAGE_SIZE = 10
 
 /**
  * Renders the eTIMS brand logo, falling back to a plain "eTIMS" text
@@ -39,6 +44,12 @@ interface OrderHistoryProps {
  * Displays a list of recent orders with status badges and retry
  * functionality for failed or pending orders.
  *
+ * Paginated at {@link ORDER_HISTORY_PAGE_SIZE} (docs/phase-166 Commit
+ * E4) over the up-to-50 orders `fetchOrders` already loads — this
+ * screen used to rely entirely on `App.tsx`'s outer window scrolling
+ * to show more than fit; Phase E's no-scroll rule replaces that with
+ * paging instead.
+ *
  * @param {OrderHistoryProps} props
  * @returns {JSX.Element}
  */
@@ -47,6 +58,7 @@ export default function OrderHistory({ onRetry, onPrint }: OrderHistoryProps) {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [expandedOrderId, setExpandedOrderId] = useState<number | null>(null)
+  const [page, setPage] = useState(1)
 
   const fetchOrders = async () => {
     try {
@@ -153,9 +165,11 @@ export default function OrderHistory({ onRetry, onPrint }: OrderHistoryProps) {
     )
   }
 
+  const pageResult = paginate(orders, page, ORDER_HISTORY_PAGE_SIZE)
+
   return (
     <div className="space-y-3">
-      {orders.map((order) => {
+      {pageResult.items.map((order) => {
         const isExpanded = expandedOrderId === order.local_id
         return (
           <div
@@ -264,6 +278,7 @@ export default function OrderHistory({ onRetry, onPrint }: OrderHistoryProps) {
           </div>
         )
       })}
+      <Pager page={pageResult.page} pageCount={pageResult.pageCount} onChange={setPage} />
     </div>
   )
 }

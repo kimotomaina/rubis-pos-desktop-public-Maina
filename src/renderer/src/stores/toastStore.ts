@@ -26,6 +26,15 @@ export interface ToastInput {
   onDismiss: () => void
   /** Extra interactive content rendered below the message (e.g. FiscalNotice's fix-and-resend buttons, UpdateToast's install button). */
   actions?: ReactNode
+  /**
+   * Exempts this toast from `ToastStack`'s visible-count cap (docs/
+   * phase-166 Commit E4) — set only by `FiscalNotice`, the one place a
+   * flagged sale surfaces to a person at all, so it can never be pushed
+   * out by routine toasts arriving afterwards. Mirrors `timeoutMs: null`
+   * (also FiscalNotice-only): both exist because that one toast plays by
+   * different rules than everything else in the stack.
+   */
+  pinned?: boolean
 }
 
 /** A toast as held in the store — `input` plus a freshness stamp. */

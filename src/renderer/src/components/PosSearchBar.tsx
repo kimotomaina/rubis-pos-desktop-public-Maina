@@ -4,6 +4,7 @@ import { formatCurrency } from '../lib/currency.js'
 import {
   findVariantByBarcode,
   getAutocompleteMatches,
+  hasMoreMatches,
   resolveSingleVariant
 } from '../lib/posSearch.js'
 
@@ -59,6 +60,7 @@ export default function PosSearchBar({
   }, [query])
 
   const results = getAutocompleteMatches(products, debouncedQuery)
+  const showMoreHint = hasMoreMatches(products, debouncedQuery)
 
   useEffect(() => {
     setHighlightedIndex(0)
@@ -181,6 +183,11 @@ export default function PosSearchBar({
                 </li>
               )
             })}
+            {showMoreHint && (
+              <li className="border-t border-slate-100 px-4 py-2 text-sm text-slate-400" aria-hidden="true">
+                Refine your search to see more results
+              </li>
+            )}
           </ul>
         )}
       </div>

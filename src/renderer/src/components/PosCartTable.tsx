@@ -1,7 +1,13 @@
+import { useEffect, useState } from 'react'
 import type { CartItem } from '../types/shopify.js'
 import { formatCurrency } from '../lib/currency.js'
 import { calculateLineTotal } from '../lib/checkoutMath.js'
 import { CartIcon, TrashIcon } from './icons.js'
+import { pageOfIndex, paginate } from '../lib/paginate.js'
+import Pager from './Pager.js'
+
+/** Cart lines per page (docs/phase-166 Commit E4) — replaces the table's old internal scroll. */
+export const CART_LINES_PER_PAGE = 7
 
 interface PosCartTableProps {
   items: CartItem[]
@@ -12,16 +18,41 @@ interface PosCartTableProps {
 }
 
 /**
- * Dense, scrollable cart table for the fast-checkout layout — replaces
+ * Dense, paginated cart table for the fast-checkout layout — replaces
  * the old card-per-item cart sidebar. Every action button is at least
  * 44×44px (`h-11 w-11`) for a reliable touch target, and rows
  * alternate background color (zebra striping) for scanability at a
  * glance on a long ticket.
  *
+ * Paginated at {@link CART_LINES_PER_PAGE} (docs/phase-166 Commit E4,
+ * replacing the table's old internal scroll — Phase E's no-scroll
+ * rule). Adding or scanning a line jumps to the page holding it;
+ * removing the only line left on a page steps back a page automatically
+ * (both via `paginate`'s own clamping, same as `LocationPicker`).
+ *
  * @param {PosCartTableProps} props
  * @returns {JSX.Element}
  */
 export default function PosCartTable({ items, onUpdateQuantity, onRemove, flashId }: PosCartTableProps) {
+  const [page, setPage] = useState(1)
+  const pageResult = paginate(items, page, CART_LINES_PER_PAGE)
+
+  /**
+   * Jumps to the page holding the line most recently added/scanned
+   * (docs/phase-166 Commit E4) — `items` is deliberately left out of the
+   * dependency list: this should fire only when a NEW flash starts, not
+   * on every incidental cart mutation (e.g. a quantity tweak) while a
+   * flash from a moment ago is still technically active, which would
+   * otherwise snap the cashier back to that line mid-navigation.
+   */
+  useEffect(() => {
+    if (!flashId) return
+    const index = items.findIndex((item) => item.id === flashId)
+    if (index === -1) return
+    setPage(pageOfIndex(index, CART_LINES_PER_PAGE))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [flashId])
+
   if (items.length === 0) {
     return (
       <div className="flex flex-1 flex-col items-center justify-center gap-2 p-12 text-center text-slate-400">
@@ -32,9 +63,9 @@ export default function PosCartTable({ items, onUpdateQuantity, onRemove, flashI
   }
 
   return (
-    <div className="flex-1 overflow-y-auto">
+    <div className="flex flex-1 flex-col">
       <table className="w-full border-collapse text-left">
-        <thead className="sticky top-0 z-10 bg-slate-100 text-sm font-semibold uppercase text-slate-500">
+        <thead className="bg-slate-100 text-sm font-semibold uppercase text-slate-500">
           <tr>
             <th className="px-4 py-2">Product</th>
             <th className="px-2 py-2 text-center">Qty</th>
@@ -44,7 +75,7 @@ export default function PosCartTable({ items, onUpdateQuantity, onRemove, flashI
           </tr>
         </thead>
         <tbody>
-          {items.map((item, index) => (
+          {pageResult.items.map((item, index) => (
             <tr
               key={item.id}
               className={`border-b border-slate-100 transition-colors duration-700 ${
@@ -96,6 +127,9 @@ export default function PosCartTable({ items, onUpdateQuantity, onRemove, flashI
           ))}
         </tbody>
       </table>
+      <div className="border-t border-slate-100 px-4 py-2">
+        <Pager page={pageResult.page} pageCount={pageResult.pageCount} onChange={setPage} />
+      </div>
     </div>
   )
 }
