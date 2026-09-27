@@ -16,7 +16,9 @@ import {
   renderZReport,
   defaultPrinterFactory,
   PRINTER_CONNECT_TIMEOUT_MS,
-  shouldMarkReceiptPrinted
+  shouldMarkReceiptPrinted,
+  shouldShowFiscalPendingSlip,
+  shouldOpenPdfFallbackViewer
 } from '../src/main/services/printer.js'
 import type {
   PrinterSettings,
@@ -26,6 +28,7 @@ import type {
 } from '../src/main/services/printer.js'
 import type { ZReport } from '../src/main/services/reports.js'
 import { formatCurrency } from '../src/main/services/currency.js'
+import { FISCAL_PENDING_HEADER, NOT_A_TAX_INVOICE_LINE } from '../src/main/lib/receiptFiscalBlock.js'
 
 vi.mock('node-thermal-printer', () => ({
   ThermalPrinter: vi.fn(),
@@ -379,6 +382,43 @@ describe('renderReceipt — duplicate labelling (docs/phase-164, post-implementa
   })
 })
 
+describe('renderReceipt — not-yet-filed slip (docs/phase-165)', () => {
+  it('prints the header near the top and "Not a tax invoice" where the CU block would be', async () => {
+    const { client, calls } = createFakePrinter()
+    const pendingOrder: ReceiptOrder = { ...order, fiscalPending: true }
+
+    await renderReceipt(client, pendingOrder, items, settings)
+
+    const lineTexts = calls.filter((c) => c.method === 'println').map((c) => c.args[0])
+    expect(lineTexts[0]).toBe(FISCAL_PENDING_HEADER)
+    expect(lineTexts.indexOf(FISCAL_PENDING_HEADER)).toBeLessThan(lineTexts.indexOf(settings.storeName))
+    expect(lineTexts).toContain(NOT_A_TAX_INVOICE_LINE)
+    expect(lineTexts.some((t) => typeof t === 'string' && t.startsWith('CU '))).toBe(false)
+  })
+
+  it('prints neither the header nor the slip line when fiscalPending is not set', async () => {
+    const { client, calls } = createFakePrinter()
+
+    await renderReceipt(client, order, items, settings)
+
+    const lineTexts = calls.filter((c) => c.method === 'println').map((c) => c.args[0])
+    expect(lineTexts).not.toContain(FISCAL_PENDING_HEADER)
+    expect(lineTexts).not.toContain(NOT_A_TAX_INVOICE_LINE)
+  })
+
+  it('ignores fiscalPending for a fiscalised order — prints the real CU block, not the slip', async () => {
+    const { client, calls } = createFakePrinter()
+    const fiscalOrder: ReceiptOrder = { ...order, fiscalInvoiceNumber: 'KRA-0020', fiscalPending: true }
+
+    await renderReceipt(client, fiscalOrder, items, settings)
+
+    const lineTexts = calls.filter((c) => c.method === 'println').map((c) => c.args[0])
+    expect(lineTexts).toContain('CU Invoice No: KRA-0020')
+    expect(lineTexts).not.toContain(NOT_A_TAX_INVOICE_LINE)
+    expect(lineTexts).not.toContain(FISCAL_PENDING_HEADER)
+  })
+})
+
 describe('renderZReport (docs/phase-158-1)', () => {
   const baseReport: ZReport = {
     shiftId: 7,
@@ -577,5 +617,40 @@ describe('shouldMarkReceiptPrinted (docs/phase-164-1)', () => {
 
   it('is false for a failed print attempt, whatever the order', () => {
     expect(shouldMarkReceiptPrinted({ success: false, error: 'Printer offline' }, 'KRA-0001')).toBe(false)
+  })
+})
+
+describe('shouldShowFiscalPendingSlip (docs/phase-165)', () => {
+  it('is true on the real provider for a waiting sale', () => {
+    expect(shouldShowFiscalPendingSlip(true, 'waiting')).toBe(true)
+  })
+
+  it('is true on the real provider for a needs_fixing sale', () => {
+    expect(shouldShowFiscalPendingSlip(true, 'needs_fixing')).toBe(true)
+  })
+
+  it('is true on the real provider when fiscalization was never attempted (null)', () => {
+    expect(shouldShowFiscalPendingSlip(true, null)).toBe(true)
+  })
+
+  it('is false on the real provider once fiscalised', () => {
+    expect(shouldShowFiscalPendingSlip(true, 'fiscalized')).toBe(false)
+  })
+
+  it('is false on the mock/non-eTIMS provider, whatever the fiscal status', () => {
+    expect(shouldShowFiscalPendingSlip(false, 'waiting')).toBe(false)
+    expect(shouldShowFiscalPendingSlip(false, null)).toBe(false)
+    expect(shouldShowFiscalPendingSlip(false, 'fiscalized')).toBe(false)
+  })
+})
+
+describe('shouldOpenPdfFallbackViewer (docs/phase-165)', () => {
+  it('is true for a manual print (auto omitted or false)', () => {
+    expect(shouldOpenPdfFallbackViewer(undefined)).toBe(true)
+    expect(shouldOpenPdfFallbackViewer(false)).toBe(true)
+  })
+
+  it('is false for the automatic end-of-sale print', () => {
+    expect(shouldOpenPdfFallbackViewer(true)).toBe(false)
   })
 })

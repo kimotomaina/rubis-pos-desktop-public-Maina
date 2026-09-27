@@ -9,7 +9,12 @@ import { describe, it, expect } from 'vitest'
 import { getSaleCompleteMessage } from '../src/renderer/src/lib/saleCompleteToast.js'
 
 describe('getSaleCompleteMessage', () => {
-  it('says the tax receipt was issued when the sale fiscalized', () => {
+  // DELIBERATE TEST CHANGE (docs/phase-165): old message "Sale complete -
+  // tax receipt issued." implied a receipt had been printed, which was
+  // never true on its own (no receipt was auto-printed until this
+  // phase) — new message "Sale complete - filed with KRA." states only
+  // what is actually known at this point: fiscalization succeeded.
+  it('says the sale was filed with KRA when it fiscalized', () => {
     expect(
       getSaleCompleteMessage({
         fiscalStatus: 'fiscalized',
@@ -17,7 +22,7 @@ describe('getSaleCompleteMessage', () => {
         fiscalErrorKind: null,
         fiscalDataIssue: null
       })
-    ).toBe('Sale complete - tax receipt issued.')
+    ).toBe('Sale complete - filed with KRA.')
   })
 
   it('says plain "Sale complete." when fiscalization was never attempted', () => {

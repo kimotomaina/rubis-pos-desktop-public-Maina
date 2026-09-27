@@ -17,7 +17,7 @@
 import { describe, it, expect, vi } from 'vitest'
 import { RubisDatabase } from '../src/main/services/database.js'
 import { hashPin } from '../src/main/services/auth.js'
-import { shouldMarkReceiptPrinted } from '../src/main/services/printer.js'
+import { shouldMarkReceiptPrinted, shouldShowFiscalPendingSlip } from '../src/main/services/printer.js'
 import type { ReceiptPrintResult } from '../src/main/services/printer.js'
 import type { ServiceResult } from '../src/main/services/shopify-types.js'
 
@@ -171,5 +171,62 @@ describe('the receipt:print decision sequence (docs/phase-164-1)', () => {
 
     const reprint = simulatePrint(db, localId, 'KRA-0002', PHYSICAL_SUCCESS)
     expect(reprint.isDuplicate).toBe(true)
+  })
+})
+
+/**
+ * Replicates `main/index.ts`'s `receipt:print` handler even more closely
+ * than {@link simulatePrint} — reads the order FRESH from the database
+ * each call (as the real handler does), and also computes `fiscalPending`
+ * (docs/phase-165), so this can prove the automatic print's slip and the
+ * write-once marking decision are consistent with each other across a
+ * sale's whole lifecycle: printed while waiting, filed, printed again.
+ */
+function simulateReceiptPrint(
+  db: RubisDatabase,
+  localId: number,
+  isRealProvider: boolean,
+  printResult: ServiceResult<ReceiptPrintResult>
+): { isDuplicate: boolean; fiscalPending: boolean } {
+  const order = db.getOrder(localId)
+  const isDuplicate = db.hasReceiptPrinted(localId)
+  const fiscalPending = shouldShowFiscalPendingSlip(isRealProvider, order?.fiscal_status ?? null)
+  if (shouldMarkReceiptPrinted(printResult, order?.fiscal_invoice_number)) {
+    db.markReceiptPrinted(localId)
+  }
+  return { isDuplicate, fiscalPending }
+}
+
+describe('the automatic end-of-sale print across a sale that files later (docs/phase-165)', () => {
+  it('prints the slip while waiting (unmarked), then the real CU block once filed, as the ORIGINAL', () => {
+    const db = freshDb()
+    const localId = seedOrder(db)
+    // Not fiscalised yet — matches a sale still in sync_queue.
+
+    const autoPrintWhileWaiting = simulateReceiptPrint(db, localId, true, PHYSICAL_SUCCESS)
+    expect(autoPrintWhileWaiting.fiscalPending).toBe(true)
+    expect(autoPrintWhileWaiting.isDuplicate).toBe(false)
+    expect(db.hasReceiptPrinted(localId)).toBe(false)
+
+    // The sale files sometime later (the background retry engine, or a
+    // manual resend).
+    db.setOrderFiscalInfo(localId, 'KRA-0030', 'base64qr')
+
+    const laterManualPrint = simulateReceiptPrint(db, localId, true, PHYSICAL_SUCCESS)
+    expect(laterManualPrint.fiscalPending).toBe(false)
+    expect(laterManualPrint.isDuplicate).toBe(false)
+    expect(db.hasReceiptPrinted(localId)).toBe(true)
+
+    const reprint = simulateReceiptPrint(db, localId, true, PHYSICAL_SUCCESS)
+    expect(reprint.isDuplicate).toBe(true)
+  })
+
+  it('never shows the slip on the mock provider, whatever the fiscal status', () => {
+    const db = freshDb()
+    const localId = seedOrder(db)
+
+    const result = simulateReceiptPrint(db, localId, false, PHYSICAL_SUCCESS)
+
+    expect(result.fiscalPending).toBe(false)
   })
 })

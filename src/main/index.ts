@@ -160,6 +160,7 @@ import {
   stockTakeCommitSchema,
   stockTakeSettingsSchema,
   zReportRequestSchema,
+  receiptPrintRequestSchema,
   shiftsListSchema,
   salesSummarySchema,
   fiscalByDaySchema,
@@ -184,7 +185,6 @@ import {
 import type {
   IntegrationProviderName,
   PrinterConfig,
-  PrinterType,
   MpesaTransactionRow,
   AppConfigCategory,
   NeedsAttentionRow,
@@ -205,7 +205,9 @@ import {
   printZReport,
   printTestPage,
   buildPrinterRegistry,
-  shouldMarkReceiptPrinted
+  shouldMarkReceiptPrinted,
+  shouldShowFiscalPendingSlip,
+  shouldOpenPdfFallbackViewer
 } from './services/printer.js'
 import type { PrinterSettings, ReceiptPrintResult, PrinterRegistry } from './services/printer.js'
 import { hashPin, authenticateStaff } from './services/auth.js'
@@ -2443,21 +2445,19 @@ app.whenReady().then(async () => {
    */
   ipcMain.handle(
     'receipt:print',
-    async (
-      _event,
-      request: {
-        localId?: number
-        shiftId?: number
-        isZReport?: boolean
-        printerType?: PrinterType
+    async (_event, request: unknown): Promise<ServiceResult<ReceiptPrintResult>> => {
+      const validation = validate(receiptPrintRequestSchema, request)
+      if (!validation.success) {
+        return { success: false, error: validation.error }
       }
-    ): Promise<ServiceResult<ReceiptPrintResult>> => {
-      if (request?.isZReport) {
-        if (!request.shiftId) {
+      const { localId, shiftId, isZReport, printerType, auto } = validation.data
+
+      if (isZReport) {
+        if (!shiftId) {
           return { success: false, error: 'No shift specified for Z-report' }
         }
         try {
-          const report = generateZReport(db, request.shiftId, printerSettings.taxRate)
+          const report = generateZReport(db, shiftId, printerSettings.taxRate)
           return openPdfFallbackIfPresent(await printZReport(report, printerSettings))
         } catch (err) {
           return {
@@ -2467,7 +2467,6 @@ app.whenReady().then(async () => {
         }
       }
 
-      const localId = request?.localId
       if (!localId) {
         return { success: false, error: 'No order specified' }
       }
@@ -2485,6 +2484,13 @@ app.whenReady().then(async () => {
         // both the first print and any later reprint (see docs/phase-164's
         // audit of every receipt:print/printReceipt call site).
         const isDuplicate = db.hasReceiptPrinted(localId)
+        // docs/phase-165: a not-yet-filed sale on the real provider gets
+        // a plain "sale record" slip instead of a tax invoice — never on
+        // the mock/non-eTIMS provider, which has no filing to promise.
+        const fiscalPending = shouldShowFiscalPendingSlip(
+          fiscalizationProvider instanceof RealFiscalizationProvider,
+          order.fiscal_status
+        )
         const result = await printReceiptToType(
           {
             localId: order.local_id,
@@ -2500,6 +2506,7 @@ app.whenReady().then(async () => {
             fiscalizedAt: order.fiscal_fiscalized_at ?? undefined,
             fiscalizedAtSource: order.fiscal_fiscalized_at_source ?? undefined,
             cuSerial: order.fiscal_cu_serial ?? undefined,
+            fiscalPending,
             isDuplicate,
             // docs/phase-161: the stored total/discounts, no longer
             // stripped before reaching the printer.
@@ -2515,14 +2522,19 @@ app.whenReady().then(async () => {
           })),
           printerRegistry,
           printerSettings,
-          request.printerType ?? 'receipt'
+          printerType ?? 'receipt'
         )
         // docs/phase-164-1: marked only when the CU block actually went
         // out on paper — see shouldMarkReceiptPrinted.
         if (shouldMarkReceiptPrinted(result, order.fiscal_invoice_number)) {
           db.markReceiptPrinted(localId)
         }
-        return openPdfFallbackIfPresent(result)
+        // docs/phase-165: the automatic end-of-sale print never
+        // force-opens a PDF viewer window when the printer was offline —
+        // the PDF is still saved, and the renderer shows one toast
+        // instead (cartStore.ts). A manual Order History print keeps
+        // opening it, exactly as before this phase.
+        return shouldOpenPdfFallbackViewer(auto) ? openPdfFallbackIfPresent(result) : result
       } catch (err) {
         return {
           success: false,

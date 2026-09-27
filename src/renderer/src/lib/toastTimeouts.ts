@@ -13,6 +13,9 @@ export const SCAN_TOAST_TIMEOUT_MS = 2500
 /** The sale-complete confirmation toast. */
 export const SALE_COMPLETE_TOAST_TIMEOUT_MS = 5000
 
+/** The automatic end-of-sale print's "printer offline" notice (docs/phase-165). */
+export const AUTO_PRINT_OFFLINE_TOAST_TIMEOUT_MS = 5000
+
 /**
  * `UpdateToast`. Long on purpose (an available/downloaded update must
  * not be lost) and, per `toastStore.ts`'s `updatedAt` stamp, reset on

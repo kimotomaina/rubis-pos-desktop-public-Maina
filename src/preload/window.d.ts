@@ -124,10 +124,15 @@ export interface PosApi {
   getUnfiledSalesCount: () => Promise<ServiceResult<number>>
   /** Whether this till is running the real fiscal provider (docs/phase-161). */
   isFiscalLive: () => Promise<ServiceResult<boolean>>
-  /** Prints (or, in mock mode, logs) a receipt for a local order, optionally routed to a printer type. */
+  /**
+   * Prints (or, in mock mode, logs) a receipt for a local order,
+   * optionally routed to a printer type. `auto: true` marks the
+   * automatic end-of-sale print (docs/phase-165) — never set by a manual
+   * Order History print.
+   */
   printReceipt: (
     localId: number,
-    printerType?: PrinterType
+    options?: { printerType?: PrinterType; auto?: boolean }
   ) => Promise<ServiceResult<ReceiptPrintResult>>
   /** Fetches every active staff account for the login picker. */
   getStaffList: () => Promise<ServiceResult<StaffSummary[]>>

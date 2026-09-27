@@ -1,6 +1,8 @@
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { useCartStore } from '../src/renderer/src/stores/cartStore.js'
+import { useToastStore } from '../src/renderer/src/stores/toastStore.js'
 import type { CartItem } from '../src/renderer/src/types/shopify.js'
+import type { CheckoutReceipt, FiscalResendResult } from '../src/main/services/database.js'
 
 /**
  * Factory that produces a valid CartItem-minus-quantity with
@@ -121,5 +123,141 @@ describe('Cart Store', () => {
     expect(items).toHaveLength(0)
     expect(getTotal()).toBe(0)
     expect(getItemCount()).toBe(0)
+  })
+})
+
+/** A minimal, valid CheckoutReceipt — overridable for each scenario. */
+function makeReceipt(overrides: Partial<CheckoutReceipt> = {}): CheckoutReceipt {
+  return {
+    localId: 42,
+    mode: 'synced',
+    fiscalStatus: 'fiscalized',
+    fiscalErrorReason: null,
+    fiscalErrorKind: null,
+    fiscalDataIssue: null,
+    fiscal: { invoiceNumber: 'KRA-0001', qrCode: 'base64qr' },
+    ...overrides
+  }
+}
+
+const CHECKOUT_PARAMS = {
+  staffId: 1,
+  paymentMethod: 'cash' as const,
+  tenderedAmount: 100,
+  changeDue: 0
+}
+
+/** Lets the fire-and-forget automatic print's own promise chain settle before assertions. */
+async function flushMicrotasks(): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, 0))
+}
+
+describe('Cart Store — automatic receipt print (docs/phase-165)', () => {
+  beforeEach(() => {
+    useCartStore.setState({ items: [], checkoutStatus: 'idle', checkoutError: null, lastReceipt: null })
+    useToastStore.setState({ toasts: [] })
+  })
+
+  it.each(['cash', 'mpesa'] as const)(
+    'prints exactly once per checkout, %s included',
+    async (paymentMethod) => {
+      const printReceipt = vi.fn().mockResolvedValue({ success: true, data: { printed: true, mock: false } })
+      window.api = {
+        checkout: vi.fn().mockResolvedValue({ success: true, data: makeReceipt() }),
+        printReceipt
+      } as unknown as typeof window.api
+
+      useCartStore.getState().addItem(makeItemInput())
+      await useCartStore.getState().checkout({ ...CHECKOUT_PARAMS, paymentMethod })
+
+      expect(printReceipt).toHaveBeenCalledTimes(1)
+      expect(printReceipt).toHaveBeenCalledWith(42, { auto: true })
+    }
+  )
+
+  it('never prints merely from lastReceipt being set — there is no watcher, only checkout() itself calls it', () => {
+    const printReceipt = vi.fn()
+    window.api = { printReceipt } as unknown as typeof window.api
+
+    // Simulates what a restored/rehydrated lastReceipt would look like —
+    // this store never actually persists it (see partialize), so this
+    // can't happen via a real app restart, but the point stands either
+    // way: setting the field alone must never trigger a print.
+    useCartStore.setState({ lastReceipt: makeReceipt() })
+
+    expect(printReceipt).not.toHaveBeenCalled()
+  })
+
+  it('never prints again on a same-visit fiscal resend (applyFiscalResendResult)', () => {
+    const printReceipt = vi.fn()
+    window.api = { printReceipt } as unknown as typeof window.api
+    useCartStore.setState({ lastReceipt: makeReceipt({ fiscalStatus: 'needs_fixing' }) })
+
+    const resendResult: FiscalResendResult = {
+      localId: 42,
+      fiscal: { invoiceNumber: 'KRA-0002', qrCode: 'base64qr' },
+      fiscalStatus: 'fiscalized',
+      fiscalErrorReason: null,
+      fiscalErrorKind: null,
+      fiscalDataIssue: null
+    }
+    useCartStore.getState().applyFiscalResendResult(resendResult)
+
+    expect(printReceipt).not.toHaveBeenCalled()
+  })
+
+  it('a print that throws never changes checkoutStatus, never leaves the cart non-empty, never surfaces as checkoutError', async () => {
+    const printReceipt = vi.fn().mockRejectedValue(new Error('printer exploded'))
+    window.api = {
+      checkout: vi.fn().mockResolvedValue({ success: true, data: makeReceipt() }),
+      printReceipt
+    } as unknown as typeof window.api
+
+    useCartStore.getState().addItem(makeItemInput())
+    await useCartStore.getState().checkout(CHECKOUT_PARAMS)
+
+    // Already true synchronously, before the print promise even settles —
+    // the sale's own state is never made to depend on the print outcome.
+    expect(useCartStore.getState().checkoutStatus).toBe('synced')
+    expect(useCartStore.getState().items).toHaveLength(0)
+    expect(useCartStore.getState().checkoutError).toBeNull()
+
+    await flushMicrotasks()
+
+    // Still true once the rejected print promise has actually settled.
+    expect(useCartStore.getState().checkoutStatus).toBe('synced')
+    expect(useCartStore.getState().checkoutError).toBeNull()
+  })
+
+  it('shows one "printer offline" toast when the automatic print falls back to a PDF', async () => {
+    const printReceipt = vi.fn().mockResolvedValue({
+      success: true,
+      data: { printed: false, mock: false, mode: 'pdf', filePath: 'C:\\Desktop\\r.pdf' }
+    })
+    window.api = {
+      checkout: vi.fn().mockResolvedValue({ success: true, data: makeReceipt() }),
+      printReceipt
+    } as unknown as typeof window.api
+
+    useCartStore.getState().addItem(makeItemInput())
+    await useCartStore.getState().checkout(CHECKOUT_PARAMS)
+    await flushMicrotasks()
+
+    const toasts = useToastStore.getState().toasts
+    expect(toasts.some((t) => t.message.includes('Printer offline'))).toBe(true)
+  })
+
+  it('shows no toast when the automatic print succeeds physically', async () => {
+    const printReceipt = vi.fn().mockResolvedValue({ success: true, data: { printed: true, mock: false } })
+    window.api = {
+      checkout: vi.fn().mockResolvedValue({ success: true, data: makeReceipt() }),
+      printReceipt
+    } as unknown as typeof window.api
+
+    useCartStore.getState().addItem(makeItemInput())
+    await useCartStore.getState().checkout(CHECKOUT_PARAMS)
+    await flushMicrotasks()
+
+    expect(useToastStore.getState().toasts).toHaveLength(0)
   })
 })

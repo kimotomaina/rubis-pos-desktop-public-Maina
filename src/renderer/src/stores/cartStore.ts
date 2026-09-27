@@ -22,6 +22,60 @@ import type {
   PaymentMethod
 } from '../../../main/services/database.js'
 import { calculateCartTotal, calculateSubtotal, validatePriceOverride } from '../lib/checkoutMath.js'
+import { getAutoPrintOfflineMessage } from '../lib/autoPrintToast.js'
+import { AUTO_PRINT_OFFLINE_TOAST_TIMEOUT_MS } from '../lib/toastTimeouts.js'
+import { useToastStore } from './toastStore.js'
+
+const AUTO_PRINT_OFFLINE_TOAST_ID = 'auto-print-offline'
+
+/**
+ * Fires the automatic end-of-sale print (docs/phase-165, docs/
+ * phase-164-1 Part A item 4) — once per checkout, from the ONE place a
+ * checkout actually completes, never from a component watching
+ * `lastReceipt` (which would also fire on a same-visit fiscal resend, or
+ * — if `lastReceipt` were ever persisted, which it deliberately is not,
+ * see this store's `partialize` — on an app restart).
+ *
+ * Deliberately NOT awaited by `checkout()`: a print failure (thrown or
+ * `{ success: false }`) must never change `checkoutStatus`, reopen the
+ * cart, or delay the next sale. The only visible effect of failure here
+ * is the printer-offline toast below; anything else is silently ignored.
+ *
+ * The whole call is wrapped in a `try` — not just a `.catch()` on the
+ * returned promise — because calling `window.api.printReceipt` itself
+ * can throw SYNCHRONOUSLY (not just return a rejected promise), and a
+ * synchronous throw here would otherwise propagate straight into
+ * `checkout()`'s own `try` block and stomp its already-set
+ * `checkoutStatus` with `'error'`. A `.catch()` alone cannot protect
+ * against that — it only ever sees a promise that was successfully
+ * returned in the first place.
+ *
+ * @param {number} localId
+ */
+function triggerAutomaticPrint(localId: number): void {
+  try {
+    window.api
+      .printReceipt(localId, { auto: true })
+      .then((result) => {
+        const message = getAutoPrintOfflineMessage(result)
+        if (!message) return
+        useToastStore.getState().show({
+          id: AUTO_PRINT_OFFLINE_TOAST_ID,
+          tone: 'warning',
+          message,
+          timeoutMs: AUTO_PRINT_OFFLINE_TOAST_TIMEOUT_MS,
+          onDismiss: () => useToastStore.getState().dismiss(AUTO_PRINT_OFFLINE_TOAST_ID)
+        })
+      })
+      .catch(() => {
+        // Never let a print failure surface as an error anywhere in the
+        // sale flow — see this function's own doc comment.
+      })
+  } catch {
+    // A synchronous throw from the call itself — see this function's own
+    // doc comment on why this can't be caught by `.catch()` alone.
+  }
+}
 
 /** Lifecycle of the most recent checkout submission. */
 export type CheckoutStatus =
@@ -199,6 +253,10 @@ export const useCartStore = create<CartState>()(
               lastReceipt: receipt
             })
             get().clearCart()
+            // docs/phase-165: fired after the sale is fully recorded
+            // above, not awaited — see triggerAutomaticPrint's doc
+            // comment for why.
+            triggerAutomaticPrint(receipt.localId)
           } else {
             set({
               checkoutStatus: 'error',

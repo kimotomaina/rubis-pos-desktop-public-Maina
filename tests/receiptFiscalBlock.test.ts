@@ -10,7 +10,11 @@
  */
 
 import { describe, it, expect } from 'vitest'
-import { buildFiscalBlockLines } from '../src/main/lib/receiptFiscalBlock.js'
+import {
+  buildFiscalBlockLines,
+  FISCAL_PENDING_HEADER,
+  NOT_A_TAX_INVOICE_LINE
+} from '../src/main/lib/receiptFiscalBlock.js'
 
 describe('buildFiscalBlockLines', () => {
   it('returns no lines at all for an unfiled order (no fiscalInvoiceNumber)', () => {
@@ -94,5 +98,31 @@ describe('buildFiscalBlockLines', () => {
       'CU Date/Time: 27-08-2026 09:15:00',
       'CU Serial No: CU-SERIAL-0008'
     ])
+  })
+})
+
+describe('buildFiscalBlockLines — not-yet-filed slip (docs/phase-165)', () => {
+  it('prints the "not a tax invoice" line when fiscalPending is set and the order has no invoice number', () => {
+    expect(buildFiscalBlockLines({ fiscalPending: true })).toEqual([NOT_A_TAX_INVOICE_LINE])
+  })
+
+  it('still prints nothing when fiscalPending is false and there is no invoice number', () => {
+    expect(buildFiscalBlockLines({ fiscalPending: false })).toEqual([])
+  })
+
+  it('ignores fiscalPending once the order is fiscalised — the real CU block always wins', () => {
+    expect(
+      buildFiscalBlockLines({
+        fiscalInvoiceNumber: 'KRA-0009',
+        fiscalPending: true
+      })
+    ).toEqual(['CU Invoice No: KRA-0009'])
+  })
+})
+
+describe('FISCAL_PENDING_HEADER / NOT_A_TAX_INVOICE_LINE wording (docs/phase-165)', () => {
+  it('are the exact strings the brief specifies', () => {
+    expect(FISCAL_PENDING_HEADER).toBe('SALE RECORD - TAX INVOICE TO FOLLOW')
+    expect(NOT_A_TAX_INVOICE_LINE).toBe('Not a tax invoice')
   })
 })

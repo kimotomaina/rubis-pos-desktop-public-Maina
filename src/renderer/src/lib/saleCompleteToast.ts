@@ -23,5 +23,5 @@ type FiscalOutcome = Pick<
  */
 export function getSaleCompleteMessage(receipt: FiscalOutcome): string | null {
   if (getFiscalNotice(receipt)) return null
-  return receipt.fiscalStatus === 'fiscalized' ? 'Sale complete - tax receipt issued.' : 'Sale complete.'
+  return receipt.fiscalStatus === 'fiscalized' ? 'Sale complete - filed with KRA.' : 'Sale complete.'
 }

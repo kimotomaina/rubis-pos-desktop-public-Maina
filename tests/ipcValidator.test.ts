@@ -36,7 +36,8 @@ import {
   correctPinAndResendSchema,
   resendFiscalizationSchema,
   endOfDayReportSchema,
-  approveDayReportSchema
+  approveDayReportSchema,
+  receiptPrintRequestSchema
 } from '../src/main/lib/ipcValidator.js'
 
 const validItem = {
@@ -389,6 +390,42 @@ describe('printerTestSchema', () => {
         managerPin: '9999'
       }).success
     ).toBe(true)
+  })
+})
+
+describe('receiptPrintRequestSchema (docs/phase-165)', () => {
+  it('accepts a bare sale-receipt request', () => {
+    expect(validate(receiptPrintRequestSchema, { localId: 7 }).success).toBe(true)
+  })
+
+  it('accepts the automatic end-of-sale print shape', () => {
+    expect(validate(receiptPrintRequestSchema, { localId: 7, auto: true }).success).toBe(true)
+  })
+
+  it('accepts a Z-report request', () => {
+    expect(validate(receiptPrintRequestSchema, { shiftId: 3, isZReport: true }).success).toBe(true)
+  })
+
+  it('accepts an explicit printerType', () => {
+    expect(validate(receiptPrintRequestSchema, { localId: 7, printerType: 'kitchen' }).success).toBe(true)
+  })
+
+  it('accepts an empty request (the handler itself reports "no order specified")', () => {
+    expect(validate(receiptPrintRequestSchema, {}).success).toBe(true)
+  })
+
+  it('rejects a non-positive or non-integer localId', () => {
+    expect(validate(receiptPrintRequestSchema, { localId: 0 }).success).toBe(false)
+    expect(validate(receiptPrintRequestSchema, { localId: -1 }).success).toBe(false)
+    expect(validate(receiptPrintRequestSchema, { localId: 1.5 }).success).toBe(false)
+  })
+
+  it('rejects an unrecognized printerType', () => {
+    expect(validate(receiptPrintRequestSchema, { localId: 7, printerType: 'fax' }).success).toBe(false)
+  })
+
+  it('rejects a non-boolean auto', () => {
+    expect(validate(receiptPrintRequestSchema, { localId: 7, auto: 'yes' }).success).toBe(false)
   })
 })
 

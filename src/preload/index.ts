@@ -270,15 +270,24 @@ const api = {
    * Prints (or, in mock mode, logs) a receipt for a local order.
    *
    * @param {number} localId
-   * @param {PrinterType} [printerType] — routes to a registered printer
-   *   of this type; defaults to `'receipt'` when omitted.
+   * @param {object} [options]
+   * @param {PrinterType} [options.printerType] — routes to a registered
+   *   printer of this type; defaults to `'receipt'` when omitted.
+   * @param {boolean} [options.auto] — set for the automatic end-of-sale
+   *   print (docs/phase-165): on a printer-offline PDF fallback, the file
+   *   is still saved but never force-opened in a viewer, unlike a manual
+   *   print. Never set by a manual Order History print.
    * @returns {Promise<ServiceResult<ReceiptPrintResult>>}
    */
   printReceipt: (
     localId: number,
-    printerType?: PrinterType
+    options?: { printerType?: PrinterType; auto?: boolean }
   ): Promise<ServiceResult<ReceiptPrintResult>> =>
-    ipcRenderer.invoke('receipt:print', { localId, printerType }),
+    ipcRenderer.invoke('receipt:print', {
+      localId,
+      printerType: options?.printerType,
+      auto: options?.auto
+    }),
 
   /**
    * Prints (or, in mock mode, logs) a shift's Z-report.

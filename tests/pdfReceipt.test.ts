@@ -156,4 +156,32 @@ describe('generatePdfReceipt', () => {
 
     expect(existsSync(filePath)).toBe(true)
   })
+
+  /**
+   * docs/phase-165 — the not-yet-filed slip's header and "Not a tax
+   * invoice" line, shared with `printer.ts` via `buildFiscalBlockLines`/
+   * `FISCAL_PENDING_HEADER` (their exact wording is asserted directly in
+   * `tests/receiptFiscalBlock.test.ts` and the thermal path's tests in
+   * `tests/printer.test.ts` — PDF content itself isn't text-assertable
+   * here, per this file's earlier note).
+   */
+  it('accepts fiscalPending:true (an unfiled sale) and still produces a PDF', async () => {
+    const pendingOrder: ReceiptOrder = { ...order, fiscalPending: true }
+
+    const filePath = await generatePdfReceipt(pendingOrder, items, settings)
+
+    expect(existsSync(filePath)).toBe(true)
+  })
+
+  it('accepts fiscalPending:true alongside a fiscalInvoiceNumber and still produces a PDF', async () => {
+    const fiscalOrder: ReceiptOrder = {
+      ...order,
+      fiscalInvoiceNumber: 'KRA-0013',
+      fiscalPending: true
+    }
+
+    const filePath = await generatePdfReceipt(fiscalOrder, items, settings)
+
+    expect(existsSync(filePath)).toBe(true)
+  })
 })

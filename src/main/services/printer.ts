@@ -23,12 +23,12 @@ import { ThermalPrinter, PrinterTypes } from 'node-thermal-printer'
 import type { ServiceResult, Discount } from './shopify-types.js'
 import type { ZReport } from './reports.js'
 import { formatVatRateLabel } from './reports.js'
-import type { PrinterConfig, PrinterType } from './database.js'
+import type { PrinterConfig, PrinterType, FiscalStatus } from './database.js'
 import { formatCurrency } from './currency.js'
 import { generatePdfReceipt } from './pdf-receipt.js'
 import { computeReceiptTotals } from '../lib/receiptTotals.js'
 import type { ReceiptTotalsLineItem } from '../lib/receiptTotals.js'
-import { buildFiscalBlockLines } from '../lib/receiptFiscalBlock.js'
+import { buildFiscalBlockLines, FISCAL_PENDING_HEADER } from '../lib/receiptFiscalBlock.js'
 
 /** Store-level configuration resolved once at startup from env vars / settings. */
 export interface PrinterSettings {
@@ -70,6 +70,15 @@ export interface ReceiptOrder {
   fiscalizedAtSource?: 'device' | 'local-fallback'
   /** The control unit's own serial number (docs/phase-164). */
   cuSerial?: string
+  /**
+   * Set only for the automatic end-of-sale print (docs/phase-165), on the
+   * real provider, of a sale that hasn't fiscalized yet — prints
+   * `FISCAL_PENDING_HEADER` at the top and `NOT_A_TAX_INVOICE_LINE` where
+   * the CU block would be, instead of either. Decided by the caller
+   * (`main/index.ts`'s `receipt:print` handler); ignored once
+   * `fiscalInvoiceNumber` is present.
+   */
+  fiscalPending?: boolean
   /**
    * True when this is not the first successful print of this sale's
    * receipt (docs/phase-164) — stamps "DUPLICATE" at the top and bottom
@@ -127,6 +136,41 @@ export function shouldMarkReceiptPrinted(
   fiscalInvoiceNumber: string | null | undefined
 ): boolean {
   return result.success && result.data?.mode !== 'pdf' && !!fiscalInvoiceNumber
+}
+
+/**
+ * Whether a print should show the not-yet-filed slip wording
+ * (docs/phase-165) — true only on the real fiscal provider, for an order
+ * that hasn't fiscalized yet. Never on the mock/non-eTIMS provider, which
+ * has no KRA filing to promise. Extracted as its own pure function for
+ * the same reason as {@link shouldMarkReceiptPrinted} — directly
+ * testable, since `main/index.ts`'s `receipt:print` handler itself is
+ * not unit tested anywhere in this codebase.
+ *
+ * @param {boolean} isRealProvider
+ * @param {FiscalStatus | null} fiscalStatus
+ * @returns {boolean}
+ */
+export function shouldShowFiscalPendingSlip(
+  isRealProvider: boolean,
+  fiscalStatus: FiscalStatus | null
+): boolean {
+  return isRealProvider && fiscalStatus !== 'fiscalized'
+}
+
+/**
+ * Whether a `receipt:print` result's PDF fallback should be opened in the
+ * OS's default viewer immediately (docs/phase-165) — true for a manual
+ * print (today's behaviour, unchanged), false for the automatic
+ * end-of-sale print, which shows one toast instead of a pop-up window
+ * (see `autoPrintToast.ts`'s `getAutoPrintOfflineMessage` on the renderer
+ * side). Extracted for the same reason as {@link shouldMarkReceiptPrinted}.
+ *
+ * @param {boolean | undefined} auto
+ * @returns {boolean}
+ */
+export function shouldOpenPdfFallbackViewer(auto: boolean | undefined): boolean {
+  return !auto
 }
 
 /**
@@ -277,6 +321,15 @@ export async function renderReceipt(
   if (order.isDuplicate) {
     client.bold(true)
     client.println('*** DUPLICATE ***')
+    client.bold(false)
+  }
+  // docs/phase-165: the automatic end-of-sale print of a not-yet-filed
+  // sale (real provider only) is headed clearly as a plain sale record,
+  // not a tax invoice — see receiptFiscalBlock.ts for NOT_A_TAX_INVOICE_LINE,
+  // printed further down where the CU block would be.
+  if (order.fiscalPending && !order.fiscalInvoiceNumber) {
+    client.bold(true)
+    client.println(FISCAL_PENDING_HEADER)
     client.bold(false)
   }
   client.bold(true)

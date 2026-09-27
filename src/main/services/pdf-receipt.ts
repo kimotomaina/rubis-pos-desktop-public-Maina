@@ -16,7 +16,7 @@ import { formatCurrency } from './currency.js'
 import { formatVatRateLabel } from './reports.js'
 import { computeReceiptTotals } from '../lib/receiptTotals.js'
 import type { ReceiptTotalsLineItem } from '../lib/receiptTotals.js'
-import { buildFiscalBlockLines } from '../lib/receiptFiscalBlock.js'
+import { buildFiscalBlockLines, FISCAL_PENDING_HEADER } from '../lib/receiptFiscalBlock.js'
 
 /** Narrow receipt-page width (points) approximating an 80mm thermal roll. */
 const PAGE_WIDTH = 280
@@ -63,6 +63,11 @@ export async function generatePdfReceipt(
     // receipt — same rule as the thermal path in `printer.ts`.
     if (order.isDuplicate) {
       doc.font('Helvetica-Bold').text('*** DUPLICATE ***', { align: 'center' })
+      doc.font('Helvetica')
+    }
+    // docs/phase-165: same not-yet-filed heading as the thermal path.
+    if (order.fiscalPending && !order.fiscalInvoiceNumber) {
+      doc.font('Helvetica-Bold').text(FISCAL_PENDING_HEADER, { align: 'center' })
       doc.font('Helvetica')
     }
     doc.font('Helvetica-Bold').fontSize(14).text(settings.storeName, { align: 'center' })

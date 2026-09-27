@@ -234,6 +234,25 @@ export const printerTestSchema = z.object({
 })
 
 /**
+ * `receipt:print` request payload (docs/phase-165) — previously this
+ * channel took its request off the wire with no zod schema at all, typed
+ * only by the handler's own TypeScript parameter shape. Either `localId`
+ * (a sale receipt) or `shiftId` + `isZReport: true` (a Z-report) is
+ * expected, but the two are not mutually exclusive here — the handler
+ * itself checks `isZReport` first and ignores `localId` when it's set,
+ * so this schema only needs to accept the shape, not police which
+ * combination makes sense.
+ */
+export const receiptPrintRequestSchema = z.object({
+  localId: z.number().int().positive().optional(),
+  shiftId: z.number().int().positive().optional(),
+  isZReport: z.boolean().optional(),
+  printerType: z.enum(['receipt', 'kitchen', 'label']).optional(),
+  /** Set for the automatic end-of-sale print (docs/phase-165) — never sent by a manual Order History print. */
+  auto: z.boolean().optional()
+})
+
+/**
  * `mpesa:log-transaction` request payload — records a newly initiated
  * STK Push for the M-Pesa Logs screen. No manager re-authorization:
  * this is a routine checkout-flow side effect, not a privileged write.
