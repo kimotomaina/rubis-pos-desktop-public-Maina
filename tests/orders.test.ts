@@ -71,6 +71,30 @@ describe('buildOrderInput', () => {
     expect(String(variables.order.note)).toContain('uuid-offline-1')
   })
 
+  it('sends the client uuid as sourceIdentifier (docs/phase-169 commit 2)', () => {
+    const variables = buildOrderInput(samplePayload)
+
+    expect(variables.order.sourceIdentifier).toBe('uuid-offline-1')
+    expect(variables.order.sourceIdentifier).toBe(samplePayload.clientOrderUuid)
+  })
+
+  it('adds sourceIdentifier without changing any other order field', () => {
+    const { sourceIdentifier: _added, ...rest } = buildOrderInput(samplePayload).order
+
+    expect(Object.keys(rest).sort()).toEqual(
+      ['customAttributes', 'financialStatus', 'lineItems', 'metafields', 'note'].sort()
+    )
+    expect(rest.customAttributes).toEqual([{ key: CLIENT_ORDER_UUID_KEY, value: 'uuid-offline-1' }])
+    expect(rest.metafields).toEqual([
+      {
+        namespace: RUBIS_NAMESPACE,
+        key: CLIENT_ORDER_UUID_KEY,
+        type: 'single_line_text_field',
+        value: 'uuid-offline-1'
+      }
+    ])
+  })
+
   it('includes the cashier name and payment method in the note', () => {
     const variables = buildOrderInput(samplePayload)
     expect(String(variables.order.note)).toContain('cashier Admin')

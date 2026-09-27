@@ -57,7 +57,12 @@ export interface OrderCreateResult {
  * The order is created as already paid (`financialStatus: PAID`) and
  * decrements inventory obeying the store's policy.  The client uuid is
  * attached both as a custom attribute and a metafield for retry
- * reconciliation.
+ * reconciliation, and is also sent as `sourceIdentifier` (docs/
+ * phase-169 commit 2). Shopify documents that field as "A unique POS or
+ * third party order identifier", and the orders query can filter on it
+ * (`source_identifier:<value>`) with no metafield definition or other
+ * store setting needed, unlike the metafield (docs/phase-168 section
+ * 1.4). Both checked on shopify.dev (2026-07 API docs) on 2026-09-27.
  *
  * @param {OfflineOrderPayload} payload
  * @returns the mutation `$order` / `$options` variables
@@ -79,6 +84,7 @@ export function buildOrderInput(payload: OfflineOrderPayload): {
       })),
       financialStatus: 'PAID',
       note: `RUBIS POS offline sale — local UUID ${payload.clientOrderUuid} (taken ${payload.createdAt}) — cashier ${payload.staffName} — payment: ${paymentNote}`,
+      sourceIdentifier: payload.clientOrderUuid,
       customAttributes: [
         { key: CLIENT_ORDER_UUID_KEY, value: payload.clientOrderUuid }
       ],
