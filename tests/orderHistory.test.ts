@@ -203,3 +203,96 @@ describe('RubisDatabase.retryOrderSync', () => {
     expect(() => db.retryOrderSync(999)).toThrow(/not found/i)
   })
 })
+
+/**
+ * docs/phase-168 finding 3: Retry Sync must never leave two queue rows
+ * for one sale. Row counts need a real database, so these use the real
+ * `better-sqlite3` (bypassing this file's module mock through
+ * `vi.importActual`) against `:memory:`, injected via `DatabaseFactory`.
+ */
+describe('RubisDatabase.retryOrderSync keeps one queue row per sale (real SQLite)', () => {
+  const realDb = async (maxAttempts?: number): Promise<RubisDatabase> => {
+    const { default: RealSqlite } = await vi.importActual<{ default: typeof BetterSqlite3 }>('better-sqlite3')
+    const db = new RubisDatabase({ dbPath: ':memory:', DatabaseFactory: RealSqlite, maxAttempts })
+    db.init()
+    return db
+  }
+
+  const seedSale = (db: RubisDatabase): number =>
+    db.queueOrder({
+      items: [],
+      total: 10,
+      clientOrderUuid: 'uuid-retry-1',
+      staffId: 1,
+      staffName: 'Alex',
+      paymentMethod: 'cash',
+      tenderedAmount: 10,
+      changeDue: 0
+    }).localId
+
+  /** Every 'order' queue row for this sale, due or not. */
+  const rowsFor = (db: RubisDatabase, localId: number) =>
+    db.getPendingSyncQueue(Number.MAX_SAFE_INTEGER).filter((row) => row.entity_id === localId)
+
+  it('pending_sync with a row: still exactly one row, and it is due now', async () => {
+    const db = await realDb()
+    const localId = seedSale(db)
+    const [original] = rowsFor(db, localId)
+    // One failed push moves the row into the future (backoff), so "due
+    // now" below is proven by the retry, not by the row's initial 0.
+    db.recordQueueFailure(original.id, 'timed out')
+    expect(db.getPendingSyncQueue(Date.now())).toHaveLength(0)
+
+    const { queueId } = db.retryOrderSync(localId)
+
+    expect(queueId).toBe(original.id)
+    expect(rowsFor(db, localId)).toHaveLength(1)
+    expect(db.getPendingSyncQueue(Date.now()).map((row) => row.id)).toEqual([original.id])
+    expect(db.getOrder(localId)?.status).toBe('pending_sync')
+  })
+
+  it('failed (no row left): exactly one new row', async () => {
+    const db = await realDb(1)
+    const localId = seedSale(db)
+    const [original] = rowsFor(db, localId)
+    db.recordQueueFailure(original.id, 'always fails')
+    expect(db.getOrder(localId)?.status).toBe('failed')
+    expect(rowsFor(db, localId)).toHaveLength(0)
+
+    db.retryOrderSync(localId)
+
+    expect(rowsFor(db, localId)).toHaveLength(1)
+    expect(db.getOrder(localId)?.status).toBe('pending_sync')
+  })
+
+  it('synced: refused, and no row is created', async () => {
+    const db = await realDb()
+    const localId = seedSale(db)
+    const [original] = rowsFor(db, localId)
+    db.markQueueItemSynced(original.id, 'gid://shopify/Order/1')
+
+    expect(() => db.retryOrderSync(localId)).toThrow(/already synced/i)
+    expect(rowsFor(db, localId)).toHaveLength(0)
+  })
+
+  it('two presses: still one row', async () => {
+    const db = await realDb()
+    const localId = seedSale(db)
+
+    db.retryOrderSync(localId)
+    db.retryOrderSync(localId)
+
+    expect(rowsFor(db, localId)).toHaveLength(1)
+  })
+
+  it('two presses on a failed sale: one row, not two', async () => {
+    const db = await realDb(1)
+    const localId = seedSale(db)
+    db.recordQueueFailure(rowsFor(db, localId)[0].id, 'always fails')
+
+    db.retryOrderSync(localId)
+    db.retryOrderSync(localId)
+
+    expect(rowsFor(db, localId)).toHaveLength(1)
+  })
+})

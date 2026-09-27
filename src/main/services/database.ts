@@ -1933,11 +1933,17 @@ export class RubisDatabase {
   }
 
   /**
-   * Re-queues a failed or pending order for sync by reading its
-   * stored payload and creating a fresh sync-queue entry.
+   * Re-queues a failed or pending order for sync. A `pending_sync` order
+   * still has its original `'order'` queue row, which is made due now; a
+   * `failed` order's row was deleted when its attempts ran out, so a
+   * fresh one is created from the stored payload.
+   *
+   * Never a second row for the same sale: two rows made the next tick
+   * push the sale twice, creating two Shopify orders (docs/phase-168
+   * finding 3).
    *
    * @param {number} localId
-   * @returns {{ queueId: number }}
+   * @returns {{ queueId: number }} the reused or newly created row's id
    * @throws if the order is already synced or does not exist
    */
   retryOrderSync(localId: number): { queueId: number } {
@@ -1957,6 +1963,18 @@ export class RubisDatabase {
       this.conn
         .prepare('UPDATE orders SET status = ? WHERE local_id = ?')
         .run('pending_sync', localId)
+
+      // `attempts` is deliberately left as it is: a retry is not a fresh
+      // sale, and the backoff/exhaustion count should say so.
+      const existing = this.conn
+        .prepare("SELECT id FROM sync_queue WHERE entity_type = 'order' AND entity_id = ? ORDER BY id ASC LIMIT 1")
+        .get(localId) as { id: number } | undefined
+      if (existing) {
+        this.conn
+          .prepare('UPDATE sync_queue SET next_attempt_at = ? WHERE id = ?')
+          .run(Date.now(), existing.id)
+        return { queueId: existing.id }
+      }
 
       const queueInfo = this.conn
         .prepare(

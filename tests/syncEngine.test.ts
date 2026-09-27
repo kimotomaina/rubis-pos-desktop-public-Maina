@@ -8,6 +8,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { createSyncEngine } from '../src/main/services/sync-engine.js'
 import type { SyncEngineDatabase } from '../src/main/services/sync-engine.js'
+import { RubisDatabase } from '../src/main/services/database.js'
 import type { SyncQueueItem } from '../src/main/services/database.js'
 import type { OfflineOrderPayload } from '../src/main/services/shopify-types.js'
 
@@ -290,6 +291,43 @@ describe('SyncEngine lifecycle & triggers', () => {
     await Promise.resolve()
 
     expect(pushOrder).toHaveBeenCalledTimes(1)
+  })
+})
+
+/**
+ * docs/phase-168 finding 3, end to end against a real in-memory
+ * database: Retry Sync on a sale that is still pending used to add a
+ * second queue row, and the next tick pushed the sale twice (two
+ * Shopify orders). No Shopify call: `pushOrder` is a stub.
+ */
+describe('SyncEngine after Retry Sync on a pending sale (real SQLite)', () => {
+  it('one tick pushes the sale exactly once', async () => {
+    const db = new RubisDatabase({ dbPath: ':memory:' })
+    db.init()
+    const { localId } = db.queueOrder({
+      items: [],
+      total: 10,
+      clientOrderUuid: 'uuid-retry-engine',
+      staffId: 1,
+      staffName: 'Alex',
+      paymentMethod: 'cash',
+      tenderedAmount: 10,
+      changeDue: 0
+    })
+    db.retryOrderSync(localId)
+
+    const pushOrder = vi.fn(async () => ({
+      success: true,
+      data: { shopifyOrderId: 'gid://shopify/Order/77', orderName: '#1077' }
+    }))
+    const engine = createSyncEngine({ db, isOnline: () => true, pushOrder })
+
+    await engine.tick()
+
+    expect(pushOrder).toHaveBeenCalledTimes(1)
+    expect(db.getOrder(localId)?.status).toBe('synced')
+    expect(db.getOrder(localId)?.shopify_order_id).toBe('gid://shopify/Order/77')
+    expect(db.getPendingSyncQueue(Number.MAX_SAFE_INTEGER)).toHaveLength(0)
   })
 })
 
