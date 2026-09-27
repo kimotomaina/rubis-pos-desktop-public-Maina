@@ -184,6 +184,31 @@ describe('Scenario A — happy path: submitInvoice succeeds at checkout', () => 
     expect(order?.fiscal_error_kind).toBeNull()
     expect(db.getPendingFiscalQueue(Date.now())).toHaveLength(0)
   })
+
+  it('checkout.ts forwards fiscalizedAt, fiscalizedAtSource and cuSerial from a direct success onto the order (docs/phase-164)', async () => {
+    const db = freshDb()
+    const staffId = seedStaff(db)
+    const clientOrderUuid = 'uuid-happy-path-cu-fields'
+
+    const submitInvoice = vi.fn().mockResolvedValue({
+      ok: true,
+      data: {
+        invoiceNumber: 'KRA-0099',
+        qrCode: 'base64qr',
+        fiscalizedAt: '27-08-2026 09:15:00',
+        fiscalizedAtSource: 'device',
+        cuSerialNumber: 'CU-SERIAL-0099'
+      }
+    })
+    const provider = makeProvider(submitInvoice)
+
+    const { localId } = await attemptFiscalization({ db, provider, staffId, clientOrderUuid })
+
+    const order = db.getOrder(localId)
+    expect(order?.fiscal_fiscalized_at).toBe('27-08-2026 09:15:00')
+    expect(order?.fiscal_fiscalized_at_source).toBe('device')
+    expect(order?.fiscal_cu_serial).toBe('CU-SERIAL-0099')
+  })
 })
 
 describe('Scenario B — device offline at checkout', () => {
@@ -800,8 +825,8 @@ describe('Scenario I — fiscal_vat_groups_json storage (docs/phase-163)', () =>
  * before this phase, silently overwrote `fiscal_fiscalized_at` with
  * "now" and `fiscal_vat_groups_json` with `NULL`.
  */
-describe('Scenario J — fiscal fields are write-once (docs/phase-163-1)', () => {
-  it('a race-path queue replay after the order is already fiscalized leaves invoice number, QR, fiscalized-at, and VAT groups unchanged, and still clears its own queue row', async () => {
+describe('Scenario J — fiscal fields are write-once (docs/phase-163-1, extended docs/phase-164)', () => {
+  it('a race-path queue replay after the order is already fiscalized leaves invoice number, QR, CU date/time, CU serial, and VAT groups unchanged, and still clears its own queue row', async () => {
     // Fake timers force a real gap between the two writes below, so this
     // test cannot pass by coincidence (two `new Date().toISOString()`
     // calls landing in the same millisecond) — only the write-once guard
@@ -814,7 +839,12 @@ describe('Scenario J — fiscal fields are write-once (docs/phase-163-1)', () =>
       const clientOrderUuid = 'uuid-write-once-race'
 
       // First attempt fails technically (queued); the queued retry
-      // succeeds — this is the "resend stores figures" step.
+      // succeeds — this is the "resend stores figures" step. The mocked
+      // outcome's `fiscalizedAt` (docs/phase-164) is deliberately a real
+      // control-unit-format string, and deliberately DIFFERENT from the
+      // system clock set above — if `setOrderFiscalInfo` still ignored it
+      // and stamped "now" instead (the docs/phase-163-2 bug this phase
+      // fixes), the assertion below on the device string would fail.
       const submitInvoice = vi
         .fn()
         .mockRejectedValueOnce(new Error('ECONNREFUSED'))
@@ -823,7 +853,9 @@ describe('Scenario J — fiscal fields are write-once (docs/phase-163-1)', () =>
           data: {
             invoiceNumber: 'KRA-FIRST',
             qrCode: 'qr-first',
-            fiscalizedAt: '2026-08-27T10:05:00.000Z',
+            fiscalizedAt: '27-08-2026 10:04:55',
+            fiscalizedAtSource: 'device',
+            cuSerialNumber: 'CU-SERIAL-0001',
             vatGroups: { A: '150.00' }
           }
         })
@@ -837,11 +869,12 @@ describe('Scenario J — fiscal fields are write-once (docs/phase-163-1)', () =>
       const afterFirstSuccess = db.getOrder(localId)
       expect(afterFirstSuccess?.fiscal_invoice_number).toBe('KRA-FIRST')
       expect(afterFirstSuccess?.fiscal_qr_code).toBe('qr-first')
-      // `fiscal_fiscalized_at` is the DB write time (`setOrderFiscalInfo`
-      // takes no `fiscalizedAt` argument at all — it always stamps
-      // `new Date().toISOString()`), not the device's own reported
-      // `fiscalizedAt`.
-      expect(afterFirstSuccess?.fiscal_fiscalized_at).toBe('2026-08-27T10:05:00.000Z')
+      // The control unit's own date/time, stored VERBATIM — not the
+      // system clock's ISO-8601 "now" (which was set to a different
+      // value, 10:05:00, above).
+      expect(afterFirstSuccess?.fiscal_fiscalized_at).toBe('27-08-2026 10:04:55')
+      expect(afterFirstSuccess?.fiscal_fiscalized_at_source).toBe('device')
+      expect(afterFirstSuccess?.fiscal_cu_serial).toBe('CU-SERIAL-0001')
       expect(JSON.parse(afterFirstSuccess?.fiscal_vat_groups_json as string)).toEqual({ A: '150.00' })
 
       // Time moves on, then the race: a second sync_queue row for the
@@ -856,8 +889,12 @@ describe('Scenario J — fiscal fields are write-once (docs/phase-163-1)', () =>
       const afterRace = db.getOrder(localId)
       expect(afterRace?.fiscal_invoice_number).toBe('KRA-FIRST')
       expect(afterRace?.fiscal_qr_code).toBe('qr-first')
-      // Unchanged — not overwritten with the new "now" (12:00).
-      expect(afterRace?.fiscal_fiscalized_at).toBe('2026-08-27T10:05:00.000Z')
+      // Unchanged — not overwritten with the new "now" (12:00) or a
+      // local-fallback source (the race-path short-circuit's own
+      // fabricated `fiscalizedAt`/no `fiscalizedAtSource`/no `cuSerial`).
+      expect(afterRace?.fiscal_fiscalized_at).toBe('27-08-2026 10:04:55')
+      expect(afterRace?.fiscal_fiscalized_at_source).toBe('device')
+      expect(afterRace?.fiscal_cu_serial).toBe('CU-SERIAL-0001')
       // Unchanged — not overwritten with NULL.
       expect(JSON.parse(afterRace?.fiscal_vat_groups_json as string)).toEqual({ A: '150.00' })
       // The race-path queue row is still deleted.
@@ -867,7 +904,7 @@ describe('Scenario J — fiscal fields are write-once (docs/phase-163-1)', () =>
     }
   })
 
-  it('a genuine first success still writes every fiscal field', async () => {
+  it('a genuine first success still writes every fiscal field, the control unit values verbatim', async () => {
     const db = freshDb()
     const staffId = seedStaff(db)
     const clientOrderUuid = 'uuid-write-once-first-success'
@@ -877,6 +914,8 @@ describe('Scenario J — fiscal fields are write-once (docs/phase-163-1)', () =>
         invoiceNumber: 'KRA-NEW',
         qrCode: 'qr-new',
         fiscalizedAt: '2026-08-27T11:00:00.000Z',
+        fiscalizedAtSource: 'local-fallback',
+        cuSerialNumber: 'CU-SERIAL-0002',
         vatGroups: { B: '80.00' }
       }
     })
@@ -887,7 +926,13 @@ describe('Scenario J — fiscal fields are write-once (docs/phase-163-1)', () =>
     const order = db.getOrder(localId)
     expect(order?.fiscal_invoice_number).toBe('KRA-NEW')
     expect(order?.fiscal_qr_code).toBe('qr-new')
-    expect(order?.fiscal_fiscalized_at).toEqual(expect.any(String))
+    // docs/phase-164: stored exactly as the outcome carried it, not
+    // `expect.any(String)` — proving the value actually reaches the
+    // column rather than merely being "a string of some kind" (which a
+    // freshly-stamped `new Date().toISOString()` would also satisfy).
+    expect(order?.fiscal_fiscalized_at).toBe('2026-08-27T11:00:00.000Z')
+    expect(order?.fiscal_fiscalized_at_source).toBe('local-fallback')
+    expect(order?.fiscal_cu_serial).toBe('CU-SERIAL-0002')
     expect(JSON.parse(order?.fiscal_vat_groups_json as string)).toEqual({ B: '80.00' })
   })
 })

@@ -41,6 +41,8 @@ function order(overrides: Partial<OrderRow> = {}): OrderRow {
     fiscal_request_json: null,
     fiscal_data_issue: null,
     fiscal_vat_groups_json: null,
+    fiscal_fiscalized_at_source: null,
+    fiscal_cu_serial: null,
     ...overrides
   }
 }

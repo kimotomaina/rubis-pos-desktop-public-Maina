@@ -57,7 +57,10 @@ export interface FiscalEngineDatabase {
     queueId: number,
     invoiceNumber: string,
     qrCode: string,
-    vatGroups?: FiscalVatGroupAmounts
+    vatGroups?: FiscalVatGroupAmounts,
+    fiscalizedAt?: string,
+    fiscalizedAtSource?: 'device' | 'local-fallback',
+    cuSerial?: string
   ): void
   recordFiscalQueueFailure(queueId: number, error: string): { exhausted: boolean }
   removeFiscalQueueItem(queueId: number): void
@@ -136,7 +139,15 @@ export function createFiscalEngine(options: FiscalEngineOptions): FiscalEngine {
         const result = await attemptFiscalRetry({ db, fiscalizationProvider: { submitInvoice } }, item.entity_id, item.payload)
 
         if (result.ok) {
-          db.markFiscalQueueItemSynced(item.id, result.data.invoiceNumber, result.data.qrCode, result.data.vatGroups)
+          db.markFiscalQueueItemSynced(
+            item.id,
+            result.data.invoiceNumber,
+            result.data.qrCode,
+            result.data.vatGroups,
+            result.data.fiscalizedAt,
+            result.data.fiscalizedAtSource,
+            result.data.cuSerialNumber
+          )
           logger.log(
             `[rubis-pos] Sale ${item.entity_id}: queued retry succeeded, fiscalized (invoice ${result.data.invoiceNumber})`
           )

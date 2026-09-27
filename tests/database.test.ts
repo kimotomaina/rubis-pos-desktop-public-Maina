@@ -519,11 +519,14 @@ describe('RubisDatabase.markFiscalQueueItemSynced', () => {
     expect(updates).toHaveLength(1)
     expect(updates[0].params[0]).toBe('KRA-0001')
     expect(updates[0].params[1]).toBe('base64qr')
-    // docs/phase-163: params[3] is now the JSON-serialized vatGroups
-    // (null here — the call above passes none), and the localId shifts
-    // from params[3] to params[4].
+    // docs/phase-163: params[3] is the JSON-serialized vatGroups (null
+    // here — the call above passes none). docs/phase-164 added two more
+    // ahead of localId: params[4] fiscalizedAtSource, params[5] cuSerial
+    // (both null here, for the same reason) — localId is now params[6].
     expect(updates[0].params[3]).toBe(null)
-    expect(updates[0].params[4]).toBe(7)
+    expect(updates[0].params[4]).toBe(null)
+    expect(updates[0].params[5]).toBe(null)
+    expect(updates[0].params[6]).toBe(7)
     expect(fake.callsFor('run', 'DELETE FROM sync_queue')[0].params).toEqual([4])
   })
 
@@ -563,9 +566,40 @@ describe('RubisDatabase.setOrderFiscalInfo', () => {
     // previously stored fixable-rejection tag (e.g. a wrong-PIN flag
     // from an earlier failed attempt on this same sale).
     expect(updates[0].sql).toContain('fiscal_data_issue = NULL')
-    // docs/phase-163: a fifth param (the JSON-serialized vatGroups, null
-    // when omitted) was added ahead of localId.
-    expect(updates[0].params).toEqual(['KRA-0001', 'base64qr', expect.any(String), null, 7])
+    // docs/phase-163 added a fourth param (the JSON-serialized vatGroups,
+    // null when omitted); docs/phase-164 added two more ahead of localId
+    // (fiscalizedAtSource, cuSerial, both null when omitted) — localId is
+    // now params[6].
+    expect(updates[0].params).toEqual(['KRA-0001', 'base64qr', expect.any(String), null, null, null, 7])
+  })
+
+  it('binds fiscalizedAt, fiscalizedAtSource and cuSerial exactly as given, not reformatted (docs/phase-164)', () => {
+    const { fake, db } = freshDb()
+
+    db.setOrderFiscalInfo(
+      7,
+      'KRA-0001',
+      'base64qr',
+      { A: '10.00' },
+      '27-08-2026 10:04:55',
+      'device',
+      'CU-SERIAL-0001'
+    )
+
+    const updates = fake.callsFor('run', 'UPDATE orders SET fiscal_invoice_number')
+    expect(updates).toHaveLength(1)
+    // Exact values, not `expect.any(String)` — proves the device's own
+    // date/time string is bound verbatim (never reparsed/reformatted)
+    // and that fiscalizedAtSource/cuSerial reach the query at all.
+    expect(updates[0].params).toEqual([
+      'KRA-0001',
+      'base64qr',
+      '27-08-2026 10:04:55',
+      JSON.stringify({ A: '10.00' }),
+      'device',
+      'CU-SERIAL-0001',
+      7
+    ])
   })
 })
 

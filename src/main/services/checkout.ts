@@ -79,7 +79,10 @@ export interface CheckoutDb {
     localId: number,
     invoiceNumber: string,
     qrCode: string,
-    vatGroups?: FiscalVatGroupAmounts
+    vatGroups?: FiscalVatGroupAmounts,
+    fiscalizedAt?: string,
+    fiscalizedAtSource?: 'device' | 'local-fallback',
+    cuSerial?: string
   ): void
   setOrderFiscalFailure(
     localId: number,
@@ -551,7 +554,15 @@ export async function runCheckout(
 
       if (invoice.ok) {
         fiscal = { invoiceNumber: invoice.data.invoiceNumber, qrCode: invoice.data.qrCode }
-        db.setOrderFiscalInfo(localId, invoice.data.invoiceNumber, invoice.data.qrCode, invoice.data.vatGroups)
+        db.setOrderFiscalInfo(
+          localId,
+          invoice.data.invoiceNumber,
+          invoice.data.qrCode,
+          invoice.data.vatGroups,
+          invoice.data.fiscalizedAt,
+          invoice.data.fiscalizedAtSource,
+          invoice.data.cuSerialNumber
+        )
       } else {
         const { status, enqueue } = routeFiscalOutcome(invoice)
         if (enqueue) {

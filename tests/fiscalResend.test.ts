@@ -137,6 +137,32 @@ describe('resendFiscalization', () => {
     expect(JSON.parse(stored as string)).toEqual({ A: '60.00', B: '40.00' })
   })
 
+  /** docs/phase-164 — the manual-resend path also forwards the control unit's date/time and serial. */
+  it('a successful resend stores fiscalizedAt, fiscalizedAtSource and cuSerial from that attempt', async () => {
+    const db = freshDb()
+    const staffId = seedStaff(db)
+    const { localId } = seedOrderWithStoredRequest(db, staffId, { clientOrderUuid: 'uuid-resend-cu-fields' })
+    db.setOrderFiscalFailure(localId, 'needs_fixing', 'some prior rejection', 'data')
+
+    const submitInvoice = vi.fn().mockResolvedValue({
+      ok: true,
+      data: {
+        invoiceNumber: 'KRA-RESEND-CU',
+        qrCode: 'base64qr',
+        fiscalizedAt: '27-08-2026 09:30:00',
+        fiscalizedAtSource: 'device',
+        cuSerialNumber: 'CU-SERIAL-RESEND'
+      }
+    })
+
+    await resendFiscalization({ db, fiscalizationProvider: { submitInvoice } }, localId)
+
+    const order = db.getOrder(localId)
+    expect(order?.fiscal_fiscalized_at).toBe('27-08-2026 09:30:00')
+    expect(order?.fiscal_fiscalized_at_source).toBe('device')
+    expect(order?.fiscal_cu_serial).toBe('CU-SERIAL-RESEND')
+  })
+
   it('reuses the stored TraderSystemInvNum — proven against the REAL provider, not a mock', async () => {
     const db = freshDb()
     const staffId = seedStaff(db)

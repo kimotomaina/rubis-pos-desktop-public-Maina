@@ -78,12 +78,60 @@ describe('FiscalEngine.tick', () => {
 
     expect(db.getPendingFiscalQueue).toHaveBeenCalledWith(1_700_000_000_000)
     expect(submitInvoice).toHaveBeenCalledTimes(2)
-    // docs/phase-163: a fourth arg (vatGroups) is now forwarded from the
-    // outcome's data — undefined here, since this test's stub success
-    // result carries none.
-    expect(db.markFiscalQueueItemSynced).toHaveBeenNthCalledWith(1, 1, 'KRA-0001', 'base64qr', undefined)
-    expect(db.markFiscalQueueItemSynced).toHaveBeenNthCalledWith(2, 2, 'KRA-0001', 'base64qr', undefined)
+    // docs/phase-163 forwards a fourth arg (vatGroups) from the outcome's
+    // data — undefined here, since this test's stub success result
+    // carries none. docs/phase-164 forwards three more: fiscalizedAt
+    // (OK_OUTCOME sets one), fiscalizedAtSource and cuSerialNumber
+    // (both undefined here, since OK_OUTCOME carries neither).
+    expect(db.markFiscalQueueItemSynced).toHaveBeenNthCalledWith(
+      1,
+      1,
+      'KRA-0001',
+      'base64qr',
+      undefined,
+      '2026-08-24T10:00:00.000Z',
+      undefined,
+      undefined
+    )
+    expect(db.markFiscalQueueItemSynced).toHaveBeenNthCalledWith(
+      2,
+      2,
+      'KRA-0001',
+      'base64qr',
+      undefined,
+      '2026-08-24T10:00:00.000Z',
+      undefined,
+      undefined
+    )
     expect(db.recordFiscalQueueFailure).not.toHaveBeenCalled()
+  })
+
+  it('forwards fiscalizedAt, fiscalizedAtSource and cuSerialNumber from a full outcome onto markFiscalQueueItemSynced (docs/phase-164)', async () => {
+    const { db, engine } = makeEngine({
+      items: [makeItem(1)],
+      submit: async () => ({
+        ok: true,
+        data: {
+          invoiceNumber: 'KRA-0002',
+          qrCode: 'base64qr',
+          fiscalizedAt: '27-08-2026 10:00:00',
+          fiscalizedAtSource: 'device',
+          cuSerialNumber: 'CU-SERIAL-ENGINE'
+        }
+      })
+    })
+
+    await engine.tick()
+
+    expect(db.markFiscalQueueItemSynced).toHaveBeenCalledWith(
+      1,
+      'KRA-0002',
+      'base64qr',
+      undefined,
+      '27-08-2026 10:00:00',
+      'device',
+      'CU-SERIAL-ENGINE'
+    )
   })
 
   it('resends the same clientOrderUuid on every attempt (idempotency)', async () => {
@@ -182,8 +230,18 @@ describe('FiscalEngine.tick — retry safety (phase-75, Part B)', () => {
     expect(submitInvoice).not.toHaveBeenCalled()
     // docs/phase-163: the already-fiscalized race guard's stored outcome
     // carries no vatGroups (it never re-reads the device), so the
-    // forwarded fourth arg is undefined.
-    expect(db.markFiscalQueueItemSynced).toHaveBeenCalledWith(1, 'KRA-WON-THE-RACE', 'base64qr', undefined)
+    // forwarded fourth arg is undefined. docs/phase-164: it also carries
+    // no fiscalizedAtSource/cuSerial (sixth/seventh args undefined) — only
+    // its fabricated fiscalizedAt (the order's own stored value) is real.
+    expect(db.markFiscalQueueItemSynced).toHaveBeenCalledWith(
+      1,
+      'KRA-WON-THE-RACE',
+      'base64qr',
+      undefined,
+      '2026-01-01T00:00:00.000Z',
+      undefined,
+      undefined
+    )
     expect(db.recordFiscalQueueFailure).not.toHaveBeenCalled()
   })
 })

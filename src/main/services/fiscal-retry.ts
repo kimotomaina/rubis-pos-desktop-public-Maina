@@ -117,7 +117,10 @@ export interface FiscalResendDb extends FiscalRetryDb {
     localId: number,
     invoiceNumber: string,
     qrCode: string,
-    vatGroups?: FiscalVatGroupAmounts
+    vatGroups?: FiscalVatGroupAmounts,
+    fiscalizedAt?: string,
+    fiscalizedAtSource?: 'device' | 'local-fallback',
+    cuSerial?: string
   ): void
   setOrderFiscalFailure(
     localId: number,
@@ -193,7 +196,15 @@ export async function resendFiscalization(
   const outcome = await attemptFiscalRetry(deps, localId, storedRequest)
 
   if (outcome.ok) {
-    deps.db.setOrderFiscalInfo(localId, outcome.data.invoiceNumber, outcome.data.qrCode, outcome.data.vatGroups)
+    deps.db.setOrderFiscalInfo(
+      localId,
+      outcome.data.invoiceNumber,
+      outcome.data.qrCode,
+      outcome.data.vatGroups,
+      outcome.data.fiscalizedAt,
+      outcome.data.fiscalizedAtSource,
+      outcome.data.cuSerialNumber
+    )
     logger.log(`[rubis-pos] Sale ${localId}: resent, fiscalized (invoice ${outcome.data.invoiceNumber})`)
   } else {
     const { status, enqueue } = routeFiscalOutcome(outcome)

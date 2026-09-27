@@ -97,6 +97,23 @@ export interface OrderRow {
    * running Step 5 itself.
    */
   fiscal_vat_groups_json: string | null
+  /**
+   * Where {@link fiscal_fiscalized_at} came from (docs/phase-164): `'device'`
+   * when the control unit's own `ReadDateTime` reply was stored verbatim
+   * (`dd-MM-yyyy HH:mm:ss`), `'local-fallback'` when the device gave no
+   * timestamp and the till's own clock was stored instead (ISO-8601), or
+   * `null` for an order fiscalized before this column existed, or by the
+   * already-filed recovery path, which always uses the local fallback but
+   * predates this column's introduction on some rows.
+   */
+  fiscal_fiscalized_at_source: 'device' | 'local-fallback' | null
+  /**
+   * The Control Unit's own serial number (`ReadCUnumbers`), stored once at
+   * fiscalization time per the VIL G03 manual's printed-invoice detail set
+   * (docs/phase-164). `null` when the device's serial read failed at that
+   * time, or the order was fiscalized before this column existed.
+   */
+  fiscal_cu_serial: string | null
 }
 
 /** Role assignable to a staff account. */
@@ -348,7 +365,14 @@ function migrateOrdersFiscalColumns(connection: SqliteConnection): void {
     // docs/phase-163 — the device's per-VAT-group amounts, for the fiscal
     // reconciliation report. Same additive/idempotent pattern as every
     // column above: a fresh database already has it via SCHEMA.orders.
-    'fiscal_vat_groups_json'
+    'fiscal_vat_groups_json',
+    // docs/phase-164 — the control unit's own date/time source tag and
+    // serial number, for the printed receipt's fiscal block. Added as
+    // plain TEXT here (no CHECK), same as fiscal_status/fiscal_error_kind
+    // above on an upgraded database — SQLite can't add a CHECK constraint
+    // via ALTER TABLE ADD COLUMN, only a fresh table gets one.
+    'fiscal_fiscalized_at_source',
+    'fiscal_cu_serial'
   ]
   for (const column of fiscalColumns) {
     try {
@@ -410,7 +434,9 @@ export const SCHEMA = {
     fiscal_error_kind TEXT CHECK (fiscal_error_kind IN ('data', 'system', 'technical')),
     fiscal_request_json TEXT,
     fiscal_data_issue TEXT,
-    fiscal_vat_groups_json TEXT
+    fiscal_vat_groups_json TEXT,
+    fiscal_fiscalized_at_source TEXT CHECK (fiscal_fiscalized_at_source IN ('device', 'local-fallback')),
+    fiscal_cu_serial TEXT
   )`,
   syncQueue: `CREATE TABLE IF NOT EXISTS sync_queue (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1339,12 +1365,18 @@ export class RubisDatabase {
    * @param {string} invoiceNumber
    * @param {string} qrCode
    * @param {FiscalVatGroupAmounts} [vatGroups] see {@link setOrderFiscalInfo}
+   * @param {string} [fiscalizedAt] see {@link setOrderFiscalInfo}
+   * @param {'device' | 'local-fallback'} [fiscalizedAtSource] see {@link setOrderFiscalInfo}
+   * @param {string} [cuSerial] see {@link setOrderFiscalInfo}
    */
   markFiscalQueueItemSynced(
     queueId: number,
     invoiceNumber: string,
     qrCode: string,
-    vatGroups?: FiscalVatGroupAmounts
+    vatGroups?: FiscalVatGroupAmounts,
+    fiscalizedAt?: string,
+    fiscalizedAtSource?: 'device' | 'local-fallback',
+    cuSerial?: string
   ): void {
     const row = this.conn
       .prepare('SELECT entity_id FROM sync_queue WHERE id = ?')
@@ -1352,7 +1384,15 @@ export class RubisDatabase {
     if (!row) return
 
     const settle = this.conn.transaction(() => {
-      this.setOrderFiscalInfo(row.entity_id, invoiceNumber, qrCode, vatGroups)
+      this.setOrderFiscalInfo(
+        row.entity_id,
+        invoiceNumber,
+        qrCode,
+        vatGroups,
+        fiscalizedAt,
+        fiscalizedAtSource,
+        cuSerial
+      )
       this.conn.prepare('DELETE FROM sync_queue WHERE id = ?').run(queueId)
     })
     settle()
@@ -1418,7 +1458,7 @@ export class RubisDatabase {
   getOrder(localId: number): OrderRow | undefined {
     return this.conn
       .prepare(
-        'SELECT local_id, shopify_order_id, total, status, created_at, payload_json, staff_id, payment_method, tendered_amount, change_due, reference_number, shift_id, fiscal_invoice_number, fiscal_qr_code, fiscal_fiscalized_at, fiscal_status, fiscal_error_reason, fiscal_error_kind, fiscal_request_json, fiscal_data_issue, fiscal_vat_groups_json FROM orders WHERE local_id = ?'
+        'SELECT local_id, shopify_order_id, total, status, created_at, payload_json, staff_id, payment_method, tendered_amount, change_due, reference_number, shift_id, fiscal_invoice_number, fiscal_qr_code, fiscal_fiscalized_at, fiscal_status, fiscal_error_reason, fiscal_error_kind, fiscal_request_json, fiscal_data_issue, fiscal_vat_groups_json, fiscal_fiscalized_at_source, fiscal_cu_serial FROM orders WHERE local_id = ?'
       )
       .get(localId) as OrderRow | undefined
   }
@@ -1440,19 +1480,34 @@ export class RubisDatabase {
    * path, which never runs Step 5 again) stores `NULL`, never a guessed
    * or re-fetched value.
    *
-   * WRITE-ONCE (docs/phase-163-1): `fiscal_invoice_number`,
-   * `fiscal_qr_code`, `fiscal_fiscalized_at` and `fiscal_vat_groups_json`
-   * are each guarded with `COALESCE(column, ?)`, so once one is set it
-   * can never be replaced by a later call — only a still-`NULL` column
-   * accepts the new value. This function is the single writer for BOTH
-   * a genuine first success AND `fiscal-engine.ts`'s "already fiscalized
-   * (race with a resend)" replay (`attemptFiscalRetry`'s short-circuit,
-   * which echoes the order's OWN already-stored `invoiceNumber`/`qrCode`
-   * back as if it were a fresh result, carrying no `vatGroups` at all).
-   * Without the guard, that replay would silently overwrite a correct,
-   * stored fiscalization timestamp with "now" and a stored
-   * `fiscal_vat_groups_json` with `NULL` — see docs/phase-163-1's audit.
-   * `fiscal_status`/`fiscal_error_*`/`fiscal_data_issue` need no such
+   * `fiscalizedAt`/`fiscalizedAtSource`/`cuSerial` (docs/phase-164) are the
+   * control unit's own date/time stamp, where it came from, and its serial
+   * number — all three already computed by `submitInvoice` but, before this
+   * phase, discarded by every caller before reaching this function (see
+   * docs/phase-163-2's audit). `fiscalizedAt` is stored VERBATIM, in
+   * whichever shape it arrives in (the device's own `dd-MM-yyyy HH:mm:ss`,
+   * or the till's ISO-8601 fallback) — never reformatted or reparsed here.
+   * `cuSerial` is present on both the normal success return AND the
+   * already-filed recovery return (it's read once per session via
+   * `ReadCUnumbers`, before either branch), so it is never specially
+   * omitted here the way `vatGroups` is — `undefined` only when the
+   * provider itself never surfaced one (e.g. the mock, or a failed
+   * session-level serial read), in which case this stores `NULL`.
+   *
+   * WRITE-ONCE (docs/phase-163-1, extended docs/phase-164):
+   * `fiscal_invoice_number`, `fiscal_qr_code`, `fiscal_fiscalized_at`,
+   * `fiscal_vat_groups_json`, `fiscal_fiscalized_at_source` and
+   * `fiscal_cu_serial` are each guarded with `COALESCE(column, ?)`, so once
+   * one is set it can never be replaced by a later call — only a
+   * still-`NULL` column accepts the new value. This function is the single
+   * writer for BOTH a genuine first success AND `fiscal-engine.ts`'s
+   * "already fiscalized (race with a resend)" replay (`attemptFiscalRetry`'s
+   * short-circuit, which echoes the order's OWN already-stored
+   * `invoiceNumber`/`qrCode` back as if it were a fresh result, carrying no
+   * `vatGroups` at all). Without the guard, that replay would silently
+   * overwrite a correct, stored fiscalization timestamp with "now" and a
+   * stored `fiscal_vat_groups_json` with `NULL` — see docs/phase-163-1's
+   * audit. `fiscal_status`/`fiscal_error_*`/`fiscal_data_issue` need no such
    * guard: setting an already-`'fiscalized'` row to `'fiscalized'` again,
    * or nulling out fields that are already `NULL` on any fiscalized row,
    * changes nothing either way.
@@ -1461,12 +1516,18 @@ export class RubisDatabase {
    * @param {string} invoiceNumber
    * @param {string} qrCode
    * @param {FiscalVatGroupAmounts} [vatGroups]
+   * @param {string} [fiscalizedAt] the control unit's own date/time stamp, verbatim — falls back to `new Date().toISOString()` when absent
+   * @param {'device' | 'local-fallback'} [fiscalizedAtSource]
+   * @param {string} [cuSerial] the control unit's serial number
    */
   setOrderFiscalInfo(
     localId: number,
     invoiceNumber: string,
     qrCode: string,
-    vatGroups?: FiscalVatGroupAmounts
+    vatGroups?: FiscalVatGroupAmounts,
+    fiscalizedAt?: string,
+    fiscalizedAtSource?: 'device' | 'local-fallback',
+    cuSerial?: string
   ): void {
     this.conn
       .prepare(
@@ -1474,14 +1535,18 @@ export class RubisDatabase {
          fiscal_qr_code = COALESCE(fiscal_qr_code, ?),
          fiscal_fiscalized_at = COALESCE(fiscal_fiscalized_at, ?),
          fiscal_status = 'fiscalized', fiscal_error_reason = NULL, fiscal_error_kind = NULL,
-         fiscal_data_issue = NULL, fiscal_vat_groups_json = COALESCE(fiscal_vat_groups_json, ?)
+         fiscal_data_issue = NULL, fiscal_vat_groups_json = COALESCE(fiscal_vat_groups_json, ?),
+         fiscal_fiscalized_at_source = COALESCE(fiscal_fiscalized_at_source, ?),
+         fiscal_cu_serial = COALESCE(fiscal_cu_serial, ?)
          WHERE local_id = ?`
       )
       .run(
         invoiceNumber,
         qrCode,
-        new Date().toISOString(),
+        fiscalizedAt ?? new Date().toISOString(),
         vatGroups ? JSON.stringify(vatGroups) : null,
+        fiscalizedAtSource ?? null,
+        cuSerial ?? null,
         localId
       )
   }
@@ -1554,7 +1619,7 @@ export class RubisDatabase {
   getOrderByFiscalInvoiceNumber(invoiceNumber: string): OrderRow | undefined {
     return this.conn
       .prepare(
-        'SELECT local_id, shopify_order_id, total, status, created_at, payload_json, staff_id, payment_method, tendered_amount, change_due, reference_number, shift_id, fiscal_invoice_number, fiscal_qr_code, fiscal_fiscalized_at, fiscal_status, fiscal_error_reason, fiscal_error_kind, fiscal_request_json, fiscal_data_issue, fiscal_vat_groups_json FROM orders WHERE fiscal_invoice_number = ?'
+        'SELECT local_id, shopify_order_id, total, status, created_at, payload_json, staff_id, payment_method, tendered_amount, change_due, reference_number, shift_id, fiscal_invoice_number, fiscal_qr_code, fiscal_fiscalized_at, fiscal_status, fiscal_error_reason, fiscal_error_kind, fiscal_request_json, fiscal_data_issue, fiscal_vat_groups_json, fiscal_fiscalized_at_source, fiscal_cu_serial FROM orders WHERE fiscal_invoice_number = ?'
       )
       .get(invoiceNumber) as OrderRow | undefined
   }
@@ -1594,7 +1659,7 @@ export class RubisDatabase {
         `SELECT local_id, shopify_order_id, total, status, created_at, payload_json, staff_id, payment_method,
                 tendered_amount, change_due, reference_number, shift_id, fiscal_invoice_number, fiscal_qr_code,
                 fiscal_fiscalized_at, fiscal_status, fiscal_error_reason, fiscal_error_kind, fiscal_request_json,
-                fiscal_data_issue, fiscal_vat_groups_json
+                fiscal_data_issue, fiscal_vat_groups_json, fiscal_fiscalized_at_source, fiscal_cu_serial
          FROM orders WHERE created_at >= ? AND created_at < ? ORDER BY created_at ASC`
       )
       .all(startIso, endIso) as OrderRow[]
@@ -1625,7 +1690,7 @@ export class RubisDatabase {
         `SELECT local_id, shopify_order_id, total, status, created_at, payload_json, staff_id, payment_method,
                 tendered_amount, change_due, reference_number, shift_id, fiscal_invoice_number, fiscal_qr_code,
                 fiscal_fiscalized_at, fiscal_status, fiscal_error_reason, fiscal_error_kind, fiscal_request_json,
-                fiscal_data_issue, fiscal_vat_groups_json
+                fiscal_data_issue, fiscal_vat_groups_json, fiscal_fiscalized_at_source, fiscal_cu_serial
          FROM orders WHERE created_at >= ? AND created_at < ? ORDER BY created_at DESC LIMIT ? OFFSET ?`
       )
       .all(startIso, endIso, limit, offset) as OrderRow[]
@@ -1731,7 +1796,7 @@ export class RubisDatabase {
   getOrders(limit = 50, offset = 0): OrderRow[] {
     return this.conn
       .prepare(
-        'SELECT local_id, shopify_order_id, total, status, created_at, payload_json, fiscal_invoice_number, fiscal_qr_code, fiscal_fiscalized_at, fiscal_status, fiscal_error_reason, fiscal_error_kind, fiscal_request_json, fiscal_data_issue, fiscal_vat_groups_json FROM orders ORDER BY created_at DESC LIMIT ? OFFSET ?'
+        'SELECT local_id, shopify_order_id, total, status, created_at, payload_json, fiscal_invoice_number, fiscal_qr_code, fiscal_fiscalized_at, fiscal_status, fiscal_error_reason, fiscal_error_kind, fiscal_request_json, fiscal_data_issue, fiscal_vat_groups_json, fiscal_fiscalized_at_source, fiscal_cu_serial FROM orders ORDER BY created_at DESC LIMIT ? OFFSET ?'
       )
       .all(limit, offset) as OrderRow[]
   }
