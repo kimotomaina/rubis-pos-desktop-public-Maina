@@ -9,9 +9,13 @@
 
 import type { RubisDatabase, MpesaPaymentRow, OrderRow } from './database.js'
 import type { OfflineOrderPayload } from './shopify-types.js'
+import type { FiscalVatGroupAmounts } from './integrations/etims.js'
 import { buildCsv, csvMoney } from '../lib/csv.js'
 import { buildTraderSystemInvNum } from '../lib/traderSystemInvoiceNumber.js'
-import { computeVatIncluded, formatNairobiDateTime, type ReportRange } from './reports.js'
+import { computeVatIncluded, formatNairobiDateTime, buildReconciliationRow, type ReportRange } from './reports.js'
+
+/** `'A'`..`'E'`, in column order, for the raw per-VAT-group `orders.csv` columns. */
+const VAT_GROUP_COLUMN_LETTERS = ['A', 'B', 'C', 'D', 'E'] as const
 
 /**
  * Parses an order's stored offline payload, tolerating a malformed or
@@ -36,6 +40,13 @@ function parsePayload(order: OrderRow): OfflineOrderPayload | null {
  * complete record). No device password, PIN, token, or other secret is
  * ever a column here — only whether a customer KRA PIN was captured
  * (yes/no), never the PIN itself.
+ *
+ * The reconciliation columns (docs/phase-163, Commit 2) reuse
+ * {@link buildReconciliationRow} — the same figures the fiscal
+ * reconciliation report shows — and are blank for an order that was
+ * never fiscalized. The five VAT-group columns are the raw device
+ * strings verbatim (blank when the device never reported that group),
+ * independent of whether the order fiscalized cleanly.
  *
  * @param {RubisDatabase} db
  * @param {ReportRange} range
@@ -79,12 +90,26 @@ export function buildOrdersCsv(db: RubisDatabase, range: ReportRange, taxRate: n
     'Shopify order id',
     'Sync status',
     'Customer KRA PIN present',
-    'Client order UUID'
+    'Client order UUID',
+    // docs/phase-163, Commit 2 — the fiscal reconciliation figures, blank
+    // for an order that was never fiscalized (nothing to reconcile yet).
+    'Device total',
+    'Difference',
+    'Reconciliation status',
+    'VAT group A',
+    'VAT group B',
+    'VAT group C',
+    'VAT group D',
+    'VAT group E'
   ]
 
   const rows = orders.map((order) => {
     const payload = parsePayload(order)
     const payment = paymentByOrder.get(order.local_id)
+    const reconciliation = order.fiscal_status === 'fiscalized' ? buildReconciliationRow(order, console) : null
+    const rawGroups: FiscalVatGroupAmounts = order.fiscal_vat_groups_json
+      ? (JSON.parse(order.fiscal_vat_groups_json) as FiscalVatGroupAmounts)
+      : {}
     return [
       formatNairobiDateTime(order.created_at),
       buildTraderSystemInvNum(order.local_id, payload?.clientOrderUuid ?? ''),
@@ -105,7 +130,15 @@ export function buildOrdersCsv(db: RubisDatabase, range: ReportRange, taxRate: n
       // customAttribute/metafield (docs/phase-158-1) — the offline
       // dedup key, useful here for cross-referencing this row against
       // the matching Shopify order.
-      payload?.clientOrderUuid ?? ''
+      payload?.clientOrderUuid ?? '',
+      reconciliation?.deviceTotal !== null && reconciliation?.deviceTotal !== undefined
+        ? csvMoney(reconciliation.deviceTotal)
+        : '',
+      reconciliation?.difference !== null && reconciliation?.difference !== undefined
+        ? csvMoney(reconciliation.difference)
+        : '',
+      reconciliation?.status ?? '',
+      ...VAT_GROUP_COLUMN_LETTERS.map((letter) => rawGroups[letter] ?? '')
     ]
   })
 

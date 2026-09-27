@@ -1,6 +1,12 @@
 import { useEffect, useState } from 'react'
 import type { ShiftRow } from '../../../main/services/database.js'
-import type { ZReport, SalesSummary, FiscalStatusDayCount, ReportRangePreset } from '../../../main/services/reports.js'
+import type {
+  ZReport,
+  SalesSummary,
+  FiscalStatusDayCount,
+  FiscalReconciliationReport,
+  ReportRangePreset
+} from '../../../main/services/reports.js'
 import { formatCurrency } from '../lib/currency.js'
 import { formatVatRateLabel } from '../lib/vatLabel.js'
 import { paginate } from '../lib/paginate.js'
@@ -12,6 +18,9 @@ const REPORTS_PAGE_SIZE = 10
 /** Fiscal-status rows per page — this table is paginated client-side (a month is at most 31 rows). */
 const FISCAL_ROWS_PER_PAGE = 10
 
+/** Fiscal-reconciliation rows per page — the whole range is fetched at once (docs/phase-163) and paginated client-side, like {@link FISCAL_ROWS_PER_PAGE}. */
+const RECONCILIATION_ROWS_PER_PAGE = 10
+
 /** The six fixed Nairobi date-range presets (docs/phase-158) — buttons only, never free text. */
 const PRESETS: Array<{ key: ReportRangePreset; label: string }> = [
   { key: 'today', label: 'Today' },
@@ -22,7 +31,7 @@ const PRESETS: Array<{ key: ReportRangePreset; label: string }> = [
   { key: 'lastMonth', label: 'Last month' }
 ]
 
-type ReportsSubView = 'shifts' | 'salesSummary' | 'fiscalByDay' | 'invoices' | 'export'
+type ReportsSubView = 'shifts' | 'salesSummary' | 'fiscalByDay' | 'fiscalReconciliation' | 'invoices' | 'export'
 
 /** A row of preset buttons, shared by every sub-view that offers one. */
 function PresetButtons({
@@ -333,6 +342,131 @@ function FiscalStatusView() {
   )
 }
 
+/** One reconciliation status's badge colours — shared between the table and would-be legends. */
+function reconciliationStatusClasses(status: FiscalReconciliationReport['rows'][number]['status']): string {
+  if (status === 'matched') return 'bg-emerald-100 text-emerald-700'
+  if (status === 'mismatch') return 'bg-rose-100 text-rose-700'
+  return 'bg-amber-100 text-amber-700'
+}
+
+/**
+ * Fiscal reconciliation (docs/phase-163, Commit 2; VIL checklist item
+ * 13): summary counts, then every fiscalised order in the preset
+ * compared against the fiscal device's own stored total, mismatches
+ * listed first (the backend already sorts them — see
+ * `generateFiscalReconciliation`). The whole range is fetched in one
+ * call and paginated client-side, the same shape {@link FiscalStatusView}
+ * already uses.
+ */
+function FiscalReconciliationView() {
+  const [preset, setPreset] = useState<ReportRangePreset>('today')
+  const [report, setReport] = useState<FiscalReconciliationReport | null>(null)
+  const [page, setPage] = useState(1)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    setLoading(true)
+    setError(null)
+    setPage(1)
+    void window.api.getFiscalReconciliation(preset).then((result) => {
+      if (cancelled) return
+      if (result.success && result.data) {
+        setReport(result.data)
+      } else {
+        setError(result.error ?? 'Failed to load fiscal reconciliation')
+      }
+      setLoading(false)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [preset])
+
+  const rows = report?.rows ?? []
+  const pageResult = paginate(rows, page, RECONCILIATION_ROWS_PER_PAGE)
+
+  return (
+    <section className="rounded-xl border border-slate-200 bg-white p-4">
+      <h3 className="mb-3 text-2xl font-bold text-slate-800">Fiscal Reconciliation</h3>
+      <PresetButtons preset={preset} onSelect={setPreset} />
+      {error && (
+        <p className="mt-3 rounded-lg bg-rose-50 px-3 py-2 text-base font-medium text-rose-700">{error}</p>
+      )}
+      {loading || !report ? (
+        <p className="mt-3 text-base text-slate-400">Loading…</p>
+      ) : rows.length === 0 ? (
+        <p className="mt-3 text-base text-slate-500">No fiscalised orders in this range.</p>
+      ) : (
+        <div className="mt-3">
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
+            <div className="rounded-lg bg-slate-50 p-3">
+              <p className="text-sm text-slate-500">Matched</p>
+              <p className="text-xl font-semibold text-emerald-700">{report.totals.matched}</p>
+            </div>
+            <div className="rounded-lg bg-slate-50 p-3">
+              <p className="text-sm text-slate-500">Mismatch</p>
+              <p className="text-xl font-semibold text-rose-700">{report.totals.mismatch}</p>
+            </div>
+            <div className="rounded-lg bg-slate-50 p-3">
+              <p className="text-sm text-slate-500">No device figure</p>
+              <p className="text-xl font-semibold text-amber-700">{report.totals.noDeviceFigure}</p>
+            </div>
+            <div className="rounded-lg bg-slate-50 p-3">
+              <p className="text-sm text-slate-500">Charged</p>
+              <p className="text-xl font-semibold text-slate-900">{formatCurrency(report.totals.sumCharged)}</p>
+            </div>
+            <div className="rounded-lg bg-slate-50 p-3">
+              <p className="text-sm text-slate-500">Device</p>
+              <p className="text-xl font-semibold text-slate-900">{formatCurrency(report.totals.sumDevice)}</p>
+            </div>
+          </div>
+          <div className="mt-3 overflow-x-auto">
+            <table className="w-full text-left text-base">
+              <thead className="text-slate-500">
+                <tr>
+                  <th className="py-2">Time</th>
+                  <th className="py-2">Trader invoice #</th>
+                  <th className="py-2">CU invoice #</th>
+                  <th className="py-2 text-right">Charged</th>
+                  <th className="py-2 text-right">Device</th>
+                  <th className="py-2 text-right">Difference</th>
+                  <th className="py-2">Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                {pageResult.items.map((row) => (
+                  <tr key={row.localId} className="border-t border-slate-100">
+                    <td className="py-2 pr-2 text-slate-500">{new Date(row.createdAt).toLocaleString()}</td>
+                    <td className="py-2 pr-2 font-mono text-sm text-slate-800">{row.traderInvoiceNumber}</td>
+                    <td className="py-2 pr-2 text-slate-800">{row.cuInvoiceNumber ?? ''}</td>
+                    <td className="py-2 text-right text-slate-800">{formatCurrency(row.charged)}</td>
+                    <td className="py-2 text-right text-slate-800">
+                      {row.deviceTotal === null ? '—' : formatCurrency(row.deviceTotal)}
+                    </td>
+                    <td className="py-2 text-right text-slate-800">
+                      {row.difference === null ? '—' : formatCurrency(row.difference)}
+                    </td>
+                    <td className="py-2">
+                      <span
+                        className={`rounded-full px-2 py-1 text-sm font-medium ${reconciliationStatusClasses(row.status)}`}
+                      >
+                        {row.status === 'no-device-figure' ? 'no device figure' : row.status}
+                      </span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <Pager page={pageResult.page} pageCount={pageResult.pageCount} onChange={setPage} />
+        </div>
+      )}
+    </section>
+  )
+}
+
 /** Invoice list: time, trader invoice number, CU invoice number (or fiscal status), total, payment, cashier. */
 function InvoiceListView({ staffName }: { staffName: (id: number | null) => string }) {
   const [preset, setPreset] = useState<ReportRangePreset>('today')
@@ -483,9 +617,10 @@ function ExportView() {
 
 /**
  * Admin "Reports" tab (docs/phase-158): shift history with reprint, a
- * date-range sales summary, fiscal status by day, an invoice list
- * pairing CU and trader invoice numbers, and CSV export — built only
- * from data the till already stores (docs/phase-157's audit). Every
+ * date-range sales summary, fiscal status by day, fiscal reconciliation
+ * against the device's own validated totals (docs/phase-163), an invoice
+ * list pairing CU and trader invoice numbers, and CSV export — built
+ * only from data the till already stores (docs/phase-157's audit). Every
  * input is a preset button; nothing here opens the on-screen keyboard.
  *
  * @returns {JSX.Element}
@@ -513,6 +648,7 @@ export default function ReportsPage() {
             ['shifts', 'Shift History'],
             ['salesSummary', 'Sales Summary'],
             ['fiscalByDay', 'Fiscal Status'],
+            ['fiscalReconciliation', 'Fiscal Reconciliation'],
             ['invoices', 'Invoice List'],
             ['export', 'Export']
           ] as const
@@ -533,6 +669,7 @@ export default function ReportsPage() {
       {subView === 'shifts' && <ShiftHistoryView staffName={staffName} />}
       {subView === 'salesSummary' && <SalesSummaryView />}
       {subView === 'fiscalByDay' && <FiscalStatusView />}
+      {subView === 'fiscalReconciliation' && <FiscalReconciliationView />}
       {subView === 'invoices' && <InvoiceListView staffName={staffName} />}
       {subView === 'export' && <ExportView />}
     </div>

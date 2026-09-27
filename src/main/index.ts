@@ -164,6 +164,7 @@ import {
   salesSummarySchema,
   fiscalByDaySchema,
   invoiceListSchema,
+  fiscalReconciliationSchema,
   exportCsvSchema
 } from './lib/ipcValidator.js'
 import { checkEtimsCompletion } from './services/etimsSetup.js'
@@ -213,6 +214,7 @@ import {
   generateEndOfDayReport,
   generateSalesSummary,
   generateFiscalStatusByDay,
+  generateFiscalReconciliation,
   getReportRange,
   localDayOf
 } from './services/reports.js'
@@ -221,7 +223,8 @@ import type {
   DailySummary,
   EndOfDayReport,
   SalesSummary,
-  FiscalStatusDayCount
+  FiscalStatusDayCount,
+  FiscalReconciliationReport
 } from './services/reports.js'
 import { buildOrdersCsv, buildLinesCsv } from './services/reportsExport.js'
 import { buildTraderSystemInvNum } from './lib/traderSystemInvoiceNumber.js'
@@ -2896,6 +2899,35 @@ app.whenReady().then(async () => {
         return {
           success: false,
           error: err instanceof Error ? err.message : 'Failed to generate fiscal status by day'
+        }
+      }
+    }
+  )
+
+  /**
+   * IPC handler for the fiscal reconciliation report (docs/phase-163,
+   * Commit 2; VIL checklist item 13) — every `'fiscalized'` order in the
+   * chosen preset, compared against the fiscal device's own stored
+   * per-VAT-group amounts. Returns the whole range in one call, like
+   * `reports:fiscal-by-day` above (client-side paginated), not one page
+   * at a time like `reports:invoice-list` below — a reconciliation
+   * preset's mismatch/no-figure counts need the full set to be correct,
+   * not just one page of it.
+   */
+  ipcMain.handle(
+    'reports:fiscal-reconciliation',
+    (_event, request: unknown): ServiceResult<FiscalReconciliationReport> => {
+      const validation = validate(fiscalReconciliationSchema, request)
+      if (!validation.success) {
+        return { success: false, error: validation.error }
+      }
+      try {
+        const range = getReportRange(validation.data.preset)
+        return { success: true, data: generateFiscalReconciliation(db, range) }
+      } catch (err) {
+        return {
+          success: false,
+          error: err instanceof Error ? err.message : 'Failed to generate fiscal reconciliation'
         }
       }
     }

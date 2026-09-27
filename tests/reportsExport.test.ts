@@ -162,7 +162,8 @@ describe('buildOrdersCsv', () => {
 
     const csv = buildOrdersCsv(db, RANGE, 0.16)
     const dataRow = csv.split('\r\n')[1].split(',')
-    // Column 15 (0-indexed), the last column, is "Client order UUID".
+    // Column 15 (0-indexed), "Client order UUID" — the last column before
+    // docs/phase-163's reconciliation columns were appended after it.
     expect(dataRow[15]).toBe('uuid-42')
 
     const shopifyInput = buildOrderInput(payload)
@@ -170,6 +171,72 @@ describe('buildOrdersCsv', () => {
     const metafields = shopifyInput.order.metafields as Array<{ key: string; value: string }>
     expect(dataRow[15]).toBe(customAttributes[0].value)
     expect(dataRow[15]).toBe(metafields[0].value)
+  })
+
+  /**
+   * docs/phase-163, Commit 2 — columns 16-23: Device total, Difference,
+   * Reconciliation status, VAT groups A-E. Fixed indices (not `toContain`)
+   * so this can't pass by accidentally matching another column's value.
+   */
+  describe('reconciliation columns (docs/phase-163)', () => {
+    it('fills the reconciliation columns for a fiscalized order and the VAT-group columns from the raw device strings', () => {
+      const db = fakeDb({
+        orders: [
+          order({
+            local_id: 20,
+            total: 190,
+            fiscal_status: 'fiscalized',
+            fiscal_invoice_number: 'KRA-0020',
+            fiscal_vat_groups_json: JSON.stringify({ A: '200.00' })
+          })
+        ],
+        staff: [admin]
+      })
+
+      const csv = buildOrdersCsv(db, RANGE, 0.16)
+      const dataRow = csv.split('\r\n')[1].split(',')
+
+      expect(dataRow[16]).toBe('200.00') // Device total
+      expect(dataRow[17]).toBe('10.00') // Difference (200 - 190)
+      expect(dataRow[18]).toBe('mismatch') // Reconciliation status
+      expect(dataRow[19]).toBe('200.00') // VAT group A
+      expect(dataRow[20]).toBe('') // VAT group B — absent from the device response
+    })
+
+    it('leaves the reconciliation columns blank for an order that was never fiscalized', () => {
+      const db = fakeDb({
+        orders: [order({ local_id: 21, fiscal_status: null, fiscal_vat_groups_json: null })],
+        staff: [admin]
+      })
+
+      const csv = buildOrdersCsv(db, RANGE, 0.16)
+      const dataRow = csv.split('\r\n')[1].split(',')
+
+      expect(dataRow[16]).toBe('')
+      expect(dataRow[17]).toBe('')
+      expect(dataRow[18]).toBe('')
+      expect(dataRow[19]).toBe('')
+    })
+
+    it('reports "no-device-figure" (not blank, not a mismatch) for a fiscalized order with no stored device figure', () => {
+      const db = fakeDb({
+        orders: [
+          order({
+            local_id: 22,
+            fiscal_status: 'fiscalized',
+            fiscal_invoice_number: 'KRA-0022',
+            fiscal_vat_groups_json: null
+          })
+        ],
+        staff: [admin]
+      })
+
+      const csv = buildOrdersCsv(db, RANGE, 0.16)
+      const dataRow = csv.split('\r\n')[1].split(',')
+
+      expect(dataRow[16]).toBe('') // Device total — null, not "0.00"
+      expect(dataRow[18]).toBe('no-device-figure')
+    })
   })
 })
 

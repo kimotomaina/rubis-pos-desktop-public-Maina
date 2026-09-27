@@ -32,6 +32,7 @@ import type {
   EndOfDayReport,
   SalesSummary,
   FiscalStatusDayCount,
+  FiscalReconciliationReport,
   ReportRangePreset
 } from '../main/services/reports.js'
 import type { UpdateStatus } from '../main/services/updater.js'
@@ -480,6 +481,19 @@ const api = {
     preset: ReportRangePreset
   ): Promise<ServiceResult<FiscalStatusDayCount[]>> =>
     ipcRenderer.invoke('reports:fiscal-by-day', { preset }),
+
+  /**
+   * The fiscal reconciliation report (docs/phase-163, Commit 2) for one
+   * of the fixed Nairobi date-range presets — every fiscalized order
+   * compared against the device's own stored per-VAT-group amounts.
+   *
+   * @param {ReportRangePreset} preset
+   * @returns {Promise<ServiceResult<FiscalReconciliationReport>>}
+   */
+  getFiscalReconciliation: (
+    preset: ReportRangePreset
+  ): Promise<ServiceResult<FiscalReconciliationReport>> =>
+    ipcRenderer.invoke('reports:fiscal-reconciliation', { preset }),
 
   /**
    * One page of orders (CU and trader invoice numbers included) for the

@@ -42,6 +42,7 @@ import type {
   EndOfDayReport,
   SalesSummary,
   FiscalStatusDayCount,
+  FiscalReconciliationReport,
   ReportRangePreset
 } from '../main/services/reports.js'
 import type { UpdateStatus } from '../main/services/updater.js'
@@ -185,6 +186,10 @@ export interface PosApi {
   getFiscalStatusByDay: (
     preset: ReportRangePreset
   ) => Promise<ServiceResult<FiscalStatusDayCount[]>>
+  /** The fiscal reconciliation report for one of the fixed Nairobi date-range presets (docs/phase-163). */
+  getFiscalReconciliation: (
+    preset: ReportRangePreset
+  ) => Promise<ServiceResult<FiscalReconciliationReport>>
   /** One page of orders (CU and trader invoice numbers included) for the invoice list. */
   getInvoiceList: (
     preset: ReportRangePreset,

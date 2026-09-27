@@ -233,7 +233,14 @@ async function checkReportsTab(cmd) {
   }
   await new Promise((r) => setTimeout(r, 400))
 
-  const subViews = ['Shift History', 'Sales Summary', 'Fiscal Status', 'Invoice List', 'Export']
+  const subViews = [
+    'Shift History',
+    'Sales Summary',
+    'Fiscal Status',
+    'Fiscal Reconciliation',
+    'Invoice List',
+    'Export'
+  ]
   for (const label of subViews) {
     const clicked = await clickWhereText(cmd, 'button', label)
     if (!clicked) {

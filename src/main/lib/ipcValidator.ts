@@ -380,6 +380,11 @@ export const invoiceListSchema = z.object({
   page: z.number().int().positive().default(1)
 })
 
+/** `reports:fiscal-reconciliation` request payload (docs/phase-163, Commit 2). */
+export const fiscalReconciliationSchema = z.object({
+  preset: reportRangePresetSchema
+})
+
 /**
  * `reports:export-csv` request payload. `kind` picks which of the two
  * files this call produces — the renderer's Export screen has two

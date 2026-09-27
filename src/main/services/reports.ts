@@ -8,6 +8,9 @@
  */
 
 import type { RubisDatabase, PaymentMethod, OrderRow, MpesaPaymentRow, OrderStatus } from './database.js'
+import type { FiscalVatGroupAmounts } from './integrations/etims.js'
+import type { Logger } from './logger.js'
+import { buildTraderSystemInvNum } from '../lib/traderSystemInvoiceNumber.js'
 
 /** Revenue total per payment method. */
 export interface PaymentTotals {
@@ -664,6 +667,19 @@ export interface SalesSummary {
   vatRate: number
   totalsByMethod: PaymentTotals
   mpesaByMode: MpesaModeTotals
+  /**
+   * VAT derived from the fiscal device's own per-VAT-group amounts
+   * (docs/phase-163, Commit 2) — a separate figure from {@link vatIncluded}
+   * (which is calculated from `total` at the store's single configured
+   * rate) shown alongside it, not in place of it. Only ever a best-effort
+   * total across `'fiscalized'` orders that carry a stored device figure;
+   * silently excludes orders with none (an older sale, an already-filed
+   * recovery, or a non-numeric device value) and excludes VAT-group `'D'`
+   * entirely (its rate is not known — see {@link deriveGroupVat}), rather
+   * than guessing either. Voided orders are excluded, matching every
+   * other figure on this report.
+   */
+  vatFromDeviceGroups: number
 }
 
 /**
@@ -696,7 +712,8 @@ export function generateSalesSummary(
     vatIncluded: computeVatIncluded(totalRevenue, taxRate),
     vatRate: taxRate,
     totalsByMethod,
-    mpesaByMode: sumMpesaByMode(payments)
+    mpesaByMode: sumMpesaByMode(payments),
+    vatFromDeviceGroups: sumVatFromDeviceGroups(orders)
   }
 }
 
@@ -737,4 +754,241 @@ export function generateFiscalStatusByDay(db: RubisDatabase, range: ReportRange)
   }
 
   return Array.from(byDay.values()).sort((a, b) => a.localDay.localeCompare(b.localDay))
+}
+
+/** A per-VAT-group amount, keyed by the VAT class letter `FiscalInvoiceLine.vatClass` already uses. */
+type VatGroupLetter = 'A' | 'B' | 'C' | 'D' | 'E'
+
+const VAT_GROUP_LETTERS: readonly VatGroupLetter[] = ['A', 'B', 'C', 'D', 'E']
+
+/**
+ * The VAT captured within one VAT-group's amount, derived from the
+ * confirmed VIL manual rate table (docs/phase-65: `'A'`=16%, `'B'`=8%,
+ * `'C'`=0%, `'D'`="usually free for any other rates", `'E'`=Exempt).
+ * `'A'`/`'B'` use the standard VAT-inclusive extraction
+ * (`amount * rate / (1 + rate)`, the same shape {@link computeVatIncluded}
+ * uses); `'C'`/`'E'` are always zero. `'D'` has no single rate the manual
+ * commits to, so its VAT is reported as `'not-known'` rather than guessed
+ * at any particular percentage.
+ *
+ * @param {VatGroupLetter} letter
+ * @param {number} amount
+ * @returns {number | 'not-known'}
+ */
+function deriveGroupVat(letter: VatGroupLetter, amount: number): number | 'not-known' {
+  if (letter === 'A') return Math.round(amount * (16 / 116) * 100) / 100
+  if (letter === 'B') return Math.round(amount * (8 / 108) * 100) / 100
+  if (letter === 'C' || letter === 'E') return 0
+  return 'not-known'
+}
+
+/**
+ * Best-effort total VAT across a set of orders' stored device figures —
+ * the Sales Summary's "VAT from device groups" (docs/phase-163, Commit 2).
+ * Silently skips an order with no stored figure, a non-numeric one, or a
+ * malformed JSON blob (this is a rough aggregate shown alongside the
+ * existing calculated VAT figure, not a compliance check — the fiscal
+ * reconciliation report is where a bad figure gets surfaced and logged
+ * per order) and excludes VAT-group `'D'` entirely, since
+ * {@link deriveGroupVat} has no rate to give it.
+ *
+ * @param {OrderRow[]} orders
+ * @returns {number}
+ */
+function sumVatFromDeviceGroups(orders: OrderRow[]): number {
+  let total = 0
+  for (const order of orders) {
+    if (order.fiscal_status !== 'fiscalized' || !order.fiscal_vat_groups_json) continue
+    let rawGroups: FiscalVatGroupAmounts
+    try {
+      rawGroups = JSON.parse(order.fiscal_vat_groups_json) as FiscalVatGroupAmounts
+    } catch {
+      continue
+    }
+    for (const letter of VAT_GROUP_LETTERS) {
+      const raw = rawGroups[letter]
+      if (raw === undefined) continue
+      const amount = Number(raw)
+      if (!Number.isFinite(amount)) continue
+      const vat = deriveGroupVat(letter, amount)
+      if (vat !== 'not-known') total += vat
+    }
+  }
+  return Math.round(total * 100) / 100
+}
+
+/** One VAT-group's amount and derived VAT, for one reconciliation row. */
+export interface FiscalReconciliationGroupVat {
+  amount: number
+  vat: number | 'not-known'
+}
+
+/**
+ * How one fiscalised order's charged amount compares to the fiscal
+ * device's own validated total (docs/phase-159 B1.1/B1.2, VIL checklist
+ * item 13):
+ *
+ *   - `'matched'`         — the two amounts agree within 1 cent.
+ *   - `'mismatch'`        — they genuinely differ (e.g. the docs/phase-160
+ *     discount case: the device was never told about a discount, so it
+ *     validated the undiscounted line amount while the till charged less).
+ *   - `'no-device-figure'` — `fiscal_vat_groups_json` is `NULL` (an older
+ *     sale filed before this column existed, or an already-filed recovery
+ *     that never re-ran Step 5) or carries a non-numeric value. Never
+ *     reported as a `'mismatch'` — there is nothing to compare against,
+ *     not a confirmed disagreement.
+ */
+export type FiscalReconciliationStatus = 'matched' | 'mismatch' | 'no-device-figure'
+
+/** One fiscalised order's reconciliation figures. */
+export interface FiscalReconciliationRow {
+  localId: number
+  createdAt: string
+  traderInvoiceNumber: string
+  /** The KRA/eTIMS invoice number `CloseReceipt` returned — `null` should not occur for a `'fiscalized'` order, but the column itself is nullable. */
+  cuInvoiceNumber: string | null
+  /** What the till charged the customer (`order.total`). */
+  charged: number
+  /** Sum of the present VAT-group amounts, or `null` for `'no-device-figure'`. */
+  deviceTotal: number | null
+  /** `deviceTotal - charged`, or `null` for `'no-device-figure'`. */
+  difference: number | null
+  status: FiscalReconciliationStatus
+  /** Present groups only — a group absent from the device's response is absent here too. */
+  vatByGroup: Partial<Record<VatGroupLetter, FiscalReconciliationGroupVat>>
+}
+
+/** Aggregate counts and sums across every row in a {@link FiscalReconciliationReport}. */
+export interface FiscalReconciliationTotals {
+  matched: number
+  mismatch: number
+  noDeviceFigure: number
+  sumCharged: number
+  sumDevice: number
+  sumDifference: number
+}
+
+/** The fiscal reconciliation report for a date range (docs/phase-163, Commit 2). */
+export interface FiscalReconciliationReport {
+  startIso: string
+  endIso: string
+  label: string
+  /** Mismatches first, then no-device-figure, then matched — each group otherwise in the order the orders were created. */
+  rows: FiscalReconciliationRow[]
+  totals: FiscalReconciliationTotals
+}
+
+/** Sort weight for {@link FiscalReconciliationStatus} — lower sorts first. */
+function reconciliationSortWeight(status: FiscalReconciliationStatus): number {
+  if (status === 'mismatch') return 0
+  if (status === 'no-device-figure') return 1
+  return 2
+}
+
+/**
+ * Builds one order's reconciliation row. A non-numeric VAT-group amount
+ * makes the WHOLE row `'no-device-figure'` (not just that one group) —
+ * a device response this build cannot parse tells us nothing usable
+ * about the sale's true device-validated total, logged once so a
+ * genuinely malformed response doesn't pass silently.
+ *
+ * Exported so `reportsExport.ts`'s `orders.csv` can reuse the identical
+ * figures rather than re-deriving them, so the report screen and the CSV
+ * export can never drift apart on what "matched"/"mismatch" means.
+ *
+ * @param {OrderRow} order a `fiscal_status === 'fiscalized'` order
+ * @param {Logger} logger
+ * @returns {FiscalReconciliationRow}
+ */
+export function buildReconciliationRow(order: OrderRow, logger: Logger): FiscalReconciliationRow {
+  const payload = JSON.parse(order.payload_json || '{}') as { clientOrderUuid?: string }
+  const traderInvoiceNumber = buildTraderSystemInvNum(order.local_id, payload.clientOrderUuid ?? '')
+  const charged = order.total
+  const base = {
+    localId: order.local_id,
+    createdAt: order.created_at,
+    traderInvoiceNumber,
+    cuInvoiceNumber: order.fiscal_invoice_number,
+    charged
+  }
+
+  if (!order.fiscal_vat_groups_json) {
+    return { ...base, deviceTotal: null, difference: null, status: 'no-device-figure', vatByGroup: {} }
+  }
+
+  const rawGroups = JSON.parse(order.fiscal_vat_groups_json) as FiscalVatGroupAmounts
+  const parsedAmounts: Partial<Record<VatGroupLetter, number>> = {}
+  for (const letter of VAT_GROUP_LETTERS) {
+    const raw = rawGroups[letter]
+    if (raw === undefined) continue
+    const value = Number(raw)
+    if (!Number.isFinite(value)) {
+      logger.warn(
+        `[rubis-pos] Fiscal reconciliation: order ${order.local_id} has a non-numeric VAT-group ${letter} ` +
+          `amount ("${raw}") — reported as no device figure, not a mismatch`
+      )
+      return { ...base, deviceTotal: null, difference: null, status: 'no-device-figure', vatByGroup: {} }
+    }
+    parsedAmounts[letter] = value
+  }
+
+  const deviceTotal =
+    Math.round(Object.values(parsedAmounts).reduce((sum: number, value) => sum + (value ?? 0), 0) * 100) / 100
+  const difference = Math.round((deviceTotal - charged) * 100) / 100
+  const status: FiscalReconciliationStatus = Math.abs(difference) <= 0.01 ? 'matched' : 'mismatch'
+  const vatByGroup: Partial<Record<VatGroupLetter, FiscalReconciliationGroupVat>> = {}
+  for (const letter of Object.keys(parsedAmounts) as VatGroupLetter[]) {
+    const amount = parsedAmounts[letter] as number
+    vatByGroup[letter] = { amount, vat: deriveGroupVat(letter, amount) }
+  }
+
+  return { ...base, deviceTotal, difference, status, vatByGroup }
+}
+
+/**
+ * Fiscal reconciliation report (docs/phase-159 B1.1/B1.2, builds 2-3;
+ * VIL checklist item 13 — "system invoice amount versus the validated
+ * amount"): for every `'fiscalized'` order in `range`, compares what the
+ * till charged against the fiscal device's own per-VAT-group amounts
+ * (stored verbatim by docs/phase-163's Commit 1), read-only — no device
+ * command is sent here.
+ *
+ * Deliberately **not** run through {@link excludeVoided}, exactly like
+ * {@link generateFiscalStatusByDay}: a fiscalised sale stays filed with
+ * KRA even if it is later voided, so this view must keep showing it
+ * rather than hide a real filing.
+ *
+ * @param {RubisDatabase} db
+ * @param {ReportRange} range
+ * @param {Logger} [logger] defaults to `console`
+ * @returns {FiscalReconciliationReport}
+ */
+export function generateFiscalReconciliation(
+  db: RubisDatabase,
+  range: ReportRange,
+  logger: Logger = console
+): FiscalReconciliationReport {
+  const fiscalisedOrders = db
+    .getOrdersForDateRange(range.startIso, range.endIso)
+    .filter((order) => order.fiscal_status === 'fiscalized')
+
+  const rows = fiscalisedOrders.map((order) => buildReconciliationRow(order, logger))
+  rows.sort((a, b) => reconciliationSortWeight(a.status) - reconciliationSortWeight(b.status))
+
+  const totals = rows.reduce<FiscalReconciliationTotals>(
+    (acc, row) => {
+      if (row.status === 'matched') acc.matched += 1
+      else if (row.status === 'mismatch') acc.mismatch += 1
+      else acc.noDeviceFigure += 1
+      acc.sumCharged = Math.round((acc.sumCharged + row.charged) * 100) / 100
+      if (row.deviceTotal !== null) acc.sumDevice = Math.round((acc.sumDevice + row.deviceTotal) * 100) / 100
+      if (row.difference !== null) {
+        acc.sumDifference = Math.round((acc.sumDifference + row.difference) * 100) / 100
+      }
+      return acc
+    },
+    { matched: 0, mismatch: 0, noDeviceFigure: 0, sumCharged: 0, sumDevice: 0, sumDifference: 0 }
+  )
+
+  return { startIso: range.startIso, endIso: range.endIso, label: range.label, rows, totals }
 }

@@ -64,6 +64,27 @@ function stubApi(overrides: Record<string, unknown> = {}): void {
     getFiscalStatusByDay: vi.fn().mockResolvedValue(
       ok([{ localDay: '2026-09-26', fiscalized: 4, waiting: 1, needsFixing: 0 }])
     ),
+    getFiscalReconciliation: vi.fn().mockResolvedValue(
+      ok({
+        startIso: '2026-09-26T00:00:00.000Z',
+        endIso: '2026-09-27T00:00:00.000Z',
+        label: 'Today (2026-09-26)',
+        rows: [
+          {
+            localId: 1,
+            createdAt: '2026-09-26T09:00:00.000Z',
+            traderInvoiceNumber: 'INV-000000001',
+            cuInvoiceNumber: 'CU-001',
+            charged: 190,
+            deviceTotal: 200,
+            difference: 10,
+            status: 'mismatch',
+            vatByGroup: { A: { amount: 200, vat: 27.59 } }
+          }
+        ],
+        totals: { matched: 0, mismatch: 1, noDeviceFigure: 0, sumCharged: 190, sumDevice: 200, sumDifference: 10 }
+      })
+    ),
     getInvoiceList: vi.fn().mockResolvedValue(
       ok({
         invoices: [
@@ -125,10 +146,19 @@ afterEach(() => {
 })
 
 describe('ReportsPage > sub-nav', () => {
-  it('declares the five named sub-views', async () => {
+  // docs/phase-163: gained a sixth sub-view, "Fiscal Reconciliation" —
+  // was five named sub-views, now six.
+  it('declares the six named sub-views', async () => {
     stubApi()
     await mount()
-    for (const label of ['Shift History', 'Sales Summary', 'Fiscal Status', 'Invoice List', 'Export']) {
+    for (const label of [
+      'Shift History',
+      'Sales Summary',
+      'Fiscal Status',
+      'Fiscal Reconciliation',
+      'Invoice List',
+      'Export'
+    ]) {
       expect(() => button(label)).not.toThrow()
     }
   })
@@ -251,6 +281,57 @@ describe('ReportsPage > Fiscal Status by Day', () => {
     expect(window.api.getFiscalStatusByDay).toHaveBeenCalledWith('today')
     expect(container.textContent).toContain('2026-09-26')
     expect(container.textContent).toContain('4')
+  })
+})
+
+describe('ReportsPage > Fiscal Reconciliation (docs/phase-163)', () => {
+  it('shows summary counts and lists a mismatch row with charged/device/difference/status', async () => {
+    stubApi()
+    await mount()
+    await click('Fiscal Reconciliation')
+
+    expect(window.api.getFiscalReconciliation).toHaveBeenCalledWith('today')
+    expect(container.textContent).toContain('INV-000000001')
+    expect(container.textContent).toContain('CU-001')
+    expect(container.textContent).toContain('mismatch')
+  })
+
+  it('switching presets requests a new report', async () => {
+    stubApi()
+    await mount()
+    await click('Fiscal Reconciliation')
+
+    await click('This week')
+    expect(window.api.getFiscalReconciliation).toHaveBeenCalledWith('thisWeek')
+  })
+
+  it('shows "no device figure" (not blank) for a row with no stored device figure', async () => {
+    const getFiscalReconciliation = vi.fn().mockResolvedValue(
+      ok({
+        startIso: '2026-09-26T00:00:00.000Z',
+        endIso: '2026-09-27T00:00:00.000Z',
+        label: 'Today (2026-09-26)',
+        rows: [
+          {
+            localId: 2,
+            createdAt: '2026-09-26T09:00:00.000Z',
+            traderInvoiceNumber: 'INV-000000002',
+            cuInvoiceNumber: 'CU-002',
+            charged: 100,
+            deviceTotal: null,
+            difference: null,
+            status: 'no-device-figure',
+            vatByGroup: {}
+          }
+        ],
+        totals: { matched: 0, mismatch: 0, noDeviceFigure: 1, sumCharged: 100, sumDevice: 0, sumDifference: 0 }
+      })
+    )
+    stubApi({ getFiscalReconciliation })
+    await mount()
+    await click('Fiscal Reconciliation')
+
+    expect(container.textContent).toContain('no device figure')
   })
 })
 

@@ -282,6 +282,47 @@ describe('generateSalesSummary (docs/phase-158)', () => {
     expect(generateSalesSummary(db, 0.08, range).vatRate).toBe(0.08)
     expect(generateSalesSummary(db, 0.16, range).vatRate).toBe(0.16)
   })
+
+  /**
+   * docs/phase-163, Commit 2 — "VAT from device groups" is a separate
+   * figure from `vatIncluded`, shown alongside it, not replacing it.
+   */
+  describe('vatFromDeviceGroups (docs/phase-163)', () => {
+    it('sums the derivable VAT across a fiscalized order\'s stored device groups', () => {
+      const db = fakeDb({
+        ordersForRange: [
+          order({
+            total: 116,
+            fiscal_status: 'fiscalized',
+            fiscal_vat_groups_json: JSON.stringify({ A: '116.00' })
+          })
+        ]
+      })
+
+      const summary = generateSalesSummary(db, 0.16, range)
+
+      expect(summary.vatIncluded).toBe(16) // unchanged, calculated figure
+      expect(summary.vatFromDeviceGroups).toBe(16) // separate, device-derived figure
+    })
+
+    it('excludes group D (no known rate) and skips orders with no stored device figure', () => {
+      const db = fakeDb({
+        ordersForRange: [
+          order({
+            total: 80,
+            fiscal_status: 'fiscalized',
+            fiscal_vat_groups_json: JSON.stringify({ D: '80.00' })
+          }),
+          order({ total: 50, fiscal_status: 'fiscalized', fiscal_vat_groups_json: null }),
+          order({ total: 20, fiscal_status: 'waiting', fiscal_vat_groups_json: null })
+        ]
+      })
+
+      const summary = generateSalesSummary(db, 0.16, range)
+
+      expect(summary.vatFromDeviceGroups).toBe(0)
+    })
+  })
 })
 
 describe('getUtcDayRange', () => {

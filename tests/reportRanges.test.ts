@@ -14,6 +14,7 @@ import {
   formatVatRateLabel,
   getReportRange,
   generateFiscalStatusByDay,
+  generateFiscalReconciliation,
   localDayOf
 } from '../src/main/services/reports.js'
 import type { RubisDatabase, OrderRow } from '../src/main/services/database.js'
@@ -132,5 +133,170 @@ describe('a sale at 00:30 Nairobi lands on the Nairobi day, not the UTC day it f
     })
 
     expect(rows).toEqual([{ localDay: '2026-09-01', fiscalized: 1, waiting: 0, needsFixing: 0 }])
+  })
+})
+
+describe('generateFiscalReconciliation (docs/phase-163, Commit 2)', () => {
+  const RANGE = { startIso: '2026-09-01T00:00:00.000Z', endIso: '2026-09-02T00:00:00.000Z', label: 'test range' }
+
+  function order(overrides: Partial<OrderRow> = {}): OrderRow {
+    return {
+      local_id: 1,
+      shopify_order_id: null,
+      total: 100,
+      status: 'synced',
+      created_at: '2026-09-01T09:00:00.000Z',
+      payload_json: JSON.stringify({ clientOrderUuid: '11111111-2222-3333-4444-555555555555' }),
+      staff_id: 1,
+      payment_method: 'cash',
+      tendered_amount: 100,
+      change_due: 0,
+      reference_number: null,
+      shift_id: 1,
+      fiscal_invoice_number: 'KRA-0001',
+      fiscal_qr_code: 'base64qr',
+      fiscal_fiscalized_at: '2026-09-01T09:00:01.000Z',
+      fiscal_status: 'fiscalized',
+      fiscal_error_reason: null,
+      fiscal_error_kind: null,
+      fiscal_request_json: null,
+      fiscal_data_issue: null,
+      fiscal_vat_groups_json: null,
+      ...overrides
+    }
+  }
+
+  function dbOf(orders: OrderRow[]): RubisDatabase {
+    return { getOrdersForDateRange: vi.fn(() => orders) } as unknown as RubisDatabase
+  }
+
+  const silentLogger = { log: vi.fn(), warn: vi.fn(), error: vi.fn() }
+
+  it('matched: charged 1.00, device GA "1.00"', () => {
+    const db = dbOf([order({ total: 1, fiscal_vat_groups_json: JSON.stringify({ A: '1.00' }) })])
+
+    const report = generateFiscalReconciliation(db, RANGE)
+
+    expect(report.rows).toHaveLength(1)
+    expect(report.rows[0].status).toBe('matched')
+    expect(report.rows[0].deviceTotal).toBe(1)
+    expect(report.rows[0].difference).toBe(0)
+  })
+
+  it('mismatch: charged 190.00, device GA "200.00" (the docs/phase-160 discount case — the device was never told about the discount)', () => {
+    const db = dbOf([order({ total: 190, fiscal_vat_groups_json: JSON.stringify({ A: '200.00' }) })])
+
+    const report = generateFiscalReconciliation(db, RANGE)
+
+    expect(report.rows[0].status).toBe('mismatch')
+    expect(report.rows[0].deviceTotal).toBe(200)
+    expect(report.rows[0].difference).toBe(10)
+  })
+
+  it('no device figure: fiscal_vat_groups_json is NULL (an older sale, or an already-filed recovery) — never reported as a mismatch', () => {
+    const db = dbOf([order({ fiscal_vat_groups_json: null })])
+
+    const report = generateFiscalReconciliation(db, RANGE)
+
+    expect(report.rows[0].status).toBe('no-device-figure')
+    expect(report.rows[0].deviceTotal).toBeNull()
+    expect(report.rows[0].difference).toBeNull()
+  })
+
+  it('mixed groups: GA "116.00" + GE "50.00" -> device total 166.00, VAT 16.00 from group A, 0 from group E', () => {
+    const db = dbOf([
+      order({ total: 166, fiscal_vat_groups_json: JSON.stringify({ A: '116.00', E: '50.00' }) })
+    ])
+
+    const report = generateFiscalReconciliation(db, RANGE)
+
+    expect(report.rows[0].deviceTotal).toBe(166)
+    expect(report.rows[0].status).toBe('matched')
+    expect(report.rows[0].vatByGroup.A).toEqual({ amount: 116, vat: 16 })
+    expect(report.rows[0].vatByGroup.E).toEqual({ amount: 50, vat: 0 })
+  })
+
+  it('group D amount present: the amount is shown, VAT is "not-known" — never guessed at a rate', () => {
+    const db = dbOf([order({ total: 80, fiscal_vat_groups_json: JSON.stringify({ D: '80.00' }) })])
+
+    const report = generateFiscalReconciliation(db, RANGE)
+
+    expect(report.rows[0].vatByGroup.D).toEqual({ amount: 80, vat: 'not-known' })
+  })
+
+  it('non-numeric value: reported as no device figure (not a mismatch), logged once', () => {
+    const db = dbOf([order({ fiscal_vat_groups_json: JSON.stringify({ A: 'n/a' }) })])
+    const logger = { log: vi.fn(), warn: vi.fn(), error: vi.fn() }
+
+    const report = generateFiscalReconciliation(db, RANGE, logger)
+
+    expect(report.rows[0].status).toBe('no-device-figure')
+    expect(report.rows[0].deviceTotal).toBeNull()
+    expect(logger.warn).toHaveBeenCalledTimes(1)
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('non-numeric'))
+  })
+
+  it('a voided-but-fiscalised order is still listed — a filed sale stays filed with KRA', () => {
+    const db = dbOf([
+      order({
+        status: 'voided',
+        total: 100,
+        fiscal_vat_groups_json: JSON.stringify({ A: '100.00' })
+      })
+    ])
+
+    const report = generateFiscalReconciliation(db, RANGE, silentLogger)
+
+    expect(report.rows).toHaveLength(1)
+    expect(report.rows[0].status).toBe('matched')
+  })
+
+  it('excludes an order that was never fiscalized (waiting/needs_fixing) — nothing to reconcile yet', () => {
+    const db = dbOf([order({ fiscal_status: 'waiting' }), order({ local_id: 2, fiscal_status: 'needs_fixing' })])
+
+    const report = generateFiscalReconciliation(db, RANGE, silentLogger)
+
+    expect(report.rows).toHaveLength(0)
+  })
+
+  it('lists mismatches first, ahead of no-device-figure and matched rows, otherwise in creation order', () => {
+    const matched = order({ local_id: 1, total: 1, fiscal_vat_groups_json: JSON.stringify({ A: '1.00' }) })
+    const noFigure = order({ local_id: 2, fiscal_vat_groups_json: null })
+    const mismatch = order({ local_id: 3, total: 190, fiscal_vat_groups_json: JSON.stringify({ A: '200.00' }) })
+    const db = dbOf([matched, noFigure, mismatch])
+
+    const report = generateFiscalReconciliation(db, RANGE, silentLogger)
+
+    expect(report.rows.map((row) => row.localId)).toEqual([3, 2, 1])
+  })
+
+  it('totals: counts per status, and sums charged/device/difference', () => {
+    const db = dbOf([
+      order({ local_id: 1, total: 1, fiscal_vat_groups_json: JSON.stringify({ A: '1.00' }) }),
+      order({ local_id: 2, total: 190, fiscal_vat_groups_json: JSON.stringify({ A: '200.00' }) }),
+      order({ local_id: 3, fiscal_vat_groups_json: null })
+    ])
+
+    const report = generateFiscalReconciliation(db, RANGE, silentLogger)
+
+    expect(report.totals).toEqual({
+      matched: 1,
+      mismatch: 1,
+      noDeviceFigure: 1,
+      sumCharged: 291,
+      sumDevice: 201,
+      sumDifference: 10
+    })
+  })
+
+  it('builds the trader invoice number from local_id, and carries the CU invoice number through', () => {
+    const db = dbOf([
+      order({ local_id: 42, fiscal_invoice_number: '0000000000123456', fiscal_vat_groups_json: JSON.stringify({ A: '100.00' }) })
+    ])
+
+    const report = generateFiscalReconciliation(db, RANGE, silentLogger)
+
+    expect(report.rows[0].traderInvoiceNumber).toBe('INV-000000042')
+    expect(report.rows[0].cuInvoiceNumber).toBe('0000000000123456')
   })
 })
