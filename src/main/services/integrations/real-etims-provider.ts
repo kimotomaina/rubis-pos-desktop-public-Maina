@@ -1213,6 +1213,14 @@ export class RealFiscalizationProvider implements FiscalizationProvider {
    * VERIFY-AGAINST-REAL-OLD-DEVICE: the `'absent'` path has never run
    * against a real `2204120945` device (see `docs/phase-109.md`).
    *
+   * **One narrow carve-out ahead of the `support`/`deviceNeverSawIt`
+   * fail-safe** (docs/phase-162-2): when BOTH the original `OpenInvoice`
+   * rejection and this function's own `ReadCUinvoiceNumber` read were
+   * refused by the same named `STE1=59` "missing daily closure" condition
+   * (docs/phase-162), the outcome is `'genuine-failure'` regardless of
+   * `defVer`. See the comment at that check for why this is safe and
+   * does not widen the fail-safe for any other kind of failure.
+   *
    * @param {string | undefined} defVer the connected server's echoed `<defVer>`
    * @param {DeviceResult} openResult the rejected `OpenInvoice` result
    * @param {number | undefined} localId sale id, for the debug trace only
@@ -1256,6 +1264,24 @@ export class RealFiscalizationProvider implements FiscalizationProvider {
             'OpenInvoice rejection is genuine: no cuInvoiceNumber in response'
         )
       }
+      return { outcome: 'genuine-failure' }
+    }
+
+    // Both the original OpenInvoice rejection and this recovery read were
+    // refused by the SAME named condition (STE1=59, "missing daily
+    // closure" — docs/phase-162), regardless of `defVer`/`support`. This
+    // files nothing; it only lets the sale keep waiting. The duplicate
+    // check still runs on the next attempt, at OpenInvoice, once the
+    // device answers again — nothing here resends SellPLU/CloseReceipt,
+    // and a device refusing every command outright cannot have filed
+    // anything in the same breath (docs/phase-162-1's Step 0b). Checked
+    // ahead of the `support`/`deviceNeverSawIt` fail-safe below so an
+    // unrecognized `defVer` no longer turns this specific, unambiguous
+    // condition into a false `'unverifiable'` flag (docs/phase-162-1,
+    // Test A, Case B) — every other combination (a different original
+    // error, a different recovery failure, or only one side blocked)
+    // falls through to that fail-safe exactly as before.
+    if (openResult.code === CODE_DAILY_CLOSURE_BLOCK && recovery.code === CODE_DAILY_CLOSURE_BLOCK) {
       return { outcome: 'genuine-failure' }
     }
 

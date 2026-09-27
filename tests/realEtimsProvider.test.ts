@@ -1967,23 +1967,30 @@ describe('TEST A: retry while the device is still blocked, then recovers when th
   })
 
   /**
-   * FINDING (docs/phase-162-1.md): with a blank/unrecognized defVer,
-   * `verifyAlreadyFiled`'s branches resolve differently. `support` is
-   * `'unknown'` and `deviceNeverSawIt` is `false` (a Code 40 device
-   * response never sets `serverFailure`), so
-   * `if (support === 'available' || deviceNeverSawIt)` is FALSE, and the
-   * function falls to its last line:
-   * `return { outcome: 'unverifiable', reason: recovery.error ?? '...' }`.
-   * `submitInvoice`'s retry branch returns early for `'unverifiable'` with
-   * `kind: 'system'`, `retryable: false` — the ORIGINAL OpenInvoice
-   * rejection's own `retryable: true` and daily-closure reason are
-   * discarded. Attempt 2 lands on `needs_fixing`, so the background queue
-   * (`enqueue: false`) stops retrying it automatically; a person must
-   * manually resend (simulated by attempt 3) even though nothing about
-   * this sale's data was ever wrong — see this phase's report for the
-   * proposed (not built) fix.
+   * UPDATED (docs/phase-162-2 — builds the carve-out proposed as a
+   * FINDING in docs/phase-162-1.md). Before this phase, with a blank/
+   * unrecognized defVer, `verifyAlreadyFiled` treated attempt 2's failed
+   * `ReadCUinvoiceNumber` probe as `'unverifiable'` regardless of why it
+   * failed, discarding the original OpenInvoice rejection's own
+   * `retryable: true`/daily-closure reason and landing on `needs_fixing`.
+   * The new carve-out in `verifyAlreadyFiled` (checked ahead of the
+   * `support`/`deviceNeverSawIt` fail-safe) fires here because BOTH the
+   * original `OpenInvoice` failure and the `ReadCUinvoiceNumber` failure
+   * carry `code === CODE_DAILY_CLOSURE_BLOCK`, so the outcome is
+   * `'genuine-failure'` and falls through to the original rejection's own
+   * classification — attempt 2 now stays `'waiting'`, exactly like
+   * attempt 1, and recovers automatically once the block clears (attempt
+   * 3), with no manual resend needed.
+   *
+   * CHANGED ASSERTIONS (docs/phase-162-2, listed per the task's rule):
+   * attempt2.reason: was `UNVERIFIABLE_RETRY_REASON` -> now
+   * `DAILY_CLOSURE_BLOCK_REASON` (this is the behaviour docs/phase-162-1
+   * flagged as wrong and this phase fixes); attempt2.kind: was `'system'`
+   * -> now `'technical'`; attempt2.retryable: was `false` -> now `true`;
+   * routeFiscalOutcome(attempt2): was `{ status: 'needs_fixing', enqueue:
+   * false }` -> now `{ status: 'waiting', enqueue: true }`.
    */
-  it('under an unrecognized/blank defVer: attempt 2 does NOT recover automatically (needs_fixing) — a manual resend still succeeds, no duplicate filing', async () => {
+  it('under an unrecognized/blank defVer, both blocked: attempt 2 now recovers automatically too (docs/phase-162-2)', async () => {
     const post = makeBlockedThenClearedPost()
     const provider = new RealFiscalizationProvider({ ...TEST_DEVICE, httpClient: makeMockClient(post) })
     const request = { ...SAMPLE_REQUEST, localId: 901 }
@@ -1996,19 +2003,122 @@ describe('TEST A: retry while the device is still blocked, then recovers when th
     const attempt2 = await provider.submitInvoice({ ...request, isRetry: true })
     expect(attempt2.ok).toBe(false)
     if (attempt2.ok) return
-    expect(attempt2.reason).toBe(UNVERIFIABLE_RETRY_REASON)
-    expect(attempt2.kind).toBe('system')
-    expect(attempt2.retryable).toBe(false)
-    expect(routeFiscalOutcome(attempt2)).toEqual({ status: 'needs_fixing', enqueue: false })
+    expect(attempt2.reason).toBe(DAILY_CLOSURE_BLOCK_REASON)
+    expect(attempt2.kind).toBe('technical')
+    expect(attempt2.retryable).toBe(true)
+    expect(routeFiscalOutcome(attempt2)).toEqual({ status: 'waiting', enqueue: true })
 
-    // A manual resend (still `isRetry: true`, the same guarded path) once
-    // the closure clears — recovers cleanly, no duplicate filing.
+    // Attempt 3 — block cleared; the device has no record for this
+    // TraderSystemInvNum, so the full sequence completes with exactly one
+    // CloseReceipt.
     const attempt3 = await provider.submitInvoice({ ...request, isRetry: true })
     expect(attempt3.ok).toBe(true)
     if (!attempt3.ok) return
     expect(attempt3.data.invoiceNumber).toBe('KRA-0001')
 
     expect(commandSequence(post).filter((c) => c === 'CloseReceipt')).toHaveLength(1)
+  })
+
+  /**
+   * The task's third scenario: the block clears, but this time the device
+   * DOES hold a record for this TraderSystemInvNum (OpenInvoice is
+   * rejected for an unrelated reason and ReadCUinvoiceNumber names the CU
+   * invoice number) — the pre-existing `if (cuInvoiceNumber) { return {
+   * outcome: 'already-filed', cuInvoiceNumber } }` branch, entirely
+   * unaffected by the new carve-out (recovery did not fail at all here).
+   */
+  it('blank defVer, block clears, device ALREADY HAS the sale on file: recovers as already-filed, zero new CloseReceipt calls', async () => {
+    let openInvoiceCalls = 0
+    const post = vi.fn().mockImplementation((path: string, body: string) => {
+      const command = commandNameOf([path, body])
+      if (command === 'OpenInvoiceWithFreeCustomerData') {
+        openInvoiceCalls += 1
+        if (openInvoiceCalls === 1) {
+          return Promise.resolve({ data: xmlCommandError(0, 'irrelevant', 59) })
+        }
+        // Attempt 2 — block cleared, but the device already holds this
+        // TraderSystemInvNum (a reply lost on attempt 1's own device-side
+        // processing, or an operator resend after the closure ran).
+        return Promise.resolve({ data: xmlCommandError(57, 'Conflict in tax group') })
+      }
+      if (command === 'ReadCUinvoiceNumber') {
+        return Promise.resolve({ data: '<Res Code="0"><CU_InvoiceNumber>0000000009999999</CU_InvoiceNumber></Res>' })
+      }
+      return makeSuccessfulPostImpl()(path, body)
+    })
+    const provider = new RealFiscalizationProvider({ ...TEST_DEVICE, httpClient: makeMockClient(post) })
+    const request = { ...SAMPLE_REQUEST, localId: 902 }
+
+    const attempt1 = await provider.submitInvoice(request)
+    expect(attempt1.ok).toBe(false)
+
+    const attempt2 = await provider.submitInvoice({ ...request, isRetry: true })
+    expect(attempt2.ok).toBe(true)
+    if (!attempt2.ok) return
+    expect(attempt2.data.invoiceNumber).toBe('0000000009999999')
+    expect(attempt2.data.qrCode).toBe('')
+
+    expect(commandSequence(post)).not.toContain('CloseReceipt')
+  })
+
+  /**
+   * The carve-out must not widen: OpenInvoice is blocked (STE1=59), but
+   * `ReadCUinvoiceNumber` fails with an unrelated server error (Code 63) —
+   * only ONE side carries `CODE_DAILY_CLOSURE_BLOCK`, so the carve-out
+   * does not fire and the pre-existing blank-defVer fail-safe still
+   * applies, exactly as `tests/defVersionCompatibility.test.ts`'s own
+   * `'flags when ReadCUinvoiceNumber is refused ...'` test already
+   * establishes for a different original error.
+   */
+  it('blank defVer, OpenInvoice blocked but ReadCUinvoiceNumber fails with Code 63: still unverifiable — the carve-out does not widen', async () => {
+    const post = vi.fn().mockImplementation((path: string, body: string) => {
+      const command = commandNameOf([path, body])
+      if (command === 'OpenInvoiceWithFreeCustomerData') {
+        return Promise.resolve({ data: xmlCommandError(0, 'irrelevant', 59) })
+      }
+      if (command === 'ReadCUinvoiceNumber') {
+        return Promise.resolve({ data: xmlServerError('63', 'Invalid POST') })
+      }
+      return makeSuccessfulPostImpl()(path, body)
+    })
+    const provider = new RealFiscalizationProvider({ ...TEST_DEVICE, httpClient: makeMockClient(post) })
+
+    const result = await provider.submitInvoice({ ...SAMPLE_REQUEST, isRetry: true })
+
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.reason).toBe(UNVERIFIABLE_RETRY_REASON)
+    expect(result.kind).toBe('system')
+    expect(result.retryable).toBe(false)
+  })
+
+  /**
+   * The carve-out must not widen the other way either: OpenInvoice fails
+   * with an unrelated error (not the daily-closure block), while
+   * `ReadCUinvoiceNumber` happens to be blocked — only the RECOVERY side
+   * carries `CODE_DAILY_CLOSURE_BLOCK`, so the carve-out still does not
+   * fire (both sides must match).
+   */
+  it('blank defVer, OpenInvoice fails with another error, ReadCUinvoiceNumber blocked: still unverifiable — the carve-out does not widen', async () => {
+    const post = vi.fn().mockImplementation((path: string, body: string) => {
+      const command = commandNameOf([path, body])
+      if (command === 'OpenInvoiceWithFreeCustomerData') {
+        return Promise.resolve({ data: xmlCommandError(57, 'Conflict in tax group') })
+      }
+      if (command === 'ReadCUinvoiceNumber') {
+        return Promise.resolve({ data: xmlCommandError(0, 'irrelevant', 59) })
+      }
+      return makeSuccessfulPostImpl()(path, body)
+    })
+    const provider = new RealFiscalizationProvider({ ...TEST_DEVICE, httpClient: makeMockClient(post) })
+
+    const result = await provider.submitInvoice({ ...SAMPLE_REQUEST, isRetry: true })
+
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.reason).toBe(UNVERIFIABLE_RETRY_REASON)
+    expect(result.kind).toBe('system')
+    expect(result.retryable).toBe(false)
   })
 })
 
