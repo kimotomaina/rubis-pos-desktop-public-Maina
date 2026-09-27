@@ -57,6 +57,7 @@ function makeEngine(overrides: {
 }) {
   const db = {
     getPendingSyncQueue: vi.fn(() => overrides.items ?? []),
+    recordPushStarted: vi.fn(),
     markQueueItemSynced: vi.fn(),
     recordQueueFailure: vi.fn(() => ({
       exhausted: overrides.exhausted ?? false,
@@ -328,6 +329,101 @@ describe('SyncEngine after Retry Sync on a pending sale (real SQLite)', () => {
     expect(db.getOrder(localId)?.status).toBe('synced')
     expect(db.getOrder(localId)?.shopify_order_id).toBe('gid://shopify/Order/77')
     expect(db.getPendingSyncQueue(Number.MAX_SAFE_INTEGER)).toHaveLength(0)
+  })
+})
+
+/**
+ * docs/phase-168 section 2.4: the push marker (`shopify_push_count`,
+ * `shopify_last_push_at`) is written immediately before each request.
+ * Marker only; nothing reads it yet, so pushing behaves as before.
+ */
+describe('SyncEngine push marker', () => {
+  it('writes the marker for the queue row\'s sale before calling pushOrder', async () => {
+    const { db, pushOrder, engine } = makeEngine({ items: [makeItem(1)] })
+
+    await engine.tick()
+
+    expect(db.recordPushStarted).toHaveBeenCalledWith(101)
+    expect(db.recordPushStarted.mock.invocationCallOrder[0]).toBeLessThan(
+      pushOrder.mock.invocationCallOrder[0]
+    )
+  })
+
+  it('does not write the marker while offline (nothing is sent)', async () => {
+    const { db, engine } = makeEngine({ items: [makeItem(1)], online: false })
+
+    await engine.tick()
+
+    expect(db.recordPushStarted).not.toHaveBeenCalled()
+  })
+
+  /** A real in-memory database with one queued sale; `pushOrder` is always a stub. */
+  const seeded = () => {
+    const db = new RubisDatabase({ dbPath: ':memory:' })
+    db.init()
+    const { localId } = db.queueOrder({
+      items: [],
+      total: 10,
+      clientOrderUuid: 'uuid-marker',
+      staffId: 1,
+      staffName: 'Alex',
+      paymentMethod: 'cash',
+      tenderedAmount: 10,
+      changeDue: 0
+    })
+    return { db, localId }
+  }
+
+  it('starts at count 0 with no push time', () => {
+    const { db, localId } = seeded()
+
+    expect(db.getShopifyPushMarker(localId)).toEqual({ count: 0, lastPushAt: null })
+  })
+
+  it('a push that throws still leaves count 1', async () => {
+    const { db, localId } = seeded()
+    const pushOrder = vi.fn(async () => {
+      throw new Error('socket hang up')
+    })
+    const engine = createSyncEngine({ db, isOnline: () => true, pushOrder })
+
+    await expect(engine.tick()).rejects.toThrow('socket hang up')
+
+    const marker = db.getShopifyPushMarker(localId)
+    expect(marker?.count).toBe(1)
+    expect(marker?.lastPushAt).not.toBeNull()
+  })
+
+  it('two pushes give count 2', async () => {
+    const { db, localId } = seeded()
+    let clock = Date.now()
+    const pushOrder = vi
+      .fn()
+      .mockResolvedValueOnce({ success: false, error: 'timed out' })
+      .mockResolvedValueOnce({
+        success: true,
+        data: { shopifyOrderId: 'gid://shopify/Order/88', orderName: '#1088' }
+      })
+    const engine = createSyncEngine({ db, isOnline: () => true, pushOrder, now: () => clock })
+
+    await engine.tick()
+    // Past the first failure's 30 s backoff, so the row is due again.
+    clock += 60_000
+    await engine.tick()
+
+    expect(pushOrder).toHaveBeenCalledTimes(2)
+    expect(db.getShopifyPushMarker(localId)?.count).toBe(2)
+  })
+
+  it('Retry Sync never resets the marker', async () => {
+    const { db, localId } = seeded()
+    const pushOrder = vi.fn(async () => ({ success: false, error: 'timed out' }))
+    const engine = createSyncEngine({ db, isOnline: () => true, pushOrder })
+    await engine.tick()
+
+    db.retryOrderSync(localId)
+
+    expect(db.getShopifyPushMarker(localId)?.count).toBe(1)
   })
 })
 

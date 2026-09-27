@@ -23,6 +23,7 @@ import type { OrderCreateResult } from './orders.js'
  */
 export interface SyncEngineDatabase {
   getPendingSyncQueue(now: number): SyncQueueItem[]
+  recordPushStarted(localId: number): void
   markQueueItemSynced(queueId: number, shopifyOrderId: string): void
   recordQueueFailure(queueId: number, error: string): { exhausted: boolean }
 }
@@ -86,6 +87,11 @@ export function createSyncEngine(options: SyncEngineOptions): SyncEngine {
       for (const item of pending) {
         if (!isOnline()) break
 
+        // Before the request, never after: a sale whose request went out
+        // but whose reply was lost must still read as "possibly already in
+        // Shopify" (docs/phase-168 section 2.4). Synchronous, so it is
+        // committed before `pushOrder` starts.
+        db.recordPushStarted(item.entity_id)
         const result = await pushOrder(item.payload)
 
         if (result.success && result.data) {

@@ -415,6 +415,26 @@ function migrateOrdersReceiptColumns(connection: SqliteConnection): void {
 }
 
 /**
+ * Adds the Shopify push marker (docs/phase-168 section 2.4) to a
+ * pre-existing `orders` table: how many times this sale has been sent
+ * to `orderCreate`, and when it was last sent. Kept in its own migration
+ * for the same reason as {@link migrateOrdersReceiptColumns}; same
+ * idempotent `ALTER TABLE` pattern. Existing rows read back as count 0
+ * and a null time, which is also true of every sale sent before this
+ * marker existed: the marker cannot know about those.
+ */
+function migrateOrdersPushColumns(connection: SqliteConnection): void {
+  const columns = ['shopify_push_count INTEGER NOT NULL DEFAULT 0', 'shopify_last_push_at TEXT']
+  for (const column of columns) {
+    try {
+      connection.exec(`ALTER TABLE orders ADD COLUMN ${column}`)
+    } catch {
+      // Column already exists — table was created with the current schema.
+    }
+  }
+}
+
+/**
  * Adds `excluded_count` to a `mpesa_day_approvals` table created before
  * docs/phase-153 introduced per-entry exclusions — a fresh table already
  * has the column via {@link SCHEMA.mpesaDayApprovals}, so this is a no-op
@@ -468,7 +488,9 @@ export const SCHEMA = {
     fiscal_vat_groups_json TEXT,
     fiscal_fiscalized_at_source TEXT CHECK (fiscal_fiscalized_at_source IN ('device', 'local-fallback')),
     fiscal_cu_serial TEXT,
-    receipt_printed_at TEXT
+    receipt_printed_at TEXT,
+    shopify_push_count INTEGER NOT NULL DEFAULT 0,
+    shopify_last_push_at TEXT
   )`,
   syncQueue: `CREATE TABLE IF NOT EXISTS sync_queue (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1153,6 +1175,7 @@ export class RubisDatabase {
     connection.exec(SCHEMA.mpesaDayExclusionsPaymentIndex)
     migrateOrdersFiscalColumns(connection)
     migrateOrdersReceiptColumns(connection)
+    migrateOrdersPushColumns(connection)
     connection.exec(SCHEMA.fiscalInvoiceIndex)
     connection.exec(SCHEMA.ordersCreatedAtIndex)
     this.connection = connection
@@ -1778,6 +1801,43 @@ export class RubisDatabase {
       .prepare('SELECT COUNT(*) as count FROM orders WHERE created_at >= ? AND created_at < ?')
       .get(startIso, endIso) as { count: number }
     return { rows, total: count }
+  }
+
+  /**
+   * Records that this sale is about to be sent to Shopify's
+   * `orderCreate`: adds one to `shopify_push_count` and stamps
+   * `shopify_last_push_at`. The sync engine calls this immediately
+   * BEFORE the request, so a request whose reply never arrives (a
+   * timeout, a crash, a forced quit) still leaves the sale marked as
+   * possibly already in Shopify (docs/phase-168 section 2.4). Both
+   * columns change in one `UPDATE`, which SQLite commits atomically as
+   * its own transaction.
+   *
+   * Nothing reads the marker yet; a later phase's pre-push check will.
+   * {@link retryOrderSync} never resets it, since it lives on the order,
+   * not on the queue row.
+   *
+   * @param {number} localId
+   */
+  recordPushStarted(localId: number): void {
+    this.conn
+      .prepare(
+        'UPDATE orders SET shopify_push_count = shopify_push_count + 1, shopify_last_push_at = ? WHERE local_id = ?'
+      )
+      .run(new Date().toISOString(), localId)
+  }
+
+  /**
+   * Reads one sale's Shopify push marker (see {@link recordPushStarted}).
+   *
+   * @param {number} localId
+   * @returns the count and last push time, or `undefined` when the sale does not exist
+   */
+  getShopifyPushMarker(localId: number): { count: number; lastPushAt: string | null } | undefined {
+    const row = this.conn
+      .prepare('SELECT shopify_push_count, shopify_last_push_at FROM orders WHERE local_id = ?')
+      .get(localId) as { shopify_push_count: number; shopify_last_push_at: string | null } | undefined
+    return row ? { count: row.shopify_push_count, lastPushAt: row.shopify_last_push_at } : undefined
   }
 
   /**
