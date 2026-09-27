@@ -10,12 +10,9 @@
  * Covers, across all 9 supported-display cases (`CASES` below):
  *   - the POS/catalog screen (Cash and M-Pesa, an empty cart and a
  *     populated one — the screen this was built to fix);
- *   - VariantModal (a multi-variant product search — best-effort, via a
- *     real catalog search; see the synthetic version below for the
- *     reliable measurement) and ConnectivityModal (via the header's
- *     "Status" button);
- *   - the on-screen keyboard, modal variant (docked-sheet variant is
- *     also attempted here, best-effort — see the synthetic version below);
+ *   - ConnectivityModal (via the header's "Status" button);
+ *   - the on-screen keyboard, modal variant (the docked-sheet variant is
+ *     measured by the synthetic case below);
  *   - Order History, and (docs/phase-166 Commit E3) every Admin section,
  *     each a card in a grid (docs/phase-167 Part A): the Admin grid
  *     itself, Overview, Integrations (its own grid of 5 sections, plus
@@ -24,15 +21,18 @@
  *     Take, End of Day, Reports (its own grid of 6 sub-views, docs/
  *     phase-158), System — navigated by tapping a card then "Back to
  *     Admin"/"Back to Integrations"/"Back to Reports", never tab clicks;
- *   - ZReportModal (a Shift History row — best-effort, see the synthetic
- *     version below) and ManagerPinModal ("Save & Restart" in System,
- *     best-effort, skipped with a note if nothing is there to open it).
+ *   - ManagerPinModal ("Save & Restart" in System, best-effort, skipped
+ *     with a note if nothing is there to open it).
  * Every "best-effort" item above is skipped with a note rather than
  * failing the whole run if the trigger isn't found (e.g. a non-admin
- * seed account, or a demo catalog with no matching content) — that is
- * exactly why docs/phase-167 Part B item 1 adds the synthetic versions
- * below, so these three screens get a reliable measurement regardless
- * of what this dev environment's real data happens to contain.
+ * seed account).
+ *
+ * VariantModal, the docked keyboard and ZReportModal used to be
+ * attempted here too, by clicking through real data (a catalogue search
+ * for a multi-variant product, a real manual M-Pesa code field, a real
+ * Shift History row). That data is rarely present, so they mostly
+ * skipped. docs/phase-169 commit 3 removed those attempts: the synthetic
+ * cases below measure the same three screens at all 9 sizes, every run.
  *
  * Three screens are measured with entirely synthetic, renderer-only
  * data (docs/phase-167 Part B item 1; `App.tsx`'s
@@ -426,22 +426,6 @@ async function checkAdminScreens(cmd) {
       if (await clickWhereText(cmd, 'button', label)) {
         await new Promise((r) => setTimeout(r, 500))
         record(await censusLabelled(cmd, `Admin > Reports > ${label}`))
-
-        if (label === 'Shift History') {
-          if (await clickBySelector(cmd, 'tbody tr.cursor-pointer')) {
-            await new Promise((r) => setTimeout(r, 400))
-            const opened = await evaluate(cmd, `document.body.innerText.includes('Z-Report')`)
-            if (opened) {
-              record(await censusLabelled(cmd, 'ZReportModal'))
-              await clickBySelector(cmd, 'button[aria-label="Close"]')
-              await new Promise((r) => setTimeout(r, 200))
-            } else {
-              findings.push('  (ZReportModal: row click did not open it — skipping)')
-            }
-          } else {
-            findings.push('  (ZReportModal: no shift history row to click — skipping)')
-          }
-        }
         await clickWhereText(cmd, 'button', 'Back to Reports')
         await new Promise((r) => setTimeout(r, 200))
       } else {
@@ -495,79 +479,6 @@ async function censusLabelled(cmd, label) {
   const ok = !result.pageOverflowX && !result.pageOverflowY && unexpectedScrollers.length === 0
   const line = `${ok ? '✔' : '✖'} ${label}: page ${result.scrollWidth}x${result.scrollHeight} vs client ${result.clientWidth}x${result.clientHeight}${unexpectedScrollers.length ? `, ${unexpectedScrollers.length} inner scroller(s): ${JSON.stringify(unexpectedScrollers)}` : ''}`
   return { ok, line }
-}
-
-/**
- * Best-effort search for a multi-variant product to open `VariantModal`
- * (docs/phase-166 Commit E3) — tries several common letters against the
- * live catalog and, for each, every row the dropdown shows (up to
- * `AUTOCOMPLETE_MAX_RESULTS`), not just the first: a single-variant
- * match adds straight to the cart instead of opening the modal
- * (`PosSearchBar`'s own `selectProduct` logic), so this clears the cart
- * add and tries the row after it before moving to the next letter.
- */
-async function tryOpenVariantModal(cmd) {
-  for (const query of ['a', 'e', 'i', 'o', 'u', 's', 'm', 'c', 'r', 't', 'p', 'l']) {
-    const typed = await evaluate(
-      cmd,
-      `(() => {
-        const input = document.querySelector('input[placeholder]');
-        if (!input) return false;
-        const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
-        setter.call(input, ${JSON.stringify(query)});
-        input.dispatchEvent(new Event('input', { bubbles: true }));
-        return true;
-      })()`
-    )
-    if (!typed) return false
-    await new Promise((r) => setTimeout(r, 400))
-
-    const rowCount = await evaluate(cmd, `document.querySelectorAll('[role="option"] button').length`)
-
-    for (let index = 0; index < rowCount; index++) {
-      // Re-typing before every row click: a single-variant row's click
-      // adds to cart and closes the dropdown, so each attempt after the
-      // first needs the dropdown re-opened from scratch.
-      await evaluate(
-        cmd,
-        `(() => {
-          const input = document.querySelector('input[placeholder]');
-          if (!input) return;
-          const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
-          setter.call(input, '');
-          input.dispatchEvent(new Event('input', { bubbles: true }));
-        })()`
-      )
-      await new Promise((r) => setTimeout(r, 150))
-      await evaluate(
-        cmd,
-        `(() => {
-          const input = document.querySelector('input[placeholder]');
-          if (!input) return;
-          const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
-          setter.call(input, ${JSON.stringify(query)});
-          input.dispatchEvent(new Event('input', { bubbles: true }));
-        })()`
-      )
-      await new Promise((r) => setTimeout(r, 400))
-
-      const clicked = await evaluate(
-        cmd,
-        `(() => {
-          const rows = document.querySelectorAll('[role="option"] button');
-          const row = rows[${index}];
-          if (row) { row.click(); return true; }
-          return false;
-        })()`
-      )
-      if (!clicked) continue
-      await new Promise((r) => setTimeout(r, 300))
-
-      const opened = await evaluate(cmd, `document.body.innerText.includes('Select Variant')`)
-      if (opened) return true
-    }
-  }
-  return false
 }
 
 /** Copies only the app's own state (never Chromium's cache, which may be locked by an already-running real instance and is irrelevant here) into `dest`. */
@@ -733,20 +644,6 @@ async function runCase(testCase, outDir) {
 
     let extraFailures = 0
 
-    const variantModalOpened = await tryOpenVariantModal(cmd)
-    if (variantModalOpened) {
-      const result = await censusLabelled(cmd, 'VariantModal')
-      findings.push(result.line)
-      log(result.line)
-      if (!result.ok) extraFailures++
-      await clickBySelector(cmd, 'button[aria-label="Close"]')
-      await new Promise((r) => setTimeout(r, 200))
-    } else {
-      findings.push(
-        '  (VariantModal: no multi-variant product found in this catalog after several tries — skipping)'
-      )
-    }
-
     // NavStatusButton's "Status" popover, and the ConnectivityModal one of its rows opens.
     // Not `clickWhereText`: each row's button also renders a trailing
     // "Connected"/"Disconnected"/etc. detail span as a sibling of the
@@ -834,22 +731,6 @@ async function runCase(testCase, outDir) {
     }
 
     failures += extraFailures
-
-    // Docked keyboard sheet — the manual M-Pesa code field, still
-    // showing from the M-Pesa scenario just above (best-effort: only
-    // present when this till's M-Pesa confirmation method is 'manual',
-    // or 'daraja' with manual entry enabled).
-    if (await clickBySelector(cmd, 'input[aria-label^="M-Pesa code"]')) {
-      await new Promise((r) => setTimeout(r, 300))
-      const result = await censusLabelled(cmd, 'Keyboard (docked sheet)')
-      findings.push(result.line)
-      log(result.line)
-      if (!result.ok) failures++
-      await clickWhereText(cmd, 'button', 'Submit')
-      await new Promise((r) => setTimeout(r, 200))
-    } else {
-      findings.push('  (Keyboard docked sheet: manual M-Pesa code field not found — skipping)')
-    }
 
     const adminResult = await checkAdminScreens(cmd)
     findings.push(...adminResult.findings)
@@ -1023,11 +904,11 @@ async function main() {
   }
 
   /**
-   * The three screens phase-166 could only skip with a note
-   * (VariantModal, the docked keyboard, ZReportModal) — docs/phase-167
-   * Part B item 1 measures each properly instead, with synthetic,
-   * renderer-only data, at ALL 9 sizes (not just {@link TIGHTEST_CASE}),
-   * per that item's own instruction.
+   * VariantModal, the docked keyboard and ZReportModal, measured with
+   * synthetic, renderer-only data (docs/phase-167 Part B item 1) at ALL
+   * 9 sizes (not just {@link TIGHTEST_CASE}). Since docs/phase-169
+   * commit 3 this is the only place they are measured; the old
+   * click-driven attempts in `runCase` were removed.
    */
   const syntheticScreens = [
     ['mpesaManualKeyboard', 'Keyboard (docked sheet, synthetic manual M-Pesa)'],
