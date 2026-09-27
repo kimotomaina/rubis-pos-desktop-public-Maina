@@ -22,11 +22,22 @@ import type {
   PaymentMethod
 } from '../../../main/services/database.js'
 import { calculateCartTotal, calculateSubtotal, validatePriceOverride } from '../lib/checkoutMath.js'
-import { getAutoPrintOfflineMessage } from '../lib/autoPrintToast.js'
+import { AUTO_PRINT_FAILURE_MESSAGE, getAutoPrintOfflineMessage } from '../lib/autoPrintToast.js'
 import { AUTO_PRINT_OFFLINE_TOAST_TIMEOUT_MS } from '../lib/toastTimeouts.js'
 import { useToastStore } from './toastStore.js'
 
 const AUTO_PRINT_OFFLINE_TOAST_ID = 'auto-print-offline'
+
+/** Shows one of the automatic-print toasts, upserted by id (docs/phase-165, docs/phase-166 Commit 0). */
+function showAutoPrintToast(message: string): void {
+  useToastStore.getState().show({
+    id: AUTO_PRINT_OFFLINE_TOAST_ID,
+    tone: 'warning',
+    message,
+    timeoutMs: AUTO_PRINT_OFFLINE_TOAST_TIMEOUT_MS,
+    onDismiss: () => useToastStore.getState().dismiss(AUTO_PRINT_OFFLINE_TOAST_ID)
+  })
+}
 
 /**
  * Fires the automatic end-of-sale print (docs/phase-165, docs/
@@ -39,7 +50,9 @@ const AUTO_PRINT_OFFLINE_TOAST_ID = 'auto-print-offline'
  * Deliberately NOT awaited by `checkout()`: a print failure (thrown or
  * `{ success: false }`) must never change `checkoutStatus`, reopen the
  * cart, or delay the next sale. The only visible effect of failure here
- * is the printer-offline toast below; anything else is silently ignored.
+ * is a toast (docs/phase-166 Commit 0: a distinct message for an
+ * outright failure vs. a PDF fallback) — anything else about the failure
+ * is silently ignored.
  *
  * The whole call is wrapped in a `try` — not just a `.catch()` on the
  * returned promise — because calling `window.api.printReceipt` itself
@@ -58,22 +71,18 @@ function triggerAutomaticPrint(localId: number): void {
       .printReceipt(localId, { auto: true })
       .then((result) => {
         const message = getAutoPrintOfflineMessage(result)
-        if (!message) return
-        useToastStore.getState().show({
-          id: AUTO_PRINT_OFFLINE_TOAST_ID,
-          tone: 'warning',
-          message,
-          timeoutMs: AUTO_PRINT_OFFLINE_TOAST_TIMEOUT_MS,
-          onDismiss: () => useToastStore.getState().dismiss(AUTO_PRINT_OFFLINE_TOAST_ID)
-        })
+        if (message) showAutoPrintToast(message)
       })
       .catch(() => {
-        // Never let a print failure surface as an error anywhere in the
-        // sale flow — see this function's own doc comment.
+        // The IPC call rejected — treat it the same as any other
+        // outright failure. checkoutStatus is never touched here; see
+        // this function's own doc comment.
+        showAutoPrintToast(AUTO_PRINT_FAILURE_MESSAGE)
       })
   } catch {
     // A synchronous throw from the call itself — see this function's own
     // doc comment on why this can't be caught by `.catch()` alone.
+    showAutoPrintToast(AUTO_PRINT_FAILURE_MESSAGE)
   }
 }
 

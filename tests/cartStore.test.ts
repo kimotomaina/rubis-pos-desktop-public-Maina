@@ -247,6 +247,27 @@ describe('Cart Store — automatic receipt print (docs/phase-165)', () => {
     expect(toasts.some((t) => t.message.includes('Printer offline'))).toBe(true)
   })
 
+  it('shows the failure toast when the automatic print rejects outright, while the sale stays complete (docs/phase-166 Commit 0)', async () => {
+    const printReceipt = vi.fn().mockRejectedValue(new Error('printer exploded'))
+    window.api = {
+      checkout: vi.fn().mockResolvedValue({ success: true, data: makeReceipt() }),
+      printReceipt
+    } as unknown as typeof window.api
+
+    useCartStore.getState().addItem(makeItemInput())
+    await useCartStore.getState().checkout(CHECKOUT_PARAMS)
+
+    expect(useCartStore.getState().checkoutStatus).toBe('synced')
+    expect(useCartStore.getState().checkoutError).toBeNull()
+
+    await flushMicrotasks()
+
+    expect(useCartStore.getState().checkoutStatus).toBe('synced')
+    expect(useCartStore.getState().checkoutError).toBeNull()
+    const toasts = useToastStore.getState().toasts
+    expect(toasts.some((t) => t.message.includes('Receipt did not print'))).toBe(true)
+  })
+
   it('shows no toast when the automatic print succeeds physically', async () => {
     const printReceipt = vi.fn().mockResolvedValue({ success: true, data: { printed: true, mock: false } })
     window.api = {

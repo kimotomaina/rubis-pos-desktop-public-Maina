@@ -1,12 +1,17 @@
 /**
- * `getAutoPrintOfflineMessage` tests (docs/phase-165).
+ * `getAutoPrintOfflineMessage` tests (docs/phase-165, docs/phase-166
+ * Commit 0).
  *
  * Pure derivation, tested directly without mounting anything — same
  * convention as `saleCompleteToast.ts`/`fiscalNotice.ts`.
  */
 
 import { describe, it, expect } from 'vitest'
-import { getAutoPrintOfflineMessage } from '../src/renderer/src/lib/autoPrintToast.js'
+import {
+  AUTO_PRINT_FAILURE_MESSAGE,
+  AUTO_PRINT_OFFLINE_MESSAGE,
+  getAutoPrintOfflineMessage
+} from '../src/renderer/src/lib/autoPrintToast.js'
 
 describe('getAutoPrintOfflineMessage', () => {
   it('returns the offline notice when the automatic print fell back to a PDF', () => {
@@ -15,7 +20,7 @@ describe('getAutoPrintOfflineMessage', () => {
         success: true,
         data: { printed: false, mock: false, mode: 'pdf', filePath: 'C:\\Desktop\\r.pdf' }
       })
-    ).toBe('Printer offline. Receipt saved; print it from Order History when the printer is back.')
+    ).toBe(AUTO_PRINT_OFFLINE_MESSAGE)
   })
 
   it('returns null for a genuine physical print', () => {
@@ -26,7 +31,9 @@ describe('getAutoPrintOfflineMessage', () => {
     expect(getAutoPrintOfflineMessage({ success: true, data: { printed: true, mock: true } })).toBeNull()
   })
 
-  it('returns null for an outright failure — never surfaces as an error toast', () => {
-    expect(getAutoPrintOfflineMessage({ success: false, error: 'Printer error' })).toBeNull()
+  it('returns the failure notice for an outright failure (docs/phase-166 Commit 0)', () => {
+    expect(getAutoPrintOfflineMessage({ success: false, error: 'Printer error' })).toBe(
+      AUTO_PRINT_FAILURE_MESSAGE
+    )
   })
 })
