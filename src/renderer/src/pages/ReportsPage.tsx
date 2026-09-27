@@ -11,6 +11,16 @@ import { formatCurrency } from '../lib/currency.js'
 import { formatVatRateLabel } from '../lib/vatLabel.js'
 import { paginate } from '../lib/paginate.js'
 import ZReportModal from '../components/ZReportModal.js'
+import BackButton from '../components/BackButton.js'
+import SectionCardGrid, { type SectionCard } from '../components/SectionCardGrid.js'
+import {
+  CalendarIcon,
+  ChartBarIcon,
+  LockIcon,
+  InboxIcon,
+  DocumentChartIcon,
+  DownloadIcon
+} from '../components/icons.js'
 
 /** Orders/shifts per page — matches the server-side `REPORTS_PAGE_SIZE` in `index.ts`. */
 const REPORTS_PAGE_SIZE = 10
@@ -32,6 +42,16 @@ const PRESETS: Array<{ key: ReportRangePreset; label: string }> = [
 ]
 
 type ReportsSubView = 'shifts' | 'salesSummary' | 'fiscalByDay' | 'fiscalReconciliation' | 'invoices' | 'export'
+
+/** Reports' own card grid contents (phase-167 Part A item 3). */
+const REPORTS_SECTIONS: SectionCard<ReportsSubView>[] = [
+  { key: 'shifts', label: 'Shift History', icon: <CalendarIcon className="h-8 w-8" /> },
+  { key: 'salesSummary', label: 'Sales Summary', icon: <ChartBarIcon className="h-8 w-8" /> },
+  { key: 'fiscalByDay', label: 'Fiscal Status', icon: <LockIcon className="h-8 w-8" /> },
+  { key: 'fiscalReconciliation', label: 'Fiscal Reconciliation', icon: <InboxIcon className="h-8 w-8" /> },
+  { key: 'invoices', label: 'Invoice List', icon: <DocumentChartIcon className="h-8 w-8" /> },
+  { key: 'export', label: 'Export', icon: <DownloadIcon className="h-8 w-8" /> }
+]
 
 /** A row of preset buttons, shared by every sub-view that offers one. */
 function PresetButtons({
@@ -634,7 +654,7 @@ function ExportView() {
  * @returns {JSX.Element}
  */
 export default function ReportsPage() {
-  const [subView, setSubView] = useState<ReportsSubView>('shifts')
+  const [subView, setSubView] = useState<ReportsSubView | null>(null)
   const [staffById, setStaffById] = useState<Map<number, string>>(new Map())
 
   useEffect(() => {
@@ -650,29 +670,11 @@ export default function ReportsPage() {
 
   return (
     <div className="space-y-4">
-      <div className="flex flex-wrap gap-2 rounded-lg bg-slate-50 p-1">
-        {(
-          [
-            ['shifts', 'Shift History'],
-            ['salesSummary', 'Sales Summary'],
-            ['fiscalByDay', 'Fiscal Status'],
-            ['fiscalReconciliation', 'Fiscal Reconciliation'],
-            ['invoices', 'Invoice List'],
-            ['export', 'Export']
-          ] as const
-        ).map(([key, label]) => (
-          <button
-            key={key}
-            type="button"
-            onClick={() => setSubView(key)}
-            className={`h-11 flex-1 rounded-md px-4 text-base font-semibold transition ${
-              subView === key ? 'bg-white text-rose-700 shadow-sm' : 'text-slate-500'
-            }`}
-          >
-            {label}
-          </button>
-        ))}
-      </div>
+      {subView === null ? (
+        <SectionCardGrid sections={REPORTS_SECTIONS} onSelect={setSubView} />
+      ) : (
+        <BackButton label="Back to Reports" onClick={() => setSubView(null)} />
+      )}
 
       {subView === 'shifts' && <ShiftHistoryView staffName={staffName} />}
       {subView === 'salesSummary' && <SalesSummaryView />}

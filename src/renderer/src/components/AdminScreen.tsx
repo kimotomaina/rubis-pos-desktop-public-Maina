@@ -1,11 +1,24 @@
 import { useEffect, useState } from 'react'
 import { useAuthStore } from '../stores/authStore.js'
+import { useUnfiledCountStore } from '../stores/unfiledCountStore.js'
 import { formatCurrency } from '../lib/currency.js'
 import EmptyState from './EmptyState.js'
 import ZReportModal from './ZReportModal.js'
 import LocationPicker, { type ShopifyLocationOption } from './LocationPicker.js'
 import { useProductStore } from '../stores/productStore.js'
-import { LockIcon } from './icons.js'
+import {
+  LockIcon,
+  ChartBarIcon,
+  LinkIcon,
+  PrinterIcon,
+  CalendarIcon,
+  DocumentChartIcon,
+  WarningIcon,
+  InboxIcon,
+  PackageIcon
+} from './icons.js'
+import BackButton from './BackButton.js'
+import SectionCardGrid, { type SectionCard } from './SectionCardGrid.js'
 import MpesaLogsPage from '../pages/MpesaLogsPage.js'
 import NeedsAttentionPage from '../pages/NeedsAttentionPage.js'
 import StockTakePage from '../pages/StockTakePage.js'
@@ -56,6 +69,58 @@ function openField(
   useKeyboardStore.getState().open({ value, onChange, label, ...options })
 }
 
+/** Every top-level Admin section, in card-grid order (phase-167). */
+type AdminTabKey =
+  | 'overview'
+  | 'integrations'
+  | 'peripherals'
+  | 'mpesaLogs'
+  | 'needsAttention'
+  | 'stockTake'
+  | 'endOfDay'
+  | 'reports'
+  | 'system'
+
+/** Every Integrations sub-section, in card-grid order (phase-167). */
+type IntegrationSectionKey = 'shopify' | 'location' | 'fiscal' | 'mpesa' | 'printer'
+
+/**
+ * The Admin card grid's contents (phase-167 Part A) — icon and title
+ * only, per the brief. `unfiledCount` is threaded in so Needs
+ * Attention's card can carry the same badge `NavStatusButton` already
+ * shows for it, without a second source of truth.
+ *
+ * @param {number | null} unfiledCount
+ * @returns {SectionCard<AdminTabKey>[]}
+ */
+function adminSections(unfiledCount: number | null): SectionCard<AdminTabKey>[] {
+  return [
+    { key: 'overview', label: 'Overview', icon: <ChartBarIcon className="h-8 w-8" /> },
+    { key: 'integrations', label: 'Integrations', icon: <LinkIcon className="h-8 w-8" /> },
+    { key: 'peripherals', label: 'Peripherals', icon: <PrinterIcon className="h-8 w-8" /> },
+    { key: 'mpesaLogs', label: 'M-Pesa Logs', icon: <InboxIcon className="h-8 w-8" /> },
+    {
+      key: 'needsAttention',
+      label: 'Needs Attention',
+      icon: <WarningIcon className="h-8 w-8" />,
+      badge: unfiledCount ?? undefined
+    },
+    { key: 'stockTake', label: 'Stock Take', icon: <PackageIcon className="h-8 w-8" /> },
+    { key: 'endOfDay', label: 'End of Day', icon: <CalendarIcon className="h-8 w-8" /> },
+    { key: 'reports', label: 'Reports', icon: <DocumentChartIcon className="h-8 w-8" /> },
+    { key: 'system', label: 'System', icon: <LockIcon className="h-8 w-8" /> }
+  ]
+}
+
+/** Integrations' own card grid contents (phase-167 Part A item 3). */
+const INTEGRATION_SECTIONS: SectionCard<IntegrationSectionKey>[] = [
+  { key: 'shopify', label: 'Shopify', icon: <LinkIcon className="h-8 w-8" /> },
+  { key: 'location', label: 'Location', icon: <PackageIcon className="h-8 w-8" /> },
+  { key: 'fiscal', label: 'Fiscal Device', icon: <LockIcon className="h-8 w-8" /> },
+  { key: 'mpesa', label: 'M-Pesa', icon: <InboxIcon className="h-8 w-8" /> },
+  { key: 'printer', label: 'Printer', icon: <PrinterIcon className="h-8 w-8" /> }
+]
+
 interface AdminScreenProps {
   /**
    * Opens the Manager PIN gate; calls `onAuthorized` with the
@@ -99,6 +164,7 @@ interface AdminScreenProps {
  */
 export default function AdminScreen({ requestManagerPin, initialTab }: AdminScreenProps) {
   const currentStaff = useAuthStore((state) => state.currentStaff)
+  const unfiledCount = useUnfiledCountStore((state) => state.count)
 
   const [dailySummary, setDailySummary] = useState<DailySummary | null>(null)
   const [currentShift, setCurrentShift] = useState<ShiftRow | null>(null)
@@ -126,27 +192,25 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
   const [resettingConfig, setResettingConfig] = useState(false)
   const [resetConfigError, setResetConfigError] = useState<string | null>(null)
 
-  const [activeTab, setActiveTab] = useState<
-    | 'overview'
-    | 'integrations'
-    | 'peripherals'
-    | 'mpesaLogs'
-    | 'needsAttention'
-    | 'stockTake'
-    | 'endOfDay'
-    | 'reports'
-    | 'system'
-  >(initialTab ?? 'overview')
+  /**
+   * `null` shows the card grid (phase-167); a section is only ever
+   * entered by picking its card, so every existing
+   * `{activeTab === '...' && (...)}` block below is completely
+   * unchanged — only what decides which one renders (a card tap, not a
+   * tab click) is new.
+   */
+  const [activeTab, setActiveTab] = useState<AdminTabKey | null>(initialTab ?? null)
   /**
    * Which Integrations section is on screen (Phase E2(e)) — the tab used
    * to show Shopify/Location/Fiscal device/M-Pesa/Printer all at once,
    * whose combined height was measured overflowing by ~2200px at scale 1
    * (phase-142). Each now renders alone; none of their state or save
    * handlers changed, only which one is visible at a time.
+   *
+   * `null` shows Integrations' own card grid (phase-167), same reasoning
+   * as `activeTab` above.
    */
-  const [integrationSection, setIntegrationSection] = useState<
-    'shopify' | 'location' | 'fiscal' | 'mpesa' | 'printer'
-  >('shopify')
+  const [integrationSection, setIntegrationSection] = useState<IntegrationSectionKey | null>(null)
   const [mpesaConsumerKey, setMpesaConsumerKey] = useState('')
   const [mpesaShortcode, setMpesaShortcode] = useState('')
   const [mpesaEnvironment, setMpesaEnvironment] = useState<'sandbox' | 'production'>('sandbox')
@@ -965,89 +1029,11 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
 
   return (
     <div className="h-full min-h-full w-full space-y-6">
-      <div className="flex flex-wrap gap-2 rounded-lg bg-slate-100 p-1">
-        <button
-          type="button"
-          onClick={() => setActiveTab('overview')}
-          className={`flex h-14 min-w-32 flex-1 items-center justify-center rounded-md px-6 text-lg font-semibold transition ${
-            activeTab === 'overview' ? 'bg-white text-rose-700 shadow-sm' : 'text-slate-500'
-          }`}
-        >
-          Overview
-        </button>
-        <button
-          type="button"
-          onClick={() => setActiveTab('integrations')}
-          className={`flex h-14 min-w-32 flex-1 items-center justify-center rounded-md px-6 text-lg font-semibold transition ${
-            activeTab === 'integrations' ? 'bg-white text-rose-700 shadow-sm' : 'text-slate-500'
-          }`}
-        >
-          Integrations
-        </button>
-        <button
-          type="button"
-          onClick={() => setActiveTab('peripherals')}
-          className={`flex h-14 min-w-32 flex-1 items-center justify-center rounded-md px-6 text-lg font-semibold transition ${
-            activeTab === 'peripherals' ? 'bg-white text-rose-700 shadow-sm' : 'text-slate-500'
-          }`}
-        >
-          Peripherals
-        </button>
-        <button
-          type="button"
-          onClick={() => setActiveTab('mpesaLogs')}
-          className={`flex h-14 min-w-32 flex-1 items-center justify-center rounded-md px-6 text-lg font-semibold transition ${
-            activeTab === 'mpesaLogs' ? 'bg-white text-rose-700 shadow-sm' : 'text-slate-500'
-          }`}
-        >
-          M-Pesa Logs
-        </button>
-        <button
-          type="button"
-          onClick={() => setActiveTab('needsAttention')}
-          className={`flex h-14 min-w-32 flex-1 items-center justify-center rounded-md px-6 text-lg font-semibold transition ${
-            activeTab === 'needsAttention' ? 'bg-white text-rose-700 shadow-sm' : 'text-slate-500'
-          }`}
-        >
-          Needs Attention
-        </button>
-        <button
-          type="button"
-          onClick={() => setActiveTab('stockTake')}
-          className={`flex h-14 min-w-32 flex-1 items-center justify-center rounded-md px-6 text-lg font-semibold transition ${
-            activeTab === 'stockTake' ? 'bg-white text-rose-700 shadow-sm' : 'text-slate-500'
-          }`}
-        >
-          Stock Take
-        </button>
-        <button
-          type="button"
-          onClick={() => setActiveTab('endOfDay')}
-          className={`flex h-14 min-w-32 flex-1 items-center justify-center rounded-md px-6 text-lg font-semibold transition ${
-            activeTab === 'endOfDay' ? 'bg-white text-rose-700 shadow-sm' : 'text-slate-500'
-          }`}
-        >
-          End of Day
-        </button>
-        <button
-          type="button"
-          onClick={() => setActiveTab('reports')}
-          className={`flex h-14 min-w-32 flex-1 items-center justify-center rounded-md px-6 text-lg font-semibold transition ${
-            activeTab === 'reports' ? 'bg-white text-rose-700 shadow-sm' : 'text-slate-500'
-          }`}
-        >
-          Reports
-        </button>
-        <button
-          type="button"
-          onClick={() => setActiveTab('system')}
-          className={`flex h-14 min-w-32 flex-1 items-center justify-center rounded-md px-6 text-lg font-semibold transition ${
-            activeTab === 'system' ? 'bg-white text-rose-700 shadow-sm' : 'text-slate-500'
-          }`}
-        >
-          System
-        </button>
-      </div>
+      {activeTab === null ? (
+        <SectionCardGrid sections={adminSections(unfiledCount)} onSelect={setActiveTab} />
+      ) : (
+        <BackButton label="Back to Admin" onClick={() => setActiveTab(null)} />
+      )}
 
       {activeTab === 'mpesaLogs' && <MpesaLogsPage />}
 
@@ -1181,30 +1167,11 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
          * blank, and vice versa (phase-147 Part 6 #5 fixed).
          */
         <div className="space-y-4">
-          <div className="flex flex-wrap gap-2 rounded-lg bg-slate-50 p-1">
-            {(
-              [
-                ['shopify', 'Shopify'],
-                ['location', 'Location'],
-                ['fiscal', 'Fiscal Device'],
-                ['mpesa', 'M-Pesa'],
-                ['printer', 'Printer']
-              ] as const
-            ).map(([key, label]) => (
-              <button
-                key={key}
-                type="button"
-                onClick={() => setIntegrationSection(key)}
-                className={`h-11 flex-1 rounded-md px-4 text-base font-semibold transition ${
-                  integrationSection === key
-                    ? 'bg-white text-rose-700 shadow-sm'
-                    : 'text-slate-500'
-                }`}
-              >
-                {label}
-              </button>
-            ))}
-          </div>
+          {integrationSection === null ? (
+            <SectionCardGrid sections={INTEGRATION_SECTIONS} onSelect={setIntegrationSection} />
+          ) : (
+            <BackButton label="Back to Integrations" onClick={() => setIntegrationSection(null)} />
+          )}
 
           {integrationsLoading ? (
             <p className="text-base text-slate-400">Loading…</p>
@@ -1578,18 +1545,27 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
 
               {integrationSection === 'fiscal' && (
                 <section className="rounded-xl border border-slate-200 bg-white p-4">
-                  <h3 className="mb-1 text-2xl font-bold text-slate-800">Fiscal Device</h3>
-                <p className="mb-1 text-sm text-slate-500">
-                  How this till reaches the KRA control unit that files your sales.
-                </p>
-                <p className="mb-3 text-base font-medium">
-                  Status:{' '}
-                  <span className={etimsReady ? 'text-emerald-600' : 'text-amber-600'}>
-                    {etimsReady ? 'Set up' : 'Not set up yet'}
-                  </span>
-                </p>
+                  <div className="mb-3 flex items-center justify-between">
+                    <h3 className="text-2xl font-bold text-slate-800">Fiscal Device</h3>
+                    <span
+                      className={`text-base font-medium ${etimsReady ? 'text-emerald-600' : 'text-amber-600'}`}
+                    >
+                      {etimsReady ? 'Set up' : 'Not set up yet'}
+                    </span>
+                  </div>
 
-                <div className="grid grid-cols-2 gap-3">
+                {/**
+                 * Three fields per row, not two (phase-167 Part B item 2):
+                 * this section alone measured ~365px over the design box
+                 * at the tightest supported size with the old two-column
+                 * layout plus a static description under every field.
+                 * Every field below already has an obvious placeholder
+                 * and a label — the removed descriptions restated one or
+                 * the other, so nothing here is undiscoverable, only
+                 * shorter. The password field's own hint is dynamic (it
+                 * differs once a password is already saved) so it stays.
+                 */}
+                <div className="grid grid-cols-3 gap-3">
                   <div>
                     <label className="mb-1 block text-lg font-medium text-slate-600">
                       Fiscal server address
@@ -1604,10 +1580,6 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
                       placeholder={DEFAULT_ETIMS_BASE_URL}
                       className="w-full h-12 rounded-lg border border-slate-300 px-3 text-lg focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-100"
                     />
-                    <p className="mt-1 text-sm text-slate-500">
-                      Leave this as it is unless the fiscal server was installed on another
-                      machine.
-                    </p>
                     {etimsFieldErrors.baseUrl && (
                       <p className="mt-1 text-sm font-medium text-rose-700">
                         {etimsFieldErrors.baseUrl}
@@ -1629,9 +1601,6 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
                       placeholder="192.168.1.50"
                       className="w-full h-12 rounded-lg border border-slate-300 px-3 text-lg focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-100"
                     />
-                    <p className="mt-1 text-sm text-slate-500">
-                      The address of the control unit on the shop network.
-                    </p>
                     {etimsFieldErrors.deviceIp && (
                       <p className="mt-1 text-sm font-medium text-rose-700">
                         {etimsFieldErrors.deviceIp}
@@ -1653,7 +1622,6 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
                       placeholder={DEFAULT_ETIMS_DEVICE_PORT}
                       className="w-full h-12 rounded-lg border border-slate-300 px-3 text-lg focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-100"
                     />
-                    <p className="mt-1 text-sm text-slate-500">Usually 8000.</p>
                     {etimsFieldErrors.devicePort && (
                       <p className="mt-1 text-sm font-medium text-rose-700">
                         {etimsFieldErrors.devicePort}
@@ -1679,9 +1647,7 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
                       className="w-full h-12 rounded-lg border border-slate-300 px-3 text-lg focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-100"
                     />
                     <p className="mt-1 text-sm text-slate-500">
-                      {etimsPasswordConfigured
-                        ? 'Saved securely on this till. Leave blank to keep it, or type a new one to replace it.'
-                        : 'The password set on the control unit. It is stored securely and cannot be read back here.'}
+                      {etimsPasswordConfigured ? 'Blank keeps it.' : 'Set on the control unit.'}
                     </p>
                   </div>
 
@@ -1701,9 +1667,6 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
                       placeholder={DEFAULT_ETIMS_VAT_CLASS}
                       className="w-full h-12 rounded-lg border border-slate-300 px-3 text-lg focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-100"
                     />
-                    <p className="mt-1 text-sm text-slate-500">
-                      Used for items that have no tax class of their own. Normally A.
-                    </p>
                   </div>
                 </div>
 
@@ -1716,9 +1679,6 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
                   >
                     {etimsTesting ? 'Testing…' : 'Test connection'}
                   </button>
-                  <p className="text-sm text-slate-500">
-                    Save first, then test. This does not create a sale.
-                  </p>
                 </div>
 
                 {etimsTestError && (
@@ -1783,9 +1743,6 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
 
               <div className="mt-4 border-t border-slate-100 pt-4">
                 <h4 className="mb-2 text-xl font-semibold text-slate-700">Store Details</h4>
-                <p className="mb-3 text-sm text-slate-500">
-                  Printed at the top of every receipt this till issues.
-                </p>
                 <div className="grid grid-cols-2 gap-3">
                   <div>
                     <label className="mb-1 block text-lg font-medium text-slate-600">
@@ -1816,10 +1773,7 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
                       placeholder="P051234567X"
                       className="w-full h-12 rounded-lg border border-slate-300 px-3 text-lg focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-100"
                     />
-                    <p className="mt-1 text-sm text-slate-500">
-                      Your own PIN, not the customer&apos;s. Leave blank to keep it off the
-                      receipt.
-                    </p>
+                    <p className="mt-1 text-sm text-slate-500">Not the customer&apos;s PIN.</p>
                   </div>
                 </div>
               </div>

@@ -12,7 +12,7 @@ import { formatCurrency } from '../lib/currency.js'
 import { isValidKraPinFormat, KRA_PIN_MAX_LENGTH } from '../lib/kraPin.js'
 import { useKeyboardStore } from '../stores/keyboardStore.js'
 import PaymentModal from './PaymentModal.js'
-import type { ManualMpesaEntryInput } from './PaymentModal.js'
+import type { ManualMpesaEntryInput, MpesaCapabilitiesState } from './PaymentModal.js'
 import VirtualNumpad from './VirtualNumpad.js'
 import type { PaymentMethod } from '../../../main/services/database.js'
 import type { Discount } from '../types/shopify.js'
@@ -23,6 +23,15 @@ interface PosCheckoutPanelProps {
     title: string,
     onAuthorized: (managerId: number, managerPin: string) => void
   ) => void
+  /**
+   * Test-hook-only (docs/phase-167 Part B item 1): forces the M-Pesa
+   * quick-toggle on and `PaymentModal` into its manual-entry screen
+   * regardless of this till's real configured mode, for `check:fit`'s
+   * `'mpesaManualKeyboard'` screen. Always `undefined`/`false` on every
+   * real launch — see `App.tsx`'s own doc comment on where this comes
+   * from.
+   */
+  forceMpesaManualKeyboard?: boolean
 }
 
 /**
@@ -56,7 +65,10 @@ type QuickPaymentMethod = Extract<PaymentMethod, 'cash' | 'mpesa'>
  * @param {PosCheckoutPanelProps} props
  * @returns {JSX.Element}
  */
-export default function PosCheckoutPanel({ requestManagerPin }: PosCheckoutPanelProps) {
+export default function PosCheckoutPanel({
+  requestManagerPin,
+  forceMpesaManualKeyboard
+}: PosCheckoutPanelProps) {
   const cartSubtotal = useCartStore((state) => state.getSubtotal())
   const cartTotal = useCartStore((state) => state.getTotal())
   const cartCount = useCartStore((state) => state.getItemCount())
@@ -73,6 +85,10 @@ export default function PosCheckoutPanel({ requestManagerPin }: PosCheckoutPanel
   const currentStaff = useAuthStore((state) => state.currentStaff)
 
   const [method, setMethod] = useState<QuickPaymentMethod>('cash')
+
+  useEffect(() => {
+    if (forceMpesaManualKeyboard) setMethod('mpesa')
+  }, [forceMpesaManualKeyboard])
   const [tenderedInput, setTenderedInput] = useState('')
   const [companyName, setCompanyName] = useState('')
   const [customerPin, setCustomerPin] = useState('')
@@ -390,7 +406,16 @@ export default function PosCheckoutPanel({ requestManagerPin }: PosCheckoutPanel
                 </button>
               </div>
             ) : (
-              <PaymentModal total={cartTotal} onPaid={handleMpesaPaid} onCancel={() => setMethod('cash')} />
+              <PaymentModal
+                total={cartTotal}
+                onPaid={handleMpesaPaid}
+                onCancel={() => setMethod('cash')}
+                forcedCapabilities={
+                  forceMpesaManualKeyboard
+                    ? ({ status: 'ready', mode: 'manual', manualEntryEnabled: false } as MpesaCapabilitiesState)
+                    : undefined
+                }
+              />
             )}
           </>
         )}

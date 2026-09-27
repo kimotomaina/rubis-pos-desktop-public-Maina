@@ -1,6 +1,12 @@
-import type { ProductSummary, VariantSummary } from '../types/shopify'
-import { formatCurrency } from '../lib/currency'
-import { CloseIcon, PackageIcon } from './icons'
+import { useState } from 'react'
+import type { ProductSummary, VariantSummary } from '../types/shopify.js'
+import { formatCurrency } from '../lib/currency.js'
+import { CloseIcon, PackageIcon } from './icons.js'
+import { paginate } from '../lib/paginate.js'
+import Pager from './Pager.js'
+
+/** Variants per page (docs/phase-167 Part B item 2) — a 6-variant product measured 15-66px over the design box at the tightest sizes with the old plain scrolling list. */
+const VARIANTS_PER_PAGE = 4
 
 interface VariantModalProps {
   product: ProductSummary
@@ -11,9 +17,13 @@ interface VariantModalProps {
 /**
  * Touch-friendly variant picker modal.
  *
- * Displays all variants of a product with their prices,
- * allowing the cashier to select a specific variant before
- * adding it to the cart.
+ * Displays a product's variants with their prices, allowing the
+ * cashier to select a specific variant before adding it to the cart.
+ *
+ * Paginated at {@link VARIANTS_PER_PAGE} (docs/phase-167 Part B item 2,
+ * replacing the list's old internal scroll — Phase E's no-scroll rule):
+ * `check:fit`'s synthetic 6-variant measurement found the plain list
+ * genuinely overflowing the design box, worse at the tightest sizes.
  *
  * @param {VariantModalProps} props
  * @returns {JSX.Element}
@@ -23,6 +33,9 @@ export default function VariantModal({
   onSelectVariant,
   onClose
 }: VariantModalProps) {
+  const [page, setPage] = useState(1)
+  const pageResult = paginate(product.variants, page, VARIANTS_PER_PAGE)
+
   const initials = product.title
     .split(' ')
     .map((w) => w[0])
@@ -83,9 +96,9 @@ export default function VariantModal({
         </div>
 
         {/* Variant list */}
-        <div className="flex-1 overflow-y-auto p-4">
+        <div className="flex-1 p-4">
           <div className="space-y-2">
-            {product.variants.map((variant) => (
+            {pageResult.items.map((variant) => (
               <button
                 key={variant.id}
                 type="button"
@@ -129,6 +142,9 @@ export default function VariantModal({
                 </div>
               </button>
             ))}
+          </div>
+          <div className="mt-3">
+            <Pager page={pageResult.page} pageCount={pageResult.pageCount} onChange={setPage} />
           </div>
         </div>
       </div>

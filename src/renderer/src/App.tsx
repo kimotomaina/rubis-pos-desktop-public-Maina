@@ -34,7 +34,52 @@ import ToastStack from './components/ToastStack'
 import { useToastStore } from './stores/toastStore'
 import { SCAN_TOAST_TIMEOUT_MS } from './lib/toastTimeouts'
 import { WarningIcon } from './components/icons'
+import { useKeyboardStore } from './stores/keyboardStore'
+import ZReportModal from './components/ZReportModal'
+import type { ZReport } from '../../main/services/reports.js'
 import rubisLogo from './assets/logo-rubis.png'
+
+/**
+ * check:fit-only synthetic data (docs/phase-167 Part B item 1) — never
+ * used outside `'zReport'`/`'variantModal'` (`checkFitForcedScreen`
+ * below): a renderer-only prop, no database write, not even against the
+ * throwaway copy `check:fit` otherwise launches against.
+ */
+const CHECK_FIT_SYNTHETIC_Z_REPORT: ZReport = {
+  shiftId: 999999,
+  staffName: 'Demo Cashier',
+  openedAt: '2026-01-01T08:00:00.000Z',
+  closedAt: '2026-01-01T16:00:00.000Z',
+  status: 'closed',
+  startingCash: 100,
+  totalsByMethod: { cash: 200, mpesa: 80, card: 0 },
+  mpesaByMode: { manual: 30, daraja: 50 },
+  orderCount: 5,
+  totalRevenue: 280,
+  vatIncluded: 38.62,
+  vatRate: 0.16,
+  expectedCash: 300,
+  endingCash: 300,
+  discrepancy: 0
+}
+
+/** check:fit-only synthetic data (docs/phase-167 Part B item 1) — see {@link CHECK_FIT_SYNTHETIC_Z_REPORT}'s own doc comment. */
+const CHECK_FIT_SYNTHETIC_PRODUCT: ProductSummary = {
+  id: 'check-fit-demo-product',
+  title: 'Demo Product',
+  handle: 'demo-product',
+  featuredImage: null,
+  variants: Array.from({ length: 6 }, (_, i) => ({
+    id: `check-fit-demo-variant-${i + 1}`,
+    productId: 'check-fit-demo-product',
+    title: `Variant ${i + 1}`,
+    price: 100 + i,
+    availableForSale: true,
+    inventoryQuantity: 10,
+    image: null,
+    barcode: null
+  }))
+}
 
 /** A pending manager-gated action awaiting PIN authorization. */
 interface PinGateRequest {
@@ -147,14 +192,22 @@ export default function App() {
   }, [demoMode])
 
   /**
-   * check:fit's own force-show hook (docs/phase-166 Commit E3) — always
-   * resolves to `null` in a real launch (see `getCheckFitForcedScreen`'s
-   * own doc comment). When set, it overrides the gates below and seeds a
-   * little demo state, so the fit-check harness can reach a screen a
-   * normal click-driven flow can't: an intermediate onboarding-gate
-   * state (`'locationPending'`, `'etimsGate'`), or the fiscal notice
-   * paired with two routine toasts at the stack's cap
-   * (`'fiscalNoticeAndToastLimit'`).
+   * check:fit's own force-show hook (docs/phase-166 Commit E3, extended
+   * docs/phase-167 Part B item 1) — always resolves to `null` in a real
+   * launch (see `getCheckFitForcedScreen`'s own doc comment). When set,
+   * it overrides the gates below and seeds a little demo state, so the
+   * fit-check harness can reach a screen a normal click-driven flow
+   * can't: an intermediate onboarding-gate state (`'locationPending'`,
+   * `'etimsGate'`), the fiscal notice paired with two routine toasts at
+   * the stack's cap (`'fiscalNoticeAndToastLimit'`), the manual M-Pesa
+   * code field with its docked keyboard open (`'mpesaManualKeyboard'`),
+   * a closed shift's Z-report (`'zReport'`), or a six-variant product's
+   * picker (`'variantModal'`) — the last three with entirely synthetic,
+   * renderer-only data (`CHECK_FIT_SYNTHETIC_Z_REPORT`/
+   * `CHECK_FIT_SYNTHETIC_PRODUCT` above), never a database write, not
+   * even against the throwaway copy `check:fit` otherwise launches
+   * against — this till's real M-Pesa mode/shift history/catalog cannot
+   * be relied on to have the shape any of these three need.
    */
   const [checkFitForcedScreen, setCheckFitForcedScreen] = useState<string | null>(null)
   useEffect(() => {
@@ -190,6 +243,27 @@ export default function App() {
       timeoutMs: null,
       onDismiss: () => {}
     })
+  }, [checkFitForcedScreen])
+
+  useEffect(() => {
+    if (checkFitForcedScreen !== 'mpesaManualKeyboard') return
+    addItem({
+      id: 'check-fit-demo-variant-1',
+      productId: 'check-fit-demo-product',
+      title: 'Demo Product',
+      variantTitle: 'Default',
+      price: 100,
+      image: null
+    })
+    useKeyboardStore.getState().open({
+      value: '',
+      onChange: () => {},
+      maxLength: 10,
+      label: 'M-Pesa code from the customer’s message',
+      mode: 'caps',
+      docked: true
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [checkFitForcedScreen])
 
   const refreshConfigStatus = () =>
@@ -572,7 +646,10 @@ export default function App() {
           </section>
 
           <aside className="flex w-full shrink-0 flex-col border-t border-slate-200 lg:w-[35%] lg:border-l lg:border-t-0">
-            <PosCheckoutPanel requestManagerPin={requestManagerPin} />
+            <PosCheckoutPanel
+              requestManagerPin={requestManagerPin}
+              forceMpesaManualKeyboard={checkFitForcedScreen === 'mpesaManualKeyboard'}
+            />
           </aside>
         </main>
       ) : activeView === 'orders' ? (
@@ -593,16 +670,16 @@ export default function App() {
         </main>
       ) : (
         /**
-         * The "Admin" heading sits in its own `shrink-0` row above the
-         * scroll region (phase-142's "+44" finding) — previously it
-         * shared `main`'s own `overflow-y-auto` with `AdminScreen`, so
-         * its height came out of the same budget `AdminScreen` was
-         * designed to fit, always overflowing by the heading's own
-         * height before a single Integrations field was ever measured.
+         * The "Admin" heading sits in its own `shrink-0` row above
+         * `AdminScreen` (phase-142's "+44" finding). `overflow-hidden`,
+         * not `-auto` (docs/phase-167 Part B item 2): the card grid
+         * (Part A) replaced the old tab bar, and every section fits the
+         * design box on its own — see docs/phase-167.md for the
+         * per-section measurements that made this true.
          */
         <main className="flex flex-1 flex-col overflow-hidden">
           <h2 className="shrink-0 px-6 pt-6 pb-4 text-lg font-semibold text-slate-700">Admin</h2>
-          <div className="min-h-0 flex-1 overflow-y-auto px-6 pb-6">
+          <div className="min-h-0 flex-1 overflow-hidden px-6 pb-6">
             <AdminScreen requestManagerPin={requestManagerPin} initialTab={adminInitialTab} />
           </div>
         </main>
@@ -614,6 +691,14 @@ export default function App() {
           onSelectVariant={handleSelectVariant}
           onClose={() => setSelectedProduct(null)}
         />
+      )}
+
+      {checkFitForcedScreen === 'zReport' && (
+        <ZReportModal report={CHECK_FIT_SYNTHETIC_Z_REPORT} onClose={() => {}} />
+      )}
+
+      {checkFitForcedScreen === 'variantModal' && (
+        <VariantModal product={CHECK_FIT_SYNTHETIC_PRODUCT} onSelectVariant={() => {}} onClose={() => {}} />
       )}
 
       {pinGate && (

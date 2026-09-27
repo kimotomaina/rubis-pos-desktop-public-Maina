@@ -144,40 +144,56 @@ describe('AdminScreen > Integrations: five sections, shown one at a time', () =>
     container.remove()
   })
 
-  it('declares exactly the five named sections, in order, as a sub-nav', async () => {
+  it('declares exactly the five named sections, in order, as cards', async () => {
     stubApi()
     await mount()
     await click('Integrations')
 
-    const subNav = Array.from(container.querySelectorAll('button')).map((b) => b.textContent)
-    expect(subNav).toEqual(
+    const cards = Array.from(container.querySelectorAll('button')).map((b) => b.textContent)
+    expect(cards).toEqual(
       expect.arrayContaining(['Shopify', 'Location', 'Fiscal Device', 'M-Pesa', 'Printer'])
     )
-    // In this exact order, immediately after Overview/Integrations/etc.'s own tab bar.
-    const order = subNav.filter((label) =>
+    // In this exact order, in the card grid shown as soon as Integrations opens (phase-167 Part A).
+    const order = cards.filter((label) =>
       ['Shopify', 'Location', 'Fiscal Device', 'M-Pesa', 'Printer'].includes(label ?? '')
     )
     expect(order).toEqual(['Shopify', 'Location', 'Fiscal Device', 'M-Pesa', 'Printer'])
   })
 
-  it('renders each section only when its sub-nav button is the one clicked — none unconditionally', async () => {
+  /**
+   * DELIBERATE TEST CHANGE (docs/phase-167 Part A): Integrations opened
+   * straight to the Shopify section by default; it now opens to a card
+   * grid (same pattern as Admin's own top level), and no section renders
+   * until its card is tapped. Switching to a different section goes via
+   * "Back to Integrations" first, not directly from one section to
+   * another — the same one-at-a-time navigation the card grid uses
+   * everywhere else.
+   *   Old assertion: clicking "Integrations" alone already shows
+   *     "Shopify Connection</h3>"; clicking a different sub-nav button
+   *     switches directly between sections.
+   *   New assertion: clicking "Integrations" shows neither; each
+   *     section's own card must be tapped to see it, and only after
+   *     returning to the grid can a different card be tapped.
+   */
+  it('renders each section only when its own card is the one clicked — none unconditionally', async () => {
     stubApi()
     await mount()
     await click('Integrations')
 
-    // Default sub-section (Shopify) is showing; none of the other four are
-    // (their own headings, not the always-present sub-nav button labels).
-    expect(container.innerHTML).toContain('Shopify Connection</h3>')
+    // The grid is showing — no section content is rendered until a card is tapped.
+    expect(container.innerHTML).not.toContain('Shopify Connection</h3>')
     expect(container.innerHTML).not.toContain('>Fiscal Device</h3>')
-    for (const [button_, heading] of [
+
+    for (const [card, heading] of [
+      ['Shopify', 'Shopify Connection</h3>'],
       ['Location', 'Location</h3>'],
       ['Fiscal Device', 'Fiscal Device</h3>'],
       ['M-Pesa', '>M-Pesa</h3>'],
       ['Printer', 'Printers</h3>']
     ] as const) {
-      await click(button_)
+      await click(card)
       expect(container.innerHTML).toContain(heading)
-      expect(container.innerHTML).not.toContain('Shopify Connection</h3>')
+      await click('Back to Integrations')
     }
   })
 
@@ -188,26 +204,45 @@ describe('AdminScreen > Integrations: five sections, shown one at a time', () =>
    * of its three modes would be actively wrong once manual is the default.
    *   Old assertion: `'M-Pesa (Daraja)</h3>'`.
    *   New assertion: `'>M-Pesa</h3>'`.
+   *
+   * ALSO CHANGED (docs/phase-167 Part A, same reasoning as the test
+   * above): each section is now reached from the grid via its own card,
+   * with "Back to Integrations" between them, rather than switching
+   * directly from one sub-nav button to the next.
    */
-  it('titles each section distinctly from the sub-nav label it lives under', async () => {
+  it('titles each section distinctly from the card it lives under', async () => {
     stubApi()
     await mount()
     await click('Integrations')
+
+    await click('Shopify')
     expect(container.innerHTML).toContain('Shopify Connection</h3>')
+    await click('Back to Integrations')
 
     await click('Location')
     expect(container.textContent).toContain('Location')
+    await click('Back to Integrations')
 
     await click('Fiscal Device')
     expect(container.innerHTML).toContain('>Fiscal Device</h3>')
+    await click('Back to Integrations')
 
     await click('M-Pesa')
     expect(container.innerHTML).toContain('>M-Pesa</h3>')
+    await click('Back to Integrations')
 
     await click('Printer')
     expect(container.innerHTML).toContain('>Printers</h3>')
   })
 
+  /**
+   * DELIBERATE TEST CHANGE (docs/phase-167 Part A): Printer is reached
+   * via "Back to Integrations" then its own card, not by clicking
+   * directly from the M-Pesa section.
+   *   Old assertion: `click('M-Pesa')` then `click('Printer')` directly.
+   *   New assertion: `click('M-Pesa')`, `click('Back to Integrations')`,
+   *     then `click('Printer')`.
+   */
   it('loads printers only once the Printer section is the one showing, not just the Integrations tab', async () => {
     stubApi()
     await mount()
@@ -216,6 +251,7 @@ describe('AdminScreen > Integrations: five sections, shown one at a time', () =>
 
     await click('M-Pesa')
     expect(window.api.getPrinters).not.toHaveBeenCalled()
+    await click('Back to Integrations')
 
     await click('Printer')
     expect(window.api.getPrinters).toHaveBeenCalledTimes(1)

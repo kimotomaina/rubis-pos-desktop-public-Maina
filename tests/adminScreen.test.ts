@@ -157,6 +157,7 @@ describe('AdminScreen > Integrations > Shopify: readOnly fields open the keyboar
     stubApi()
     await mount()
     await click('Integrations')
+    await click('Shopify')
 
     const input = inputByLabel(label)
     expect(input.readOnly).toBe(true)
@@ -172,6 +173,7 @@ describe('AdminScreen > Integrations > Shopify: readOnly fields open the keyboar
     stubApi()
     await mount()
     await click('Integrations')
+    await click('Shopify')
 
     const input = inputByLabel('Store URL')
     act(() => input.click())
@@ -190,6 +192,7 @@ describe('AdminScreen > Integrations > Shopify: readOnly fields open the keyboar
     stubApi()
     await mount()
     await click('Integrations')
+    await click('Shopify')
 
     const input = inputByLabel('New Token (starts with shpat_)')
     act(() => input.click())
@@ -341,6 +344,7 @@ describe('AdminScreen > Overview > Shift cash fields', () => {
   it('Ending Cash (counted) — mode decimal, and typing + Confirm sends it', async () => {
     stubApi()
     await mount()
+    await click('Overview')
     // getCurrentShift is stubbed open, so "Close Shift" is already available.
     await click('Close Shift')
 
@@ -360,6 +364,7 @@ describe('AdminScreen > Overview > Staff fields', () => {
   it('new-staff Name and PIN, and Reset PIN, all open the keyboard with the right mode/secret', async () => {
     stubApi()
     await mount()
+    await click('Overview')
     await click('+ Add Staff')
 
     const nameInput = container.querySelector('input[placeholder="Name"]') as HTMLInputElement
@@ -385,6 +390,7 @@ describe('AdminScreen > Overview > Staff fields', () => {
   it('typing a new staff name/PIN updates the fields, and Create sends them', async () => {
     stubApi()
     await mount()
+    await click('Overview')
     await click('+ Add Staff')
 
     const nameInput = container.querySelector('input[placeholder="Name"]') as HTMLInputElement
@@ -440,6 +446,7 @@ describe('Sanity: the field-opening tests actually detect a broken wiring (not v
     stubApi()
     await mount()
     await click('Integrations')
+    await click('Shopify')
 
     const input = inputByLabel('Store URL')
     act(() => input.click())

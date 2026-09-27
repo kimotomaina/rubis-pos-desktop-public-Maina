@@ -166,10 +166,21 @@ describe('ReportsPage > sub-nav', () => {
   })
 })
 
+/**
+ * DELIBERATE TEST CHANGE (docs/phase-167 Part A): Reports opened
+ * straight to Shift History by default (the other five sub-views'
+ * tests already clicked their own button, so only these three needed
+ * touching) — it now opens to a card grid, same as Admin and
+ * Integrations, and Shift History renders only once its own card is
+ * tapped.
+ *   Old assertion: `mount()` alone already shows Shift History.
+ *   New assertion: `mount()` then `click('Shift History')`.
+ */
 describe('ReportsPage > Shift History', () => {
   it('lists shifts and opens the Z-report on tap, with a working Reprint button', async () => {
     stubApi()
     await mount()
+    await click('Shift History')
 
     expect(container.textContent).toContain('#7')
     expect(container.textContent).toContain('Ann')
@@ -193,6 +204,7 @@ describe('ReportsPage > Shift History', () => {
     const getZReport = vi.fn().mockResolvedValue(ok({ ...SAMPLE_Z_REPORT, vatRate: 0.08, vatIncluded: 20.74 }))
     stubApi({ getZReport })
     await mount()
+    await click('Shift History')
 
     await act(async () => {
       const row = Array.from(container.querySelectorAll('tr')).find((tr) => tr.textContent?.includes('#7'))
@@ -217,6 +229,7 @@ describe('ReportsPage > Shift History', () => {
     )
     stubApi({ getShiftsList })
     await mount()
+    await click('Shift History')
 
     expect(container.textContent).toContain('Page 1 of')
     await click('Next')

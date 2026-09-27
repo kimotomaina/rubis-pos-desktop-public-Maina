@@ -10,29 +10,49 @@
  * Covers, across all 9 supported-display cases (`CASES` below):
  *   - the POS/catalog screen (Cash and M-Pesa, an empty cart and a
  *     populated one — the screen this was built to fix);
- *   - VariantModal (a multi-variant product search, best-effort) and
- *     ConnectivityModal (via the header's "Status" button);
- *   - the on-screen keyboard, both the modal and docked-sheet variants;
- *   - Order History, and (docs/phase-166 Commit E3) every Admin tab and
- *     sub-view: Overview, Integrations' 5 sections, Peripherals, M-Pesa
- *     Logs, Needs Attention, Stock Take, End of Day, Reports' 6
- *     sub-views (docs/phase-158), System;
- *   - ZReportModal (a Shift History row) and ManagerPinModal ("Save &
- *     Restart" in System) — both best-effort, skipped with a note if
- *     nothing is there to open them.
+ *   - VariantModal (a multi-variant product search — best-effort, via a
+ *     real catalog search; see the synthetic version below for the
+ *     reliable measurement) and ConnectivityModal (via the header's
+ *     "Status" button);
+ *   - the on-screen keyboard, modal variant (docked-sheet variant is
+ *     also attempted here, best-effort — see the synthetic version below);
+ *   - Order History, and (docs/phase-166 Commit E3) every Admin section,
+ *     each a card in a grid (docs/phase-167 Part A): the Admin grid
+ *     itself, Overview, Integrations (its own grid of 5 sections, plus
+ *     the Fiscal Device/Shopify/Store Details fields Part B item 2
+ *     shrank to fit), Peripherals, M-Pesa Logs, Needs Attention, Stock
+ *     Take, End of Day, Reports (its own grid of 6 sub-views, docs/
+ *     phase-158), System — navigated by tapping a card then "Back to
+ *     Admin"/"Back to Integrations"/"Back to Reports", never tab clicks;
+ *   - ZReportModal (a Shift History row — best-effort, see the synthetic
+ *     version below) and ManagerPinModal ("Save & Restart" in System,
+ *     best-effort, skipped with a note if nothing is there to open it).
  * Every "best-effort" item above is skipped with a note rather than
  * failing the whole run if the trigger isn't found (e.g. a non-admin
- * seed account, or a demo catalog with no matching content).
+ * seed account, or a demo catalog with no matching content) — that is
+ * exactly why docs/phase-167 Part B item 1 adds the synthetic versions
+ * below, so these three screens get a reliable measurement regardless
+ * of what this dev environment's real data happens to contain.
+ *
+ * Three screens are measured with entirely synthetic, renderer-only
+ * data (docs/phase-167 Part B item 1; `App.tsx`'s
+ * `CHECK_FIT_SYNTHETIC_Z_REPORT`/`CHECK_FIT_SYNTHETIC_PRODUCT`, never a
+ * database write, not even against the throwaway copy) — run at ALL 9
+ * sizes, same as the main sweep, via the `RUBIS_CHECK_FIT_SCREEN`
+ * renderer hook: the docked keyboard on a synthetic manual M-Pesa code
+ * field (`'mpesaManualKeyboard'`), a synthetic closed shift's Z-report
+ * with an M-Pesa split (`'zReport'`), and a synthetic 6-variant
+ * product's VariantModal (`'variantModal'`).
  *
  * Four more screens a normal click-driven flow cannot reach at all are
  * each run ONCE, at the single tightest case only (not across all 9 —
  * see `TIGHTEST_CASE` below, kept small to bound this script's total
  * runtime): Onboarding (a fresh install with no copied state at all),
- * LocationPendingScreen and EtimsSetupGate (via the `RUBIS_CHECK_FIT_SCREEN`
- * renderer hook, `main/index.ts`'s `checkFit:getForcedScreen` handler —
- * inert unless this exact variable is set, so no real launch is ever
- * affected, mirroring `RUBIS_CHECK_FIT_SIZE` below), and the fiscal
- * notice paired with the toast stack at its 3-toast cap (same hook).
+ * LocationPendingScreen and EtimsSetupGate (same `RUBIS_CHECK_FIT_SCREEN`
+ * hook, `main/index.ts`'s `checkFit:getForcedScreen` handler — inert
+ * unless this exact variable is set, so no real launch is ever affected,
+ * mirroring `RUBIS_CHECK_FIT_SIZE` below), and the fiscal notice paired
+ * with the toast stack at its 3-toast cap (same hook).
  *
  * Not measured at all, and not attempted: LocationConfirmScreen (the
  * admin-role counterpart of LocationPendingScreen — `screensFitDesignBox.
@@ -41,6 +61,14 @@
  * completion plus a config save against the throwaway copy — the PIN
  * modal itself IS measured, this only skips the screen after it), and
  * the orphaned `MpesaReconciliationPage` (no nav path reaches it).
+ *
+ * SUMMARY (docs/phase-167 Part B item 4): the run ends with three
+ * numbers — measured-and-fit, skipped (each named), and allow-listed
+ * scrollers (each named, from `SCROLL_ALLOW_LIST` below — empty as of
+ * this phase, so this is normally zero). "All fit" is only ever said
+ * when both of the latter two are zero: a skip or an allow-listed
+ * scroller means that case's fit was never actually verified on its own
+ * merits, whatever its own line says.
  *
  * WINDOW SIZING: Electron's CDP implementation has no `Browser.
  * setWindowBounds` on a desktop `BrowserWindow` (confirmed empirically
@@ -51,8 +79,9 @@
  * instead of maximizing — inert unless this exact variable is set, so no
  * real launch is ever affected). Both scenarios (Cash, M-Pesa) — and,
  * as of docs/phase-166 Commit E3, everything else listed above except
- * the four single-case screens — are measured within the same launch,
- * so the main sweep still costs 9 relaunches, not one per screen.
+ * the four single-case screens and the three synthetic ones — are
+ * measured within the same launch, so the main sweep still costs 9
+ * relaunches, not one per screen.
  *
  * SAFETY (phase-144 documented an incident where a broad `taskkill /IM
  * electron.exe` killed every Electron process on the machine, including an
@@ -96,20 +125,34 @@ const CASES = [
 
 /**
  * Elements allowed to scroll internally, matched by their exact
- * className. Empty until a screen legitimately needs one; emptying it
- * further is Phase E3/E4's job — nothing on the POS screen, Order
- * History, or the six Admin sub-pages this phase paginated should ever
- * need an entry (`tests/noUnexpectedScroll.test.ts` guards the source
- * side of the same claim).
- *
- * The one entry below (docs/phase-166 Commit E3) is `App.tsx`'s shared
- * Admin content wrapper — real measurement at every supported size
- * found it genuinely scrolling on Overview, End of Day, and two
- * Integrations sections (Shopify, Fiscal Device), none of which this
- * phase's pagination work touches. Removing it would silently clip
- * those tabs' content rather than fix anything.
+ * className. Empty (docs/phase-167 Part B item 3) — phase-166 Commit E3
+ * left one entry here (`App.tsx`'s shared Admin content wrapper, which
+ * genuinely scrolled on Overview, End of Day, and two Integrations
+ * sections); phase-167's card grid (Part A) and the fixes to those
+ * specific sections (Part B item 2) closed the gap it was covering for,
+ * so nothing needs an entry any more. `tests/noUnexpectedScroll.test.ts`
+ * guards the source side of the same claim.
  */
-const SCROLL_ALLOW_LIST = ['min-h-0 flex-1 overflow-y-auto px-6 pb-6']
+const SCROLL_ALLOW_LIST = []
+
+/**
+ * Every allow-listed scroller actually seen this run, by screen label
+ * (docs/phase-167 Part B item 4) — an allow-listed match is otherwise
+ * invisible in output (it's simply excluded from `unexpectedScrollers`
+ * so the case still shows `✔`), so this is the only record of it. Reset
+ * per `main()` invocation; read at the end for the summary's third
+ * number.
+ */
+let allowListedHits = []
+
+/** Records any allow-listed scroller `census`'s `scrollers` list actually contained, for the summary. */
+function recordAllowListedHits(label, scrollers) {
+  for (const scroller of scrollers) {
+    if (SCROLL_ALLOW_LIST.includes(scroller.cls)) {
+      allowListedHits.push(`${label}: ${scroller.cls}`)
+    }
+  }
+}
 
 function resolveRealUserDataPath() {
   switch (process.platform) {
@@ -281,57 +324,48 @@ async function checkAdminScreens(cmd) {
     return { findings, failures }
   }
   await new Promise((r) => setTimeout(r, 400))
-  record(await censusLabelled(cmd, 'Admin > Overview'))
+  record(await censusLabelled(cmd, 'Admin (card grid)'))
 
-  if (await clickWhereText(cmd, 'button', 'Peripherals')) {
-    await new Promise((r) => setTimeout(r, 300))
-    record(await censusLabelled(cmd, 'Admin > Peripherals'))
-  } else {
-    findings.push('✖ Admin > Peripherals: tab button not found')
-    failures++
-  }
-
-  if (await clickWhereText(cmd, 'button', 'M-Pesa Logs')) {
-    await new Promise((r) => setTimeout(r, 400))
-    record(await censusLabelled(cmd, 'Admin > M-Pesa Logs'))
-  } else {
-    findings.push('✖ Admin > M-Pesa Logs: tab button not found')
-    failures++
-  }
-
-  if (await clickWhereText(cmd, 'button', 'Needs Attention')) {
-    await new Promise((r) => setTimeout(r, 400))
-    record(await censusLabelled(cmd, 'Admin > Needs Attention'))
-  } else {
-    findings.push('✖ Admin > Needs Attention: tab button not found')
-    failures++
-  }
-
-  if (await clickWhereText(cmd, 'button', 'Stock Take')) {
-    await new Promise((r) => setTimeout(r, 400))
-    record(await censusLabelled(cmd, 'Admin > Stock Take'))
-  } else {
-    findings.push('✖ Admin > Stock Take: tab button not found')
-    failures++
-  }
-
-  if (await clickWhereText(cmd, 'button', 'End of Day')) {
-    await new Promise((r) => setTimeout(r, 400))
-    record(await censusLabelled(cmd, 'Admin > End of Day'))
-  } else {
-    findings.push('✖ Admin > End of Day: tab button not found')
-    failures++
+  /**
+   * Every Admin section is a card in a grid (docs/phase-167 Part A) —
+   * tap the card, census, then "Back to Admin" returns to the grid so
+   * the next card can be tapped. Applies to every simple one-card
+   * section; Integrations, Reports and System (which opens a further
+   * modal) each get their own block below since they need more than a
+   * plain in/census/out.
+   */
+  const simpleAdminCards = [
+    ['Overview', 'Admin > Overview'],
+    ['Peripherals', 'Admin > Peripherals'],
+    ['M-Pesa Logs', 'Admin > M-Pesa Logs'],
+    ['Needs Attention', 'Admin > Needs Attention'],
+    ['Stock Take', 'Admin > Stock Take'],
+    ['End of Day', 'Admin > End of Day']
+  ]
+  for (const [card, label] of simpleAdminCards) {
+    if (await clickWhereText(cmd, 'button', card)) {
+      await new Promise((r) => setTimeout(r, 400))
+      record(await censusLabelled(cmd, label))
+      await clickWhereText(cmd, 'button', 'Back to Admin')
+      await new Promise((r) => setTimeout(r, 300))
+    } else {
+      findings.push(`✖ ${label}: card not found`)
+      failures++
+    }
   }
 
   if (await clickWhereText(cmd, 'button', 'Integrations')) {
     await new Promise((r) => setTimeout(r, 400))
+    record(await censusLabelled(cmd, 'Admin > Integrations (card grid)'))
     const sections = ['Shopify', 'Location', 'Fiscal Device', 'M-Pesa', 'Printer']
     for (const section of sections) {
       if (await clickWhereText(cmd, 'button', section)) {
         await new Promise((r) => setTimeout(r, 300))
         record(await censusLabelled(cmd, `Admin > Integrations > ${section}`))
+        await clickWhereText(cmd, 'button', 'Back to Integrations')
+        await new Promise((r) => setTimeout(r, 200))
       } else {
-        findings.push(`✖ Admin > Integrations > ${section}: sub-nav button not found`)
+        findings.push(`✖ Admin > Integrations > ${section}: card not found`)
         failures++
       }
     }
@@ -348,9 +382,13 @@ async function checkAdminScreens(cmd) {
       } else {
         findings.push('  (Keyboard modal: Store URL field not found — skipping)')
       }
+      await clickWhereText(cmd, 'button', 'Back to Integrations')
+      await new Promise((r) => setTimeout(r, 200))
     }
+    await clickWhereText(cmd, 'button', 'Back to Admin')
+    await new Promise((r) => setTimeout(r, 300))
   } else {
-    findings.push('✖ Admin > Integrations: tab button not found')
+    findings.push('✖ Admin > Integrations: card not found')
     failures++
   }
 
@@ -366,13 +404,16 @@ async function checkAdminScreens(cmd) {
     } else {
       findings.push('  (ManagerPinModal: "Save & Restart" button not found — skipping)')
     }
+    await clickWhereText(cmd, 'button', 'Back to Admin')
+    await new Promise((r) => setTimeout(r, 300))
   } else {
-    findings.push('✖ Admin > System: tab button not found')
+    findings.push('✖ Admin > System: card not found')
     failures++
   }
 
   if (await clickWhereText(cmd, 'button', 'Reports')) {
     await new Promise((r) => setTimeout(r, 400))
+    record(await censusLabelled(cmd, 'Admin > Reports (card grid)'))
     const subViews = [
       'Shift History',
       'Sales Summary',
@@ -401,13 +442,17 @@ async function checkAdminScreens(cmd) {
             findings.push('  (ZReportModal: no shift history row to click — skipping)')
           }
         }
+        await clickWhereText(cmd, 'button', 'Back to Reports')
+        await new Promise((r) => setTimeout(r, 200))
       } else {
-        findings.push(`✖ Admin > Reports > ${label}: sub-nav button not found`)
+        findings.push(`✖ Admin > Reports > ${label}: card not found`)
         failures++
       }
     }
+    await clickWhereText(cmd, 'button', 'Back to Admin')
+    await new Promise((r) => setTimeout(r, 300))
   } else {
-    findings.push('✖ Admin > Reports: tab button not found')
+    findings.push('✖ Admin > Reports: card not found')
     failures++
   }
 
@@ -446,6 +491,7 @@ async function clickBySelector(cmd, selector) {
 async function censusLabelled(cmd, label) {
   const result = await census(cmd)
   const unexpectedScrollers = result.scrollers.filter((s) => !SCROLL_ALLOW_LIST.includes(s.cls))
+  recordAllowListedHits(label, result.scrollers)
   const ok = !result.pageOverflowX && !result.pageOverflowY && unexpectedScrollers.length === 0
   const line = `${ok ? '✔' : '✖'} ${label}: page ${result.scrollWidth}x${result.scrollHeight} vs client ${result.clientWidth}x${result.clientHeight}${unexpectedScrollers.length ? `, ${unexpectedScrollers.length} inner scroller(s): ${JSON.stringify(unexpectedScrollers)}` : ''}`
   return { ok, line }
@@ -752,6 +798,7 @@ async function runCase(testCase, outDir) {
 
       const result = await census(cmd)
       const unexpectedScrollers = result.scrollers.filter((s) => !SCROLL_ALLOW_LIST.includes(s.cls))
+      recordAllowListedHits(`${scenario.label} — ${testCase.name}`, result.scrollers)
       const ok = !result.pageOverflowX && !result.pageOverflowY && unexpectedScrollers.length === 0
       if (!ok) failures++
 
@@ -860,12 +907,18 @@ async function loginAsAdminIfShowing(cmd) {
  * Commit E3, `main/index.ts`'s `checkFit:getForcedScreen` handler)
  * rather than by clicking — for the handful of states a normal
  * click-driven flow genuinely cannot reach: an intermediate
- * onboarding-gate state (`'locationPending'`, `'etimsGate'`), or the
+ * onboarding-gate state (`'locationPending'`, `'etimsGate'`), the
  * fiscal notice paired with the toast stack at its cap
- * (`'fiscalNoticeAndToastLimit'`). Run at {@link TIGHTEST_CASE} only,
- * not across all 9 sizes, to keep this script's total runtime bounded.
+ * (`'fiscalNoticeAndToastLimit'`), or (docs/phase-167 Part B item 1,
+ * `testCase` passed explicitly) the manual M-Pesa keyboard
+ * (`'mpesaManualKeyboard'`), a Z-report (`'zReport'`), or the variant
+ * picker (`'variantModal'`). Defaults to {@link TIGHTEST_CASE} — the
+ * phase-166 screens only ever run there, to keep this script's total
+ * runtime bounded; the three phase-167 screens above are run once per
+ * `testCase` across all 9 sizes instead (their own brief's own
+ * instruction), by the caller passing each in turn.
  */
-async function runForcedScreenCase(screenId, label) {
+async function runForcedScreenCase(screenId, label, testCase = TIGHTEST_CASE) {
   const scratchUserData = mkdtempSync(join(tmpdir(), 'rubis-pos-check-fit-userdata-'))
   copyAppState(scratchUserData)
 
@@ -877,7 +930,7 @@ async function runForcedScreenCase(screenId, label) {
 
   try {
     const connected = await launchAndConnect(scratchUserData, {
-      RUBIS_CHECK_FIT_SIZE: `${TIGHTEST_CASE.width}x${TIGHTEST_CASE.height}`,
+      RUBIS_CHECK_FIT_SIZE: `${testCase.width}x${testCase.height}`,
       RUBIS_CHECK_FIT_SCREEN: screenId
     })
     child = connected.child
@@ -887,7 +940,7 @@ async function runForcedScreenCase(screenId, label) {
     await loginAsAdminIfShowing(cmd)
     await new Promise((r) => setTimeout(r, 500))
 
-    const result = await censusLabelled(cmd, label)
+    const result = await censusLabelled(cmd, `${label} — ${testCase.name}`)
     log(result.line)
     return { findings: [result.line], failures: result.ok ? 0 : 1 }
   } finally {
@@ -939,6 +992,8 @@ async function main() {
     process.exit(1)
   }
 
+  allowListedHits = []
+
   const allFindings = []
   let totalFailures = 0
   for (const testCase of CASES) {
@@ -967,14 +1022,57 @@ async function main() {
     totalFailures += failures
   }
 
+  /**
+   * The three screens phase-166 could only skip with a note
+   * (VariantModal, the docked keyboard, ZReportModal) — docs/phase-167
+   * Part B item 1 measures each properly instead, with synthetic,
+   * renderer-only data, at ALL 9 sizes (not just {@link TIGHTEST_CASE}),
+   * per that item's own instruction.
+   */
+  const syntheticScreens = [
+    ['mpesaManualKeyboard', 'Keyboard (docked sheet, synthetic manual M-Pesa)'],
+    ['zReport', 'ZReportModal (synthetic closed shift, M-Pesa split)'],
+    ['variantModal', 'VariantModal (synthetic 6-variant product)']
+  ]
+  for (const [screenId, label] of syntheticScreens) {
+    for (const testCase of CASES) {
+      const { findings, failures } = await runForcedScreenCase(screenId, label, testCase)
+      allFindings.push(...findings)
+      totalFailures += failures
+    }
+  }
+
   writeFileSync(join(outDir, 'summary.txt'), allFindings.join('\n') + '\n')
   log(`\nSummary written to ${join(outDir, 'summary.txt')}`)
+
+  /**
+   * Three numbers, not one pass/fail line (docs/phase-167 Part B item
+   * 4): how many cases were actually measured and fit, which ones were
+   * skipped instead of measured (best-effort items with no trigger to
+   * open them in this environment), and which ones needed an
+   * allow-listed scroller to pass. "All fit" is only ever said when
+   * both of the latter two are zero — a skip or an allow-listed
+   * scroller means something was NOT verified to fit on its own merits,
+   * whichever way the case's own ✔/✖ line reads.
+   */
+  const skipped = allFindings.filter((line) => line.includes('skipping'))
+  const measuredAndFit = allFindings.filter((line) => line.trimStart().startsWith('✔')).length
+
+  log(`\nMeasured and fit: ${measuredAndFit}`)
+  log(`Skipped (${skipped.length}):`)
+  for (const line of skipped) log(`  ${line.trim()}`)
+  log(`Allow-listed scrollers (${allowListedHits.length}):`)
+  for (const hit of allowListedHits) log(`  ${hit}`)
 
   if (totalFailures > 0) {
     console.error(`\n✖ ${totalFailures} case(s) failed the fit check.`)
     process.exitCode = 1
+  } else if (skipped.length > 0 || allowListedHits.length > 0) {
+    log(
+      `\n✔ ${measuredAndFit} case(s) fit with no overflow — but ${skipped.length} skipped and ${allowListedHits.length} allow-listed scroller(s) were not verified fit on their own merits, see above.`
+    )
   } else {
-    log(`\n✔ All ${allFindings.length} case(s) fit with no overflow.`)
+    log(`\n✔ All ${measuredAndFit} case(s) fit with no overflow.`)
   }
 }
 

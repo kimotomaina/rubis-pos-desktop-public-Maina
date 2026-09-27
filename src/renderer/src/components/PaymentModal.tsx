@@ -25,7 +25,7 @@ type MpesaMode = 'manual' | 'daraja' | 'sms'
  * and an explicit "unavailable" notice are honest about what's actually
  * known instead.
  */
-type MpesaCapabilitiesState =
+export type MpesaCapabilitiesState =
   | { status: 'loading' }
   | { status: 'unavailable' }
   | { status: 'ready'; mode: MpesaMode; manualEntryEnabled: boolean }
@@ -72,6 +72,16 @@ interface PaymentModalProps {
   onPaid: (referenceNumber: string, manual?: ManualMpesaEntryInput) => void
   /** Called when the cashier backs out to pick a different payment method. */
   onCancel: () => void
+  /**
+   * Test-hook-only (docs/phase-167 Part B item 1): skips the real
+   * `getMpesaCapabilities()` call and renders as if it had already
+   * resolved to this value — this till's ACTUAL mode is whatever a real
+   * admin configured, which `check:fit`'s `'mpesaManualKeyboard'` screen
+   * cannot rely on being `'manual'`. Always `undefined` on every real
+   * launch (see `PosCheckoutPanel`'s own doc comment on where this comes
+   * from), so the real capabilities call is never skipped there.
+   */
+  forcedCapabilities?: MpesaCapabilitiesState
 }
 
 /** `2547XXXXXXXX` — Safaricom MSISDN format expected by the mock Daraja provider. */
@@ -137,8 +147,15 @@ function stripLeadingZero(rawInput: string): string {
  * @param {PaymentModalProps} props
  * @returns {JSX.Element}
  */
-export default function PaymentModal({ total, onPaid, onCancel }: PaymentModalProps) {
-  const [capabilities, setCapabilities] = useState<MpesaCapabilitiesState>({ status: 'loading' })
+export default function PaymentModal({
+  total,
+  onPaid,
+  onCancel,
+  forcedCapabilities
+}: PaymentModalProps) {
+  const [capabilities, setCapabilities] = useState<MpesaCapabilitiesState>(
+    forcedCapabilities ?? { status: 'loading' }
+  )
   const [tab, setTab] = useState<PaymentTab>('stk')
 
   /** Raw digits typed after the fixed `254` prefix — may still include a leading `0`. */
@@ -153,6 +170,7 @@ export default function PaymentModal({ total, onPaid, onCancel }: PaymentModalPr
   const [unverifiedError, setUnverifiedError] = useState<string | null>(null)
 
   useEffect(() => {
+    if (forcedCapabilities) return
     let cancelled = false
     void window.api
       .getMpesaCapabilities()
@@ -174,6 +192,7 @@ export default function PaymentModal({ total, onPaid, onCancel }: PaymentModalPr
     return () => {
       cancelled = true
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   const pollerRef = useRef<MpesaPaymentPoller | null>(null)
