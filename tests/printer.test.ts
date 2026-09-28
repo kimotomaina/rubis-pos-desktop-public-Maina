@@ -4,8 +4,13 @@
  * `node-thermal-printer` is never touched — a recording fake
  * implementing {@link ThermalPrinterLike} is injected via the
  * `PrinterFactory` parameter, the same dependency-injection pattern
- * used for the Shopify axios client and the SQLite connection
+ * used by the Shopify axios client and the SQLite connection
  * elsewhere in this codebase.
+ *
+ * `renderReceipt` (docs/phase-171) no longer owns any receipt content —
+ * it only translates `buildReceiptLayout`'s array into ESC/POS calls, so
+ * this file tests that translation (the wiring), not the content, which
+ * `tests/receiptLayout.test.ts` covers exhaustively.
  */
 
 import { describe, it, expect, vi } from 'vitest'
@@ -28,7 +33,8 @@ import type {
 } from '../src/main/services/printer.js'
 import type { ZReport } from '../src/main/services/reports.js'
 import { formatCurrency } from '../src/main/services/currency.js'
-import { FISCAL_PENDING_HEADER, NOT_A_TAX_INVOICE_LINE } from '../src/main/lib/receiptFiscalBlock.js'
+import { buildReceiptLayout, isReceiptLayoutQr } from '../src/main/lib/receiptLayout.js'
+import type { ReceiptLayoutOrder } from '../src/main/lib/receiptLayout.js'
 
 vi.mock('node-thermal-printer', () => ({
   ThermalPrinter: vi.fn(),
@@ -42,14 +48,20 @@ vi.mock('node-thermal-printer', () => ({
 function createFakePrinter(options?: {
   connected?: boolean
   executeError?: unknown
+  /** Defaults to true — real hardware always has this command (docs/phase-171's audit). */
+  supportsPrintQR?: boolean
   printImageBuffer?: ReturnType<typeof vi.fn>
 }) {
   const calls: Array<{ method: string; args: unknown[] }> = []
+  const printQR = vi.fn((text: string) => calls.push({ method: 'printQR', args: [text] }))
   const client: ThermalPrinterLike = {
     isPrinterConnected: vi.fn(async () => options?.connected ?? true),
     alignCenter: vi.fn(() => calls.push({ method: 'alignCenter', args: [] })),
     alignLeft: vi.fn(() => calls.push({ method: 'alignLeft', args: [] })),
+    alignRight: vi.fn(() => calls.push({ method: 'alignRight', args: [] })),
     bold: vi.fn((enabled: boolean) => calls.push({ method: 'bold', args: [enabled] })),
+    setTextNormal: vi.fn(() => calls.push({ method: 'setTextNormal', args: [] })),
+    setTextQuadArea: vi.fn(() => calls.push({ method: 'setTextQuadArea', args: [] })),
     println: vi.fn((text: string) => calls.push({ method: 'println', args: [text] })),
     drawLine: vi.fn(() => calls.push({ method: 'drawLine', args: [] })),
     cut: vi.fn(() => calls.push({ method: 'cut', args: [] })),
@@ -57,9 +69,10 @@ function createFakePrinter(options?: {
       if (options?.executeError) throw options.executeError
       return undefined
     }),
+    ...(options?.supportsPrintQR === false ? {} : { printQR }),
     ...(options?.printImageBuffer ? { printImageBuffer: options.printImageBuffer } : {})
   }
-  return { client, calls }
+  return { client, calls, printQR }
 }
 
 const order: ReceiptOrder = {
@@ -85,337 +98,115 @@ const settings: PrinterSettings = {
   taxRate: 0.08
 }
 
-describe('renderReceipt', () => {
-  it('issues the ESC/POS call sequence: header, items, totals, footer', async () => {
+/** Rebuilds the same layout `renderReceipt` builds internally, for wiring assertions. */
+function expectedLayout(o: ReceiptOrder, lines: ReceiptLineItem[], s: PrinterSettings) {
+  const layoutOrder: ReceiptLayoutOrder = {
+    ...o,
+    items: lines.map((item) => ({
+      title: item.title,
+      variantTitle: item.variantTitle,
+      quantity: item.quantity,
+      unitPrice: item.unitPrice,
+      discount: item.discount,
+      vatClass: item.vatClass
+    }))
+  }
+  return buildReceiptLayout(
+    layoutOrder,
+    {
+      taxRate: s.taxRate,
+      tradingName: s.storeName,
+      legalName: s.legalName,
+      address: s.address,
+      phone: s.phone,
+      sellerPin: s.storeKraPin,
+      footerMessage: s.footerMessage
+    },
+    { width: s.width }
+  )
+}
+
+describe('renderReceipt — wiring (docs/phase-171)', () => {
+  it('translates every layout entry into its matching ESC/POS calls, in order', async () => {
     const { client, calls } = createFakePrinter()
-
-    await renderReceipt(client, order, items, settings)
-
-    expect(calls[0]).toEqual({ method: 'alignCenter', args: [] })
-    expect(calls[1]).toEqual({ method: 'bold', args: [true] })
-    expect(calls[2]).toEqual({ method: 'println', args: ['RUBIS'] })
-    expect(calls[3]).toEqual({ method: 'bold', args: [false] })
-    expect(calls[4]).toEqual({ method: 'println', args: ['Order #7'] })
-    expect(calls.some((c) => c.method === 'println' && c.args[0] === 'Cashier: Alex')).toBe(true)
-
-    const lineTexts = calls.filter((c) => c.method === 'println').map((c) => c.args[0])
-    expect(lineTexts).toContain('RUBIS Mug (Small) x2')
-    expect(lineTexts).toContain(`  ${formatCurrency(25)}`)
-    expect(lineTexts).toContain('RUBIS T-Shirt x1')
-    expect(lineTexts).toContain(`  ${formatCurrency(19.99)}`)
-
-    /**
-     * DELIBERATE TEST CHANGE (docs/phase-161 Commit 2, docs/phase-160 Part A):
-     * this order carries no discount, and shelf prices already include VAT
-     * (docs/phase-158), so the correct total is the order's own stored
-     * total (44.99, unchanged from the raw subtotal) — not the old
-     * added-on-top figure.
-     *   Old assertions: `Tax: 3.60` (44.99 * 0.08, added on top),
-     *     `Total: 48.59` (subtotal + that tax).
-     *   New assertions: no "Discount:" line (nothing was discounted),
-     *     `Total: 44.99` (the stored total, never recomputed), and
-     *     `VAT included (calculated at 8%): 3.33` (44.99 * 0.08 / 1.08,
-     *     the VAT already inside 44.99, extracted rather than added).
-     */
-    expect(lineTexts).toContain(`Subtotal: ${formatCurrency(44.99)}`)
-    expect(lineTexts.some((t) => typeof t === 'string' && t.startsWith('Discount:'))).toBe(false)
-    expect(lineTexts).toContain(`Total: ${formatCurrency(44.99)}`)
-    expect(lineTexts).toContain(`VAT included (calculated at 8%): ${formatCurrency(3.33)}`)
-    expect(lineTexts).toContain('Payment: cash')
-    expect(lineTexts).toContain(`Tendered: ${formatCurrency(50)}`)
-    expect(lineTexts).toContain(`Change: ${formatCurrency(1.41)}`)
-    expect(lineTexts).toContain('Thank you!')
-
-    expect(calls[calls.length - 1]).toEqual({ method: 'cut', args: [] })
-  })
-
-  it('prints a reference number instead of tendered/change for non-cash payments', async () => {
-    const { client, calls } = createFakePrinter()
-    const cardOrder: ReceiptOrder = {
-      ...order,
-      paymentMethod: 'card',
-      tenderedAmount: 48.59,
-      changeDue: 0,
-      referenceNumber: 'TXN-9001'
-    }
-
-    await renderReceipt(client, cardOrder, items, settings)
-
-    const lineTexts = calls.filter((c) => c.method === 'println').map((c) => c.args[0])
-    expect(lineTexts).toContain('Payment: card')
-    expect(lineTexts).toContain('Ref: TXN-9001')
-    expect(lineTexts.some((t) => typeof t === 'string' && t.startsWith('Tendered:'))).toBe(false)
-  })
-
-  it('bolds only the store name and the total, not the item lines', async () => {
-    const { client, calls } = createFakePrinter()
-    await renderReceipt(client, order, items, settings)
-
-    const boldCalls = calls.filter((c) => c.method === 'bold')
-    expect(boldCalls).toEqual([
-      { method: 'bold', args: [true] },
-      { method: 'bold', args: [false] },
-      { method: 'bold', args: [true] },
-      { method: 'bold', args: [false] }
-    ])
-  })
-
-  it('omits the fiscal footer entirely when the order was not fiscalized', async () => {
-    const { client, calls } = createFakePrinter()
-    await renderReceipt(client, order, items, settings)
-
-    const lineTexts = calls.filter((c) => c.method === 'println').map((c) => c.args[0])
-    // DELIBERATE TEST CHANGE (docs/phase-164): the printed label is now
-    // "CU Invoice No:" (the VIL G03 manual's own term, matching the new
-    // "CU Date/Time"/"CU Serial No" lines), not the old "Fiscal Inv:".
-    expect(lineTexts.some((t) => typeof t === 'string' && t.startsWith('CU Invoice No:'))).toBe(false)
-  })
-
-  it('prints the fiscal invoice number and the QR code as an image when supported', async () => {
-    const printImageBuffer = vi.fn().mockResolvedValue(undefined)
-    const { client, calls } = createFakePrinter({ printImageBuffer })
     const fiscalOrder: ReceiptOrder = {
       ...order,
       fiscalInvoiceNumber: 'KRA-0001',
-      fiscalQrCode: Buffer.from('fake-png-bytes').toString('base64')
+      fiscalQrCode: 'https://itax.kra.go.ke/common/link/etims/receipt/indexEtimsReceiptData?Data=abc123'
     }
 
     await renderReceipt(client, fiscalOrder, items, settings)
 
-    const lineTexts = calls.filter((c) => c.method === 'println').map((c) => c.args[0])
-    // DELIBERATE TEST CHANGE (docs/phase-164): "Fiscal Inv: KRA-0001" ->
-    // "CU Invoice No: KRA-0001" — see the test above.
-    expect(lineTexts).toContain('CU Invoice No: KRA-0001')
-    expect(printImageBuffer).toHaveBeenCalledTimes(1)
-    expect(printImageBuffer).toHaveBeenCalledWith(Buffer.from('fake-png-bytes'))
-    expect(lineTexts.some((t) => typeof t === 'string' && t.startsWith('[QR CODE:'))).toBe(false)
+    const entries = expectedLayout(fiscalOrder, items, settings)
+    let i = 0
+    for (const entry of entries) {
+      if (isReceiptLayoutQr(entry)) {
+        expect(calls[i]).toEqual({ method: 'printQR', args: [entry.qr] })
+        i += 1
+        continue
+      }
+      const alignMethod =
+        entry.align === 'left' ? 'alignLeft' : entry.align === 'right' ? 'alignRight' : 'alignCenter'
+      expect(calls[i]).toEqual({ method: alignMethod, args: [] })
+      i += 1
+      if (entry.style === 'double') {
+        expect(calls[i]).toEqual({ method: 'setTextQuadArea', args: [] })
+        expect(calls[i + 1]).toEqual({ method: 'bold', args: [true] })
+        expect(calls[i + 2]).toEqual({ method: 'println', args: [entry.text] })
+        expect(calls[i + 3]).toEqual({ method: 'bold', args: [false] })
+        expect(calls[i + 4]).toEqual({ method: 'setTextNormal', args: [] })
+        i += 5
+      } else if (entry.style === 'bold') {
+        expect(calls[i]).toEqual({ method: 'bold', args: [true] })
+        expect(calls[i + 1]).toEqual({ method: 'println', args: [entry.text] })
+        expect(calls[i + 2]).toEqual({ method: 'bold', args: [false] })
+        i += 3
+      } else {
+        expect(calls[i]).toEqual({ method: 'println', args: [entry.text] })
+        i += 1
+      }
+    }
+    expect(calls[calls.length - 1]).toEqual({ method: 'cut', args: [] })
   })
 
-  it('falls back to a text placeholder when the client has no image support', async () => {
-    const { client, calls } = createFakePrinter()
+  it('prints the QR entry with the native printQR command, receiving the exact stored text', async () => {
+    const { client, calls, printQR } = createFakePrinter()
     const fiscalOrder: ReceiptOrder = {
       ...order,
       fiscalInvoiceNumber: 'KRA-0002',
-      fiscalQrCode: Buffer.from('fake-png-bytes').toString('base64')
+      fiscalQrCode: 'https://itax.kra.go.ke/verify/xyz789'
     }
 
     await renderReceipt(client, fiscalOrder, items, settings)
 
+    expect(printQR).toHaveBeenCalledTimes(1)
+    expect(printQR).toHaveBeenCalledWith('https://itax.kra.go.ke/verify/xyz789')
+    // Never falls back to the text placeholder when the native command exists.
     const lineTexts = calls.filter((c) => c.method === 'println').map((c) => c.args[0])
-    expect(lineTexts).toContain('[QR CODE: KRA-0002]')
+    expect(lineTexts.some((t) => typeof t === 'string' && t.startsWith('[QR:'))).toBe(false)
   })
 
-  it('falls back to a text placeholder when image printing throws', async () => {
-    const printImageBuffer = vi.fn().mockRejectedValue(new Error('unsupported image format'))
-    const { client, calls } = createFakePrinter({ printImageBuffer })
+  it('falls back to a text placeholder when the client has no printQR command', async () => {
+    const { client, calls } = createFakePrinter({ supportsPrintQR: false })
     const fiscalOrder: ReceiptOrder = {
       ...order,
       fiscalInvoiceNumber: 'KRA-0003',
-      fiscalQrCode: 'not-a-real-png'
+      fiscalQrCode: 'https://itax.kra.go.ke/verify/qr-text'
     }
 
     await renderReceipt(client, fiscalOrder, items, settings)
 
     const lineTexts = calls.filter((c) => c.method === 'println').map((c) => c.args[0])
-    expect(lineTexts).toContain('[QR CODE: KRA-0003]')
+    expect(lineTexts).toContain('[QR: https://itax.kra.go.ke/verify/qr-text]')
   })
 
-  it('prints only the invoice number line when no QR code is present', async () => {
-    const { client, calls } = createFakePrinter()
+  it('prints no QR entry, and calls printQR zero times, when no QR text is stored', async () => {
+    const { client, printQR } = createFakePrinter()
     const fiscalOrder: ReceiptOrder = { ...order, fiscalInvoiceNumber: 'KRA-0004' }
 
     await renderReceipt(client, fiscalOrder, items, settings)
 
-    const lineTexts = calls.filter((c) => c.method === 'println').map((c) => c.args[0])
-    // DELIBERATE TEST CHANGE (docs/phase-164): "Fiscal Inv: KRA-0004" ->
-    // "CU Invoice No: KRA-0004".
-    expect(lineTexts).toContain('CU Invoice No: KRA-0004')
-    expect(lineTexts.some((t) => typeof t === 'string' && t.startsWith('[QR CODE:'))).toBe(false)
-  })
-
-  it('prints the discount line and the stored total, not a recomputed one (docs/phase-160/161)', async () => {
-    const { client, calls } = createFakePrinter()
-    const discountedItems: ReceiptLineItem[] = [
-      { title: 'RUBIS Mug', variantTitle: 'Small', quantity: 2, unitPrice: 100, discount: { type: 'fixed', value: 10 } }
-    ]
-    const discountedOrder: ReceiptOrder = { ...order, total: 190 }
-
-    await renderReceipt(client, discountedOrder, discountedItems, settings)
-
-    const lineTexts = calls.filter((c) => c.method === 'println').map((c) => c.args[0])
-    expect(lineTexts).toContain(`Subtotal: ${formatCurrency(200)}`)
-    expect(lineTexts).toContain(`Discount: -${formatCurrency(10)}`)
-    expect(lineTexts).toContain(`Total: ${formatCurrency(190)}`)
-  })
-
-  it('omits the discount line entirely when nothing was discounted', async () => {
-    const { client, calls } = createFakePrinter()
-    await renderReceipt(client, order, items, settings)
-
-    const lineTexts = calls.filter((c) => c.method === 'println').map((c) => c.args[0])
-    expect(lineTexts.some((t) => typeof t === 'string' && t.startsWith('Discount:'))).toBe(false)
-  })
-
-  it('prefixes the order-creation line "Sale time:" (docs/phase-164)', async () => {
-    const { client, calls } = createFakePrinter()
-    await renderReceipt(client, order, items, settings)
-
-    const lineTexts = calls.filter((c) => c.method === 'println').map((c) => c.args[0])
-    expect(lineTexts).toContain(`Sale time: ${new Date(order.createdAt).toLocaleString()}`)
-  })
-})
-
-describe('renderReceipt — CU date/time/serial block (docs/phase-164)', () => {
-  it('prints "CU Date/Time" when the timestamp came from the device', async () => {
-    const { client, calls } = createFakePrinter()
-    const fiscalOrder: ReceiptOrder = {
-      ...order,
-      fiscalInvoiceNumber: 'KRA-0010',
-      fiscalizedAt: '27-08-2026 09:15:00',
-      fiscalizedAtSource: 'device'
-    }
-
-    await renderReceipt(client, fiscalOrder, items, settings)
-
-    const lineTexts = calls.filter((c) => c.method === 'println').map((c) => c.args[0])
-    expect(lineTexts).toContain('CU Date/Time: 27-08-2026 09:15:00')
-    expect(lineTexts.some((t) => typeof t === 'string' && t.startsWith('Till time'))).toBe(false)
-  })
-
-  it('labels a local-fallback timestamp as till time, not a device time', async () => {
-    const { client, calls } = createFakePrinter()
-    const fiscalOrder: ReceiptOrder = {
-      ...order,
-      fiscalInvoiceNumber: 'KRA-0011',
-      fiscalizedAt: '2026-08-27T09:15:00.000Z',
-      fiscalizedAtSource: 'local-fallback'
-    }
-
-    await renderReceipt(client, fiscalOrder, items, settings)
-
-    const lineTexts = calls.filter((c) => c.method === 'println').map((c) => c.args[0])
-    expect(lineTexts).toContain('Till time (device time unavailable): 2026-08-27T09:15:00.000Z')
-    expect(lineTexts.some((t) => typeof t === 'string' && t.startsWith('CU Date/Time'))).toBe(false)
-  })
-
-  it('labels a missing/unknown source (an order fiscalized before this phase) as till time too', async () => {
-    const { client, calls } = createFakePrinter()
-    const fiscalOrder: ReceiptOrder = {
-      ...order,
-      fiscalInvoiceNumber: 'KRA-0012',
-      fiscalizedAt: '2026-08-27T09:15:00.000Z'
-      // fiscalizedAtSource deliberately omitted.
-    }
-
-    await renderReceipt(client, fiscalOrder, items, settings)
-
-    const lineTexts = calls.filter((c) => c.method === 'println').map((c) => c.args[0])
-    expect(lineTexts).toContain('Till time (device time unavailable): 2026-08-27T09:15:00.000Z')
-  })
-
-  it('prints the CU serial number when present', async () => {
-    const { client, calls } = createFakePrinter()
-    const fiscalOrder: ReceiptOrder = {
-      ...order,
-      fiscalInvoiceNumber: 'KRA-0013',
-      cuSerial: 'CU-SERIAL-0013'
-    }
-
-    await renderReceipt(client, fiscalOrder, items, settings)
-
-    const lineTexts = calls.filter((c) => c.method === 'println').map((c) => c.args[0])
-    expect(lineTexts).toContain('CU Serial No: CU-SERIAL-0013')
-  })
-
-  it('omits the serial line entirely when absent, rather than printing it blank', async () => {
-    const { client, calls } = createFakePrinter()
-    const fiscalOrder: ReceiptOrder = { ...order, fiscalInvoiceNumber: 'KRA-0014' }
-
-    await renderReceipt(client, fiscalOrder, items, settings)
-
-    const lineTexts = calls.filter((c) => c.method === 'println').map((c) => c.args[0])
-    expect(lineTexts.some((t) => typeof t === 'string' && t.startsWith('CU Serial No:'))).toBe(false)
-  })
-
-  it('prints no CU block at all for an unfiled order, whatever fiscal fields it happens to carry', async () => {
-    const { client, calls } = createFakePrinter()
-    // Not fiscalized (no fiscalInvoiceNumber) — the other fiscal fields
-    // must never appear on a receipt without an invoice number gating them.
-    const unfiledOrder: ReceiptOrder = {
-      ...order,
-      fiscalizedAt: '27-08-2026 09:15:00',
-      fiscalizedAtSource: 'device',
-      cuSerial: 'CU-SERIAL-0015'
-    }
-
-    await renderReceipt(client, unfiledOrder, items, settings)
-
-    const lineTexts = calls.filter((c) => c.method === 'println').map((c) => c.args[0])
-    expect(lineTexts.some((t) => typeof t === 'string' && t.startsWith('CU '))).toBe(false)
-  })
-})
-
-describe('renderReceipt — duplicate labelling (docs/phase-164, post-implementation checklist item 11)', () => {
-  it('stamps DUPLICATE at the top and bottom when isDuplicate is set', async () => {
-    const { client, calls } = createFakePrinter()
-    const duplicateOrder: ReceiptOrder = { ...order, isDuplicate: true }
-
-    await renderReceipt(client, duplicateOrder, items, settings)
-
-    const lineTexts = calls.filter((c) => c.method === 'println').map((c) => c.args[0])
-    const stampIndexes = lineTexts
-      .map((t, i) => (t === '*** DUPLICATE ***' ? i : -1))
-      .filter((i) => i >= 0)
-    expect(stampIndexes).toHaveLength(2)
-    // One stamp before the store name (near the top), one at/near the end.
-    expect(lineTexts[stampIndexes[0] + 1]).toBe(settings.storeName)
-    expect(stampIndexes[1]).toBeGreaterThan(lineTexts.indexOf('Thank you!'))
-  })
-
-  it('prints no DUPLICATE stamp for an original (first) print', async () => {
-    const { client, calls } = createFakePrinter()
-
-    await renderReceipt(client, order, items, settings)
-
-    const lineTexts = calls.filter((c) => c.method === 'println').map((c) => c.args[0])
-    expect(lineTexts).not.toContain('*** DUPLICATE ***')
-  })
-})
-
-describe('renderReceipt — not-yet-filed slip (docs/phase-165)', () => {
-  it('prints the header near the top and "Not a tax invoice" where the CU block would be', async () => {
-    const { client, calls } = createFakePrinter()
-    const pendingOrder: ReceiptOrder = { ...order, fiscalPending: true }
-
-    await renderReceipt(client, pendingOrder, items, settings)
-
-    const lineTexts = calls.filter((c) => c.method === 'println').map((c) => c.args[0])
-    expect(lineTexts[0]).toBe(FISCAL_PENDING_HEADER)
-    expect(lineTexts.indexOf(FISCAL_PENDING_HEADER)).toBeLessThan(lineTexts.indexOf(settings.storeName))
-    expect(lineTexts).toContain(NOT_A_TAX_INVOICE_LINE)
-    expect(lineTexts.some((t) => typeof t === 'string' && t.startsWith('CU '))).toBe(false)
-  })
-
-  it('prints neither the header nor the slip line when fiscalPending is not set', async () => {
-    const { client, calls } = createFakePrinter()
-
-    await renderReceipt(client, order, items, settings)
-
-    const lineTexts = calls.filter((c) => c.method === 'println').map((c) => c.args[0])
-    expect(lineTexts).not.toContain(FISCAL_PENDING_HEADER)
-    expect(lineTexts).not.toContain(NOT_A_TAX_INVOICE_LINE)
-  })
-
-  it('ignores fiscalPending for a fiscalised order — prints the real CU block, not the slip', async () => {
-    const { client, calls } = createFakePrinter()
-    const fiscalOrder: ReceiptOrder = { ...order, fiscalInvoiceNumber: 'KRA-0020', fiscalPending: true }
-
-    await renderReceipt(client, fiscalOrder, items, settings)
-
-    const lineTexts = calls.filter((c) => c.method === 'println').map((c) => c.args[0])
-    expect(lineTexts).toContain('CU Invoice No: KRA-0020')
-    expect(lineTexts).not.toContain(NOT_A_TAX_INVOICE_LINE)
-    expect(lineTexts).not.toContain(FISCAL_PENDING_HEADER)
+    expect(printQR).not.toHaveBeenCalled()
   })
 })
 
@@ -547,13 +338,13 @@ describe('printReceipt', () => {
 
     expect(logSpy).toHaveBeenCalledTimes(1)
     const logged = logSpy.mock.calls[0][0] as string
-    expect(logged).toContain('Order #7')
-    // DELIBERATE TEST CHANGE (docs/phase-161 Commit 2, same reasoning as
-    // the "issues the ESC/POS call sequence" test above): old assertion
-    // `Total: 48.59` (the old added-on-top figure); new assertion
-    // `Total: 44.99` (the order's own stored total, unchanged since
-    // there is no discount here).
-    expect(logged).toContain(`Total: ${formatCurrency(44.99)}`)
+    expect(logged).toContain('RUBIS')
+    // DELIBERATE TEST CHANGE (docs/phase-171): the receipt no longer
+    // prints a "Total:" label — the new layout's headline total line
+    // reads "TOTAL KSH <amount>" (see receiptLayout.ts section (e)).
+    // Old assertion: `logged` contains `Total: Ksh 44.99`.
+    expect(logged).toContain('TOTAL KSH')
+    expect(logged).toContain('44.99')
 
     logSpy.mockRestore()
   })

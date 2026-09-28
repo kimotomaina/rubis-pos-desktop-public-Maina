@@ -102,7 +102,11 @@ function stubApi(): void {
       .fn()
       .mockResolvedValue(ok({ consumerSecretConfigured: false, passkeyConfigured: false })),
     getEtimsSecretStatus: vi.fn().mockResolvedValue(ok({ passwordConfigured: false })),
-    getStoreIdentity: vi.fn().mockResolvedValue(ok({ storeName: '', storeKraPin: '' })),
+    getStoreIdentity: vi
+      .fn()
+      .mockResolvedValue(
+        ok({ storeName: '', storeKraPin: '', legalName: '', address: '', phone: '', footerMessage: '' })
+      ),
     getShopifyTokenStatus: vi.fn().mockResolvedValue(ok({ configured: false })),
     getShopifyStoreUrl: vi.fn().mockResolvedValue(ok({ storeUrl: '' })),
     getConfigStatus: vi.fn().mockResolvedValue(ok({ config: null })),

@@ -146,9 +146,13 @@ export interface FiscalInvoiceResult {
   /** KRA-assigned invoice number, or a local placeholder while queued. */
   invoiceNumber: string
   /**
-   * Base64-encoded placeholder for the KRA-mandated QR code. Real QR
-   * generation (the `qrcode` package, encoding the KRA verification
-   * URL) is planned for the production integration.
+   * The device's own QR verification text (a URL, up to 128 characters,
+   * per the vendor's `CloseReceipt` definition — docs/phase-110),
+   * returned verbatim by `CloseReceipt`. Rendered as a real QR code from
+   * this text — the printer's native command on the thermal path, plain
+   * small text on the PDF fallback (no QR-image library is a dependency
+   * of this project — docs/phase-171's audit) — never as an image
+   * decoded from this string itself.
    */
   qrCode: string
   fiscalizedAt: string

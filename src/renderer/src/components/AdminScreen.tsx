@@ -272,6 +272,10 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
 
   const [storeName, setStoreName] = useState('')
   const [storeKraPin, setStoreKraPin] = useState('')
+  const [storeLegalName, setStoreLegalName] = useState('')
+  const [storeAddress, setStoreAddress] = useState('')
+  const [storePhone, setStorePhone] = useState('')
+  const [storeFooterMessage, setStoreFooterMessage] = useState('')
 
   /**
    * Whether this till has everything it needs to file a sale. Mirrors
@@ -387,6 +391,10 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
     if (storeIdentityResult.success && storeIdentityResult.data) {
       setStoreName(storeIdentityResult.data.storeName)
       setStoreKraPin(storeIdentityResult.data.storeKraPin)
+      setStoreLegalName(storeIdentityResult.data.legalName)
+      setStoreAddress(storeIdentityResult.data.address)
+      setStorePhone(storeIdentityResult.data.phone)
+      setStoreFooterMessage(storeIdentityResult.data.footerMessage)
     }
   }
 
@@ -744,7 +752,14 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
         setStoreIdentitySaving(true)
         try {
           const result = await window.api.setStoreIdentity(
-            { storeName: storeName.trim(), storeKraPin: storeKraPin.trim() },
+            {
+              storeName: storeName.trim(),
+              storeKraPin: storeKraPin.trim(),
+              legalName: storeLegalName.trim(),
+              address: storeAddress.trim(),
+              phone: storePhone.trim(),
+              footerMessage: storeFooterMessage.trim()
+            },
             managerId,
             managerPin
           )
@@ -1784,6 +1799,60 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
                       className="w-full h-12 rounded-lg border border-slate-300 px-3 text-lg focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-100"
                     />
                     <p className="mt-1 text-sm text-slate-500">Not the customer&apos;s PIN.</p>
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-lg font-medium text-slate-600">Legal name</label>
+                    <input
+                      type="text"
+                      readOnly
+                      value={storeLegalName}
+                      onClick={() =>
+                        openField(storeLegalName, setStoreLegalName, 'Legal name', { mode: 'text' })
+                      }
+                      placeholder="Rubis Energy Kenya PLC"
+                      className="w-full h-12 rounded-lg border border-slate-300 px-3 text-lg focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-100"
+                    />
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-lg font-medium text-slate-600">
+                      Shop name and address
+                    </label>
+                    <input
+                      type="text"
+                      readOnly
+                      value={storeAddress}
+                      onClick={() => openField(storeAddress, setStoreAddress, 'Shop name and address', { mode: 'text' })}
+                      placeholder="Enjoy Westlands, Waiyaki Way, Nairobi"
+                      className="w-full h-12 rounded-lg border border-slate-300 px-3 text-lg focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-100"
+                    />
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-lg font-medium text-slate-600">Phone</label>
+                    <input
+                      type="text"
+                      readOnly
+                      value={storePhone}
+                      onClick={() => openField(storePhone, setStorePhone, 'Phone', { mode: 'text' })}
+                      placeholder="0700 000 000"
+                      className="w-full h-12 rounded-lg border border-slate-300 px-3 text-lg focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-100"
+                    />
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-lg font-medium text-slate-600">
+                      Receipt footer message
+                    </label>
+                    <input
+                      type="text"
+                      readOnly
+                      value={storeFooterMessage}
+                      onClick={() =>
+                        openField(storeFooterMessage, setStoreFooterMessage, 'Receipt footer message', {
+                          mode: 'text'
+                        })
+                      }
+                      placeholder="Thank you for shopping at Enjoy!"
+                      className="w-full h-12 rounded-lg border border-slate-300 px-3 text-lg focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-100"
+                    />
                   </div>
                 </div>
               </div>

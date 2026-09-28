@@ -387,11 +387,27 @@ export interface PosApi {
   getEtimsSecretStatus: () => Promise<ServiceResult<{ passwordConfigured: boolean }>>
   /** Walks the three hops to the fiscal device and reports which one broke, in plain words. */
   testEtimsConnection: () => Promise<ServiceResult<FiscalConnectionTestResult>>
-  /** Reads the store name and KRA PIN printed on every receipt. */
-  getStoreIdentity: () => Promise<ServiceResult<{ storeName: string; storeKraPin: string }>>
-  /** Saves the store name and KRA PIN printed on every receipt. Requires a re-verified admin Manager PIN. */
+  /** Reads the seller identity fields printed on every receipt (docs/phase-171). */
+  getStoreIdentity: () => Promise<
+    ServiceResult<{
+      storeName: string
+      storeKraPin: string
+      legalName: string
+      address: string
+      phone: string
+      footerMessage: string
+    }>
+  >
+  /** Saves the seller identity fields printed on every receipt (docs/phase-171). Requires a re-verified admin Manager PIN. */
   setStoreIdentity: (
-    identity: { storeName: string; storeKraPin: string },
+    identity: {
+      storeName: string
+      storeKraPin: string
+      legalName?: string
+      address?: string
+      phone?: string
+      footerMessage?: string
+    },
     managerId: number,
     managerPin: string
   ) => Promise<ServiceResult<void>>

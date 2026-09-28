@@ -26,9 +26,15 @@ import { formatVatRateLabel } from './reports.js'
 import type { PrinterConfig, PrinterType, FiscalStatus } from './database.js'
 import { formatCurrency } from './currency.js'
 import { generatePdfReceipt } from './pdf-receipt.js'
-import { computeReceiptTotals } from '../lib/receiptTotals.js'
-import type { ReceiptTotalsLineItem } from '../lib/receiptTotals.js'
-import { buildFiscalBlockLines, FISCAL_PENDING_HEADER } from '../lib/receiptFiscalBlock.js'
+import { buildReceiptLayout, isReceiptLayoutQr, asReceiptWidth } from '../lib/receiptLayout.js'
+import type {
+  ReceiptLayoutOrder,
+  ReceiptLayoutLineItem,
+  ReceiptLayoutVatGroups,
+  ReceiptWidth
+} from '../lib/receiptLayout.js'
+
+export type { ReceiptLayoutVatGroups, ReceiptWidth } from '../lib/receiptLayout.js'
 
 /** Store-level configuration resolved once at startup from env vars / settings. */
 export interface PrinterSettings {
@@ -43,6 +49,16 @@ export interface PrinterSettings {
    * when the branch has not set one.
    */
   storeKraPin?: string
+  /** Registered company name (docs/phase-171) — omitted when unset. */
+  legalName?: string
+  /** Branch/shop name and street address, one line (docs/phase-171) — omitted when unset. */
+  address?: string
+  /** Phone number, printed as "Tel <phone>" (docs/phase-171) — omitted when unset. */
+  phone?: string
+  /** Printed centred above the VAT key at the very bottom (docs/phase-171). Defaults to "Thank you for shopping at Enjoy!". */
+  footerMessage?: string
+  /** Characters per printed line — 48 (80mm Font A, default), 42 or 32 (58mm) (docs/phase-171). */
+  width?: ReceiptWidth
   /** Fractional tax rate applied to the subtotal (0.08 = 8%). */
   taxRate: number
   /** When true, skips hardware entirely and logs the receipt text. */
@@ -60,10 +76,14 @@ export interface ReceiptOrder {
   referenceNumber?: string
   /** Customer's KRA PIN, when captured for a B2B eTIMS invoice — omitted for a walk-in B2C sale. */
   customerPin?: string
+  /** Buyer's company/trading name, read from `fiscal_request_json` (docs/phase-171, docs/phase-157) — omitted otherwise. */
+  buyerName?: string
   /** KRA/eTIMS invoice number, when the sale was fiscalized. */
   fiscalInvoiceNumber?: string
-  /** Base64 QR code payload returned (or generated) at fiscalization time. */
+  /** The device's own QR verification text (a URL, up to 128 characters, per docs/phase-110) — never an image (docs/phase-171's audit). */
   fiscalQrCode?: string
+  /** The device's five per-VAT-group taxable (ex-VAT) subtotals (docs/phase-171) — printed in the VAT table when present. */
+  vatGroups?: ReceiptLayoutVatGroups
   /** The control unit's own date/time stamp, stored verbatim (docs/phase-164). See {@link buildFiscalBlockLines}. */
   fiscalizedAt?: string
   /** Where {@link fiscalizedAt} came from (docs/phase-164). */
@@ -102,6 +122,8 @@ export interface ReceiptLineItem {
   unitPrice: number
   /** Line-level discount applied at checkout, when any (docs/phase-161). */
   discount?: Discount
+  /** KRA VAT class letter, from `fiscal_request_json` when known (docs/phase-171) — defaults to `'A'` otherwise. */
+  vatClass?: string
 }
 
 /** Result data on a successful print. */
@@ -182,11 +204,17 @@ export interface ThermalPrinterLike {
   isPrinterConnected(): Promise<boolean>
   alignCenter(): void
   alignLeft(): void
+  alignRight(): void
   bold(enabled: boolean): void
+  setTextNormal(): void
+  /** Sets double height and width together — used for the layout's `'double'` style. */
+  setTextQuadArea(): void
   println(text: string): void
   drawLine(): void
   cut(): void
   execute(): Promise<unknown>
+  /** Prints a QR code from its native command, from plain text — never an image (docs/phase-171). Optional — absent on the mock sink. */
+  printQR?(text: string): void
   /** Prints a raster image from a decoded PNG buffer. Optional — absent on the mock sink. */
   printImageBuffer?(buffer: Buffer): Promise<unknown>
 }
@@ -271,26 +299,31 @@ export function resolvePrinterSettings(
 ): PrinterSettings {
   for (const config of registry.values()) {
     if (config.type === type && config.enabled) {
-      return { ...defaultSettings, interfaceName: config.interfaceName }
+      return {
+        ...defaultSettings,
+        interfaceName: config.interfaceName,
+        width: asReceiptWidth(config.width) ?? defaultSettings.width
+      }
     }
   }
   return defaultSettings
 }
 
 /**
- * Issues the ESC/POS formatting calls for one receipt onto a
- * {@link ThermalPrinterLike} sink. Exported so tests can verify the
- * exact print sequence independent of hardware/mock branching.
+ * Renders one receipt onto a {@link ThermalPrinterLike} sink by walking
+ * {@link buildReceiptLayout}'s output — the same array
+ * {@link generatePdfReceipt} renders. This function owns no receipt
+ * content or wording of its own any more (docs/phase-171); it only
+ * translates each entry into ESC/POS calls:
  *
- * Layout: store name (centered, bold) → order # → date/time → cashier
- * → customer KRA PIN, for a B2B sale → dashed line → items
- * (name/variant, qty, price) → dashed line → subtotal → discount (only
- * if any) → total (bold) → VAT included → payment method → "Thank
- * you!" → fiscal invoice number/QR code, when the sale was fiscalized.
- *
- * Subtotal/discount/total/VAT all come from {@link computeReceiptTotals}
- * (docs/phase-161 Commit 2) — `total` is always `order.total`, the
- * amount actually charged, never recomputed from `items` here.
+ *   - `align` picks `alignLeft`/`alignCenter`/`alignRight`.
+ *   - `style: 'double'` wraps the line in `setTextQuadArea()` (bold);
+ *     `'bold'` wraps it in `bold(true)`; `'normal'` prints it plain.
+ *   - a `{ qr }` entry prints the device's own QR text with the
+ *     printer's native `printQR` command when the client supports it
+ *     (real hardware always does — see docs/phase-171's audit of
+ *     `node-thermal-printer`'s API); otherwise a plain-text placeholder,
+ *     since a receipt must never be left silently missing a whole entry.
  *
  * @param {ThermalPrinterLike} client
  * @param {ReceiptOrder} order
@@ -304,127 +337,63 @@ export async function renderReceipt(
   items: ReceiptLineItem[],
   settings: PrinterSettings
 ): Promise<void> {
-  const lineItems: ReceiptTotalsLineItem[] = items.map((item) => ({
-    unitPrice: item.unitPrice,
-    quantity: item.quantity,
-    discount: item.discount
-  }))
-  const totals = computeReceiptTotals(
-    { localId: order.localId, lineItems, cartDiscount: order.cartDiscount, total: order.total },
-    settings.taxRate
+  const layoutOrder: ReceiptLayoutOrder = {
+    ...order,
+    items: items.map(
+      (item): ReceiptLayoutLineItem => ({
+        title: item.title,
+        variantTitle: item.variantTitle,
+        quantity: item.quantity,
+        unitPrice: item.unitPrice,
+        discount: item.discount,
+        vatClass: item.vatClass
+      })
+    )
+  }
+  const entries = buildReceiptLayout(
+    layoutOrder,
+    {
+      taxRate: settings.taxRate,
+      tradingName: settings.storeName,
+      legalName: settings.legalName,
+      address: settings.address,
+      phone: settings.phone,
+      sellerPin: settings.storeKraPin,
+      footerMessage: settings.footerMessage
+    },
+    { width: settings.width }
   )
 
-  client.alignCenter()
-  // docs/phase-164, post-implementation checklist item 11: any print past
-  // the first successful one for this sale is stamped a duplicate, top
-  // and bottom, so it can never be mistaken for the original receipt.
-  if (order.isDuplicate) {
-    client.bold(true)
-    client.println('*** DUPLICATE ***')
-    client.bold(false)
-  }
-  // docs/phase-165: the automatic end-of-sale print of a not-yet-filed
-  // sale (real provider only) is headed clearly as a plain sale record,
-  // not a tax invoice — see receiptFiscalBlock.ts for NOT_A_TAX_INVOICE_LINE,
-  // printed further down where the CU block would be.
-  if (order.fiscalPending && !order.fiscalInvoiceNumber) {
-    client.bold(true)
-    client.println(FISCAL_PENDING_HEADER)
-    client.bold(false)
-  }
-  client.bold(true)
-  client.println(settings.storeName)
-  client.bold(false)
-  if (settings.storeKraPin) {
-    client.println(`PIN: ${settings.storeKraPin}`)
-  }
-  client.println(`Order #${order.localId}`)
-  client.println(`Sale time: ${new Date(order.createdAt).toLocaleString()}`)
-  client.println(`Cashier: ${order.cashierName}`)
-  if (order.customerPin) {
-    client.println(`Customer PIN: ${order.customerPin}`)
-  }
-  client.drawLine()
-
-  client.alignLeft()
-  for (const item of items) {
-    const label = item.variantTitle
-      ? `${item.title} (${item.variantTitle})`
-      : item.title
-    client.println(`${label} x${item.quantity}`)
-    client.println(`  ${formatCurrency(item.unitPrice * item.quantity)}`)
-  }
-  client.drawLine()
-
-  client.println(`Subtotal: ${formatCurrency(totals.rawSubtotal)}`)
-  if (totals.discountTotal > 0) {
-    client.println(`Discount: -${formatCurrency(totals.discountTotal)}`)
-  }
-  client.bold(true)
-  client.println(`Total: ${formatCurrency(totals.total)}`)
-  client.bold(false)
-  client.println(`${formatVatRateLabel(settings.taxRate)}: ${formatCurrency(totals.vatIncluded)}`)
-  client.println(`Payment: ${order.paymentMethod}`)
-  if (order.paymentMethod === 'cash') {
-    client.println(`Tendered: ${formatCurrency(order.tenderedAmount)}`)
-    client.println(`Change: ${formatCurrency(order.changeDue)}`)
-  } else if (order.referenceNumber) {
-    client.println(`Ref: ${order.referenceNumber}`)
-  }
-
-  client.alignCenter()
-  client.println('Thank you!')
-
-  // docs/phase-164: CU invoice number, date/time and serial — the VIL G03
-  // manual's "details received from control unit" — shared with the PDF
-  // fallback via buildFiscalBlockLines. Empty for a non-fiscalized order,
-  // so the block (and the drawLine below) never appears for one.
-  const fiscalLines = buildFiscalBlockLines(order)
-  if (fiscalLines.length > 0 || order.fiscalQrCode) {
-    client.drawLine()
-    for (const line of fiscalLines) {
-      client.println(line)
+  for (const entry of entries) {
+    if (isReceiptLayoutQr(entry)) {
+      if (client.printQR) {
+        client.printQR(entry.qr)
+      } else {
+        client.println(`[QR: ${entry.qr}]`)
+      }
+      continue
     }
-    if (order.fiscalQrCode) {
-      await printFiscalQrCode(client, order.fiscalQrCode, order.fiscalInvoiceNumber)
-    }
-  }
 
-  if (order.isDuplicate) {
-    client.bold(true)
-    client.println('*** DUPLICATE ***')
-    client.bold(false)
+    if (entry.align === 'left') client.alignLeft()
+    else if (entry.align === 'right') client.alignRight()
+    else client.alignCenter()
+
+    if (entry.style === 'double') {
+      client.setTextQuadArea()
+      client.bold(true)
+      client.println(entry.text)
+      client.bold(false)
+      client.setTextNormal()
+    } else if (entry.style === 'bold') {
+      client.bold(true)
+      client.println(entry.text)
+      client.bold(false)
+    } else {
+      client.println(entry.text)
+    }
   }
 
   client.cut()
-}
-
-/**
- * Prints the eTIMS QR code as a raster image via
- * {@link ThermalPrinterLike.printImageBuffer}. Falls back to a plain-text
- * placeholder — rather than breaking the receipt layout — when the
- * client has no image support, or the buffer isn't a decodable PNG
- * (the fiscal device may return an opaque payload rather than image
- * bytes; see the module doc for the QR code roadmap).
- *
- * @param {ThermalPrinterLike} client
- * @param {string} qrCodeBase64
- * @param {string} [invoiceNumber]
- */
-async function printFiscalQrCode(
-  client: ThermalPrinterLike,
-  qrCodeBase64: string,
-  invoiceNumber?: string
-): Promise<void> {
-  if (client.printImageBuffer) {
-    try {
-      await client.printImageBuffer(Buffer.from(qrCodeBase64, 'base64'))
-      return
-    } catch {
-      // Not a decodable image — fall through to the text placeholder.
-    }
-  }
-  client.println(`[QR CODE: ${invoiceNumber ?? qrCodeBase64.slice(0, 12)}]`)
 }
 
 /**
@@ -497,9 +466,13 @@ function createMockSink(): { client: ThermalPrinterLike; lines: string[] } {
     isPrinterConnected: async () => true,
     alignCenter: () => {},
     alignLeft: () => {},
+    alignRight: () => {},
     bold: () => {},
+    setTextNormal: () => {},
+    setTextQuadArea: () => {},
     println: (text) => lines.push(text),
     drawLine: () => lines.push('--------------------------------'),
+    printQR: (text) => lines.push(`[QR: ${text}]`),
     cut: () => {},
     execute: async () => undefined
   }

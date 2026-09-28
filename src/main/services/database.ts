@@ -435,6 +435,22 @@ function migrateOrdersPushColumns(connection: SqliteConnection): void {
 }
 
 /**
+ * Adds `width` (characters per printed line) to a pre-existing `printers`
+ * table (docs/phase-171) — a fresh table already has it via
+ * {@link SCHEMA.printers}. `NULL` on an existing row reads back as "not
+ * set", which {@link resolvePrinterSettings} treats as the default
+ * (48, 80mm Font A) — the same idempotent `ALTER TABLE` pattern as
+ * {@link migrateOrdersReceiptColumns}.
+ */
+function migratePrintersColumns(connection: SqliteConnection): void {
+  try {
+    connection.exec('ALTER TABLE printers ADD COLUMN width INTEGER')
+  } catch {
+    // Column already exists — table was created with the current schema.
+  }
+}
+
+/**
  * Adds `excluded_count` to a `mpesa_day_approvals` table created before
  * docs/phase-153 introduced per-entry exclusions — a fresh table already
  * has the column via {@link SCHEMA.mpesaDayApprovals}, so this is a no-op
@@ -543,7 +559,8 @@ export const SCHEMA = {
     id TEXT PRIMARY KEY,
     type TEXT NOT NULL CHECK (type IN ('receipt', 'kitchen', 'label')),
     interface TEXT NOT NULL,
-    enabled INTEGER NOT NULL DEFAULT 1
+    enabled INTEGER NOT NULL DEFAULT 1,
+    width INTEGER
   )`,
   mpesaTransactions: `CREATE TABLE IF NOT EXISTS mpesa_transactions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -780,6 +797,8 @@ export interface PrinterConfig {
   interfaceName: string
   /** Disabled printers are skipped by registry lookups without deleting the row. */
   enabled: boolean
+  /** Characters per printed line (48/42/32, docs/phase-171) — `undefined` falls back to the default (48). */
+  width?: number
 }
 
 /** Raw `printers` row shape, before {@link PrinterConfig}'s boolean/name normalization. */
@@ -788,6 +807,7 @@ interface PrinterRow {
   type: PrinterType
   interface: string
   enabled: number
+  width: number | null
 }
 
 /** Grouping shown in the Admin screen's configuration list. */
@@ -1175,6 +1195,7 @@ export class RubisDatabase {
     connection.exec(SCHEMA.shifts)
     connection.exec(SCHEMA.integrations)
     connection.exec(SCHEMA.printers)
+    migratePrintersColumns(connection)
     connection.exec(SCHEMA.mpesaTransactions)
     connection.exec(SCHEMA.mpesaTransactionsCheckoutRequestIndex)
     connection.exec(SCHEMA.mpesaSmsMessages)
@@ -2454,13 +2475,14 @@ export class RubisDatabase {
    */
   getPrinters(): PrinterConfig[] {
     const rows = this.conn
-      .prepare('SELECT id, type, interface, enabled FROM printers ORDER BY id ASC')
+      .prepare('SELECT id, type, interface, enabled, width FROM printers ORDER BY id ASC')
       .all() as PrinterRow[]
     return rows.map((row) => ({
       id: row.id,
       type: row.type,
       interfaceName: row.interface,
-      enabled: row.enabled === 1
+      enabled: row.enabled === 1,
+      width: row.width ?? undefined
     }))
   }
 
@@ -2472,10 +2494,10 @@ export class RubisDatabase {
   savePrinter(config: PrinterConfig): void {
     this.conn
       .prepare(
-        'INSERT INTO printers (id, type, interface, enabled) VALUES (?, ?, ?, ?) ' +
-          'ON CONFLICT(id) DO UPDATE SET type = excluded.type, interface = excluded.interface, enabled = excluded.enabled'
+        'INSERT INTO printers (id, type, interface, enabled, width) VALUES (?, ?, ?, ?, ?) ' +
+          'ON CONFLICT(id) DO UPDATE SET type = excluded.type, interface = excluded.interface, enabled = excluded.enabled, width = excluded.width'
       )
-      .run(config.id, config.type, config.interfaceName, config.enabled ? 1 : 0)
+      .run(config.id, config.type, config.interfaceName, config.enabled ? 1 : 0, config.width ?? null)
   }
 
   /**

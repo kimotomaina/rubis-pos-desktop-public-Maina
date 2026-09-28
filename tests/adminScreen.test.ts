@@ -71,7 +71,11 @@ function stubApi(mpesaOverrides: Record<string, unknown> = {}): void {
       .fn()
       .mockResolvedValue(ok({ consumerSecretConfigured: false, passkeyConfigured: false })),
     getEtimsSecretStatus: vi.fn().mockResolvedValue(ok({ passwordConfigured: false })),
-    getStoreIdentity: vi.fn().mockResolvedValue(ok({ storeName: '', storeKraPin: '' })),
+    getStoreIdentity: vi
+      .fn()
+      .mockResolvedValue(
+        ok({ storeName: '', storeKraPin: '', legalName: '', address: '', phone: '', footerMessage: '' })
+      ),
     getShopifyTokenStatus: vi.fn().mockResolvedValue(ok({ configured: false })),
     getShopifyStoreUrl: vi.fn().mockResolvedValue(ok({ storeUrl: '' })),
     getConfigStatus: vi.fn().mockResolvedValue(ok({ config: null })),
@@ -273,7 +277,11 @@ describe('AdminScreen > Integrations > Fiscal Device + Store Details', () => {
     { label: 'Fiscal device password', mode: 'text', secret: true },
     { label: 'Default tax class', mode: 'caps', secret: false },
     { label: 'Store name', mode: 'text', secret: false },
-    { label: 'Store KRA PIN', mode: 'caps', secret: false }
+    { label: 'Store KRA PIN', mode: 'caps', secret: false },
+    { label: 'Legal name', mode: 'text', secret: false },
+    { label: 'Shop name and address', mode: 'text', secret: false },
+    { label: 'Phone', mode: 'text', secret: false },
+    { label: 'Receipt footer message', mode: 'text', secret: false }
   ]
 
   it.each(cases)('$label — mode $mode, secret $secret', async ({ label, mode, secret }) => {
@@ -302,8 +310,19 @@ describe('AdminScreen > Integrations > Fiscal Device + Store Details', () => {
     expect(inputByLabel('Store KRA PIN').value).toBe('P051234567Z')
 
     await click('Save Store Details')
+    // DELIBERATE TEST CHANGE (docs/phase-171): four more seller-identity
+    // fields (legal name, address, phone, footer message) are now sent
+    // alongside store name/KRA PIN — blank here since this test only
+    // types into the KRA PIN field.
     expect(window.api.setStoreIdentity).toHaveBeenCalledWith(
-      { storeName: '', storeKraPin: 'P051234567Z' },
+      {
+        storeName: '',
+        storeKraPin: 'P051234567Z',
+        legalName: '',
+        address: '',
+        phone: '',
+        footerMessage: ''
+      },
       9,
       '9999'
     )

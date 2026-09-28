@@ -29,7 +29,10 @@ function createFakePrinter(options?: { connected?: boolean; executeError?: unkno
     isPrinterConnected: vi.fn(async () => options?.connected ?? true),
     alignCenter: vi.fn(() => calls.push({ method: 'alignCenter', args: [] })),
     alignLeft: vi.fn(() => calls.push({ method: 'alignLeft', args: [] })),
+    alignRight: vi.fn(() => calls.push({ method: 'alignRight', args: [] })),
     bold: vi.fn((enabled: boolean) => calls.push({ method: 'bold', args: [enabled] })),
+    setTextNormal: vi.fn(() => calls.push({ method: 'setTextNormal', args: [] })),
+    setTextQuadArea: vi.fn(() => calls.push({ method: 'setTextQuadArea', args: [] })),
     println: vi.fn((text: string) => calls.push({ method: 'println', args: [text] })),
     drawLine: vi.fn(() => calls.push({ method: 'drawLine', args: [] })),
     cut: vi.fn(() => calls.push({ method: 'cut', args: [] })),
@@ -117,6 +120,19 @@ describe('resolvePrinterSettings', () => {
     const registry = buildPrinterRegistry([disabledLabelPrinter])
 
     expect(resolvePrinterSettings(registry, 'label', defaultSettings)).toEqual(defaultSettings)
+  })
+
+  it('carries a registered printer\'s own configured width (docs/phase-171)', () => {
+    const narrowPrinter: PrinterConfig = { ...kitchenPrinter, width: 32 }
+    const registry = buildPrinterRegistry([narrowPrinter])
+
+    expect(resolvePrinterSettings(registry, 'kitchen', defaultSettings).width).toBe(32)
+  })
+
+  it('falls back to defaultSettings.width when the registered printer has none configured (docs/phase-171)', () => {
+    const registry = buildPrinterRegistry([kitchenPrinter])
+
+    expect(resolvePrinterSettings(registry, 'kitchen', { ...defaultSettings, width: 42 }).width).toBe(42)
   })
 })
 

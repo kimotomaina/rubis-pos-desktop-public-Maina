@@ -1069,16 +1069,24 @@ const api = {
     ipcRenderer.invoke('config:test-etims'),
 
   /**
-   * Reads the store name and KRA PIN printed on every receipt.
+   * Reads the seller identity fields printed on every receipt (docs/phase-171).
    *
-   * @returns {Promise<ServiceResult<{ storeName: string; storeKraPin: string }>>}
+   * @returns {Promise<ServiceResult<{ storeName: string; storeKraPin: string; legalName: string; address: string; phone: string; footerMessage: string }>>}
    */
-  getStoreIdentity: (): Promise<ServiceResult<{ storeName: string; storeKraPin: string }>> =>
-    ipcRenderer.invoke('store:get-identity'),
+  getStoreIdentity: (): Promise<
+    ServiceResult<{
+      storeName: string
+      storeKraPin: string
+      legalName: string
+      address: string
+      phone: string
+      footerMessage: string
+    }>
+  > => ipcRenderer.invoke('store:get-identity'),
 
   /**
-   * Saves the store name and KRA PIN printed on every receipt. Requires
-   * a re-verified admin Manager PIN.
+   * Saves the seller identity fields printed on every receipt
+   * (docs/phase-171). Requires a re-verified admin Manager PIN.
    *
    * @param {object} identity
    * @param {number} managerId
@@ -1086,7 +1094,14 @@ const api = {
    * @returns {Promise<ServiceResult<void>>}
    */
   setStoreIdentity: (
-    identity: { storeName: string; storeKraPin: string },
+    identity: {
+      storeName: string
+      storeKraPin: string
+      legalName?: string
+      address?: string
+      phone?: string
+      footerMessage?: string
+    },
     managerId: number,
     managerPin: string
   ): Promise<ServiceResult<void>> =>

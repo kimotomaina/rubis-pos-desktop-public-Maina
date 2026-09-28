@@ -113,6 +113,7 @@ import { DarajaMpesaProvider } from './services/integrations/daraja-mpesa-provid
 import type { FiscalizationProvider } from './services/integrations/etims.js'
 import { RealFiscalizationProvider } from './services/integrations/real-etims-provider.js'
 import type { FiscalConnectionTestResult } from './services/integrations/fiscal-connection-test.js'
+import { toConnectivityCheckResult } from './services/integrations/fiscal-connection-test.js'
 import { resolveFiscalizationProvider } from './services/fiscal-provider-factory.js'
 import { DEFAULT_ETIMS_BASE_URL } from './services/integrations/http-client.js'
 import {
@@ -217,7 +218,12 @@ import {
   shouldShowFiscalPendingSlip,
   shouldOpenPdfFallbackViewer
 } from './services/printer.js'
-import type { PrinterSettings, ReceiptPrintResult, PrinterRegistry } from './services/printer.js'
+import type {
+  PrinterSettings,
+  ReceiptPrintResult,
+  PrinterRegistry,
+  ReceiptLayoutVatGroups
+} from './services/printer.js'
 import { hashPin, authenticateStaff } from './services/auth.js'
 import {
   generateZReport,
@@ -559,6 +565,18 @@ app.whenReady().then(async () => {
   /** `settings` table key for the store's own KRA PIN, printed on every receipt. */
   const STORE_KRA_PIN_SETTING_KEY = 'store_kra_pin'
 
+  /** `settings` table key for the registered company (legal) name, printed on the receipt header (docs/phase-171). */
+  const STORE_LEGAL_NAME_SETTING_KEY = 'store_legal_name'
+
+  /** `settings` table key for the branch/shop name and street address, one line (docs/phase-171). */
+  const STORE_ADDRESS_SETTING_KEY = 'store_address'
+
+  /** `settings` table key for the phone number, printed as "Tel <phone>" (docs/phase-171). */
+  const STORE_PHONE_SETTING_KEY = 'store_phone'
+
+  /** `settings` table key for the receipt footer message (docs/phase-171). */
+  const STORE_FOOTER_MESSAGE_SETTING_KEY = 'store_footer_message'
+
   /**
    * Store URL, not a secret (a public shop domain) so it lives in the
    * plain `settings` table rather than the encrypted vault — resolved
@@ -641,6 +659,10 @@ app.whenReady().then(async () => {
      */
     storeName: db.getSetting(STORE_NAME_SETTING_KEY) || process.env.VITE_STORE_NAME || 'RUBIS',
     storeKraPin: db.getSetting(STORE_KRA_PIN_SETTING_KEY) || undefined,
+    legalName: db.getSetting(STORE_LEGAL_NAME_SETTING_KEY) || undefined,
+    address: db.getSetting(STORE_ADDRESS_SETTING_KEY) || undefined,
+    phone: db.getSetting(STORE_PHONE_SETTING_KEY) || undefined,
+    footerMessage: db.getSetting(STORE_FOOTER_MESSAGE_SETTING_KEY) || undefined,
     taxRate: Number(process.env.VITE_TAX_RATE) || 0,
     mock: process.env.VITE_MOCK_PRINTER === 'true'
   }
@@ -1060,15 +1082,23 @@ app.whenReady().then(async () => {
     checkFiscal: () =>
       mockEtimsEnabled
         ? Promise.resolve(mockDisconnectedResult('eTIMS mock mode enabled'))
-        : checkHttpReachable(
-            /**
-             * Read fresh on every check rather than closing over the
-             * startup `etimsConfig` snapshot — otherwise this kept
-             * probing the OLD server address after an Admin save until
-             * the next relaunch (phase-95, Finding 4's staleness note).
+        : fiscalizationProvider instanceof RealFiscalizationProvider
+          ? /**
+             * The same three-hop check as the Admin "Test connection"
+             * button, so the two never disagree about what "reachable"
+             * means — a bare HTTP GET here used to count any response
+             * (even from an unrelated service on that port) as
+             * connected. `checkConnectivity` (not `testConnection`)
+             * reuses an already-open device session instead of forcing
+             * a fresh handshake on every 30s poll; it also always reads
+             * this provider's current settings, so an Admin save applies
+             * immediately (`applyEtimsConfigToProvider`/`reconfigure`
+             * keep it current — phase-95, Finding 4's staleness note).
              */
-            db.getIntegrationConfig<{ baseUrl?: string }>('etims').baseUrl || DEFAULT_ETIMS_BASE_URL
-          ),
+            fiscalizationProvider.checkConnectivity().then(toConnectivityCheckResult)
+          : checkHttpReachable(
+              db.getIntegrationConfig<{ baseUrl?: string }>('etims').baseUrl || DEFAULT_ETIMS_BASE_URL
+            ),
     checkPrinter: () =>
       printerSettings.mock
         ? Promise.resolve(mockConnectedResult())
@@ -1798,13 +1828,24 @@ app.whenReady().then(async () => {
    */
   ipcMain.handle(
     'store:get-identity',
-    (): ServiceResult<{ storeName: string; storeKraPin: string }> => {
+    (): ServiceResult<{
+      storeName: string
+      storeKraPin: string
+      legalName: string
+      address: string
+      phone: string
+      footerMessage: string
+    }> => {
       try {
         return {
           success: true,
           data: {
             storeName: db.getSetting(STORE_NAME_SETTING_KEY) ?? '',
-            storeKraPin: db.getSetting(STORE_KRA_PIN_SETTING_KEY) ?? ''
+            storeKraPin: db.getSetting(STORE_KRA_PIN_SETTING_KEY) ?? '',
+            legalName: db.getSetting(STORE_LEGAL_NAME_SETTING_KEY) ?? '',
+            address: db.getSetting(STORE_ADDRESS_SETTING_KEY) ?? '',
+            phone: db.getSetting(STORE_PHONE_SETTING_KEY) ?? '',
+            footerMessage: db.getSetting(STORE_FOOTER_MESSAGE_SETTING_KEY) ?? ''
           }
         }
       } catch (err) {
@@ -1836,10 +1877,22 @@ app.whenReady().then(async () => {
       try {
         const storeName = validation.data.storeName.trim()
         const storeKraPin = validation.data.storeKraPin.trim()
+        const legalName = validation.data.legalName?.trim() ?? ''
+        const address = validation.data.address?.trim() ?? ''
+        const phone = validation.data.phone?.trim() ?? ''
+        const footerMessage = validation.data.footerMessage?.trim() ?? ''
         db.setSetting(STORE_NAME_SETTING_KEY, storeName)
         db.setSetting(STORE_KRA_PIN_SETTING_KEY, storeKraPin)
+        db.setSetting(STORE_LEGAL_NAME_SETTING_KEY, legalName)
+        db.setSetting(STORE_ADDRESS_SETTING_KEY, address)
+        db.setSetting(STORE_PHONE_SETTING_KEY, phone)
+        db.setSetting(STORE_FOOTER_MESSAGE_SETTING_KEY, footerMessage)
         printerSettings.storeName = storeName
         printerSettings.storeKraPin = storeKraPin || undefined
+        printerSettings.legalName = legalName || undefined
+        printerSettings.address = address || undefined
+        printerSettings.phone = phone || undefined
+        printerSettings.footerMessage = footerMessage || undefined
         return { success: true }
       } catch (err) {
         return {
@@ -2638,6 +2691,38 @@ app.whenReady().then(async () => {
           fiscalizationProvider instanceof RealFiscalizationProvider,
           order.fiscal_status
         )
+        /**
+         * `fiscal_request_json` (docs/phase-171's audit) is the ORIGINAL
+         * request sent to the device — read-only here, never resubmitted.
+         * It is the only place a buyer's company name is stored
+         * (docs/phase-157), and the only place a per-item VAT class is
+         * stored before a sale has fiscalised. Absent (an unfiled sale
+         * that has never reached the device, or an older order predating
+         * this field) means no buyer name and every item defaults to
+         * class A, same as `checkout.ts`'s own default.
+         */
+        let buyerName: string | undefined
+        let itemVatClasses: string[] = []
+        if (order.fiscal_request_json) {
+          try {
+            const fiscalRequest = JSON.parse(order.fiscal_request_json) as {
+              companyName?: string
+              items?: Array<{ vatClass?: string }>
+            }
+            buyerName = fiscalRequest.companyName || undefined
+            itemVatClasses = (fiscalRequest.items ?? []).map((line) => line.vatClass || 'A')
+          } catch {
+            // Malformed/legacy JSON — print without a buyer name or per-item VAT classes rather than failing the whole receipt.
+          }
+        }
+        let vatGroups: ReceiptLayoutVatGroups | undefined
+        if (order.fiscal_vat_groups_json) {
+          try {
+            vatGroups = JSON.parse(order.fiscal_vat_groups_json) as ReceiptLayoutVatGroups
+          } catch {
+            // Malformed JSON — the layout builder's own class-A fallback covers this.
+          }
+        }
         const result = await printReceiptToType(
           {
             localId: order.local_id,
@@ -2648,11 +2733,13 @@ app.whenReady().then(async () => {
             changeDue: payload.changeDue,
             referenceNumber: payload.referenceNumber,
             customerPin: payload.customerPin,
+            buyerName,
             fiscalInvoiceNumber: order.fiscal_invoice_number ?? undefined,
             fiscalQrCode: order.fiscal_qr_code ?? undefined,
             fiscalizedAt: order.fiscal_fiscalized_at ?? undefined,
             fiscalizedAtSource: order.fiscal_fiscalized_at_source ?? undefined,
             cuSerial: order.fiscal_cu_serial ?? undefined,
+            vatGroups,
             fiscalPending,
             isDuplicate,
             // docs/phase-161: the stored total/discounts, no longer
@@ -2660,12 +2747,13 @@ app.whenReady().then(async () => {
             total: order.total,
             cartDiscount: payload.cartDiscount
           },
-          payload.lineItems.map((line) => ({
+          payload.lineItems.map((line, index) => ({
             title: line.title,
             variantTitle: line.variantTitle ?? '',
             quantity: line.quantity,
             unitPrice: line.unitPrice,
-            discount: line.discount
+            discount: line.discount,
+            vatClass: itemVatClasses[index]
           })),
           printerRegistry,
           printerSettings,

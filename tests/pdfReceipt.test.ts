@@ -10,8 +10,14 @@ import { describe, it, expect, vi, afterEach } from 'vitest'
 import { existsSync, readFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { generatePdfReceipt } from '../src/main/services/pdf-receipt.js'
+import {
+  generatePdfReceipt,
+  fontSizeForWidth,
+  computeReceiptPdfHeight
+} from '../src/main/services/pdf-receipt.js'
 import type { PrinterSettings, ReceiptLineItem, ReceiptOrder } from '../src/main/services/printer.js'
+import { buildReceiptLayout } from '../src/main/lib/receiptLayout.js'
+import type { ReceiptLayoutOrder } from '../src/main/lib/receiptLayout.js'
 
 vi.mock('electron', () => ({
   app: { getPath: vi.fn(() => tmpdir()) }
@@ -183,5 +189,67 @@ describe('generatePdfReceipt', () => {
     const filePath = await generatePdfReceipt(fiscalOrder, items, settings)
 
     expect(existsSync(filePath)).toBe(true)
+  })
+})
+
+describe('fontSizeForWidth (docs/phase-171)', () => {
+  it('is about 7.2pt at the default 48-character width', () => {
+    expect(fontSizeForWidth(48)).toBeCloseTo(7.1, 1)
+  })
+
+  it('is larger for a narrower character width — same physical 80mm page, fewer characters to fit', () => {
+    expect(fontSizeForWidth(32)).toBeGreaterThan(fontSizeForWidth(48))
+    expect(fontSizeForWidth(42)).toBeGreaterThan(fontSizeForWidth(48))
+    expect(fontSizeForWidth(42)).toBeLessThan(fontSizeForWidth(32))
+  })
+})
+
+describe('computeReceiptPdfHeight (docs/phase-171)', () => {
+  function layoutFor(itemCount: number) {
+    const layoutOrder: ReceiptLayoutOrder = {
+      localId: 1,
+      createdAt: '2026-08-27T10:00:00.000Z',
+      cashierName: 'Alex',
+      paymentMethod: 'cash',
+      tenderedAmount: 50,
+      changeDue: 0,
+      total: itemCount * 10,
+      items: Array.from({ length: itemCount }, (_, i) => ({
+        title: `Item ${i}`,
+        variantTitle: '',
+        quantity: 1,
+        unitPrice: 10
+      }))
+    }
+    return buildReceiptLayout(layoutOrder, { taxRate: 0.16, tradingName: 'RUBIS' }, { width: 48 })
+  }
+
+  it('grows with the number of items', () => {
+    const fontSize = fontSizeForWidth(48)
+    const shortHeight = computeReceiptPdfHeight(layoutFor(1), fontSize)
+    const longHeight = computeReceiptPdfHeight(layoutFor(20), fontSize)
+
+    expect(longHeight).toBeGreaterThan(shortHeight)
+  })
+
+  it('is always tall enough to hold every line at least once', () => {
+    const fontSize = fontSizeForWidth(48)
+    const entries = layoutFor(5)
+    const height = computeReceiptPdfHeight(entries, fontSize)
+
+    expect(height).toBeGreaterThan(entries.length * fontSize)
+  })
+})
+
+describe('generatePdfReceipt — page width (docs/phase-171)', () => {
+  it('is fixed at 80mm regardless of the configured character width', async () => {
+    // 80mm in points (2.83465pt/mm) — the page's physical width never
+    // changes with the configured character width (item 4's own spec);
+    // only the font size (see fontSizeForWidth above) adapts instead.
+    const narrowSettings: PrinterSettings = { ...settings, width: 32 }
+    const filePath = await generatePdfReceipt(order, items, narrowSettings)
+
+    const buffer = readFileSync(filePath)
+    expect(buffer.toString('latin1')).toContain('226.77')
   })
 })

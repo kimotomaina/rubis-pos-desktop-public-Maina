@@ -1,10 +1,22 @@
 /**
- * PDF fallback receipt generator.
+ * PDF fallback receipt generator (docs/phase-171).
  *
  * When the configured thermal printer is offline or unreachable,
  * `printReceipt` in `printer.ts` falls back to this generator instead
  * of failing the print outright, saving a readable receipt to the
  * cashier's desktop so the sale still has a physical record.
+ *
+ * Renders the exact same {@link buildReceiptLayout} array the thermal
+ * path renders — this module owns no receipt content or wording of its
+ * own. Courier (a standard PDF base font, needing no embedded font file)
+ * keeps every line's monospaced width identical to the thermal printer's
+ * own fixed-pitch font, so the two-column rows the layout already
+ * pre-pads (Details, Totals, Payment, VAT table, CU block) line up here
+ * too. A `{ qr }` entry has no image — no QR-image library is a
+ * dependency of this project (docs/phase-171's audit) — so it prints as
+ * plain small text instead; see the report for the dependency this
+ * would need to become a real code, proposed and stopped rather than
+ * added without asking.
  */
 
 import PDFDocument from 'pdfkit'
@@ -12,20 +24,60 @@ import { createWriteStream } from 'node:fs'
 import { join } from 'node:path'
 import { app } from 'electron'
 import type { ReceiptOrder, ReceiptLineItem, PrinterSettings } from './printer.js'
-import { formatCurrency } from './currency.js'
-import { formatVatRateLabel } from './reports.js'
-import { computeReceiptTotals } from '../lib/receiptTotals.js'
-import type { ReceiptTotalsLineItem } from '../lib/receiptTotals.js'
-import { buildFiscalBlockLines, FISCAL_PENDING_HEADER } from '../lib/receiptFiscalBlock.js'
+import { buildReceiptLayout, isReceiptLayoutQr } from '../lib/receiptLayout.js'
+import type { ReceiptLayoutOrder, ReceiptLayoutLineItem, ReceiptLayoutEntry } from '../lib/receiptLayout.js'
 
-/** Narrow receipt-page width (points) approximating an 80mm thermal roll. */
-const PAGE_WIDTH = 280
-const PAGE_HEIGHT = 800
-const DASHED_LINE = '-'.repeat(40)
+const MM_TO_PT = 2.83465
+/** 80mm roll width — fixed regardless of the configured character width (docs/phase-171 item 4). */
+const PAGE_WIDTH_PT = 80 * MM_TO_PT
+const MARGIN_PT = 4 * MM_TO_PT
+/** Courier's advance width is 0.6em at any size — a PDF base-14 font metric, not a guess. */
+const COURIER_CHAR_WIDTH_FACTOR = 0.6
+const LINE_HEIGHT_FACTOR = 1.5
+/** Vertical space reserved for the QR entry's placeholder text block (no image — see module doc). */
+const QR_BLOCK_LINES = 5
 
 /**
- * Renders `order`/`items` as a simple text receipt PDF and saves it to
- * the user's desktop as `RUBIS_Receipt_Order_<localId>.pdf`.
+ * The font size that fits `width` Courier characters into the fixed
+ * 80mm page, less its margins — ~7.1pt at the default 48 characters,
+ * matching docs/phase-171's own "about 7.2pt" estimate. A narrower
+ * character width (a 58mm printer's 42 or 32) computes a larger font
+ * for the same physical PDF page, rather than a narrower one.
+ *
+ * @param {number} width
+ * @returns {number}
+ */
+export function fontSizeForWidth(width: number): number {
+  const usable = PAGE_WIDTH_PT - 2 * MARGIN_PT
+  return usable / (width * COURIER_CHAR_WIDTH_FACTOR)
+}
+
+/**
+ * Computes the page height needed for `entries` at `fontSize` — grown
+ * from the content, never a fixed guess. A `'double'` line takes two
+ * rows' worth of height; a QR entry reserves a small fixed block for its
+ * placeholder text (never an image — see module doc).
+ *
+ * @param {ReceiptLayoutEntry[]} entries
+ * @param {number} fontSize
+ * @returns {number}
+ */
+export function computeReceiptPdfHeight(entries: ReceiptLayoutEntry[], fontSize: number): number {
+  let rows = 0
+  for (const entry of entries) {
+    if (isReceiptLayoutQr(entry)) {
+      rows += QR_BLOCK_LINES
+      continue
+    }
+    rows += entry.style === 'double' ? 2 : 1
+  }
+  const contentHeight = rows * fontSize * LINE_HEIGHT_FACTOR
+  return Math.ceil(contentHeight + 2 * MARGIN_PT)
+}
+
+/**
+ * Renders `order`/`items` as a PDF receipt and saves it to the user's
+ * desktop as `RUBIS_Receipt_Order_<localId>.pdf`.
  *
  * @param {ReceiptOrder} order
  * @param {ReceiptLineItem[]} items
@@ -37,88 +89,68 @@ export async function generatePdfReceipt(
   items: ReceiptLineItem[],
   settings: PrinterSettings
 ): Promise<string> {
-  const lineItems: ReceiptTotalsLineItem[] = items.map((item) => ({
-    unitPrice: item.unitPrice,
-    quantity: item.quantity,
-    discount: item.discount
-  }))
-  const totals = computeReceiptTotals(
-    { localId: order.localId, lineItems, cartDiscount: order.cartDiscount, total: order.total },
-    settings.taxRate
+  const layoutOrder: ReceiptLayoutOrder = {
+    ...order,
+    items: items.map(
+      (item): ReceiptLayoutLineItem => ({
+        title: item.title,
+        variantTitle: item.variantTitle,
+        quantity: item.quantity,
+        unitPrice: item.unitPrice,
+        discount: item.discount,
+        vatClass: item.vatClass
+      })
+    )
+  }
+  const width = settings.width ?? 48
+  const entries = buildReceiptLayout(
+    layoutOrder,
+    {
+      taxRate: settings.taxRate,
+      tradingName: settings.storeName,
+      legalName: settings.legalName,
+      address: settings.address,
+      phone: settings.phone,
+      sellerPin: settings.storeKraPin,
+      footerMessage: settings.footerMessage
+    },
+    { width }
   )
+  const fontSize = fontSizeForWidth(width)
+  const pageHeight = computeReceiptPdfHeight(entries, fontSize)
 
   const filePath = join(app.getPath('desktop'), `RUBIS_Receipt_Order_${order.localId}.pdf`)
 
   await new Promise<void>((resolve, reject) => {
-    const doc = new PDFDocument({ size: [PAGE_WIDTH, PAGE_HEIGHT], margin: 12 })
+    const doc = new PDFDocument({ size: [PAGE_WIDTH_PT, pageHeight], margin: MARGIN_PT })
     const stream = createWriteStream(filePath)
     stream.on('finish', () => resolve())
     stream.on('error', reject)
     doc.on('error', reject)
     doc.pipe(stream)
 
-    // docs/phase-164, post-implementation checklist item 11: any print
-    // past the first successful one for this sale is stamped a duplicate,
-    // top and bottom, so it can never be mistaken for the original
-    // receipt — same rule as the thermal path in `printer.ts`.
-    if (order.isDuplicate) {
-      doc.font('Helvetica-Bold').text('*** DUPLICATE ***', { align: 'center' })
-      doc.font('Helvetica')
-    }
-    // docs/phase-165: same not-yet-filed heading as the thermal path.
-    if (order.fiscalPending && !order.fiscalInvoiceNumber) {
-      doc.font('Helvetica-Bold').text(FISCAL_PENDING_HEADER, { align: 'center' })
-      doc.font('Helvetica')
-    }
-    doc.font('Helvetica-Bold').fontSize(14).text(settings.storeName, { align: 'center' })
-    doc.font('Helvetica').fontSize(9)
-    doc.text(`Order #${order.localId}`, { align: 'center' })
-    doc.text(`Sale time: ${new Date(order.createdAt).toLocaleString()}`, { align: 'center' })
-    doc.text(`Cashier: ${order.cashierName}`)
-    if (order.customerPin) {
-      doc.text(`Customer PIN: ${order.customerPin}`)
-    }
-    doc.text(DASHED_LINE)
+    doc.font('Courier').fontSize(fontSize)
 
-    for (const item of items) {
-      const label = item.variantTitle ? `${item.title} (${item.variantTitle})` : item.title
-      doc.text(`${item.quantity} x ${label} - ${formatCurrency(item.unitPrice * item.quantity)}`)
-    }
-
-    doc.text(DASHED_LINE)
-    doc.text(`Subtotal: ${formatCurrency(totals.rawSubtotal)}`)
-    if (totals.discountTotal > 0) {
-      doc.text(`Discount: -${formatCurrency(totals.discountTotal)}`)
-    }
-    doc.font('Helvetica-Bold').text(`Total: ${formatCurrency(totals.total)}`)
-    doc.font('Helvetica')
-    doc.text(`${formatVatRateLabel(settings.taxRate)}: ${formatCurrency(totals.vatIncluded)}`)
-    doc.text(`Payment: ${order.paymentMethod}`)
-    if (order.paymentMethod === 'cash') {
-      doc.text(`Tendered: ${formatCurrency(order.tenderedAmount)}`)
-      doc.text(`Change: ${formatCurrency(order.changeDue)}`)
-    } else if (order.referenceNumber) {
-      doc.text(`Ref: ${order.referenceNumber}`)
-    }
-    doc.text(DASHED_LINE)
-    doc.text('Thank you!', { align: 'center' })
-
-    // docs/phase-164: CU invoice number, date/time and serial — the same
-    // shared helper `printer.ts`'s thermal path uses, so both surfaces
-    // agree on content and wording. Empty for a non-fiscalized order, so
-    // nothing prints here at all in that case. No QR image in the PDF
-    // fallback — it never carried one before this phase either.
-    const fiscalLines = buildFiscalBlockLines(order)
-    if (fiscalLines.length > 0) {
-      doc.text(DASHED_LINE)
-      for (const line of fiscalLines) {
-        doc.text(line)
+    for (const entry of entries) {
+      if (isReceiptLayoutQr(entry)) {
+        doc.fontSize(fontSize * 0.8)
+        doc.text(entry.qr, { align: 'center' })
+        doc.fontSize(fontSize)
+        continue
       }
-    }
 
-    if (order.isDuplicate) {
-      doc.font('Helvetica-Bold').text('*** DUPLICATE ***', { align: 'center' })
-      doc.font('Helvetica')
+      const align = entry.align === 'centre' ? 'center' : entry.align
+      if (entry.style === 'double') {
+        doc.font('Courier-Bold').fontSize(fontSize * 2)
+        doc.text(entry.text, { align })
+        doc.font('Courier').fontSize(fontSize)
+      } else if (entry.style === 'bold') {
+        doc.font('Courier-Bold')
+        doc.text(entry.text, { align })
+        doc.font('Courier')
+      } else {
+        doc.text(entry.text, { align })
+      }
     }
 
     doc.end()

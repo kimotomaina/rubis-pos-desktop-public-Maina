@@ -634,7 +634,15 @@ export const storeIdentitySetSchema = managerAuthzSchema.extend({
     .refine(
       (pin) => pin === '' || /^[A-Za-z]\d{9}[A-Za-z]$/.test(pin),
       'A KRA PIN looks like P051234567X — one letter, nine digits, one letter'
-    )
+    ),
+  /** Registered company (legal) name, printed on the receipt header (docs/phase-171). Blank is allowed — a branch may not have set it yet. */
+  legalName: z.string().trim().optional(),
+  /** Branch/shop name and street address, one line (docs/phase-171). Blank is allowed. */
+  address: z.string().trim().optional(),
+  /** Phone number, printed as "Tel <phone>" (docs/phase-171). Blank is allowed. */
+  phone: z.string().trim().optional(),
+  /** Receipt footer message (docs/phase-171). Blank falls back to the built-in default. */
+  footerMessage: z.string().trim().optional()
 })
 
 /**
