@@ -34,8 +34,10 @@ import type {
   StaffRole,
   StaffSummary,
   PrinterConfig,
-  PrinterType
+  PrinterType,
+  PrinterConnectionType
 } from '../../../main/services/database.js'
+import type { WindowsPrinterInfo, PrinterWithAvailability } from '../../../main/services/windowsPrinter.js'
 import {
   DEFAULT_ETIMS_BASE_URL,
   DEFAULT_ETIMS_DEVICE_PORT,
@@ -302,14 +304,20 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
   const [storeIdentityMessage, setStoreIdentityMessage] = useState<string | null>(null)
   const [storeIdentitySaving, setStoreIdentitySaving] = useState(false)
 
-  const [printers, setPrinters] = useState<PrinterConfig[]>([])
+  const [printers, setPrinters] = useState<PrinterWithAvailability[]>([])
   const [printersLoading, setPrintersLoading] = useState(false)
   const [newPrinterId, setNewPrinterId] = useState('')
   const [newPrinterType, setNewPrinterType] = useState<PrinterType>('receipt')
   const [newPrinterInterface, setNewPrinterInterface] = useState('')
+  const [newPrinterConnectionType, setNewPrinterConnectionType] =
+    useState<PrinterConnectionType>('network')
   const [printerActionError, setPrinterActionError] = useState<string | null>(null)
   const [printerTestMessages, setPrinterTestMessages] = useState<Record<string, string>>({})
   const [testingPrinterId, setTestingPrinterId] = useState<string | null>(null)
+  /** "Find printers" results (docs/phase-174, Windows only) — cleared each time the button is pressed again. */
+  const [windowsPrinterOptions, setWindowsPrinterOptions] = useState<WindowsPrinterInfo[]>([])
+  const [windowsPrintersLoading, setWindowsPrintersLoading] = useState(false)
+  const [windowsPrintersError, setWindowsPrintersError] = useState<string | null>(null)
 
   const [shopifyTokenConfigured, setShopifyTokenConfigured] = useState(false)
   const [shopifyTokenInput, setShopifyTokenInput] = useState('')
@@ -824,14 +832,23 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
   const handleAddPrinter = () => {
     setPrinterActionError(null)
     if (!newPrinterId.trim() || !newPrinterInterface.trim()) {
-      setPrinterActionError('Printer id and interface are required')
+      setPrinterActionError(
+        newPrinterConnectionType === 'windows'
+          ? 'Printer id and a found printer are required'
+          : 'Printer id and interface are required'
+      )
       return
     }
     const config: PrinterConfig = {
       id: newPrinterId.trim(),
       type: newPrinterType,
-      interfaceName: newPrinterInterface.trim(),
-      enabled: true
+      // For connectionType 'windows' this is the queue's system name,
+      // already the exact PrinterInfo.name — never trimmed or altered,
+      // since it must match what getPrintersAsync() reports back
+      // (docs/phase-174's PrinterConfig.interfaceName doc comment).
+      interfaceName: newPrinterConnectionType === 'windows' ? newPrinterInterface : newPrinterInterface.trim(),
+      enabled: true,
+      connectionType: newPrinterConnectionType
     }
     requestManagerPin('Add printer', (managerId, managerPin) => {
       void (async () => {
@@ -843,9 +860,33 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
         setNewPrinterId('')
         setNewPrinterInterface('')
         setNewPrinterType('receipt')
+        setNewPrinterConnectionType('network')
+        setWindowsPrinterOptions([])
         await loadPrinters()
       })()
     })
+  }
+
+  /**
+   * Lists Windows printer queues for the "Find printers" button
+   * (docs/phase-174, Windows only) — read-only, no Manager PIN, same
+   * class of check as `handleTestPrinter`.
+   */
+  const handleFindWindowsPrinters = () => {
+    setWindowsPrintersError(null)
+    setWindowsPrintersLoading(true)
+    void (async () => {
+      try {
+        const result = await window.api.findWindowsPrinters()
+        if (!result.success) {
+          setWindowsPrintersError(result.error ?? 'Failed to list Windows printers')
+          return
+        }
+        setWindowsPrinterOptions(result.data ?? [])
+      } finally {
+        setWindowsPrintersLoading(false)
+      }
+    })()
   }
 
   /**
@@ -871,15 +912,26 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
   /**
    * Sends a test page to `interfaceName` — no Manager PIN required,
    * since this is a read-only connectivity check (see `printerTestSchema`).
+   * For a `connectionType: 'windows'` printer (docs/phase-174),
+   * `interfaceName` is that printer's queue name, and the test is sent
+   * RAW to the Windows queue instead of over TCP/IP — looked up from
+   * `printers` rather than widening this function's own parameters, so
+   * its signature and every call site stay exactly as they were before
+   * phase-174 (docs/phase-167 Part A's regression guard on this file).
    *
    * @param {string} id
    * @param {string} interfaceName
    */
   const handleTestPrinter = (id: string, interfaceName: string) => {
     setTestingPrinterId(id)
+    const isWindowsPrinter = printers.find((p) => p.id === id)?.connectionType === 'windows'
     void (async () => {
       try {
-        const result = await window.api.testPrinter(interfaceName)
+        const result = await window.api.testPrinter(
+          isWindowsPrinter
+            ? { connectionType: 'windows', windowsPrinterName: interfaceName }
+            : { interfaceName }
+        )
         setPrinterTestMessages((prev) => ({
           ...prev,
           [id]: result.success ? 'Test page sent successfully.' : (result.error ?? 'Test failed')
@@ -1857,6 +1909,11 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
                                   Disabled
                                 </span>
                               )}
+                              {printer.missing && (
+                                <span className="rounded-full bg-rose-100 px-2 py-0.5 text-sm font-medium text-rose-700">
+                                  Missing
+                                </span>
+                              )}
                             </div>
                             <div className="flex items-center gap-2">
                               <button
@@ -1876,12 +1933,76 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
                               </button>
                             </div>
                           </div>
-                          <p className="mt-1 text-sm text-slate-500">{printer.interfaceName}</p>
+                          <p className="mt-1 text-sm text-slate-500">
+                            {printer.connectionType === 'windows'
+                              ? `Windows printer: ${printer.interfaceName}`
+                              : printer.interfaceName}
+                          </p>
                           {printerTestMessages[printer.id] && (
                             <p className="mt-1 text-sm text-slate-600">{printerTestMessages[printer.id]}</p>
                           )}
                         </div>
                       ))}
+
+                      {/* Windows-only connection type (docs/phase-174) — hidden on every other platform, per its own row so the 4-column grid below never has to reflow to fit a 5th control. */}
+                      {window.api.platform === 'win32' && (
+                        <div className="flex items-center gap-2 rounded-lg bg-slate-50 p-3 text-base">
+                          <span className="font-medium text-slate-600">Connection:</span>
+                          <select
+                            value={newPrinterConnectionType}
+                            onChange={(e) => {
+                              setNewPrinterConnectionType(e.target.value as PrinterConnectionType)
+                              setNewPrinterInterface('')
+                            }}
+                            className="h-10 rounded-lg border border-slate-300 px-3 text-base focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-100"
+                          >
+                            <option value="network">Network (IP)</option>
+                            <option value="windows">Windows printer (USB or COM)</option>
+                          </select>
+                        </div>
+                      )}
+
+                      {newPrinterConnectionType === 'windows' && (
+                        <div className="space-y-2 rounded-lg bg-slate-50 p-3">
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="text-base text-slate-600">
+                              {newPrinterInterface ? `Selected: ${newPrinterInterface}` : 'No printer selected yet'}
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => handleFindWindowsPrinters()}
+                              disabled={windowsPrintersLoading}
+                              className="rounded-md border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                            >
+                              {windowsPrintersLoading ? 'Finding…' : 'Find printers'}
+                            </button>
+                          </div>
+                          {windowsPrintersError && (
+                            <p className="text-sm font-medium text-rose-700">{windowsPrintersError}</p>
+                          )}
+                          {windowsPrinterOptions.length > 0 && (
+                            <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+                              {windowsPrinterOptions.map((option) => (
+                                <button
+                                  key={option.name}
+                                  type="button"
+                                  onClick={() => setNewPrinterInterface(option.name)}
+                                  className={`rounded-lg border px-3 py-2 text-left text-sm ${
+                                    newPrinterInterface === option.name
+                                      ? 'border-rose-400 bg-rose-50'
+                                      : 'border-slate-200 bg-white hover:bg-slate-50'
+                                  }`}
+                                >
+                                  <div className="font-medium text-slate-800">{option.displayName}</div>
+                                  {option.port && (
+                                    <div className="text-xs text-slate-500">{option.port}</div>
+                                  )}
+                                </button>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      )}
 
                       <div className="grid grid-cols-2 gap-2 rounded-lg bg-slate-50 p-3 sm:grid-cols-4">
                         <input
@@ -1903,18 +2024,24 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
                           <option value="kitchen">Kitchen</option>
                           <option value="label">Label</option>
                         </select>
-                        <input
-                          type="text"
-                          readOnly
-                          placeholder="tcp://192.168.0.101:9100"
-                          value={newPrinterInterface}
-                          onClick={() =>
-                            openField(newPrinterInterface, setNewPrinterInterface, 'Printer interface', {
-                              mode: 'text'
-                            })
-                          }
-                          className="h-12 rounded-lg border border-slate-300 px-3 text-lg focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-100"
-                        />
+                        {newPrinterConnectionType === 'windows' ? (
+                          <div className="flex h-12 items-center truncate rounded-lg border border-slate-300 bg-white px-3 text-lg text-slate-500">
+                            {newPrinterInterface || 'Use "Find printers" above'}
+                          </div>
+                        ) : (
+                          <input
+                            type="text"
+                            readOnly
+                            placeholder="tcp://192.168.0.101:9100"
+                            value={newPrinterInterface}
+                            onClick={() =>
+                              openField(newPrinterInterface, setNewPrinterInterface, 'Printer interface', {
+                                mode: 'text'
+                              })
+                            }
+                            className="h-12 rounded-lg border border-slate-300 px-3 text-lg focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-100"
+                          />
+                        )}
                         <button
                           type="button"
                           onClick={() => handleAddPrinter()}

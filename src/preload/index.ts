@@ -26,6 +26,7 @@ import type {
   StockTakeSettings
 } from '../main/services/stock-take.js'
 import type { ReceiptPrintResult } from '../main/services/printer.js'
+import type { WindowsPrinterInfo, PrinterWithAvailability } from '../main/services/windowsPrinter.js'
 import type {
   ZReport,
   DailySummary,
@@ -78,6 +79,14 @@ export interface ConnectivityStatusPayload {
  * directly (contextIsolation + sandbox).
  */
 const api = {
+  /**
+   * The OS this till is running on (docs/phase-174) — a plain value,
+   * not an IPC call, since it never changes for a running process. Lets
+   * the Admin screen hide the Windows-printer connection option on
+   * every other platform.
+   */
+  platform: process.platform,
+
   /**
    * Lightweight health-check channel.
    * @returns {Promise<string>} resolves to 'pong'
@@ -816,11 +825,13 @@ const api = {
 
   /**
    * Lists every configured printer (Admin screen
-   * Peripherals tab).
+   * Peripherals tab). A `connectionType: 'windows'` entry carries
+   * `missing: true` when its saved queue is no longer installed
+   * (docs/phase-174).
    *
-   * @returns {Promise<ServiceResult<PrinterConfig[]>>}
+   * @returns {Promise<ServiceResult<PrinterWithAvailability[]>>}
    */
-  getPrinters: (): Promise<ServiceResult<PrinterConfig[]>> =>
+  getPrinters: (): Promise<ServiceResult<PrinterWithAvailability[]>> =>
     ipcRenderer.invoke('printers:list'),
 
   /**
@@ -857,14 +868,26 @@ const api = {
     ipcRenderer.invoke('printers:delete', { id, managerId, managerPin }),
 
   /**
-   * Sends a test page to a printer interface to verify connectivity —
-   * no manager PIN required (read-only diagnostic).
+   * Sends a test page to verify connectivity — no manager PIN required
+   * (read-only diagnostic). Either a network printer interface
+   * (unchanged), or (docs/phase-174, Windows only) a Windows printer
+   * queue's system name, sent RAW.
    *
-   * @param {string} interfaceName — `tcp://<ip>:<port>`
+   * @param {{ interfaceName: string } | { connectionType: 'windows'; windowsPrinterName: string }} target
    * @returns {Promise<ServiceResult<ReceiptPrintResult>>}
    */
-  testPrinter: (interfaceName: string): Promise<ServiceResult<ReceiptPrintResult>> =>
-    ipcRenderer.invoke('printers:test', { interfaceName }),
+  testPrinter: (
+    target: { interfaceName: string } | { connectionType: 'windows'; windowsPrinterName: string }
+  ): Promise<ServiceResult<ReceiptPrintResult>> => ipcRenderer.invoke('printers:test', target),
+
+  /**
+   * Lists Windows printer queues (USB or COM/serial) for the Admin
+   * screen's "Find printers" button (docs/phase-174, Windows only).
+   *
+   * @returns {Promise<ServiceResult<WindowsPrinterInfo[]>>}
+   */
+  findWindowsPrinters: (): Promise<ServiceResult<WindowsPrinterInfo[]>> =>
+    ipcRenderer.invoke('printers:find-windows'),
 
   /**
    * Reports whether a Shopify Admin API token is currently stored in

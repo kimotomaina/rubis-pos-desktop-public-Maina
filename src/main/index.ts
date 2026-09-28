@@ -191,7 +191,6 @@ import {
 } from './services/secretStore.js'
 import type {
   IntegrationProviderName,
-  PrinterConfig,
   MpesaTransactionRow,
   AppConfigCategory,
   NeedsAttentionRow,
@@ -213,6 +212,7 @@ import {
   printReceiptToType,
   printZReport,
   printTestPage,
+  printWindowsTestPage,
   buildPrinterRegistry,
   shouldMarkReceiptPrinted,
   shouldShowFiscalPendingSlip,
@@ -224,6 +224,8 @@ import type {
   PrinterRegistry,
   ReceiptLayoutVatGroups
 } from './services/printer.js'
+import { toWindowsPrinterInfo, markMissingWindowsPrinters } from './services/windowsPrinter.js'
+import type { WindowsPrinterInfo, PrinterWithAvailability } from './services/windowsPrinter.js'
 import { hashPin, authenticateStaff } from './services/auth.js'
 import {
   generateZReport,
@@ -1930,17 +1932,65 @@ app.whenReady().then(async () => {
 
   /**
    * IPC handler that lists every configured printer for the
-   * Admin screen's Peripherals tab.
+   * Admin screen's Peripherals tab. On Windows, also re-checks every
+   * `connectionType: 'windows'` printer against the currently installed
+   * queues (docs/phase-174) — `markMissingWindowsPrinters` flags one
+   * `missing: true` when its saved queue name is no longer installed,
+   * so the Admin screen can show it rather than let a "Test" silently
+   * fail. Re-checked on every load (the first of which is at app
+   * start), not just once — a queue can be uninstalled at any time.
    */
   ipcMain.handle(
     'printers:list',
-    (): ServiceResult<PrinterConfig[]> => {
+    async (): Promise<ServiceResult<PrinterWithAvailability[]>> => {
       try {
-        return { success: true, data: db.getPrinters() }
+        const configs = db.getPrinters()
+        if (process.platform !== 'win32' || !configs.some((c) => c.connectionType === 'windows')) {
+          return { success: true, data: configs }
+        }
+        const window = BrowserWindow.getAllWindows()[0]
+        const available = window ? await window.webContents.getPrintersAsync() : []
+        return {
+          success: true,
+          data: markMissingWindowsPrinters(configs, available.map((p) => p.name))
+        }
       } catch (err) {
         return {
           success: false,
           error: err instanceof Error ? err.message : 'Failed to load printers'
+        }
+      }
+    }
+  )
+
+  /**
+   * IPC handler behind the Admin screen's "Find printers" button
+   * (docs/phase-174) — lists every printer Windows currently knows
+   * about via `webContents.getPrintersAsync()` ("Get the system printer
+   * list": https://www.electronjs.org/docs/latest/api/web-contents), so
+   * a USB or COM/serial printer already installed as a Windows printer
+   * queue can be picked instead of typed. Read-only, same risk class as
+   * `printers:test`. Windows-only — the Admin screen hides the option
+   * elsewhere, but this is refused server-side too rather than trusting
+   * that alone.
+   */
+  ipcMain.handle(
+    'printers:find-windows',
+    async (): Promise<ServiceResult<WindowsPrinterInfo[]>> => {
+      if (process.platform !== 'win32') {
+        return { success: false, error: 'Windows printer detection is only available on Windows' }
+      }
+      try {
+        const window = BrowserWindow.getAllWindows()[0]
+        if (!window) {
+          return { success: false, error: 'No window available to list printers' }
+        }
+        const printers = await window.webContents.getPrintersAsync()
+        return { success: true, data: printers.map(toWindowsPrinterInfo) }
+      } catch (err) {
+        return {
+          success: false,
+          error: err instanceof Error ? err.message : 'Failed to list Windows printers'
         }
       }
     }
@@ -1968,7 +2018,8 @@ app.whenReady().then(async () => {
           id: validation.data.id,
           type: validation.data.type,
           interfaceName: validation.data.interfaceName,
-          enabled: validation.data.enabled
+          enabled: validation.data.enabled,
+          connectionType: validation.data.connectionType
         })
         printerRegistry = buildPrinterRegistry(db.getPrinters())
         return { success: true }
@@ -2010,9 +2061,11 @@ app.whenReady().then(async () => {
   )
 
   /**
-   * IPC handler that sends a test page to a given printer interface
-   * — read-only diagnostic, no manager re-authorization
-   * needed (see `printerTestSchema`).
+   * IPC handler that sends a test page to a given printer — read-only
+   * diagnostic, no manager re-authorization needed (see
+   * `printerTestSchema`). Branches on the request shape (docs/phase-174):
+   * a Windows queue name routes to `printWindowsTestPage`, unchanged
+   * `interfaceName` keeps going to `printTestPage` exactly as before.
    */
   ipcMain.handle(
     'printers:test',
@@ -2020,6 +2073,9 @@ app.whenReady().then(async () => {
       const validation = validate(printerTestSchema, request)
       if (!validation.success) {
         return { success: false, error: validation.error }
+      }
+      if ('windowsPrinterName' in validation.data) {
+        return printWindowsTestPage(validation.data.windowsPrinterName, printerSettings.storeName)
       }
       return printTestPage(validation.data.interfaceName)
     }

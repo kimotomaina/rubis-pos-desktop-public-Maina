@@ -42,8 +42,15 @@ function ok<T>(data?: T): { success: true; data: T | undefined } {
 }
 
 /** Stubs every `window.api` method `AdminScreen` calls, across every tab this file visits. */
-function stubApi(mpesaOverrides: Record<string, unknown> = {}): void {
+function stubApi(
+  mpesaOverrides: Record<string, unknown> = {},
+  // docs/phase-174: defaults to a non-Windows platform so every existing
+  // test here keeps seeing the screen exactly as before — the Windows
+  // connection-type control only renders when platform is 'win32'.
+  options: { platform?: NodeJS.Platform } = {}
+): void {
   window.api = {
+    platform: options.platform ?? 'linux',
     getDailySummary: vi.fn().mockResolvedValue(
       ok({ orderCount: 0, totalRevenue: 0, totalTax: 0, totalsByMethod: { cash: 0, mpesa: 0, card: 0 } })
     ),
@@ -90,6 +97,7 @@ function stubApi(mpesaOverrides: Record<string, unknown> = {}): void {
     savePrinter: vi.fn().mockResolvedValue(ok(undefined)),
     deletePrinter: vi.fn().mockResolvedValue(ok(undefined)),
     testPrinter: vi.fn().mockResolvedValue(ok(undefined)),
+    findWindowsPrinters: vi.fn().mockResolvedValue(ok([])),
     testMpesaConnection: vi.fn().mockResolvedValue(ok(undefined)),
     testEtimsConnection: vi.fn().mockResolvedValue(ok(undefined)),
     createStaff: vi.fn().mockResolvedValue(ok(undefined)),
@@ -348,6 +356,94 @@ describe('AdminScreen > Integrations > Printer', () => {
     expect(input.readOnly).toBe(true)
     act(() => input.click())
     expect(useKeyboardStore.getState().request?.mode ?? 'caps').toBe(mode)
+  })
+})
+
+describe('AdminScreen > Integrations > Printer > Windows printer (docs/phase-174)', () => {
+  it('hides the Windows connection option entirely on a non-Windows platform', async () => {
+    stubApi(undefined, { platform: 'linux' })
+    await mount()
+    await click('Integrations')
+    await click('Printer')
+
+    expect(container.textContent).not.toContain('Connection:')
+    expect(window.api.findWindowsPrinters).not.toHaveBeenCalled()
+  })
+
+  it('finds, selects, and saves a Windows printer queue (mocked getPrintersAsync via findWindowsPrinters)', async () => {
+    stubApi(undefined, { platform: 'win32' })
+    window.api.findWindowsPrinters = vi.fn().mockResolvedValue(
+      ok([
+        { name: 'EPSON-TM-T88', displayName: 'EPSON TM-T88 Receipt', port: 'USB001' },
+        { name: 'COM3', displayName: 'Generic / Text Only on COM3' }
+      ])
+    )
+    await mount()
+    await click('Integrations')
+    await click('Printer')
+
+    // Switch the connection type to Windows — the tcp:// field disappears.
+    const connectionSelect = Array.from(container.querySelectorAll('select')).find((s) =>
+      Array.from(s.options).some((o) => o.value === 'windows')
+    ) as HTMLSelectElement
+    await act(async () => {
+      connectionSelect.value = 'windows'
+      connectionSelect.dispatchEvent(new Event('change', { bubbles: true }))
+    })
+    expect(container.querySelector('input[placeholder^="tcp://"]')).toBeNull()
+
+    await click('Find printers')
+    expect(window.api.findWindowsPrinters).toHaveBeenCalledTimes(1)
+    expect(container.textContent).toContain('EPSON TM-T88 Receipt')
+    expect(container.textContent).toContain('USB001')
+
+    const printerCard = Array.from(container.querySelectorAll('button')).find((b) =>
+      b.textContent?.includes('EPSON TM-T88 Receipt')
+    ) as HTMLButtonElement
+    await act(async () => {
+      printerCard.click()
+      await Promise.resolve()
+    })
+    expect(container.textContent).toContain('Selected: EPSON-TM-T88')
+
+    const idInput = container.querySelector('input[placeholder^="Printer id"]') as HTMLInputElement
+    act(() => idInput.click())
+    act(() => useKeyboardStore.getState().request?.onChange('till-1'))
+
+    await click('Add Printer')
+    expect(window.api.savePrinter).toHaveBeenCalledWith(
+      {
+        id: 'till-1',
+        type: 'receipt',
+        interfaceName: 'EPSON-TM-T88',
+        enabled: true,
+        connectionType: 'windows'
+      },
+      9,
+      '9999'
+    )
+  })
+
+  it('shows a "Missing" badge for a saved Windows printer no longer installed', async () => {
+    stubApi(undefined, { platform: 'win32' })
+    window.api.getPrinters = vi.fn().mockResolvedValue(
+      ok([
+        {
+          id: 'till-1',
+          type: 'receipt',
+          interfaceName: 'EPSON-TM-T88',
+          enabled: true,
+          connectionType: 'windows',
+          missing: true
+        }
+      ])
+    )
+    await mount()
+    await click('Integrations')
+    await click('Printer')
+
+    expect(container.textContent).toContain('Missing')
+    expect(container.textContent).toContain('Windows printer: EPSON-TM-T88')
   })
 })
 

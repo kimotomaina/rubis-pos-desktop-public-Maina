@@ -155,7 +155,9 @@ export const printerSaveSchema = managerAuthzSchema.extend({
   id: z.string().min(1, 'Printer id is required'),
   type: z.enum(['receipt', 'kitchen', 'label']),
   interfaceName: z.string().min(1, 'Printer interface is required'),
-  enabled: z.boolean()
+  enabled: z.boolean(),
+  /** Defaults to `'network'` server-side when omitted (docs/phase-174) — see `PrinterConfig.connectionType`. */
+  connectionType: z.enum(['network', 'windows']).optional()
 })
 
 /** `printers:delete` request payload. */
@@ -228,10 +230,19 @@ export const locationSetSchema = managerAuthzSchema.extend({
  * re-authorization: sending a test page reads and changes nothing, so
  * it carries the same risk as the existing read-only `staff:list`/
  * `integrations:get-config` channels, not a privileged write.
+ *
+ * A union of the two test routes (docs/phase-174): the original
+ * network shape (`interfaceName`, unchanged), or a Windows queue name
+ * plus its `connectionType: 'windows'` tag so the handler can tell
+ * which one it received.
  */
-export const printerTestSchema = z.object({
-  interfaceName: z.string().min(1, 'Printer interface is required')
-})
+export const printerTestSchema = z.union([
+  z.object({ interfaceName: z.string().min(1, 'Printer interface is required') }),
+  z.object({
+    connectionType: z.literal('windows'),
+    windowsPrinterName: z.string().min(1, 'Windows printer name is required')
+  })
+])
 
 /**
  * `receipt:print` request payload (docs/phase-165) — previously this

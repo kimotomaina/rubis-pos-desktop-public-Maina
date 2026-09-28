@@ -435,16 +435,26 @@ function migrateOrdersPushColumns(connection: SqliteConnection): void {
 }
 
 /**
- * Adds `width` (characters per printed line) to a pre-existing `printers`
- * table (docs/phase-171) — a fresh table already has it via
- * {@link SCHEMA.printers}. `NULL` on an existing row reads back as "not
- * set", which {@link resolvePrinterSettings} treats as the default
- * (48, 80mm Font A) — the same idempotent `ALTER TABLE` pattern as
+ * Adds `width` (characters per printed line, docs/phase-171) and
+ * `connection_type` (`'network'` | `'windows'`, docs/phase-174) to a
+ * pre-existing `printers` table — a fresh table already has both via
+ * {@link SCHEMA.printers}. `NULL` `width` on an existing row reads back
+ * as "not set", which {@link resolvePrinterSettings} treats as the
+ * default (48, 80mm Font A). `connection_type`'s `DEFAULT 'network'`
+ * backfills every printer configured before phase-174 as the TCP/IP
+ * route it always was — the same idempotent `ALTER TABLE` pattern as
  * {@link migrateOrdersReceiptColumns}.
  */
 function migratePrintersColumns(connection: SqliteConnection): void {
   try {
     connection.exec('ALTER TABLE printers ADD COLUMN width INTEGER')
+  } catch {
+    // Column already exists — table was created with the current schema.
+  }
+  try {
+    connection.exec(
+      "ALTER TABLE printers ADD COLUMN connection_type TEXT NOT NULL DEFAULT 'network'"
+    )
   } catch {
     // Column already exists — table was created with the current schema.
   }
@@ -560,7 +570,8 @@ export const SCHEMA = {
     type TEXT NOT NULL CHECK (type IN ('receipt', 'kitchen', 'label')),
     interface TEXT NOT NULL,
     enabled INTEGER NOT NULL DEFAULT 1,
-    width INTEGER
+    width INTEGER,
+    connection_type TEXT NOT NULL DEFAULT 'network' CHECK (connection_type IN ('network', 'windows'))
   )`,
   mpesaTransactions: `CREATE TABLE IF NOT EXISTS mpesa_transactions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -788,17 +799,35 @@ export type IntegrationProviderName = 'mpesa' | 'etims'
  */
 export type PrinterType = 'receipt' | 'kitchen' | 'label'
 
+/**
+ * How a printer is reached (docs/phase-174). `'network'` is every
+ * printer this codebase supported before phase-174 — unchanged.
+ * `'windows'` is a printer installed as a Windows printer queue (USB or
+ * COM/serial), sent to directly rather than over TCP/IP — see
+ * `windowsPrinter.ts`.
+ */
+export type PrinterConnectionType = 'network' | 'windows'
+
 /** One configured printer, as read from / written to the `printers` table. */
 export interface PrinterConfig {
   /** Stable identifier the Admin screen and printer registry key on. */
   id: string
   type: PrinterType
-  /** `tcp://<ip>:<port>` address, matching `PrinterSettings.interfaceName`. */
+  /**
+   * For `connectionType: 'network'` (or absent — every printer
+   * configured before phase-174): `tcp://<ip>:<port>`, matching
+   * `PrinterSettings.interfaceName`. For `connectionType: 'windows'`:
+   * the printer queue's system name (`PrinterInfo.name`, never
+   * `displayName` — docs/phase-174), reusing this same field rather
+   * than adding a second name column.
+   */
   interfaceName: string
   /** Disabled printers are skipped by registry lookups without deleting the row. */
   enabled: boolean
   /** Characters per printed line (48/42/32, docs/phase-171) — `undefined` falls back to the default (48). */
   width?: number
+  /** Defaults to `'network'` when absent — every printer configured before docs/phase-174. */
+  connectionType?: PrinterConnectionType
 }
 
 /** Raw `printers` row shape, before {@link PrinterConfig}'s boolean/name normalization. */
@@ -808,6 +837,7 @@ interface PrinterRow {
   interface: string
   enabled: number
   width: number | null
+  connection_type: PrinterConnectionType
 }
 
 /** Grouping shown in the Admin screen's configuration list. */
@@ -2475,14 +2505,17 @@ export class RubisDatabase {
    */
   getPrinters(): PrinterConfig[] {
     const rows = this.conn
-      .prepare('SELECT id, type, interface, enabled, width FROM printers ORDER BY id ASC')
+      .prepare(
+        'SELECT id, type, interface, enabled, width, connection_type FROM printers ORDER BY id ASC'
+      )
       .all() as PrinterRow[]
     return rows.map((row) => ({
       id: row.id,
       type: row.type,
       interfaceName: row.interface,
       enabled: row.enabled === 1,
-      width: row.width ?? undefined
+      width: row.width ?? undefined,
+      connectionType: row.connection_type === 'windows' ? 'windows' : 'network'
     }))
   }
 
@@ -2494,10 +2527,17 @@ export class RubisDatabase {
   savePrinter(config: PrinterConfig): void {
     this.conn
       .prepare(
-        'INSERT INTO printers (id, type, interface, enabled, width) VALUES (?, ?, ?, ?, ?) ' +
-          'ON CONFLICT(id) DO UPDATE SET type = excluded.type, interface = excluded.interface, enabled = excluded.enabled, width = excluded.width'
+        'INSERT INTO printers (id, type, interface, enabled, width, connection_type) VALUES (?, ?, ?, ?, ?, ?) ' +
+          'ON CONFLICT(id) DO UPDATE SET type = excluded.type, interface = excluded.interface, enabled = excluded.enabled, width = excluded.width, connection_type = excluded.connection_type'
       )
-      .run(config.id, config.type, config.interfaceName, config.enabled ? 1 : 0, config.width ?? null)
+      .run(
+        config.id,
+        config.type,
+        config.interfaceName,
+        config.enabled ? 1 : 0,
+        config.width ?? null,
+        config.connectionType ?? 'network'
+      )
   }
 
   /**

@@ -799,16 +799,48 @@ describe('RubisDatabase printers', () => {
     expect(db.getPrinters()).toEqual([])
   })
 
-  it('lists configured printers, normalizing enabled to a boolean', () => {
+  it('lists configured printers, normalizing enabled to a boolean and defaulting connectionType to network', () => {
     const { fake, db } = freshDb()
     fake.setAllResult('FROM printers', [
-      { id: 'till-1', type: 'receipt', interface: 'tcp://192.168.0.51:9100', enabled: 1 },
-      { id: 'label-1', type: 'label', interface: 'tcp://192.168.0.53:9100', enabled: 0 }
+      { id: 'till-1', type: 'receipt', interface: 'tcp://192.168.0.51:9100', enabled: 1, connection_type: 'network' },
+      { id: 'label-1', type: 'label', interface: 'tcp://192.168.0.53:9100', enabled: 0, connection_type: 'network' }
+    ])
+
+    // DELIBERATE TEST CHANGE (docs/phase-174): every row now also
+    // carries connectionType, normalized from the new connection_type
+    // column.
+    expect(db.getPrinters()).toEqual([
+      {
+        id: 'till-1',
+        type: 'receipt',
+        interfaceName: 'tcp://192.168.0.51:9100',
+        enabled: true,
+        connectionType: 'network'
+      },
+      {
+        id: 'label-1',
+        type: 'label',
+        interfaceName: 'tcp://192.168.0.53:9100',
+        enabled: false,
+        connectionType: 'network'
+      }
+    ])
+  })
+
+  it('lists a windows-connection printer, reusing interfaceName for its queue name', () => {
+    const { fake, db } = freshDb()
+    fake.setAllResult('FROM printers', [
+      { id: 'till-1', type: 'receipt', interface: 'EPSON-TM-T88', enabled: 1, connection_type: 'windows' }
     ])
 
     expect(db.getPrinters()).toEqual([
-      { id: 'till-1', type: 'receipt', interfaceName: 'tcp://192.168.0.51:9100', enabled: true },
-      { id: 'label-1', type: 'label', interfaceName: 'tcp://192.168.0.53:9100', enabled: false }
+      {
+        id: 'till-1',
+        type: 'receipt',
+        interfaceName: 'EPSON-TM-T88',
+        enabled: true,
+        connectionType: 'windows'
+      }
     ])
   })
 
@@ -824,10 +856,18 @@ describe('RubisDatabase printers', () => {
 
     const upsertCalls = fake.callsFor('run', 'INSERT INTO printers')
     expect(upsertCalls).toHaveLength(1)
-    // DELIBERATE TEST CHANGE (docs/phase-171): a 5th bind param, the
-    // printed-line width, was added for the new receipt layout — `null`
-    // when not configured (falls back to the 48-character default).
-    expect(upsertCalls[0].params).toEqual(['kitchen-1', 'kitchen', 'tcp://192.168.0.52:9100', 1, null])
+    // DELIBERATE TEST CHANGE (docs/phase-174): a 6th bind param,
+    // connection_type, was added — defaults to 'network' when the
+    // config carries no connectionType (every printer saved before
+    // phase-174's Admin UI change).
+    expect(upsertCalls[0].params).toEqual([
+      'kitchen-1',
+      'kitchen',
+      'tcp://192.168.0.52:9100',
+      1,
+      null,
+      'network'
+    ])
   })
 
   it('stores a configured width alongside the other fields', () => {
@@ -842,7 +882,14 @@ describe('RubisDatabase printers', () => {
     })
 
     const upsertCalls = fake.callsFor('run', 'INSERT INTO printers')
-    expect(upsertCalls[0].params).toEqual(['till-1', 'receipt', 'tcp://192.168.0.50:9100', 1, 42])
+    expect(upsertCalls[0].params).toEqual([
+      'till-1',
+      'receipt',
+      'tcp://192.168.0.50:9100',
+      1,
+      42,
+      'network'
+    ])
   })
 
   it('stores enabled: false as 0', () => {
@@ -856,8 +903,31 @@ describe('RubisDatabase printers', () => {
     })
 
     const upsertCalls = fake.callsFor('run', 'INSERT INTO printers')
-    // DELIBERATE TEST CHANGE (docs/phase-171): see the width param note above.
-    expect(upsertCalls[0].params).toEqual(['label-1', 'label', 'tcp://192.168.0.53:9100', 0, null])
+    // DELIBERATE TEST CHANGE (docs/phase-174): see the connection_type
+    // param note above.
+    expect(upsertCalls[0].params).toEqual([
+      'label-1',
+      'label',
+      'tcp://192.168.0.53:9100',
+      0,
+      null,
+      'network'
+    ])
+  })
+
+  it('stores connectionType: windows alongside its queue name', () => {
+    const { fake, db } = freshDb()
+
+    db.savePrinter({
+      id: 'till-1',
+      type: 'receipt',
+      interfaceName: 'EPSON-TM-T88',
+      enabled: true,
+      connectionType: 'windows'
+    })
+
+    const upsertCalls = fake.callsFor('run', 'INSERT INTO printers')
+    expect(upsertCalls[0].params).toEqual(['till-1', 'receipt', 'EPSON-TM-T88', 1, null, 'windows'])
   })
 
   it('deletes a printer by id and reports true when a row was removed', () => {

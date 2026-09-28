@@ -17,9 +17,12 @@ import { describe, it, expect, vi } from 'vitest'
 import { ThermalPrinter } from 'node-thermal-printer'
 import {
   printReceipt,
+  printReceiptToType,
+  printWindowsTestPage,
   renderReceipt,
   renderZReport,
   defaultPrinterFactory,
+  buildPrinterRegistry,
   PRINTER_CONNECT_TIMEOUT_MS,
   shouldMarkReceiptPrinted,
   shouldShowFiscalPendingSlip,
@@ -32,12 +35,48 @@ import type {
   ThermalPrinterLike
 } from '../src/main/services/printer.js'
 import type { ZReport } from '../src/main/services/reports.js'
+import type { PrinterConfig } from '../src/main/services/database.js'
 import { formatCurrency } from '../src/main/services/currency.js'
 import { buildReceiptLayout, isReceiptLayoutQr } from '../src/main/lib/receiptLayout.js'
 import type { ReceiptLayoutOrder } from '../src/main/lib/receiptLayout.js'
 
+/**
+ * `createBufferClient` (docs/phase-174, the Windows route) constructs a
+ * real `ThermalPrinter` with no `interface` — this fake gives it just
+ * enough behaviour (formatting no-ops + `getBuffer()`) to render
+ * through `renderReceipt`/the test-slip renderer without touching real
+ * ESC/POS encoding. `ThermalPrinter` stays a `vi.fn()` spy so the
+ * existing `defaultPrinterFactory` constructor-args test still holds.
+ */
+class FakeBufferPrinter {
+  private lines: string[] = []
+  alignCenter(): void {}
+  alignLeft(): void {}
+  alignRight(): void {}
+  bold(): void {}
+  setTextNormal(): void {}
+  setTextQuadArea(): void {}
+  println(text: string): void {
+    this.lines.push(text)
+  }
+  drawLine(): void {}
+  cut(): void {}
+  printQR(text: string): void {
+    this.lines.push(`[QR: ${text}]`)
+  }
+  async execute(): Promise<undefined> {
+    return undefined
+  }
+  async isPrinterConnected(): Promise<boolean> {
+    return true
+  }
+  getBuffer(): Buffer {
+    return Buffer.from(this.lines.join('\n'))
+  }
+}
+
 vi.mock('node-thermal-printer', () => ({
-  ThermalPrinter: vi.fn(),
+  ThermalPrinter: vi.fn(() => new FakeBufferPrinter()),
   PrinterTypes: { EPSON: 'epson' }
 }))
 
@@ -443,5 +482,172 @@ describe('shouldOpenPdfFallbackViewer (docs/phase-165)', () => {
 
   it('is false for the automatic end-of-sale print', () => {
     expect(shouldOpenPdfFallbackViewer(true)).toBe(false)
+  })
+})
+
+describe('printReceipt — Windows route (docs/phase-174)', () => {
+  const windowsSettings: PrinterSettings = {
+    ...settings,
+    interfaceName: 'EPSON-TM-T88',
+    connectionType: 'windows'
+  }
+
+  it('sends the rendered ESC/POS buffer to the named Windows queue, never touching the network factory', async () => {
+    const windowsSender = vi.fn(async () => undefined)
+    const networkFactory = vi.fn()
+
+    const result = await printReceipt(
+      order,
+      items,
+      windowsSettings,
+      networkFactory,
+      undefined,
+      windowsSender
+    )
+
+    expect(networkFactory).not.toHaveBeenCalled()
+    expect(windowsSender).toHaveBeenCalledTimes(1)
+    expect(windowsSender).toHaveBeenCalledWith('EPSON-TM-T88', expect.any(Buffer))
+    expect(result).toEqual({ success: true, data: { printed: true, mock: false } })
+  })
+
+  it('falls back to a PDF receipt when the Windows queue is missing', async () => {
+    const windowsSender = vi.fn(async () => {
+      throw new Error("The printer name is invalid, or the specified printer is no longer installed")
+    })
+    const pdfGenerator = vi.fn(async () => 'C:\\Users\\cashier\\Desktop\\RUBIS_Receipt_Order_7.pdf')
+
+    const result = await printReceipt(
+      order,
+      items,
+      windowsSettings,
+      defaultPrinterFactory,
+      pdfGenerator,
+      windowsSender
+    )
+
+    expect(pdfGenerator).toHaveBeenCalledWith(order, items, windowsSettings)
+    expect(result).toEqual({
+      success: true,
+      data: {
+        printed: false,
+        mock: false,
+        mode: 'pdf',
+        filePath: 'C:\\Users\\cashier\\Desktop\\RUBIS_Receipt_Order_7.pdf'
+      }
+    })
+  })
+
+  it('falls back to a PDF receipt when the send times out', async () => {
+    const windowsSender = vi.fn(async () => {
+      throw Object.assign(new Error('killed'), { killed: true, signal: 'SIGTERM' })
+    })
+    const pdfGenerator = vi.fn(async () => 'C:\\Users\\cashier\\Desktop\\RUBIS_Receipt_Order_7.pdf')
+
+    const result = await printReceipt(
+      order,
+      items,
+      windowsSettings,
+      defaultPrinterFactory,
+      pdfGenerator,
+      windowsSender
+    )
+
+    expect(result.success).toBe(true)
+    expect(result.data?.mode).toBe('pdf')
+  })
+
+  it('never blocks the sale: a PDF-generation failure alongside a missing queue still returns a clear error, not a throw', async () => {
+    const windowsSender = vi.fn(async () => {
+      throw new Error('missing queue')
+    })
+    const pdfGenerator = vi.fn(async () => {
+      throw new Error('disk full')
+    })
+
+    const result = await printReceipt(
+      order,
+      items,
+      windowsSettings,
+      defaultPrinterFactory,
+      pdfGenerator,
+      windowsSender
+    )
+
+    expect(result.success).toBe(false)
+    expect(result.error).toMatch(/disk full/i)
+  })
+
+  it('stays on the mock sink when mock: true, even with connectionType windows (mock always wins)', async () => {
+    const windowsSender = vi.fn(async () => undefined)
+    const mockWindowsSettings: PrinterSettings = { ...windowsSettings, mock: true }
+
+    const result = await printReceipt(
+      order,
+      items,
+      mockWindowsSettings,
+      defaultPrinterFactory,
+      undefined,
+      windowsSender
+    )
+
+    expect(windowsSender).not.toHaveBeenCalled()
+    expect(result).toEqual({ success: true, data: { printed: true, mock: true } })
+  })
+})
+
+describe('printReceiptToType — Windows route (docs/phase-174)', () => {
+  it('resolves a registered windows-connection printer and routes through the Windows sender', async () => {
+    const windowsSender = vi.fn(async () => undefined)
+    const networkFactory = vi.fn()
+    const windowsConfig: PrinterConfig = {
+      id: 'till-1',
+      type: 'receipt',
+      interfaceName: 'EPSON-TM-T88',
+      enabled: true,
+      connectionType: 'windows'
+    }
+    const registry = buildPrinterRegistry([windowsConfig])
+
+    await printReceiptToType(
+      order,
+      items,
+      registry,
+      settings,
+      'receipt',
+      networkFactory,
+      undefined,
+      windowsSender
+    )
+
+    expect(networkFactory).not.toHaveBeenCalled()
+    expect(windowsSender).toHaveBeenCalledWith('EPSON-TM-T88', expect.any(Buffer))
+  })
+})
+
+describe('printWindowsTestPage (docs/phase-174)', () => {
+  it('sends a slip with the store name, date, and "Test print" RAW to the named queue', async () => {
+    const windowsSender = vi.fn<(printerName: string, buffer: Buffer) => Promise<void>>(
+      async () => undefined
+    )
+
+    const result = await printWindowsTestPage('EPSON-TM-T88', 'RUBIS Westlands', windowsSender)
+
+    expect(windowsSender).toHaveBeenCalledWith('EPSON-TM-T88', expect.any(Buffer))
+    const sentText = (windowsSender.mock.calls[0][1] as Buffer).toString()
+    expect(sentText).toContain('RUBIS Westlands')
+    expect(sentText).toContain('Test print')
+    expect(result).toEqual({ success: true, data: { printed: true, mock: false } })
+  })
+
+  it('reports a clear failure when the queue is missing — no PDF fallback for a bare test print', async () => {
+    const windowsSender = vi.fn(async () => {
+      throw new Error('printer not found')
+    })
+
+    const result = await printWindowsTestPage('EPSON-TM-T88', 'RUBIS Westlands', windowsSender)
+
+    expect(result.success).toBe(false)
+    expect(result.error).toMatch(/printer not found/i)
   })
 })

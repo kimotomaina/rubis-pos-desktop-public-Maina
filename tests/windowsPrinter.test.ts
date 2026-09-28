@@ -1,0 +1,204 @@
+/**
+ * Windows RAW printer route tests (docs/phase-174).
+ *
+ * `child_process.execFile` and `fs/promises` are mocked so no real
+ * PowerShell process or temp file is ever touched — the same
+ * dependency-injection philosophy as `printer.test.ts`'s recording
+ * fake, applied here at the module-mock level since `execFile` isn't
+ * already behind an injectable seam (there is nothing to fake it with
+ * inside `sendRawToWindowsPrinter` itself; the seam this codebase
+ * exposes for tests is `WindowsPrintSender`, one level up in `printer.ts`).
+ */
+
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { tmpdir } from 'node:os'
+import {
+  sendRawToWindowsPrinter,
+  resolvePrintRawScriptPath,
+  toWindowsPrinterInfo,
+  markMissingWindowsPrinters,
+  WINDOWS_PRINT_TIMEOUT_MS
+} from '../src/main/services/windowsPrinter.js'
+import type { PrinterConfig } from '../src/main/services/database.js'
+
+type ExecFileCallback = (err: Error | null) => void
+
+const execFileMock =
+  vi.fn<(cmd: string, args: string[], opts: object, cb: ExecFileCallback) => void>()
+const writeFileMock = vi.fn<(...args: unknown[]) => Promise<undefined>>(async () => undefined)
+const unlinkMock = vi.fn<(...args: unknown[]) => Promise<undefined>>(async () => undefined)
+
+vi.mock('node:child_process', () => {
+  const execFile = (cmd: string, args: string[], opts: object, cb: ExecFileCallback) =>
+    execFileMock(cmd, args, opts, cb)
+  return { execFile, default: { execFile } }
+})
+
+vi.mock('node:fs/promises', () => {
+  const writeFile = (...args: unknown[]) => writeFileMock(...args)
+  const unlink = (...args: unknown[]) => unlinkMock(...args)
+  return { writeFile, unlink, default: { writeFile, unlink } }
+})
+
+vi.mock('electron', () => ({
+  app: {
+    getPath: vi.fn(() => tmpdir()),
+    isPackaged: false
+  }
+}))
+
+beforeEach(() => {
+  execFileMock.mockReset()
+  writeFileMock.mockClear()
+  unlinkMock.mockClear()
+})
+
+describe('sendRawToWindowsPrinter', () => {
+  it('sends the printer name as a discrete execFile argument, never a shell string', async () => {
+    execFileMock.mockImplementation((_cmd, _args, _opts, cb) => cb(null))
+
+    await sendRawToWindowsPrinter('EPSON-TM-T88', Buffer.from('hello'))
+
+    expect(execFileMock).toHaveBeenCalledTimes(1)
+    const [command, args, options] = execFileMock.mock.calls[0]
+    expect(command).toBe('powershell.exe')
+    expect(Array.isArray(args)).toBe(true)
+    // The printer name is one discrete array element, not concatenated
+    // into any other argument — proves no shell interpolation is possible.
+    expect(args).toContain('EPSON-TM-T88')
+    expect(args.some((a: string) => a.includes('EPSON-TM-T88;'))).toBe(false)
+    expect(options).toMatchObject({ timeout: WINDOWS_PRINT_TIMEOUT_MS })
+  })
+
+  it('a printer name containing shell metacharacters is still a single argument', async () => {
+    execFileMock.mockImplementation((_cmd, _args, _opts, cb) => cb(null))
+    const dangerousName = 'PRN & calc.exe'
+
+    await sendRawToWindowsPrinter(dangerousName, Buffer.from('hello'))
+
+    const [, args] = execFileMock.mock.calls[0]
+    expect(args).toContain(dangerousName)
+  })
+
+  it('writes the buffer to a temp file, then removes it on success', async () => {
+    execFileMock.mockImplementation((_cmd, _args, _opts, cb) => cb(null))
+    const buffer = Buffer.from([0x1b, 0x40])
+
+    await sendRawToWindowsPrinter('EPSON-TM-T88', buffer)
+
+    expect(writeFileMock).toHaveBeenCalledTimes(1)
+    expect(writeFileMock.mock.calls[0][1]).toBe(buffer)
+    const tempPath = writeFileMock.mock.calls[0][0] as string
+    expect(unlinkMock).toHaveBeenCalledWith(tempPath)
+  })
+
+  it('removes the temp file even when the script fails', async () => {
+    execFileMock.mockImplementation((_cmd, _args, _opts, cb) => cb(new Error('printer offline')))
+
+    await expect(sendRawToWindowsPrinter('EPSON-TM-T88', Buffer.from('x'))).rejects.toThrow(
+      'printer offline'
+    )
+
+    expect(unlinkMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('removes the temp file even when the process times out', async () => {
+    const timeoutErr = Object.assign(new Error('killed'), { killed: true, signal: 'SIGTERM' })
+    execFileMock.mockImplementation((_cmd, _args, _opts, cb) => cb(timeoutErr))
+
+    await expect(sendRawToWindowsPrinter('EPSON-TM-T88', Buffer.from('x'))).rejects.toThrow()
+
+    expect(unlinkMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('bounds the print job at 15 seconds', () => {
+    expect(WINDOWS_PRINT_TIMEOUT_MS).toBe(15_000)
+  })
+
+  it('resolves the bundled script path relative to the source tree in dev', () => {
+    expect(resolvePrintRawScriptPath()).toMatch(/resources[\\/]print-raw\.ps1$/)
+  })
+})
+
+describe('toWindowsPrinterInfo', () => {
+  it('maps name and displayName straight through', () => {
+    const info = toWindowsPrinterInfo({
+      name: 'EPSON-TM-T88',
+      displayName: 'EPSON TM-T88 Receipt',
+      description: '',
+      options: {}
+    } as Electron.PrinterInfo)
+
+    expect(info).toEqual({ name: 'EPSON-TM-T88', displayName: 'EPSON TM-T88 Receipt' })
+  })
+
+  it('includes port when options exposes one', () => {
+    const info = toWindowsPrinterInfo({
+      name: 'EPSON-TM-T88',
+      displayName: 'EPSON TM-T88 Receipt',
+      description: '',
+      options: { port: 'USB001' }
+    } as unknown as Electron.PrinterInfo)
+
+    expect(info.port).toBe('USB001')
+  })
+
+  it('leaves port out entirely when options does not expose one', () => {
+    const info = toWindowsPrinterInfo({
+      name: 'EPSON-TM-T88',
+      displayName: 'EPSON TM-T88 Receipt',
+      description: '',
+      options: {}
+    } as Electron.PrinterInfo)
+
+    expect('port' in info).toBe(false)
+  })
+})
+
+describe('markMissingWindowsPrinters', () => {
+  const windowsPrinter: PrinterConfig = {
+    id: 'till-1',
+    type: 'receipt',
+    interfaceName: 'EPSON-TM-T88',
+    enabled: true,
+    connectionType: 'windows'
+  }
+  const networkPrinter: PrinterConfig = {
+    id: 'kitchen-1',
+    type: 'kitchen',
+    interfaceName: 'tcp://192.168.0.52:9100',
+    enabled: true,
+    connectionType: 'network'
+  }
+
+  it('flags a windows printer whose queue is no longer installed', () => {
+    const result = markMissingWindowsPrinters([windowsPrinter], [])
+
+    expect(result).toEqual([{ ...windowsPrinter, missing: true }])
+  })
+
+  it('leaves a windows printer unflagged when its queue is still installed', () => {
+    const result = markMissingWindowsPrinters([windowsPrinter], ['EPSON-TM-T88'])
+
+    expect(result).toEqual([windowsPrinter])
+  })
+
+  it('never flags a network printer, whatever the available queues are', () => {
+    const result = markMissingWindowsPrinters([networkPrinter], [])
+
+    expect(result).toEqual([networkPrinter])
+  })
+
+  it('never flags a pre-phase-174 config with no connectionType', () => {
+    const legacyPrinter: PrinterConfig = {
+      id: 'till-1',
+      type: 'receipt',
+      interfaceName: 'tcp://192.168.0.50:9100',
+      enabled: true
+    }
+
+    const result = markMissingWindowsPrinters([legacyPrinter], [])
+
+    expect(result).toEqual([legacyPrinter])
+  })
+})

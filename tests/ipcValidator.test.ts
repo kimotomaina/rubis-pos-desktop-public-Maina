@@ -352,6 +352,27 @@ describe('printerSaveSchema', () => {
     expect(validate(printerSaveSchema, withoutManagerId).success).toBe(false)
     expect(validate(printerSaveSchema, { ...validRequest, managerPin: '' }).success).toBe(false)
   })
+
+  it('accepts an omitted connectionType (docs/phase-174 back-compat — every printer saved before it)', () => {
+    const { connectionType: _unused, ...withoutConnectionType } = { ...validRequest, connectionType: undefined }
+    expect(validate(printerSaveSchema, withoutConnectionType).success).toBe(true)
+  })
+
+  it('accepts connectionType: windows, with interfaceName reused as the queue name', () => {
+    expect(
+      validate(printerSaveSchema, {
+        ...validRequest,
+        interfaceName: 'EPSON-TM-T88',
+        connectionType: 'windows'
+      }).success
+    ).toBe(true)
+  })
+
+  it('rejects an invalid connectionType', () => {
+    expect(
+      validate(printerSaveSchema, { ...validRequest, connectionType: 'bluetooth' }).success
+    ).toBe(false)
+  })
 })
 
 describe('printerDeleteSchema', () => {
@@ -390,6 +411,28 @@ describe('printerTestSchema', () => {
         managerPin: '9999'
       }).success
     ).toBe(true)
+  })
+
+  it('accepts the Windows queue-name shape (docs/phase-174)', () => {
+    expect(
+      validate(printerTestSchema, {
+        connectionType: 'windows',
+        windowsPrinterName: 'EPSON-TM-T88'
+      }).success
+    ).toBe(true)
+  })
+
+  it('rejects a windows request with a missing or empty queue name', () => {
+    expect(validate(printerTestSchema, { connectionType: 'windows' }).success).toBe(false)
+    expect(
+      validate(printerTestSchema, { connectionType: 'windows', windowsPrinterName: '' }).success
+    ).toBe(false)
+  })
+
+  it('rejects connectionType: windows with no windowsPrinterName and no interfaceName either', () => {
+    expect(validate(printerTestSchema, { connectionType: 'windows', interfaceName: '' }).success).toBe(
+      false
+    )
   })
 })
 

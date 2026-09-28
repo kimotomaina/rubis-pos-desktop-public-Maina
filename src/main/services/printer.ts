@@ -23,7 +23,7 @@ import { ThermalPrinter, PrinterTypes } from 'node-thermal-printer'
 import type { ServiceResult, Discount } from './shopify-types.js'
 import type { ZReport } from './reports.js'
 import { formatVatRateLabel } from './reports.js'
-import type { PrinterConfig, PrinterType, FiscalStatus } from './database.js'
+import type { PrinterConfig, PrinterType, PrinterConnectionType, FiscalStatus } from './database.js'
 import { formatCurrency } from './currency.js'
 import { generatePdfReceipt } from './pdf-receipt.js'
 import { buildReceiptLayout, isReceiptLayoutQr, asReceiptWidth } from '../lib/receiptLayout.js'
@@ -33,6 +33,8 @@ import type {
   ReceiptLayoutVatGroups,
   ReceiptWidth
 } from '../lib/receiptLayout.js'
+import type { WindowsPrintSender } from './windowsPrinter.js'
+import { sendRawToWindowsPrinter } from './windowsPrinter.js'
 
 export type { ReceiptLayoutVatGroups, ReceiptWidth } from '../lib/receiptLayout.js'
 
@@ -63,6 +65,15 @@ export interface PrinterSettings {
   taxRate: number
   /** When true, skips hardware entirely and logs the receipt text. */
   mock?: boolean
+  /**
+   * Defaults to `'network'` when absent — every till configured before
+   * docs/phase-174. `'windows'` sends RAW ESC/POS to a Windows printer
+   * queue (USB or COM/serial) instead of over TCP/IP — see
+   * `windowsPrinter.ts`. Either way `interfaceName` is the address:
+   * `tcp://<ip>:<port>` for `'network'`, the queue's system name for
+   * `'windows'`.
+   */
+  connectionType?: PrinterConnectionType
 }
 
 /** The per-transaction fields a receipt needs — real data captured at checkout. */
@@ -302,7 +313,8 @@ export function resolvePrinterSettings(
       return {
         ...defaultSettings,
         interfaceName: config.interfaceName,
-        width: asReceiptWidth(config.width) ?? defaultSettings.width
+        width: asReceiptWidth(config.width) ?? defaultSettings.width,
+        connectionType: config.connectionType
       }
     }
   }
@@ -480,6 +492,28 @@ function createMockSink(): { client: ThermalPrinterLike; lines: string[] } {
 }
 
 /**
+ * Builds a real `node-thermal-printer` client with no transport
+ * interface at all — every ESC/POS formatting call (`println`, `bold`,
+ * `cut`, …) still works, appending to its internal buffer, but nothing
+ * is ever sent anywhere. `getBuffer()` then hands back those raw bytes
+ * for {@link sendToWindowsPrinter} to send RAW to a Windows queue
+ * instead of over TCP/IP (docs/phase-174) — the exact same renderer
+ * (`renderReceipt`/`renderZReport`/the test-slip renderers) the network
+ * route uses, so the two routes can never drift in what they print.
+ *
+ * @returns a {@link ThermalPrinterLike} that also exposes `getBuffer()`
+ */
+function createBufferClient(): ThermalPrinterLike & { getBuffer(): Buffer } {
+  // `interface` is typed as required by node-thermal-printer's own .d.ts,
+  // but core.js only wires one up when the value is truthy (`if
+  // (initConfig.interface)`) — an empty string satisfies the type and
+  // is falsy, so no transport is ever attached.
+  return new ThermalPrinter({ type: PrinterTypes.EPSON, interface: '' }) as unknown as ThermalPrinterLike & {
+    getBuffer(): Buffer
+  }
+}
+
+/**
  * True when `err` carries one of the TCP failure codes that mean the
  * printer itself is offline or unreachable, as opposed to a hardware
  * fault (out of paper, etc.) on an otherwise-connected printer. Used
@@ -522,6 +556,39 @@ function translatePrinterError(err: unknown): string {
 }
 
 /**
+ * Renders onto a buffer-only client ({@link createBufferClient}) and
+ * sends the resulting ESC/POS bytes RAW to `printerName` via
+ * `windowsSender` (docs/phase-174) — the Windows-queue counterpart of
+ * the network route's connect/execute in {@link sendToPrinter}.
+ *
+ * Any failure (missing queue, script error, the 15-second timeout) is
+ * treated the same as an offline network printer: `onOfflineFallback`,
+ * when given, wins over a bare failure result — never blocks the sale.
+ *
+ * @param {(client: ThermalPrinterLike) => void | Promise<void>} render
+ * @param {string} printerName — the queue's system name (`PrinterConfig.interfaceName`)
+ * @param {WindowsPrintSender} windowsSender
+ * @param {() => Promise<ServiceResult<ReceiptPrintResult>>} [onOfflineFallback]
+ * @returns {Promise<ServiceResult<ReceiptPrintResult>>}
+ */
+async function sendToWindowsPrinter(
+  render: (client: ThermalPrinterLike) => void | Promise<void>,
+  printerName: string,
+  windowsSender: WindowsPrintSender,
+  onOfflineFallback?: () => Promise<ServiceResult<ReceiptPrintResult>>
+): Promise<ServiceResult<ReceiptPrintResult>> {
+  try {
+    const client = createBufferClient()
+    await render(client)
+    await windowsSender(printerName, client.getBuffer())
+    return { success: true, data: { printed: true, mock: false } }
+  } catch (err) {
+    if (onOfflineFallback) return onOfflineFallback()
+    return { success: false, error: translatePrinterError(err) }
+  }
+}
+
+/**
  * Shared connect/render/execute/mock-logging flow for both receipts
  * and Z-reports — the only difference between the two is which
  * `render*` function draws onto the client.
@@ -533,11 +600,18 @@ function translatePrinterError(err: unknown): string {
  * receipt. Callers with no meaningful fallback (Z-reports, test
  * pages) omit it and keep failing as before.
  *
+ * `settings.connectionType === 'windows'` routes to
+ * {@link sendToWindowsPrinter} instead — but only when not mocked:
+ * `settings.mock` stands in for whichever route is otherwise
+ * configured, exactly as it always has for the network route (see
+ * `printReceipt`'s own doc comment).
+ *
  * @param {(client: ThermalPrinterLike) => void | Promise<void>} render
  * @param {PrinterSettings} settings
  * @param {PrinterFactory} factory
  * @param {string} mockLogLabel — identifies the document in the mock-mode console log
  * @param {() => Promise<ServiceResult<ReceiptPrintResult>>} [onOfflineFallback]
+ * @param {WindowsPrintSender} [windowsSender] — injected Windows-queue sender for testing
  * @returns {Promise<ServiceResult<ReceiptPrintResult>>}
  */
 async function sendToPrinter(
@@ -545,9 +619,15 @@ async function sendToPrinter(
   settings: PrinterSettings,
   factory: PrinterFactory,
   mockLogLabel: string,
-  onOfflineFallback?: () => Promise<ServiceResult<ReceiptPrintResult>>
+  onOfflineFallback?: () => Promise<ServiceResult<ReceiptPrintResult>>,
+  windowsSender: WindowsPrintSender = sendRawToWindowsPrinter
 ): Promise<ServiceResult<ReceiptPrintResult>> {
   const usingMock = settings.mock === true
+
+  if (!usingMock && settings.connectionType === 'windows') {
+    return sendToWindowsPrinter(render, settings.interfaceName, windowsSender, onOfflineFallback)
+  }
+
   const sink = usingMock ? createMockSink() : null
   const client = sink ? sink.client : factory(settings.interfaceName)
 
@@ -617,6 +697,7 @@ async function fallBackToPdf(
  * @param {PrinterSettings} settings
  * @param {PrinterFactory} [factory] — injected client factory for testing
  * @param {PdfReceiptGenerator} [pdfGenerator] — injected PDF fallback generator for testing
+ * @param {WindowsPrintSender} [windowsSender] — injected Windows-queue sender for testing (docs/phase-174)
  * @returns {Promise<ServiceResult<ReceiptPrintResult>>}
  */
 export async function printReceipt(
@@ -624,14 +705,16 @@ export async function printReceipt(
   items: ReceiptLineItem[],
   settings: PrinterSettings,
   factory: PrinterFactory = defaultPrinterFactory,
-  pdfGenerator: PdfReceiptGenerator = generatePdfReceipt
+  pdfGenerator: PdfReceiptGenerator = generatePdfReceipt,
+  windowsSender: WindowsPrintSender = sendRawToWindowsPrinter
 ): Promise<ServiceResult<ReceiptPrintResult>> {
   return sendToPrinter(
     (client) => renderReceipt(client, order, items, settings),
     settings,
     factory,
     `Order #${order.localId}`,
-    () => fallBackToPdf(order, items, settings, pdfGenerator)
+    () => fallBackToPdf(order, items, settings, pdfGenerator),
+    windowsSender
   )
 }
 
@@ -669,6 +752,7 @@ export async function printZReport(
  * @param {PrinterType} [printerType] — defaults to `'receipt'`
  * @param {PrinterFactory} [factory] — injected client factory for testing
  * @param {PdfReceiptGenerator} [pdfGenerator] — injected PDF fallback generator for testing
+ * @param {WindowsPrintSender} [windowsSender] — injected Windows-queue sender for testing (docs/phase-174)
  * @returns {Promise<ServiceResult<ReceiptPrintResult>>}
  */
 export async function printReceiptToType(
@@ -678,10 +762,11 @@ export async function printReceiptToType(
   defaultSettings: PrinterSettings,
   printerType: PrinterType = 'receipt',
   factory: PrinterFactory = defaultPrinterFactory,
-  pdfGenerator: PdfReceiptGenerator = generatePdfReceipt
+  pdfGenerator: PdfReceiptGenerator = generatePdfReceipt,
+  windowsSender: WindowsPrintSender = sendRawToWindowsPrinter
 ): Promise<ServiceResult<ReceiptPrintResult>> {
   const settings = resolvePrinterSettings(registry, printerType, defaultSettings)
-  return printReceipt(order, items, settings, factory, pdfGenerator)
+  return printReceipt(order, items, settings, factory, pdfGenerator, windowsSender)
 }
 
 /**
@@ -715,5 +800,39 @@ export async function printTestPage(
     { interfaceName, storeName: 'RUBIS POS', taxRate: 0 },
     factory,
     `Test Page (${interfaceName})`
+  )
+}
+
+/**
+ * Sends a short test slip — shop name, date, "Test print", cut — RAW to
+ * a Windows printer queue (docs/phase-174). The Windows-route
+ * counterpart of {@link printTestPage}, kept as its own function rather
+ * than folded into it: `printTestPage`'s own content is fixed
+ * ("RUBIS POS"/"TEST PAGE", not the configured store name) and this
+ * route's hard rule is to leave that network test path untouched, so
+ * this one is free to show the real store name instead.
+ *
+ * @param {string} printerName — the queue's system name (`PrinterConfig.interfaceName`)
+ * @param {string} storeName
+ * @param {WindowsPrintSender} [windowsSender] — injected Windows-queue sender for testing
+ * @returns {Promise<ServiceResult<ReceiptPrintResult>>}
+ */
+export async function printWindowsTestPage(
+  printerName: string,
+  storeName: string,
+  windowsSender: WindowsPrintSender = sendRawToWindowsPrinter
+): Promise<ServiceResult<ReceiptPrintResult>> {
+  return sendToWindowsPrinter(
+    (client) => {
+      client.alignCenter()
+      client.bold(true)
+      client.println(storeName)
+      client.bold(false)
+      client.println(new Date().toLocaleString())
+      client.println('Test print')
+      client.cut()
+    },
+    printerName,
+    windowsSender
   )
 }

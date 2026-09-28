@@ -36,6 +36,7 @@ import type {
   StockTakeSettings
 } from '../main/services/stock-take.js'
 import type { ReceiptPrintResult } from '../main/services/printer.js'
+import type { WindowsPrinterInfo, PrinterWithAvailability } from '../main/services/windowsPrinter.js'
 import type {
   ZReport,
   DailySummary,
@@ -84,6 +85,8 @@ export interface ConnectivityStatusPayload {
  * built in `src/preload/index.ts`.
  */
 export interface PosApi {
+  /** The OS this till is running on (docs/phase-174) — used to hide the Windows-printer connection option elsewhere. */
+  platform: NodeJS.Platform
   /** Lightweight health-check channel, resolves to 'pong'. */
   ping: () => Promise<string>
   /** Application version from the main process. */
@@ -301,8 +304,8 @@ export interface PosApi {
     managerId: number,
     managerPin: string
   ) => Promise<ServiceResult<void>>
-  /** Lists every configured printer. */
-  getPrinters: () => Promise<ServiceResult<PrinterConfig[]>>
+  /** Lists every configured printer — a `connectionType: 'windows'` entry carries `missing: true` when its queue is no longer installed (docs/phase-174). */
+  getPrinters: () => Promise<ServiceResult<PrinterWithAvailability[]>>
   /** Upserts a printer configuration. Requires a re-verified admin Manager PIN. */
   savePrinter: (
     config: PrinterConfig,
@@ -311,8 +314,16 @@ export interface PosApi {
   ) => Promise<ServiceResult<void>>
   /** Removes a printer configuration. Requires a re-verified admin Manager PIN. */
   deletePrinter: (id: string, managerId: number, managerPin: string) => Promise<ServiceResult<void>>
-  /** Sends a test page to a printer interface to verify connectivity. */
-  testPrinter: (interfaceName: string) => Promise<ServiceResult<ReceiptPrintResult>>
+  /**
+   * Sends a test page — either to a network printer interface (unchanged),
+   * or (docs/phase-174, Windows only) RAW to a Windows printer queue by
+   * its system name.
+   */
+  testPrinter: (
+    target: { interfaceName: string } | { connectionType: 'windows'; windowsPrinterName: string }
+  ) => Promise<ServiceResult<ReceiptPrintResult>>
+  /** Lists Windows printer queues (USB or COM/serial) for the "Find printers" button (docs/phase-174, Windows only). */
+  findWindowsPrinters: () => Promise<ServiceResult<WindowsPrinterInfo[]>>
   /** Reports whether a Shopify Admin API token is stored in the credential vault. */
   getShopifyTokenStatus: () => Promise<ServiceResult<{ configured: boolean }>>
   /** Saves the Shopify Admin API token to the credential vault. */

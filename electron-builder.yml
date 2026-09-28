@@ -18,6 +18,8 @@ extraResources:
     to: .env
   - from: resources/icons/icon.ico
     to: icons/icon.ico
+  - from: resources/print-raw.ps1
+    to: print-raw.ps1
 
 win:
   target:
