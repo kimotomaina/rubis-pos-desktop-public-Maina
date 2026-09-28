@@ -14,12 +14,15 @@ import type { AxiosInstance } from 'axios'
 import { RealFiscalizationProvider } from '../src/main/services/integrations/real-etims-provider.js'
 import type { FiscalInvoiceRequest } from '../src/main/services/integrations/etims.js'
 import {
+  connectionTestFailed,
+  connectionTestPassed,
   describeDeviceNotAnswering,
   describeNotReady,
   NOT_CONFIGURED_MESSAGE,
   NOT_CONFIGURED_REASON,
   SERVER_UNREACHABLE_MESSAGE,
-  STATUS_UNREADABLE_MESSAGE
+  STATUS_UNREADABLE_MESSAGE,
+  toConnectivityCheckResult
 } from '../src/main/services/integrations/fiscal-connection-test.js'
 
 /** A complete, valid sale — nothing about the request is at fault here. */
@@ -445,6 +448,94 @@ describe('testConnection', () => {
     await provider.testConnection()
 
     expect(get.mock.calls.length).toBeGreaterThan(afterFirst)
+  })
+})
+
+describe('checkConnectivity (the till-status badge check)', () => {
+  it('opens a session on first use, same as testConnection would', async () => {
+    const get = vi.fn().mockResolvedValue({ data: '<Res Code="0"/>' })
+    const post = vi.fn().mockResolvedValue({
+      data: '<Res Code="0"><Res Name="CU_fiscalized" Value="1"/><Res Name="Paired_with_TIMS" Value="1"/></Res>'
+    })
+    const provider = new RealFiscalizationProvider({
+      ...CONFIGURED,
+      httpClient: makeClient(post, get)
+    })
+
+    expect(get).not.toHaveBeenCalled()
+    const result = await provider.checkConnectivity()
+
+    expect(get).toHaveBeenCalledTimes(1)
+    expect(result.ok).toBe(true)
+  })
+
+  it('reuses an already-open session instead of forcing a fresh handshake', async () => {
+    // The opposite of testConnection's own "re-runs the handshake" test
+    // above: the periodic badge poll must not tear down a session a live
+    // sale might depend on.
+    const get = vi.fn().mockResolvedValue({ data: '<Res Code="0"/>' })
+    const post = vi.fn().mockResolvedValue({
+      data: '<Res Code="0"><Res Name="CU_fiscalized" Value="1"/><Res Name="Paired_with_TIMS" Value="1"/></Res>'
+    })
+    const provider = new RealFiscalizationProvider({
+      ...CONFIGURED,
+      httpClient: makeClient(post, get)
+    })
+
+    await provider.checkConnectivity()
+    const afterFirst = get.mock.calls.length
+    await provider.checkConnectivity()
+
+    expect(get.mock.calls.length).toBe(afterFirst)
+  })
+
+  it('reports the device hop, and no server hop, when nothing is configured', async () => {
+    const provider = new RealFiscalizationProvider({
+      httpClient: makeClient(vi.fn(), vi.fn())
+    })
+
+    const result = await provider.checkConnectivity()
+
+    expect(result.ok).toBe(false)
+    expect(result.message).toMatch(/has not been set up on this till yet/)
+  })
+
+  it('names the SERVER hop when the fiscal server cannot be reached at all', async () => {
+    // Same classification as testConnection's equivalent test — both
+    // run through the same shared hop logic, only the cache handling
+    // differs.
+    const get = vi.fn().mockRejectedValue(
+      Object.assign(new Error('connect ECONNREFUSED'), { isAxiosError: true, request: {} })
+    )
+    const provider = new RealFiscalizationProvider({
+      ...CONFIGURED,
+      httpClient: makeClient(vi.fn(), get)
+    })
+
+    const result = await provider.checkConnectivity()
+
+    expect(result.ok).toBe(false)
+    expect(result.failedAt).toBe('server')
+    expect(result.message).toMatch(/Could not reach the fiscal server on this till/)
+  })
+})
+
+describe('toConnectivityCheckResult', () => {
+  it('reports connected, with no error, when every hop passed', () => {
+    const result = toConnectivityCheckResult(connectionTestPassed())
+
+    expect(result.connected).toBe(true)
+    expect(result.error).toBeUndefined()
+    expect(result.lastCheckedAt).toEqual(expect.any(String))
+  })
+
+  it('reports disconnected with the failing hop\'s own message', () => {
+    const result = toConnectivityCheckResult(
+      connectionTestFailed('server', SERVER_UNREACHABLE_MESSAGE)
+    )
+
+    expect(result.connected).toBe(false)
+    expect(result.error).toBe(SERVER_UNREACHABLE_MESSAGE)
   })
 })
 

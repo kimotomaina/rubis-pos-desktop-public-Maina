@@ -787,14 +787,6 @@ export class RealFiscalizationProvider implements FiscalizationProvider {
    * Clears the cached handshake first: a "test" that reported a session
    * opened minutes ago under different settings would not be a test.
    *
-   * A `ReadStatus` failure is attributed to the hop it actually belongs
-   * to, which is the point of the four explicit branches below. Until
-   * phase-98 every one of them was reported as hop 3 with "the fiscal
-   * device answered but is not ready to file sales" — a sentence that is
-   * false whenever nothing answered, and one that sent a live
-   * investigation after KRA provisioning while the real fault was that
-   * the session never opened (`docs/phase-97.md`).
-   *
    * @returns {Promise<FiscalConnectionTestResult>}
    */
   async testConnection(): Promise<FiscalConnectionTestResult> {
@@ -803,6 +795,41 @@ export class RealFiscalizationProvider implements FiscalizationProvider {
     }
 
     this.settingsPromise = null
+    return this.runConnectionHops()
+  }
+
+  /**
+   * Same three-hop classification as {@link testConnection}, but reuses
+   * an already-open session instead of forcing a fresh handshake first.
+   *
+   * For the periodic background badge (polled every 30s), which must not
+   * tear down a session a live sale might depend on — see the
+   * `settingsPromise` doc comment and the before-quit handler in
+   * `index.ts` that both exist to avoid exactly that churn.
+   *
+   * @returns {Promise<FiscalConnectionTestResult>}
+   */
+  async checkConnectivity(): Promise<FiscalConnectionTestResult> {
+    if (!this.isConfigured()) {
+      return connectionTestFailed('device', NOT_CONFIGURED_MESSAGE)
+    }
+
+    return this.runConnectionHops()
+  }
+
+  /**
+   * The shared body of {@link testConnection} and {@link checkConnectivity}:
+   * `settings()` then `ReadStatus`, stopping at the first failure.
+   *
+   * A `ReadStatus` failure is attributed to the hop it actually belongs
+   * to, which is the point of the four explicit branches below. Until
+   * phase-98 every one of them was reported as hop 3 with "the fiscal
+   * device answered but is not ready to file sales" — a sentence that is
+   * false whenever nothing answered, and one that sent a live
+   * investigation after KRA provisioning while the real fault was that
+   * the session never opened (`docs/phase-97.md`).
+   */
+  private async runConnectionHops(): Promise<FiscalConnectionTestResult> {
     const settings = await this.ensureSettings()
     if (!settings.success) {
       // No `code` means no `<Res>` came back at all — the fiscal server

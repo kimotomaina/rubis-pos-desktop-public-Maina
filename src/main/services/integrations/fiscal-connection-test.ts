@@ -13,6 +13,8 @@
  * outcomes.
  */
 
+import type { ConnectivityCheckResult } from '../connectivityMonitor.js'
+
 /** The three hops between this till and a filed invoice. */
 export type FiscalConnectionHop = 'server' | 'device' | 'ready'
 
@@ -222,3 +224,25 @@ export const STATUS_UNREADABLE_MESSAGE =
  */
 export const SERVER_UNREACHABLE_MESSAGE =
   'Could not reach the fiscal server on this till. Check that the fiscal server software is running, and that the fiscal server address above is right.'
+
+/**
+ * Turns a hop-based result into the plain connected/error shape the
+ * till-status badge shares with M-Pesa and the printer.
+ *
+ * Before this, the header badge probed with a bare HTTP GET that counted
+ * any response — even a 404 from an unrelated service on that port — as
+ * "Reachable", while the Admin "Test connection" button ran the real
+ * three-hop check. The two disagreed whenever something answered on the
+ * port without actually being the fiscal server. This makes the header
+ * report exactly what "Test connection" would say.
+ *
+ * @param {FiscalConnectionTestResult} result
+ * @returns {ConnectivityCheckResult}
+ */
+export function toConnectivityCheckResult(
+  result: FiscalConnectionTestResult
+): ConnectivityCheckResult {
+  return result.ok
+    ? { connected: true, lastCheckedAt: new Date().toISOString() }
+    : { connected: false, lastCheckedAt: new Date().toISOString(), error: result.message }
+}
