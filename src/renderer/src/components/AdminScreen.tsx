@@ -1073,10 +1073,7 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
       {activeTab === 'system' && (
         <section className="rounded-xl border border-slate-200 bg-white p-4">
           <h3 className="mb-1 text-2xl font-bold text-slate-800">Startup Configuration</h3>
-          <p className="mb-4 text-base text-slate-500">
-            Selects which providers this till talks to. Both are constructed once at startup, so
-            a change here only takes effect after a restart.
-          </p>
+          <p className="mb-4 text-base text-slate-500">Changes apply only after a restart.</p>
 
           {startupConfigLoading ? (
             <p className="text-base text-slate-400">Loading…</p>
@@ -1128,10 +1125,7 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
         <section className="rounded-xl border border-slate-200 bg-white p-4">
           <h3 className="mb-1 text-2xl font-bold text-slate-800">Reset Configuration</h3>
           <p className="mb-4 text-base text-slate-500">
-            Clears this till's saved Shopify store URL, Admin API token, and confirmed
-            location, then returns it to first-run setup. Use this to point the till at a
-            different store — there is no undo. To just switch locations on the same store,
-            use "Change Location" above instead.
+            Clears this till's Shopify connection and location, with no undo.
           </p>
 
           {resetConfigError && (
@@ -1154,28 +1148,15 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
       {activeTab === 'peripherals' && (
         <section className="rounded-xl border border-slate-200 bg-white p-4">
           <h3 className="mb-1 text-2xl font-bold text-slate-800">Barcode Scanner Stations</h3>
- 
+
           <ol className="list-inside list-decimal space-y-1 text-base text-slate-600">
             <li>
-              Open the Datalogic QD2100 programming guide and find the barcode for
-              &quot;Add Prefix&quot;.
-            </li>
-            <li>
-              Scan the &quot;Add Prefix&quot; barcode, then scan the characters for the station's
-              prefix — <code className="rounded bg-slate-100 px-1">SC1:</code> for till 1,{' '}
-              <code className="rounded bg-slate-100 px-1">SC2:</code> for till 2, or{' '}
-              <code className="rounded bg-slate-100 px-1">KITCHEN:</code> for a back-of-house unit
-              — then scan &quot;Save&quot; to commit the change.
-            </li>
-            <li>
-              Every scan from that unit now arrives prefixed automatically — no app restart or
-              configuration needed here.
+              Scan Add Prefix, then{' '}
+              <code className="rounded bg-slate-100 px-1">SC1:</code> (till 1),{' '}
+              <code className="rounded bg-slate-100 px-1">SC2:</code> (till 2) or{' '}
+              <code className="rounded bg-slate-100 px-1">KITCHEN:</code>, then Save.
             </li>
           </ol>
-          <p className="mt-3 text-sm text-slate-400">
-            A scanner that is never programmed keeps working exactly as before, labeled
-            &quot;UNKNOWN&quot; internally.
-          </p>
         </section>
       )}
 
@@ -1205,10 +1186,6 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
               {integrationSection === 'shopify' && (
                 <section className="rounded-xl border border-slate-200 bg-white p-4">
                   <h3 className="mb-1 text-2xl font-bold text-slate-800">Shopify Connection</h3>
-                  <p className="mb-4 text-base text-slate-500">
-                    Shopify store URL and Admin API token. These credentials are stored securely
-                    on this device and only need to be entered once per till.
-                  </p>
 
                   <label className="mb-1 block text-lg font-medium text-slate-600">Store URL</label>
                   <input
@@ -1234,10 +1211,6 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
 
                   <div className="border-t border-slate-100 pt-4">
                     <h4 className="mb-1 text-xl font-semibold text-slate-700">Admin API Token</h4>
-                    <p className="mb-3 text-sm text-slate-500">
-                      Stored securely on this device. For your protection, once saved the token
-                      cannot be viewed again here — only whether one is currently configured.
-                    </p>
 
                     <p className="mb-3 text-base font-medium">
                       Status:{' '}
@@ -1282,7 +1255,7 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
                 <section className="rounded-xl border border-slate-200 bg-white p-4">
                   <h3 className="mb-1 text-2xl font-bold text-slate-800">Location</h3>
                   <p className="mb-4 text-sm text-slate-500">
-                    The Shopify location this till scopes inventory and sales to.
+                    The Shopify location this till's stock and sales use.
                   </p>
 
                   {!changingLocation ? (
@@ -1330,7 +1303,6 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
               {integrationSection === 'mpesa' && (
                 <section className="rounded-xl border border-slate-200 bg-white p-4">
                   <h3 className="mb-1 text-2xl font-bold text-slate-800">M-Pesa</h3>
-                  <p className="mb-4 text-base text-slate-500">How this till takes M-Pesa payments.</p>
                   <div>
                 <div className="grid grid-cols-2 gap-3">
                   <div>
@@ -1364,19 +1336,9 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
                       </option>
                     </select>
                     <p className="mt-1 text-base text-slate-500">
-                      Manual is the default: the cashier checks the confirmation message on the
-                      customer&rsquo;s own phone and records the code. Choose sending a request
-                      only once Daraja credentials are ready below.
+                      Manual is default; only switch to Daraja once credentials are set below.
                     </p>
                   </div>
-
-                  {mpesaConfirmationMethod === 'manual' && (
-                    <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-base text-slate-600">
-                      No Daraja credentials are needed for this mode. The cashier reads the code
-                      off the customer&rsquo;s phone and enters it at the till for every M-Pesa
-                      sale.
-                    </div>
-                  )}
 
                   {mpesaConfirmationMethod === 'daraja' && (
                     <>
@@ -1496,9 +1458,6 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
                         aria-label="Where payment messages arrive"
                         className="w-full h-12 rounded-lg border border-slate-300 px-3 text-lg focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-100"
                       />
-                      <p className="mt-1 text-base text-slate-500">
-                        The folder on this till where the message reader saves each payment message.
-                      </p>
                     </div>
                   )}
 
@@ -1523,11 +1482,8 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
                         Allow recording unverified M-Pesa payments
                       </label>
                       <p className="mt-1 text-base text-amber-900/80">
-                        Lets a cashier complete a sale by typing the customer&rsquo;s M-Pesa code when
-                        the confirmation has not reached this till. <strong>Nothing checks that the
-                        payment really happened.</strong> Each one needs a manager&rsquo;s PIN, is
-                        recorded as unverified, and stays on the Reconciliation tab until someone
-                        matches it to the M-Pesa statement. Takes effect after a restart.
+                        <strong>Nothing checks that the payment really happened.</strong> Needs a
+                        manager&rsquo;s PIN; stays unverified until matched to the statement.
                       </p>
                     </div>
                   )}
@@ -1549,10 +1505,7 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
                 )}
               </div>
 
-              <p className="mt-4 text-sm text-slate-500">
-                M-Pesa settings are read once when the till starts, so saving here applies them
-                after a restart.
-              </p>
+              <p className="mt-4 text-sm text-slate-500">Applies after a restart.</p>
 
               {mpesaMessage && (
                 <p className="mt-2 text-base text-slate-500">{mpesaMessage}</p>
@@ -1874,12 +1827,6 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
               {integrationSection === 'printer' && (
                 <section className="rounded-xl border border-slate-200 bg-white p-4">
                   <h3 className="mb-1 text-2xl font-bold text-slate-800">Printers</h3>
-                  <p className="mb-4 text-base text-slate-500">
-                    Register additional printers — a secondary kitchen or label printer
-                    alongside the main receipt printer. A store with no printers registered here
-                    keeps using the single receipt printer configured via environment variables,
-                    unchanged.
-                  </p>
 
                   {printerActionError && (
                     <p className="mb-3 rounded-lg bg-rose-50 px-3 py-2 text-base font-medium text-rose-700">

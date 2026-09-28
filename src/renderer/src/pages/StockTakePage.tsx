@@ -369,9 +369,7 @@ export default function StockTakePage() {
         <section className="rounded-xl border border-slate-200 bg-white p-4">
           <h3 className="text-xl font-semibold text-slate-900">Start a stock take</h3>
           <p className="mt-1 max-w-3xl text-base text-slate-500">
-            Reads the current Shopify figures for this till&rsquo;s location, then lets you count
-            items against them. Counting works without internet; pushing the correction does not.
-            The till keeps selling normally throughout.
+            Counting works offline; pushing the correction needs an internet connection.
           </p>
           <button
             type="button"
@@ -614,9 +612,8 @@ export default function StockTakePage() {
 
           {preview.requiresSecondApprover && (
             <p className="mt-2 rounded-lg bg-white px-3 py-2 text-base font-medium text-amber-900">
-              This is over the approval limit
-              {settings ? ` of ${formatCurrency(settings.varianceThresholdKes)}` : ''} — two
-              different managers must approve it.
+              Over the limit{settings ? ` of ${formatCurrency(settings.varianceThresholdKes)}` : ''},
+              needs two managers&rsquo; approval.
             </p>
           )}
 
@@ -633,9 +630,6 @@ export default function StockTakePage() {
             <div className="mt-3 rounded-lg border-2 border-rose-600 bg-white p-3">
               <p className="text-lg font-semibold text-rose-700">
                 This changes live stock in Shopify and cannot be undone.
-              </p>
-              <p className="mt-1 text-base text-slate-600">
-                Corrections after this are a new stock take.
               </p>
               <div className="mt-3 flex flex-wrap gap-2">
                 <button
@@ -672,8 +666,7 @@ export default function StockTakePage() {
       <section className="rounded-xl border border-slate-200 bg-white p-4">
         <h3 className="text-xl font-semibold text-slate-900">Approval policy</h3>
         <p className="mt-1 max-w-3xl text-base text-slate-500">
-          Counts moving more than the limit need a second manager. With the limit at zero every
-          count does — set a real figure once the store has agreed one.
+          Counts over the limit (zero by default) need two managers&rsquo; approval.
         </p>
         <div className="mt-3 flex flex-wrap items-end gap-3">
           <div>

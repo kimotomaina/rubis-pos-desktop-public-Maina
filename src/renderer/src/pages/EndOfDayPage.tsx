@@ -306,9 +306,7 @@ export default function EndOfDayPage() {
           <div>
             <h3 className="text-xl font-semibold text-slate-900">End of Day — {report.localDay}</h3>
             <p className="mt-1 max-w-2xl text-base text-slate-500">
-              Every manual M-Pesa entry is recorded on the cashier&rsquo;s own authority, with no PIN
-              at the till. This review — approve what matches the statement, leave out what
-              doesn&rsquo;t with a reason — is the only check they get.
+              Approve entries that match the M-Pesa statement; leave out the rest with a reason.
             </p>
           </div>
           <div className="flex gap-2">
@@ -453,10 +451,6 @@ export default function EndOfDayPage() {
       {report.carryOver.length > 0 && (
         <section className="overflow-x-auto rounded-xl border border-amber-300 bg-amber-50/40 p-4">
           <h4 className="mb-1 text-lg font-semibold text-amber-900">Carry-over — not yet approved</h4>
-          <p className="mb-3 text-base text-amber-800">
-            Manual entries from earlier days that no manager has approved yet. They stay here until
-            someone does.
-          </p>
           <table className="w-full text-left text-base">
             <thead className="text-slate-500">
               <tr>
