@@ -113,7 +113,11 @@ function stubApi(): void {
     getPrinters: vi.fn().mockResolvedValue(ok([])),
     // Phase 177: not wrapped in ok(...) — the preload's getAppVersion
     // resolves the bare version string, unlike every ServiceResult call above.
-    getAppVersion: vi.fn().mockResolvedValue('2.0.4')
+    getAppVersion: vi.fn().mockResolvedValue('2.0.4'),
+    // Phase 178:
+    installUpdate: vi.fn().mockResolvedValue(ok(undefined)),
+    onUpdateStatus: vi.fn(() => () => {}),
+    getLastUpdateResult: vi.fn().mockResolvedValue(ok(null))
   } as unknown as typeof window.api
 }
 

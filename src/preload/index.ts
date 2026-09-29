@@ -37,6 +37,7 @@ import type {
   ReportRangePreset
 } from '../main/services/reports.js'
 import type { UpdateStatus } from '../main/services/updater.js'
+import type { LastUpdateResult } from '../main/services/updateBackup.js'
 import type { FiscalConnectionTestResult } from '../main/services/integrations/fiscal-connection-test.js'
 import type {
   StkPushRequest,
@@ -586,6 +587,15 @@ const api = {
     ipcRenderer.on('updater:status', listener)
     return () => ipcRenderer.removeListener('updater:status', listener)
   },
+
+  /**
+   * Reads the result of the most recently completed over-the-air update,
+   * or `null` if none has landed since it was last resolved.
+   *
+   * @returns {Promise<ServiceResult<LastUpdateResult | null>>}
+   */
+  getLastUpdateResult: (): Promise<ServiceResult<LastUpdateResult | null>> =>
+    ipcRenderer.invoke('updater:last-result'),
 
   /**
    * Initiates an M-Pesa STK Push prompt to the customer's phone. This

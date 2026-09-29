@@ -21,6 +21,8 @@ import AdminScreen from '../src/renderer/src/components/AdminScreen.js'
 import { useAuthStore } from '../src/renderer/src/stores/authStore.js'
 import { useKeyboardStore } from '../src/renderer/src/stores/keyboardStore.js'
 import type { ShiftRow } from '../src/main/services/database.js'
+import type { UpdateStatus } from '../src/main/services/updater.js'
+import type { LastUpdateResult } from '../src/main/services/updateBackup.js'
 
 let container: HTMLDivElement
 let root: Root
@@ -41,13 +43,21 @@ function ok<T>(data?: T): { success: true; data: T | undefined } {
   return { success: true, data }
 }
 
+/**
+ * Phase 178: the listener `AdminScreen`'s own `onUpdateStatus`
+ * subscription registers, captured so a test can drive it directly —
+ * the same role `useKeyboardStore.getState().request` plays for the
+ * on-screen-keyboard tests above.
+ */
+let updateStatusListener: ((status: UpdateStatus) => void) | null = null
+
 /** Stubs every `window.api` method `AdminScreen` calls, across every tab this file visits. */
 function stubApi(
   mpesaOverrides: Record<string, unknown> = {},
   // docs/phase-174: defaults to a non-Windows platform so every existing
   // test here keeps seeing the screen exactly as before — the Windows
   // connection-type control only renders when platform is 'win32'.
-  options: { platform?: NodeJS.Platform } = {}
+  options: { platform?: NodeJS.Platform; lastUpdateResult?: LastUpdateResult | null } = {}
 ): void {
   window.api = {
     platform: options.platform ?? 'linux',
@@ -108,8 +118,25 @@ function stubApi(
     checkForUpdates: vi.fn().mockResolvedValue(ok(undefined)),
     // Phase 177: not wrapped in ok(...) — the preload's getAppVersion
     // resolves the bare version string, unlike every ServiceResult call above.
-    getAppVersion: vi.fn().mockResolvedValue('2.0.4')
+    getAppVersion: vi.fn().mockResolvedValue('2.0.4'),
+    // Phase 178:
+    installUpdate: vi.fn().mockResolvedValue(ok(undefined)),
+    onUpdateStatus: vi.fn((callback: (status: UpdateStatus) => void) => {
+      updateStatusListener = callback
+      return () => {
+        updateStatusListener = null
+      }
+    }),
+    getLastUpdateResult: vi.fn().mockResolvedValue(ok(options.lastUpdateResult ?? null))
   } as unknown as typeof window.api
+}
+
+/** Drives the listener `AdminScreen`'s own `onUpdateStatus` subscription registered (phase 178). */
+async function emitUpdateStatus(status: UpdateStatus): Promise<void> {
+  await act(async () => {
+    updateStatusListener?.(status)
+    await Promise.resolve()
+  })
 }
 
 /** Auto-approves every `requestManagerPin` gate with a fixed manager — AdminScreen only ever forwards it. */
@@ -155,6 +182,7 @@ beforeEach(() => {
   root = createRoot(container)
   useKeyboardStore.setState({ request: null })
   useAuthStore.setState({ currentStaff: { id: 1, name: 'Admin', role: 'admin' } })
+  updateStatusListener = null
 })
 
 afterEach(() => {
@@ -457,6 +485,113 @@ describe('AdminScreen > Overview > App & Updates', () => {
     await click('Overview')
 
     expect(container.textContent).toContain('Installed version: 2.0.4')
+  })
+
+  describe('Install update and restart — enabled only once a download is ready (phase 178)', () => {
+    it('is disabled with no update status at all', async () => {
+      stubApi()
+      await mount()
+      await click('Overview')
+
+      expect(button('Install update and restart').disabled).toBe(true)
+    })
+
+    it('stays disabled while downloading', async () => {
+      stubApi()
+      await mount()
+      await click('Overview')
+      await emitUpdateStatus({ kind: 'downloading', percent: 42 })
+
+      expect(button('Install update and restart').disabled).toBe(true)
+      expect(container.textContent).toContain('Downloading update… 42%')
+    })
+
+    it('becomes enabled once the status is downloaded, and shows the ready-to-install text', async () => {
+      stubApi()
+      await mount()
+      await click('Overview')
+      await emitUpdateStatus({ kind: 'downloaded', version: '2.0.6' })
+
+      expect(button('Install update and restart').disabled).toBe(false)
+      expect(container.textContent).toContain('Version 2.0.6 is ready to install')
+    })
+
+    it('shows "Up to date" when the status is not-available', async () => {
+      stubApi()
+      await mount()
+      await click('Overview')
+      await emitUpdateStatus({ kind: 'not-available' })
+
+      expect(container.textContent).toContain('Up to date')
+    })
+
+    it('clicking Install calls window.api.installUpdate, and shows the error text if it refuses', async () => {
+      stubApi()
+      window.api.installUpdate = vi.fn().mockResolvedValue({
+        success: false,
+        error: 'Backup failed: disk full'
+      })
+      await mount()
+      await click('Overview')
+      await emitUpdateStatus({ kind: 'downloaded', version: '2.0.6' })
+
+      await click('Install update and restart')
+      expect(window.api.installUpdate).toHaveBeenCalledOnce()
+      expect(container.textContent).toContain('Backup failed: disk full')
+    })
+  })
+
+  describe('lastUpdateResult line (phase 178)', () => {
+    it('renders the carried-over-data line for a successful update', async () => {
+      stubApi(undefined, {
+        lastUpdateResult: {
+          ok: true,
+          fromVersion: '2.0.5',
+          toVersion: '2.0.6',
+          before: { orders: 1234, unpushed: 1, unfiled: 2, mpesaPayments: 3 },
+          after: { orders: 1234, unpushed: 1, unfiled: 2, mpesaPayments: 3 },
+          backupPath: 'C:\\backups\\pre-update-2.0.5-to-2.0.6-x.sqlite',
+          checkedAt: '2026-09-29T12:00:00.000Z'
+        }
+      })
+      await mount()
+      await click('Overview')
+
+      expect(container.textContent).toContain('Updated 2.0.5 to 2.0.6')
+      expect(container.textContent).toContain('Sales carried over: 1,234 of 1,234')
+      expect(container.textContent).toContain('C:\\backups\\pre-update-2.0.5-to-2.0.6-x.sqlite')
+    })
+
+    it('renders in red for a failed update, with the differing numbers', async () => {
+      stubApi(undefined, {
+        lastUpdateResult: {
+          ok: false,
+          fromVersion: '2.0.5',
+          toVersion: '2.0.6',
+          before: { orders: 1234, unpushed: 1, unfiled: 2, mpesaPayments: 3 },
+          after: { orders: 1230, unpushed: 1, unfiled: 2, mpesaPayments: 3 },
+          backupPath: 'C:\\backups\\pre-update-2.0.5-to-2.0.6-x.sqlite',
+          checkedAt: '2026-09-29T12:00:00.000Z'
+        }
+      })
+      await mount()
+      await click('Overview')
+
+      const line = Array.from(container.querySelectorAll('p')).find((p) =>
+        p.textContent?.startsWith('Updated 2.0.5 to 2.0.6')
+      )
+      expect(line).toBeTruthy()
+      expect(line!.className).toContain('text-rose-600')
+      expect(container.textContent).toContain('Sales carried over: 1,230 of 1,234')
+    })
+
+    it('renders nothing when there is no last update result', async () => {
+      stubApi()
+      await mount()
+      await click('Overview')
+
+      expect(container.textContent).not.toContain('Sales carried over')
+    })
   })
 })
 

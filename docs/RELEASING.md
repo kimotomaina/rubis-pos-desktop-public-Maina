@@ -43,6 +43,8 @@ Tills see nothing until you publish the draft — a draft release is invisible t
 
 On the till: **Admin > Check for Updates**, wait for the toast, then **Restart & Install**. Afterwards, read **Installed version** in Admin to confirm it landed.
 
+Before installing, the till takes its own backup to `userData\backups` and records the current sales/fiscal counts, so Admin can show whether everything carried over once it restarts. That folder survives an update (the guard in `build/installer.nsh`) and is only ever removed by a real uninstall, along with everything else under `userData`.
+
 ## f. Rollback
 
 Unpublish or delete the bad release on GitHub, then re-publish the previous one.

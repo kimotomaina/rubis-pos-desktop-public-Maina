@@ -2,7 +2,7 @@ import { app, BrowserWindow, Menu, shell, ipcMain, net, powerMonitor, dialog, se
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 import { randomUUID } from 'node:crypto'
-import { appendFileSync, chmodSync, writeFileSync } from 'node:fs'
+import { appendFileSync, chmodSync, mkdirSync, readdirSync, unlinkSync, writeFileSync } from 'node:fs'
 import { config as loadEnvFile } from 'dotenv'
 import electronUpdater from 'electron-updater'
 
@@ -49,6 +49,8 @@ import {
 } from './lib/checkFit.js'
 import { initAutoUpdater, checkForUpdates } from './services/updater.js'
 import type { UpdateStatus } from './services/updater.js'
+import { installUpdate, runPostUpdateCheck } from './services/updateBackup.js'
+import type { LastUpdateResult } from './services/updateBackup.js'
 import { createFileErrorLogger, installGlobalErrorHandlers } from './services/errorHandler.js'
 import {
   fetchAllProducts,
@@ -480,6 +482,14 @@ app.whenReady().then(async () => {
   const dbPath = join(app.getPath('userData'), 'rubis-pos.db')
   const db = createDatabase({ dbPath })
   db.init()
+
+  /**
+   * Resolves whatever `pendingUpdateCheck` a prior `updater:install` left
+   * behind, before the window shows — so Admin > App & Updates can show
+   * the result on the very first open after an update (docs/phase-178).
+   * A no-op on every launch that didn't just install an update.
+   */
+  runPostUpdateCheck({ db, installedVersion: app.getVersion() })
 
   /**
    * docs/phase-169-1 commit A: `scripts/check-fit.mjs` sets
@@ -3378,10 +3388,20 @@ app.whenReady().then(async () => {
   ipcMain.handle('app:get-version', () => app.getVersion())
 
   /**
+   * The version `update-downloaded` most recently reported — `updater:install`
+   * needs it as the backup's `toVersion` (docs/phase-178), and nothing else
+   * in `electron-updater`'s API hands it back on demand.
+   */
+  let downloadedVersion: string | null = null
+
+  /**
    * Auto-update wiring: pushes each status change to every
    * open window as `updater:status`, driving the renderer's toast.
    */
-  initAutoUpdater(autoUpdater, (status: UpdateStatus) => broadcast('updater:status', status))
+  initAutoUpdater(autoUpdater, (status: UpdateStatus) => {
+    if (status.kind === 'downloaded') downloadedVersion = status.version
+    broadcast('updater:status', status)
+  })
 
   /**
    * IPC handler that triggers an update check, invoked from the Admin
@@ -3392,12 +3412,48 @@ app.whenReady().then(async () => {
     return { success: true }
   })
 
+  /** Where phase 178's pre-update backups live — survives an update (the phase-177 NSIS guard), wiped on a real uninstall like everything else under `userData`. */
+  const updateBackupsDir = join(app.getPath('userData'), 'backups')
+
   /**
-   * IPC handler that restarts the app to apply a downloaded update.
+   * IPC handler that backs up the database, records the before-counts,
+   * prunes old backups, then restarts the app to install the downloaded
+   * update (docs/phase-178). Thin glue only — `installUpdate` owns the
+   * ordering guarantee (backup and settings write fully resolved before
+   * `quitAndInstall()` ever runs) and is what's actually unit-tested.
    */
-  ipcMain.handle('updater:install', (): ServiceResult<void> => {
-    autoUpdater.quitAndInstall()
+  ipcMain.handle('updater:install', async (): Promise<ServiceResult<void>> => {
+    if (!downloadedVersion) {
+      return { success: false, error: 'No update ready to install.' }
+    }
+
+    const result = await installUpdate({
+      db,
+      backupsDir: updateBackupsDir,
+      fromVersion: app.getVersion(),
+      toVersion: downloadedVersion,
+      ensureDir: (dir) => mkdirSync(dir, { recursive: true }),
+      listBackups: (dir) => readdirSync(dir),
+      deleteBackup: (path) => unlinkSync(path),
+      quitAndInstall: () => autoUpdater.quitAndInstall()
+    })
+
+    if (!result.success) {
+      return { success: false, error: result.error }
+    }
+
     return { success: true }
+  })
+
+  /**
+   * IPC handler that reads the result of the most recently completed
+   * over-the-air update, or `null` if none has landed since it was last
+   * resolved (docs/phase-178) — drives Admin > App & Updates' carried-over
+   * data line.
+   */
+  ipcMain.handle('updater:last-result', (): ServiceResult<LastUpdateResult | null> => {
+    const raw = db.getSetting('lastUpdateResult')
+    return { success: true, data: raw ? (JSON.parse(raw) as LastUpdateResult) : null }
   })
 
   /**

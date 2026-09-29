@@ -46,6 +46,49 @@ import {
 } from '../lib/etimsConfig.js'
 import { MPESA_SMS_PARSER_READY } from '../lib/mpesaConfig.js'
 import type { FiscalConnectionTestResult } from '../../../main/services/integrations/fiscal-connection-test.js'
+import type { UpdateStatus } from '../../../main/services/updater.js'
+import type { LastUpdateResult } from '../../../main/services/updateBackup.js'
+
+/**
+ * Phase 178: the App & Updates panel's status-derived result text — null
+ * when the live status has nothing new to say (the button's own
+ * "Checking…" label already covers `checking`, and the progress line
+ * already covers `downloading`/`available`).
+ *
+ * @param {UpdateStatus | null} status
+ * @returns {string | null}
+ */
+function updateResultText(status: UpdateStatus | null): string | null {
+  if (!status) return null
+  switch (status.kind) {
+    case 'not-available':
+      return 'Up to date'
+    case 'downloaded':
+      return `Version ${status.version} is ready to install`
+    case 'error':
+      return status.message
+    default:
+      return null
+  }
+}
+
+/**
+ * Phase 178: Admin > App & Updates' one-line carried-over-data summary.
+ * "Sales carried over" reads the total-orders count — every order is a
+ * sale, and it's the widest of the four counts a regression could show
+ * up in.
+ *
+ * @param {LastUpdateResult} result
+ * @returns {string}
+ */
+function formatUpdateResultLine(result: LastUpdateResult): string {
+  const date = new Date(result.checkedAt).toLocaleDateString()
+  return (
+    `Updated ${result.fromVersion} to ${result.toVersion} on ${date}. ` +
+    `Sales carried over: ${result.after.orders.toLocaleString()} of ${result.before.orders.toLocaleString()}. ` +
+    `Backup: ${result.backupPath}.`
+  )
+}
 
 /**
  * Opens the shared on-screen keyboard (`PosCheckoutPanel`,
@@ -201,6 +244,10 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
   const [checkingForUpdates, setCheckingForUpdates] = useState(false)
   const [updateCheckMessage, setUpdateCheckMessage] = useState<string | null>(null)
   const [installedVersion, setInstalledVersion] = useState<string | null>(null)
+  const [updateStatus, setUpdateStatus] = useState<UpdateStatus | null>(null)
+  const [installingUpdate, setInstallingUpdate] = useState(false)
+  const [installError, setInstallError] = useState<string | null>(null)
+  const [lastUpdateResult, setLastUpdateResult] = useState<LastUpdateResult | null>(null)
 
   const [resettingConfig, setResettingConfig] = useState(false)
   const [resetConfigError, setResetConfigError] = useState<string | null>(null)
@@ -968,6 +1015,25 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
     void window.api.getAppVersion().then(setInstalledVersion)
   }, [])
 
+  /**
+   * Phase 178: a second subscriber to the same `updater:status` broadcast
+   * `UpdateToast.tsx` already listens to — that one is deliberately silent
+   * for `checking`/`not-available`/`error` so it never distracts a
+   * cashier mid-sale; this one is the Admin screen, where every status
+   * kind is exactly what's wanted. No shared store: two independent
+   * subscribers to one broadcast is fine.
+   */
+  useEffect(() => {
+    return window.api.onUpdateStatus(setUpdateStatus)
+  }, [])
+
+  /** Phase 178: the previous update's carried-over-data result, read once on mount. */
+  useEffect(() => {
+    void window.api.getLastUpdateResult().then((result) => {
+      if (result.success) setLastUpdateResult(result.data ?? null)
+    })
+  }, [])
+
   if (!currentStaff || currentStaff.role !== 'admin') {
     return (
       <EmptyState
@@ -1078,12 +1144,32 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
     setCheckingForUpdates(true)
     setUpdateCheckMessage(null)
     const result = await window.api.checkForUpdates()
-    setUpdateCheckMessage(
-      result.success
-        ? "Checking — you'll see a toast if an update is found."
-        : (result.error ?? 'Update check failed')
-    )
+    // A successful call only means the check was *triggered* — the real
+    // outcome (up to date / downloading / ready) arrives shortly after via
+    // the `updateStatus` subscription above, which drives the panel's
+    // result text from here on. Only a failure to even start the check
+    // needs its own message.
+    if (!result.success) {
+      setUpdateCheckMessage(result.error ?? 'Update check failed')
+    }
     setCheckingForUpdates(false)
+  }
+
+  /**
+   * Runs phase 178's pre-install backup and carried-over-data record,
+   * then restarts to apply the update (`updater:install` in the main
+   * process). A failed backup refuses the install and shows the error
+   * text here instead — the app never quits.
+   */
+  const handleInstallUpdate = async () => {
+    setInstallingUpdate(true)
+    setInstallError(null)
+    const result = await window.api.installUpdate()
+    if (!result.success) {
+      setInstallError(result.error ?? 'Install failed')
+      setInstallingUpdate(false)
+    }
+    // On success the app quits immediately — no state left to reset.
   }
 
   /**
@@ -2343,19 +2429,55 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
       {/* App & Updates */}
       <section className="rounded-xl border border-slate-200 bg-white p-4">
         <h3 className="mb-3 text-base font-semibold text-slate-800">App &amp; Updates</h3>
+
+        {/* Line 1: installed version */}
         {installedVersion && (
           <p className="mb-3 text-base text-slate-500">Installed version: {installedVersion}</p>
         )}
+
+        {/* Line 2: Check for Updates button + result text */}
+        <div className="flex flex-wrap items-center gap-3">
+          <button
+            type="button"
+            disabled={checkingForUpdates}
+            onClick={() => void handleCheckForUpdates()}
+            className="rounded-lg border border-slate-300 px-4 py-2 text-base font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {checkingForUpdates ? 'Checking…' : 'Check for Updates'}
+          </button>
+          {(updateCheckMessage ?? updateResultText(updateStatus)) && (
+            <p className="text-base text-slate-500">
+              {updateCheckMessage ?? updateResultText(updateStatus)}
+            </p>
+          )}
+        </div>
+
+        {/* Line 3: download progress */}
+        {updateStatus?.kind === 'downloading' && (
+          <p className="mt-2 text-base text-slate-500">
+            Downloading update… {Math.round(updateStatus.percent)}%
+          </p>
+        )}
+
+        {/* Line 4: install, enabled only once a download has finished */}
         <button
           type="button"
-          disabled={checkingForUpdates}
-          onClick={() => void handleCheckForUpdates()}
-          className="rounded-lg border border-slate-300 px-4 py-2 text-base font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+          disabled={updateStatus?.kind !== 'downloaded' || installingUpdate}
+          onClick={() => void handleInstallUpdate()}
+          className="mt-3 rounded-lg bg-rose-600 px-4 py-2 text-base font-semibold text-white hover:bg-rose-700 disabled:cursor-not-allowed disabled:opacity-50"
         >
-          {checkingForUpdates ? 'Checking…' : 'Check for Updates'}
+          {installingUpdate ? 'Restarting…' : 'Install update and restart'}
         </button>
-        {updateCheckMessage && (
-          <p className="mt-2 text-base text-slate-500">{updateCheckMessage}</p>
+        {installError && <p className="mt-2 text-base font-medium text-rose-600">{installError}</p>}
+
+        {lastUpdateResult && (
+          <p
+            className={`mt-3 text-base ${
+              lastUpdateResult.ok ? 'text-slate-500' : 'font-medium text-rose-600'
+            }`}
+          >
+            {formatUpdateResultLine(lastUpdateResult)}
+          </p>
         )}
       </section>
         </>

@@ -2086,6 +2086,29 @@ export class RubisDatabase {
   }
 
   /**
+   * Removes a key from the settings table — used by phase 178's
+   * post-update check to clear a resolved `pendingUpdateCheck` record.
+   *
+   * @param {string} key
+   */
+  deleteSetting(key: string): void {
+    this.conn.prepare('DELETE FROM settings WHERE key = ?').run(key)
+  }
+
+  /**
+   * Takes an online backup of the live database to `destPath`, using
+   * SQLite's own backup API (safe under WAL — unlike a plain file copy,
+   * this reads committed pages that may still be sitting only in the
+   * `-wal` file) — phase 178's pre-update snapshot.
+   *
+   * @param {string} destPath
+   * @returns {Promise<void>}
+   */
+  async backup(destPath: string): Promise<void> {
+    await this.conn.backup(destPath)
+  }
+
+  /**
    * Returns local orders sorted by creation date (newest first).
    *
    * @param {number} [limit=50]
@@ -2148,6 +2171,47 @@ export class RubisDatabase {
         `SELECT COUNT(*) as count FROM orders WHERE fiscal_status IN ('waiting', 'needs_fixing') AND status != 'voided'`
       )
       .get() as { count: number }
+    return row.count
+  }
+
+  /**
+   * Every order ever recorded — the widest of phase 178's four
+   * carried-over-data counts.
+   *
+   * @returns {number}
+   */
+  getTotalOrderCount(): number {
+    const row = this.conn.prepare('SELECT COUNT(*) as count FROM orders').get() as {
+      count: number
+    }
+    return row.count
+  }
+
+  /**
+   * Orders not yet confirmed synced to Shopify — the same status set
+   * {@link getReconciliationCandidates} already treats as "not yet
+   * pushed" (`pending_sync`/`failed`); `voided` is excluded since a
+   * voided sale is never meant to reach Shopify (docs/phase-178).
+   *
+   * @returns {number}
+   */
+  getUnpushedOrderCount(): number {
+    const row = this.conn
+      .prepare(`SELECT COUNT(*) as count FROM orders WHERE status IN ('pending_sync', 'failed')`)
+      .get() as { count: number }
+    return row.count
+  }
+
+  /**
+   * Every `mpesa_payments` row ever written — phase 178's fourth
+   * carried-over-data count.
+   *
+   * @returns {number}
+   */
+  getMpesaPaymentCount(): number {
+    const row = this.conn.prepare('SELECT COUNT(*) as count FROM mpesa_payments').get() as {
+      count: number
+    }
     return row.count
   }
 

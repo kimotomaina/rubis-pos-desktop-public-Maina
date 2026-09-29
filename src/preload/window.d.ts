@@ -47,6 +47,7 @@ import type {
   ReportRangePreset
 } from '../main/services/reports.js'
 import type { UpdateStatus } from '../main/services/updater.js'
+import type { LastUpdateResult } from '../main/services/updateBackup.js'
 import type {
   StkPushRequest,
   StkPushResult,
@@ -223,6 +224,8 @@ export interface PosApi {
   installUpdate: () => Promise<ServiceResult<void>>
   /** Subscribes to auto-update status changes; returns an unsubscribe fn. */
   onUpdateStatus: (callback: (status: UpdateStatus) => void) => () => void
+  /** The result of the most recently completed OTA update, or null. */
+  getLastUpdateResult: () => Promise<ServiceResult<LastUpdateResult | null>>
   /** Initiates an M-Pesa STK Push prompt to the customer's phone. */
   initiateMpesaStkPush: (request: StkPushRequest) => Promise<ServiceResult<StkPushResult>>
   /**
