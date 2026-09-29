@@ -403,11 +403,17 @@ export function mapFiscalServerError(code: string): FiscalDeviceErrorInfo | unde
 /**
  * Translates a device-level **command/business** error — the `STE2` byte
  * (protocol PDF §1.2.1's "Command errors" column), decimal-converted from
- * the hex the wire sends — into a friendly message. Every one of these is
- * a rejection of the data actually sent (wrong PIN, unknown item, invalid
- * HS code, an amount that doesn't fit the original invoice, …): resending
- * the identical request will fail again the same way, so all are
- * `retryable: false` — cashier-visible, not queued. `STE1 = 52` ("Opened
+ * the hex the wire sends — into a friendly message. Almost every one of
+ * these is a rejection that resending the identical request would meet
+ * again (wrong PIN, unknown item, invalid HS code, an amount that doesn't
+ * fit the original invoice, …), so they are `retryable: false` —
+ * cashier-visible, not queued. The one exception is `'50'` (hex `0x32`,
+ * "Illegal command"), which the PDF defines as refused "depending on the
+ * current status of the CU": state, not data, so it is queued and retried
+ * (docs/phase-184 §2). Only ever called with a Code 40 `STE2` —
+ * {@link checkDeviceResponse} never runs a server `<Res Code>` through
+ * this table, since the SDK reuses 50–53, 62 and 63 as client/server
+ * codes (`Tremol.ServerErrorType`). `STE1 = 52` ("Opened
  * fiscal receipt", the *other* column, same hex byte `0x34`) is handled
  * separately by `checkDeviceResponse` as {@link CODE_OPENED_FISCAL_RECEIPT},
  * not through this table — see that constant's doc for why the two must
@@ -420,8 +426,22 @@ export function mapFiscalServerError(code: string): FiscalDeviceErrorInfo | unde
  */
 export function mapFiscalDeviceError(code: string, message: string): FiscalDeviceErrorInfo {
   switch (code) {
+    case '49':
+      return { message: 'Invalid command', retryable: false }
+    case '50':
+      return { message: 'Illegal command', retryable: true }
+    case '51':
+      return { message: 'Z daily report is not zero', retryable: false }
     case '52':
       return { message: 'Syntax error', retryable: false }
+    case '53':
+      return { message: 'Input registers overflow', retryable: false }
+    case '54':
+      return { message: 'Zero input registers', retryable: false }
+    case '55':
+      return { message: 'Unavailable transaction for correction', retryable: false }
+    case '56':
+      return { message: 'Insufficient amount on hand', retryable: false }
     case '57':
       return { message: 'Conflict in tax group', retryable: false }
     case '58':
@@ -497,8 +517,12 @@ type DeviceResult = ServiceResult<Record<string, string>> & {
  *      `STE2`'s own decimal `59` ("Wrong client PIN"). Otherwise `STE2`
  *      is looked up in {@link mapFiscalDeviceError}'s command-errors table;
  *   3. a defensive fallback for any other non-zero code (no known server
- *      case and not `40`) — treated as a business code directly, same as
- *      before this parser could read `Code 40`'s STE bytes.
+ *      case and not `40`) — reported with the server's own `<Message>`,
+ *      non-retryable, and never looked up in the `STE2` table: the SDK
+ *      reuses 50–53, 62 and 63 as client/server codes
+ *      (`Tremol.ServerErrorType`, `fp_core.js:547-552`), so reading them as
+ *      `STE2` would turn our own malformed request into a retryable
+ *      "Illegal command" (docs/phase-184 §2.3a).
  *
  * @param {ServiceResult<Record<string, string>>} result
  * @returns {DeviceResult}
@@ -568,12 +592,11 @@ function checkDeviceResponse(result: ServiceResult<Record<string, string>>): Dev
     return { success: false, error: `Fiscal device error (Code 40): ${rawMessage}`, code, retryable: false }
   }
 
-  const mapped = mapFiscalDeviceError(code, rawMessage)
   return {
     success: false,
-    error: `Fiscal device error (Code ${code}): ${mapped.message}`,
+    error: `Fiscal device error (Code ${code}): ${rawMessage}`,
     code,
-    retryable: mapped.retryable,
+    retryable: false,
     // Server codes with no entry in `mapFiscalServerError` (32, 34) land
     // here; tagging them keeps the connection test reporting them as the
     // device not answering, which is what they mean.
@@ -589,14 +612,15 @@ function checkDeviceResponse(result: ServiceResult<Record<string, string>>): Dev
  *
  *   - `retryable` (already correctly computed by `checkDeviceResponse` —
  *     the transient server/technical codes 19/30/31/53, a still-
- *     unresolved `STE1=52` "opened receipt" case, and `STE1=59` "missing
- *     daily closure", docs/phase-162) → `'technical'`. This branch runs
+ *     unresolved `STE1=52` "opened receipt" case, `STE1=59` "missing
+ *     daily closure", docs/phase-162, and `STE2=0x32` "Illegal command",
+ *     docs/phase-184) → `'technical'`. This branch runs
  *     before the `dataIssue`/wrong-PIN tag below, so none of these can
  *     ever be mistagged as a data problem;
  *   - otherwise `code === '63'` (`ZFPLabServer rejected the request
  *     format` — a malformed request is this build's own bug, not the
  *     sale's data) → `'system'`;
- *   - otherwise (every `phase-69` STE2 business-table code) → `'data'`.
+ *   - otherwise (every other STE2 command-errors code) → `'data'`.
  *
  * `fallbackKind` overrides the final branch for call sites whose failure
  * was never routed through `checkDeviceResponse`'s STE tables at all
@@ -1464,7 +1488,10 @@ export class RealFiscalizationProvider implements FiscalizationProvider {
    * Sends one `<Command Name="…">` and interprets its response. A
    * `Code 53` ("client settings missing" — typically the server was
    * restarted, dropping our session) re-runs `settings()` once and
-   * retries the command a single time.
+   * retries the command a single time. Only a server-sourced 53 counts:
+   * `STE2 = 0x35` ("Input registers overflow") is also decimal 53, and
+   * repeating a command the device refused must not happen
+   * (docs/phase-184 §2.3b).
    */
   private async sendCommand(
     path: string,
@@ -1472,7 +1499,7 @@ export class RealFiscalizationProvider implements FiscalizationProvider {
     args: object
   ): Promise<DeviceResult> {
     const first = checkDeviceResponse(await postXml(this.http, path, commandName, args, this.debugLogging))
-    if (first.success || first.code !== RES_CODE_SETTINGS_MISSING) {
+    if (first.success || first.code !== RES_CODE_SETTINGS_MISSING || !first.serverFailure) {
       return first
     }
 

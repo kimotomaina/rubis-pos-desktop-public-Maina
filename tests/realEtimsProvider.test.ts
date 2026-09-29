@@ -204,7 +204,13 @@ describe('mapFiscalServerError', () => {
 
 describe('mapFiscalDeviceError (phase-69: full STE2 command-errors table, protocol PDF §1.2.1)', () => {
   it.each([
+    ['49', 'Invalid command'],
+    ['51', 'Z daily report is not zero'],
     ['52', 'Syntax error'],
+    ['53', 'Input registers overflow'],
+    ['54', 'Zero input registers'],
+    ['55', 'Unavailable transaction for correction'],
+    ['56', 'Insufficient amount on hand'],
     ['57', 'Conflict in tax group'],
     ['58', 'Invoice number not found'],
     ['59', 'Wrong client PIN'],
@@ -213,10 +219,16 @@ describe('mapFiscalDeviceError (phase-69: full STE2 command-errors table, protoc
     ['62', 'Item amount too large'],
     ['63', 'Amount exceeds original invoice'],
     ['64', 'HS code is not valid']
-  ])('maps STE2 decimal %s to the PDF-correct message, always non-retryable', (code, expectedMessage) => {
+  ])('maps STE2 decimal %s to the PDF-correct message, non-retryable', (code, expectedMessage) => {
     const result = mapFiscalDeviceError(code, 'raw device message')
     expect(result.message).toBe(expectedMessage)
     expect(result.retryable).toBe(false)
+  })
+
+  it('maps STE2 decimal 50 (0x32, "Illegal command") as retryable — refused on the device state, not the data (docs/phase-184)', () => {
+    const result = mapFiscalDeviceError('50', 'raw device message')
+    expect(result.message).toBe('Illegal command')
+    expect(result.retryable).toBe(true)
   })
 
   it('falls back to the raw message for an unrecognized code', () => {
@@ -2358,5 +2370,89 @@ describe('device session lock (docs/phase-184, commit 1)', () => {
 
     expect(events.indexOf('clientremove')).toBe(events.length - 1)
     expect(events.indexOf('clientremove')).toBeGreaterThan(events.indexOf('ReadDateTime'))
+  })
+})
+
+describe('STE2 codes and their guards (docs/phase-184, commit 2)', () => {
+  /**
+   * A post that answers `failing` with `reply` and succeeds otherwise.
+   *
+   * @param {string} failing command name to fail
+   * @param {string} reply response body for that command
+   * @returns {ReturnType<typeof vi.fn>}
+   */
+  function makePostFailing(failing: string, reply: string): ReturnType<typeof vi.fn> {
+    const success = makeSuccessfulPostImpl()
+    return vi.fn().mockImplementation((path: string, body: string) =>
+      commandNameOf([path, body]) === failing ? Promise.resolve({ data: reply }) : success(path, body)
+    )
+  }
+
+  it('queues a SellPLU refused with STE2 0x32 ("Illegal command") for retry, after cancelling the receipt', async () => {
+    const post = makePostFailing('SellPLUfromExtDB', xmlCommandError(0x32, 'FP: OK; Command: Illegal.'))
+    const provider = new RealFiscalizationProvider({ ...TEST_DEVICE, httpClient: makeMockClient(post) })
+
+    const result = await provider.submitInvoice(SAMPLE_REQUEST)
+
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.kind).toBe('technical')
+    expect(result.retryable).toBe(true)
+    expect(result.reason).toMatch(/Illegal command/)
+    expect(commandSequence(post)).toContain('CancelReceipt')
+    expect(commandSequence(post)).not.toContain('CloseReceipt')
+    expect(routeFiscalOutcome(result)).toEqual({ status: 'waiting', enqueue: true })
+  })
+
+  it('on a RETRY whose OpenInvoice is refused with STE2 0x32, asks ReadCUinvoiceNumber first and never reports the sale as filed', async () => {
+    const post = vi.fn().mockImplementation((path: string, body: string) => {
+      const command = commandNameOf([path, body])
+      if (command === 'OpenInvoiceWithFreeCustomerData') {
+        return Promise.resolve({ data: xmlCommandError(0x32, 'Illegal command') })
+      }
+      if (command === 'ReadCUinvoiceNumber') {
+        return Promise.resolve({ data: '<Res Code="0"/>' })
+      }
+      return makeSuccessfulPostImpl()(path, body)
+    })
+    const provider = new RealFiscalizationProvider({ ...TEST_DEVICE, httpClient: makeMockClient(post) })
+
+    const result = await provider.submitInvoice({ ...SAMPLE_REQUEST, isRetry: true })
+
+    expect(result.ok).toBe(false)
+    expect(!result.ok && result.retryable).toBe(true)
+    expect(commandSequence(post)).toContain('ReadCUinvoiceNumber')
+    expect(commandSequence(post)).not.toContain('SellPLUfromExtDB')
+    expect(commandSequence(post)).not.toContain('CloseReceipt')
+  })
+
+  it('never reads a server Code 50 (ClientArgDefMissing) as a retryable "Illegal command"', async () => {
+    const post = makePostFailing(
+      'OpenInvoiceWithFreeCustomerData',
+      '<Res Code="50"><Err Source="Server" Type="ClientArgDefMissing"><Message>Argument definition missing</Message></Err></Res>'
+    )
+    const provider = new RealFiscalizationProvider({ ...TEST_DEVICE, httpClient: makeMockClient(post) })
+
+    const result = await provider.submitInvoice(SAMPLE_REQUEST)
+
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.retryable).toBe(false)
+    expect(result.reason).not.toMatch(/Illegal command/)
+    expect(result.reason).toMatch(/Argument definition missing/)
+  })
+
+  it('does not treat STE2 0x35 (decimal 53, "Input registers overflow") as a dropped session — no settings() resend, no repeated command', async () => {
+    const post = makePostFailing('SellPLUfromExtDB', xmlCommandError(0x35, 'Input registers overflow'))
+    const get = vi.fn().mockResolvedValue({ data: '<Res Code="0"/>' })
+    const provider = new RealFiscalizationProvider({ ...TEST_DEVICE, httpClient: makeMockClient(post, get) })
+
+    const result = await provider.submitInvoice(SAMPLE_REQUEST)
+
+    expect(result.ok).toBe(false)
+    expect(!result.ok && result.reason).toMatch(/Input registers overflow/)
+    expect(!result.ok && result.retryable).toBe(false)
+    expect(get).toHaveBeenCalledTimes(1)
+    expect(commandSequence(post).filter((c) => c === 'SellPLUfromExtDB')).toHaveLength(1)
   })
 })
