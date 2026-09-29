@@ -32,10 +32,13 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
+# No `using` lines here: -MemberDefinition's snippet is compiled inside a
+# generated class body, where a using directive is not valid syntax
+# (docs/phase-179 — this broke Add-Type on a real till). Add-Type already
+# references System, and System.Runtime.InteropServices when
+# -MemberDefinition is used, so both are implicit.
+# https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.utility/add-type?view=powershell-5.1
 Add-Type -Namespace RubisPos -Name RawPrinter -MemberDefinition @'
-using System;
-using System.Runtime.InteropServices;
-
 [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Auto)]
 public struct DOCINFOA
 {

@@ -12,6 +12,8 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { tmpdir } from 'node:os'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import {
   sendRawToWindowsPrinter,
   resolvePrintRawScriptPath,
@@ -117,6 +119,26 @@ describe('sendRawToWindowsPrinter', () => {
 
   it('resolves the bundled script path relative to the source tree in dev', () => {
     expect(resolvePrintRawScriptPath()).toMatch(/resources[\\/]print-raw\.ps1$/)
+  })
+})
+
+/**
+ * String check only — the mocks above never run the actual PowerShell
+ * body (this file's own header comment), so it can't catch a compile
+ * error inside the here-string. Phase 179: Add-Type's -MemberDefinition
+ * snippet compiles inside a generated class body, where a `using`
+ * directive is invalid syntax and failed on a real till.
+ */
+describe('print-raw.ps1: no `using` line in the Add-Type here-string (docs/phase-179)', () => {
+  it('the -MemberDefinition snippet contains no line starting with "using "', () => {
+    const script = readFileSync(join(process.cwd(), 'resources', 'print-raw.ps1'), 'utf8')
+    const start = script.indexOf("@'")
+    const end = script.indexOf("'@", start)
+    expect(start).toBeGreaterThan(-1)
+    expect(end).toBeGreaterThan(start)
+
+    const hereString = script.slice(start, end)
+    expect(hereString).not.toMatch(/^using /m)
   })
 })
 
