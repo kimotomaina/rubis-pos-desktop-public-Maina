@@ -29,6 +29,7 @@ import type {
   MpesaPaymentMode,
   MpesaVerificationStatus,
   OrderRow,
+  QueuedOrder,
   QueueOrderInput,
   RecordMpesaPaymentInput,
   ShiftRow,
@@ -37,8 +38,8 @@ import type {
 import type {
   FiscalFailureKind,
   FiscalInvoiceRequest,
-  FiscalSubmitOutcome,
-  FiscalVatGroupAmounts
+  FiscalInvoiceResult,
+  FiscalSubmitOutcome
 } from './integrations/etims.js'
 import type { ManualCodeVerification, ManualCodeVerificationResult } from './integrations/mpesa.js'
 import type { ServiceResult } from './shopify-types.js'
@@ -62,38 +63,24 @@ export interface CheckoutDb {
     input: QueueOrderInput,
     claim: { transactionCode: string; staffId: number },
     payment?: RecordMpesaPaymentInput
-  ): { localId: number; queueId: number } | null
+  ): QueuedOrder | null
   /** Queues the order and records the confirmed payment that settled it, in one transaction. */
-  queueOrderRecordingMpesaPayment(
-    input: QueueOrderInput,
-    payment: RecordMpesaPaymentInput
-  ): { localId: number; queueId: number }
+  queueOrderRecordingMpesaPayment(input: QueueOrderInput, payment: RecordMpesaPaymentInput): QueuedOrder
   /** Queues the order and records a manually entered, unverified payment, in one transaction. */
-  queueOrderRecordingManualPayment(
-    input: QueueOrderInput,
-    payment: RecordMpesaPaymentInput
-  ): { localId: number; queueId: number } | null
-  queueOrder(input: QueueOrderInput): { localId: number; queueId: number }
+  queueOrderRecordingManualPayment(input: QueueOrderInput, payment: RecordMpesaPaymentInput): QueuedOrder | null
+  queueOrder(input: QueueOrderInput): QueuedOrder
   getOrder(localId: number): OrderRow | undefined
-  setOrderFiscalInfo(
+  /** Records the first filing and deletes the sale's fiscal row, in one transaction. */
+  settleCheckoutFiscalSuccess(localId: number, fiscalQueueId: number, invoice: FiscalInvoiceResult): void
+  /** Records a failed first filing; `needs_fixing` also deletes the fiscal row, in the same transaction. */
+  settleCheckoutFiscalFailure(
     localId: number,
-    invoiceNumber: string,
-    qrCode: string,
-    vatGroups?: FiscalVatGroupAmounts,
-    fiscalizedAt?: string,
-    fiscalizedAtSource?: 'device' | 'local-fallback',
-    cuSerial?: string
-  ): void
-  setOrderFiscalFailure(
-    localId: number,
+    fiscalQueueId: number,
     status: Exclude<FiscalStatus, 'fiscalized'>,
     reason: string,
     kind: FiscalFailureKind,
     dataIssue?: 'wrong-pin' | null
   ): void
-  queueFiscalInvoice(localId: number, request: FiscalInvoiceRequest): { queueId: number }
-  /** Stores the request just attempted, so a later manual resend (phase-76) has it to resubmit. */
-  setOrderFiscalRequest(localId: number, request: FiscalInvoiceRequest): void
 }
 
 /**
@@ -191,6 +178,8 @@ export interface CheckoutFiscalizationProvider {
 /** Structural slice of {@link FiscalEngine} `runCheckout` depends on. */
 export interface CheckoutFiscalEngine {
   onCheckoutMade(): void
+  claim(localId: number): void
+  release(localId: number): void
 }
 
 /** Structural slice of {@link NetworkMonitor} `runCheckout` depends on. */
@@ -539,7 +528,10 @@ export async function runCheckout(
       referenceNumber: cardReference ?? input.referenceNumber,
       shiftId: openShift?.id,
       customerPin: input.customerPin,
-      cartDiscount: input.cartDiscount
+      cartDiscount: input.cartDiscount,
+      // Rule 3 (docs/phase-185.md §4.1): the sale is `waiting`, queued and
+      // carries this exact request from the moment it exists.
+      buildFiscalRequest: (id: number) => buildFiscalRequest(input, clientOrderUuid, id, taxRate)
     }
 
     /**
@@ -572,23 +564,25 @@ export async function runCheckout(
      * indistinguishable from a confirmed one, and a confirmed sale with
      * no payment row is the untraceable state this table exists to end.
      */
+    let queued: QueuedOrder | null
     if (mpesaSettlement?.mode === 'manual') {
-      const queued = db.queueOrderRecordingManualPayment(orderInput, mpesaSettlement)
+      queued = db.queueOrderRecordingManualPayment(orderInput, mpesaSettlement)
       if (!queued) {
         return { success: false, error: MPESA_MANUAL_CODE_ALREADY_USED_MESSAGE }
       }
-      localId = queued.localId
     } else if (smsClaim) {
-      const queued = db.queueOrderClaimingSmsPayment(orderInput, smsClaim, mpesaSettlement ?? undefined)
+      queued = db.queueOrderClaimingSmsPayment(orderInput, smsClaim, mpesaSettlement ?? undefined)
       if (!queued) {
         return { success: false, error: MPESA_PAYMENT_ALREADY_USED_MESSAGE }
       }
-      localId = queued.localId
     } else if (mpesaSettlement) {
-      localId = db.queueOrderRecordingMpesaPayment(orderInput, mpesaSettlement).localId
+      queued = db.queueOrderRecordingMpesaPayment(orderInput, mpesaSettlement)
     } else {
-      localId = db.queueOrder(orderInput).localId
+      queued = db.queueOrder(orderInput)
     }
+    localId = queued.localId
+    // Always set: `orderInput` carries `buildFiscalRequest`.
+    const fiscalQueueId = queued.fiscalQueueId as number
 
     if (monitor.isOnline()) {
       void engineTick()
@@ -607,35 +601,27 @@ export async function runCheckout(
 
     /**
      * Fiscalization never blocks the sale — the cash/stock side of
-     * the transaction is already committed. An immediate failure
-     * (device unreachable, rejected request, or an unexpected
-     * throw) queues the same request in `sync_queue` for
-     * `fiscalEngine` to retry in the background instead of losing
-     * it, mirroring how a failed Shopify push falls back to
-     * `sync_queue` above rather than failing checkout.
+     * the transaction is already committed. The insert above already
+     * left the sale `waiting` with a due `sync_queue` row carrying this
+     * exact request, so every outcome below only settles that row:
+     * success deletes it, a retryable failure (or an unexpected throw)
+     * leaves it for `fiscalEngine`, and a non-retryable one deletes it.
+     *
+     * The claim is taken before the first `await`, so nothing else can
+     * run between the insert and it; until released, the engine and a
+     * manual resend leave this sale alone (Rule 1, docs/phase-185.md §5).
      */
     let fiscal: CheckoutReceipt['fiscal']
     let fiscalDataIssue: CheckoutReceipt['fiscalDataIssue'] = null
-    let fiscalRequest: FiscalInvoiceRequest | undefined
+    let retryInBackground = false
+    fiscalEngine.claim(localId)
     try {
-      fiscalRequest = buildFiscalRequest(input, clientOrderUuid, localId, taxRate)
-      // Stored regardless of outcome — a manual resend (phase-76) needs
-      // the sale's original request even if this attempt fails.
-      db.setOrderFiscalRequest(localId, fiscalRequest)
-
+      const fiscalRequest = buildFiscalRequest(input, clientOrderUuid, localId, taxRate)
       const invoice = await fiscalizationProvider.submitInvoice(fiscalRequest)
 
       if (invoice.ok) {
         fiscal = { invoiceNumber: invoice.data.invoiceNumber, qrCode: invoice.data.qrCode }
-        db.setOrderFiscalInfo(
-          localId,
-          invoice.data.invoiceNumber,
-          invoice.data.qrCode,
-          invoice.data.vatGroups,
-          invoice.data.fiscalizedAt,
-          invoice.data.fiscalizedAtSource,
-          invoice.data.cuSerialNumber
-        )
+        db.settleCheckoutFiscalSuccess(localId, fiscalQueueId, invoice.data)
       } else {
         const { status, enqueue } = routeFiscalOutcome(invoice)
         if (enqueue) {
@@ -651,12 +637,16 @@ export async function runCheckout(
         }
         // Persisted (phase-88/Step 4) so the back-office list can
         // recognize a fixable rejection later, not just at this attempt.
-        db.setOrderFiscalFailure(localId, status, invoice.reason, invoice.kind, invoice.dataIssue ?? null)
+        db.settleCheckoutFiscalFailure(
+          localId,
+          fiscalQueueId,
+          status,
+          invoice.reason,
+          invoice.kind,
+          invoice.dataIssue ?? null
+        )
         fiscalDataIssue = invoice.dataIssue ?? null
-        if (enqueue) {
-          db.queueFiscalInvoice(localId, fiscalRequest)
-          fiscalEngine.onCheckoutMade()
-        }
+        retryInBackground = enqueue
       }
     } catch (fiscalError) {
       logger.error(`[rubis-pos] Sale ${localId}: fiscalization threw an unhandled exception:`, fiscalError)
@@ -666,22 +656,23 @@ export async function runCheckout(
       // failure — keep retrying, don't flag it as a data problem the
       // sale can't fix. The existing ABANDONED-after-10-attempts
       // backoff (`recordFiscalQueueFailure`) is the backstop against
-      // an endless loop if it's genuinely unrecoverable.
+      // an endless loop if it's genuinely unrecoverable. If even this
+      // write fails, the sale is still `waiting` and queued from the
+      // insert, so nothing is lost.
       const { reason, kind } = classifyThrownFiscalError(fiscalError)
       try {
-        const requestToQueue = fiscalRequest ?? buildFiscalRequest(input, clientOrderUuid, localId, taxRate)
-        // Only reached here (rather than already having run above) when
-        // the throw happened while building the request itself, before
-        // it could be stored.
-        if (!fiscalRequest) {
-          db.setOrderFiscalRequest(localId, requestToQueue)
-        }
-        db.setOrderFiscalFailure(localId, 'waiting', reason, kind)
-        db.queueFiscalInvoice(localId, requestToQueue)
-        fiscalEngine.onCheckoutMade()
+        db.settleCheckoutFiscalFailure(localId, fiscalQueueId, 'waiting', reason, kind)
       } catch (queueError) {
-        logger.error(`[rubis-pos] Sale ${localId}: fallback fiscal queue write also failed:`, queueError)
+        logger.error(`[rubis-pos] Sale ${localId}: fallback fiscal failure write also failed:`, queueError)
       }
+      retryInBackground = true
+    } finally {
+      fiscalEngine.release(localId)
+    }
+    // After the release: the tick this starts must not find the sale
+    // still claimed.
+    if (retryInBackground) {
+      fiscalEngine.onCheckoutMade()
     }
 
     // Read back rather than hand-tracked through the branches above —

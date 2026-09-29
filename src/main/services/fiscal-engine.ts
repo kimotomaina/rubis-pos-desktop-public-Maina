@@ -101,6 +101,19 @@ export interface FiscalEngine {
   notifyOnline(): void
   /** Called right after a checkout queues a failed fiscalization (trigger a). */
   onCheckoutMade(): void
+  /**
+   * Marks a sale as being filed by checkout, so neither the queue nor a
+   * manual resend submits it at the same time (docs/phase-185.md §5).
+   * Checkout claims synchronously right after the insert that queued the
+   * sale's fiscal row, and releases once the outcome is stored. In memory
+   * only: a crash empties it, which is exactly when the queue should take
+   * the sale over.
+   */
+  claim(localId: number): void
+  /** Ends a {@link claim}. */
+  release(localId: number): void
+  /** Whether checkout is filing this sale right now. */
+  isClaimed(localId: number): boolean
 }
 
 /**
@@ -117,6 +130,7 @@ export function createFiscalEngine(options: FiscalEngineOptions): FiscalEngine {
 
   let timer: ReturnType<typeof setInterval> | null = null
   let running = false
+  const claimed = new Set<number>()
 
   /**
    * One retry pass: fetches due queue items and resubmits each in
@@ -129,6 +143,9 @@ export function createFiscalEngine(options: FiscalEngineOptions): FiscalEngine {
     try {
       const pending = db.getPendingFiscalQueue(now())
       for (const item of pending) {
+        // Checkout is filing this sale now: skipped without counting an
+        // attempt. Its outcome settles the row before the claim ends.
+        if (claimed.has(item.entity_id)) continue
         // Every item in this queue is, by construction, a retry — it
         // only got here because a first attempt already failed. Routing
         // through `attemptFiscalRetry` (phase-75) re-checks the order
@@ -213,6 +230,18 @@ export function createFiscalEngine(options: FiscalEngineOptions): FiscalEngine {
 
     onCheckoutMade(): void {
       void tick()
+    },
+
+    claim(localId: number): void {
+      claimed.add(localId)
+    },
+
+    release(localId: number): void {
+      claimed.delete(localId)
+    },
+
+    isClaimed(localId: number): boolean {
+      return claimed.has(localId)
     }
   }
 }

@@ -17,7 +17,12 @@ import BetterSqlite3 from 'better-sqlite3'
 import type { Database as SqliteConnection } from 'better-sqlite3'
 import type { Discount, OfflineOrderPayload } from './shopify-types.js'
 import type { CartItem, ProductSummary } from '../../renderer/src/types/shopify.js'
-import type { FiscalFailureKind, FiscalInvoiceRequest, FiscalVatGroupAmounts } from './integrations/etims.js'
+import type {
+  FiscalFailureKind,
+  FiscalInvoiceRequest,
+  FiscalInvoiceResult,
+  FiscalVatGroupAmounts
+} from './integrations/etims.js'
 
 /** Lifecycle states of a local order row. */
 export type OrderStatus = 'pending_sync' | 'synced' | 'failed' | 'voided'
@@ -210,6 +215,27 @@ export interface QueueOrderInput {
   customerPin?: string
   /** Cart-level discount, applied on top of the line-item subtotal. */
   cartDiscount?: Discount
+  /**
+   * Builds the sale's fiscal request once its `localId` exists. When
+   * given, {@link RubisDatabase.queueOrder} stores the request, marks the
+   * sale `waiting` and queues its fiscal row in the same transaction as
+   * the order, so a stop at any later point leaves the sale where the
+   * fiscal queue retries it (docs/phase-185.md §4.1). A function because
+   * `TraderSystemInvNum` is built from `localId`, which only exists after
+   * the INSERT.
+   */
+  buildFiscalRequest?: (localId: number) => FiscalInvoiceRequest
+}
+
+/**
+ * What {@link RubisDatabase.queueOrder} and its M-Pesa wrappers return.
+ * `fiscalQueueId` is set only when the input carried
+ * `buildFiscalRequest`.
+ */
+export interface QueuedOrder {
+  localId: number
+  queueId: number
+  fiscalQueueId?: number
 }
 
 /** Fiscal (eTIMS) details attached to a receipt once submitted for fiscalization. */
@@ -995,6 +1021,14 @@ export interface InsertMpesaSmsMessageInput {
  */
 export const STUCK_WAITING_THRESHOLD_MS = 15 * 60_000
 
+/** Reason {@link RubisDatabase.sweepUnqueuedFiscalOrders} gives a stopped sale it re-queues. */
+export const INTERRUPTED_FILING_REASON =
+  'The till stopped while this sale was being sent to the tax device. It will be sent automatically.'
+
+/** Reason {@link RubisDatabase.sweepUnqueuedFiscalOrders} gives a stopped sale it cannot resend. */
+export const INTERRUPTED_UNSENT_REASON =
+  'The till stopped before this sale reached the tax device, and it cannot be resent automatically. Ask support to check it.'
+
 /**
  * One row of the back-office "needs attention" list (phase-88/Step 4):
  * every `needs_fixing` order, plus every `waiting` order that's been
@@ -1402,12 +1436,14 @@ export class RubisDatabase {
 
   /**
    * Persists a checkout as a `pending_sync` order plus a `orderCreate`
-   * sync-queue entry, atomically.
+   * sync-queue entry, atomically. With `input.buildFiscalRequest`, the
+   * same transaction also stores the fiscal request, sets
+   * `fiscal_status = 'waiting'` and inserts the due `etims_invoice` row.
    *
    * @param {QueueOrderInput} input
-   * @returns local order id and queue id
+   * @returns {QueuedOrder}
    */
-  queueOrder(input: QueueOrderInput): { localId: number; queueId: number } {
+  queueOrder(input: QueueOrderInput): QueuedOrder {
     const createdAt = new Date().toISOString()
     const payload: OfflineOrderPayload = {
       clientOrderUuid: input.clientOrderUuid,
@@ -1460,7 +1496,15 @@ export class RubisDatabase {
         createdAt,
         0
       )
-      return { localId, queueId: Number(queueInfo.lastInsertRowid) }
+      const queued: QueuedOrder = { localId, queueId: Number(queueInfo.lastInsertRowid) }
+      if (input.buildFiscalRequest) {
+        const request = input.buildFiscalRequest(localId)
+        this.conn
+          .prepare("UPDATE orders SET fiscal_status = 'waiting', fiscal_request_json = ? WHERE local_id = ?")
+          .run(JSON.stringify(request), localId)
+        queued.fiscalQueueId = this.queueFiscalInvoice(localId, request).queueId
+      }
+      return queued
     })
     return enqueue()
   }
@@ -1622,6 +1666,98 @@ export class RubisDatabase {
    */
   removeFiscalQueueItem(queueId: number): void {
     this.conn.prepare('DELETE FROM sync_queue WHERE id = ?').run(queueId)
+  }
+
+  /**
+   * Records checkout's successful first filing and deletes the fiscal row
+   * {@link queueOrder} created for it, in one transaction. Keyed on
+   * `localId`, unlike {@link markFiscalQueueItemSynced}, so the filing is
+   * recorded even if the row has gone (a void during filing).
+   *
+   * @param {number} localId
+   * @param {number} fiscalQueueId
+   * @param {FiscalInvoiceResult} invoice
+   */
+  settleCheckoutFiscalSuccess(localId: number, fiscalQueueId: number, invoice: FiscalInvoiceResult): void {
+    const settle = this.conn.transaction(() => {
+      this.setOrderFiscalInfo(
+        localId,
+        invoice.invoiceNumber,
+        invoice.qrCode,
+        invoice.vatGroups,
+        invoice.fiscalizedAt,
+        invoice.fiscalizedAtSource,
+        invoice.cuSerialNumber
+      )
+      this.removeFiscalQueueItem(fiscalQueueId)
+    })
+    settle()
+  }
+
+  /**
+   * Records checkout's failed first filing and the fate of its fiscal row
+   * in one transaction: `waiting` keeps the row, already due, for the
+   * fiscal engine; `needs_fixing` deletes it, as the engine's own
+   * reclassification does.
+   *
+   * @param {number} localId
+   * @param {number} fiscalQueueId
+   * @param {Exclude<FiscalStatus, 'fiscalized'>} status
+   * @param {string} reason
+   * @param {FiscalFailureKind} kind
+   * @param {'wrong-pin' | null} [dataIssue]
+   */
+  settleCheckoutFiscalFailure(
+    localId: number,
+    fiscalQueueId: number,
+    status: Exclude<FiscalStatus, 'fiscalized'>,
+    reason: string,
+    kind: FiscalFailureKind,
+    dataIssue: 'wrong-pin' | null = null
+  ): void {
+    const settle = this.conn.transaction(() => {
+      this.setOrderFiscalFailure(localId, status, reason, kind, dataIssue)
+      if (status === 'needs_fixing') {
+        this.removeFiscalQueueItem(fiscalQueueId)
+      }
+    })
+    settle()
+  }
+
+  /**
+   * Makes every sale left with `fiscal_status` NULL visible again — the
+   * start-up sweep for sales stopped mid-filing before
+   * {@link queueOrder} wrote the status in its own transaction
+   * (docs/phase-185.md §4.2). A sale with a stored request goes back to
+   * `waiting` with a due fiscal row; one without is flagged for a person,
+   * never refiled from a rebuilt request (`payload_json` lacks the VAT
+   * class and HS fields). Idempotent by its `WHERE`: a swept sale is no
+   * longer NULL. Must run before the fiscal engine starts.
+   *
+   * @returns {{ queued: number; flagged: number }}
+   */
+  sweepUnqueuedFiscalOrders(): { queued: number; flagged: number } {
+    const sweep = this.conn.transaction(() => {
+      const rows = this.conn
+        .prepare(
+          "SELECT local_id, fiscal_request_json FROM orders WHERE fiscal_status IS NULL AND status != 'voided' ORDER BY local_id ASC"
+        )
+        .all() as { local_id: number; fiscal_request_json: string | null }[]
+      let queued = 0
+      let flagged = 0
+      for (const row of rows) {
+        if (row.fiscal_request_json) {
+          this.setOrderFiscalFailure(row.local_id, 'waiting', INTERRUPTED_FILING_REASON, 'technical')
+          this.queueFiscalInvoice(row.local_id, JSON.parse(row.fiscal_request_json) as FiscalInvoiceRequest)
+          queued++
+        } else {
+          this.setOrderFiscalFailure(row.local_id, 'needs_fixing', INTERRUPTED_UNSENT_REASON, 'system')
+          flagged++
+        }
+      }
+      return { queued, flagged }
+    })
+    return sweep()
   }
 
   /**
@@ -2805,13 +2941,13 @@ export class RubisDatabase {
    * @param {QueueOrderInput} input
    * @param {{ transactionCode: string; staffId: number }} claim
    * @param {RecordMpesaPaymentInput} [payment] — the unified payment record, written in the same transaction
-   * @returns {{ localId: number; queueId: number } | null} `null` when another sale already used that payment
+   * @returns {QueuedOrder | null} `null` when another sale already used that payment
    */
   queueOrderClaimingSmsPayment(
     input: QueueOrderInput,
     claim: { transactionCode: string; staffId: number },
     payment?: RecordMpesaPaymentInput
-  ): { localId: number; queueId: number } | null {
+  ): QueuedOrder | null {
     const claimStatement = this.conn.prepare(
       'UPDATE mpesa_sms_messages SET matched_order_local_id = ?, approved_by_staff_id = ?, approved_at = ? ' +
         'WHERE transaction_code = ? COLLATE NOCASE AND (matched_order_local_id IS NULL OR matched_order_local_id = ?)'
@@ -2891,12 +3027,12 @@ export class RubisDatabase {
    *
    * @param {QueueOrderInput} input
    * @param {RecordMpesaPaymentInput} payment
-   * @returns {{ localId: number; queueId: number }}
+   * @returns {QueuedOrder}
    */
   queueOrderRecordingMpesaPayment(
     input: QueueOrderInput,
     payment: RecordMpesaPaymentInput
-  ): { localId: number; queueId: number } {
+  ): QueuedOrder {
     const run = this.conn.transaction(() => {
       const queued = this.queueOrder(input)
       this.insertMpesaPayment(queued.localId, payment)
@@ -2920,12 +3056,12 @@ export class RubisDatabase {
    *
    * @param {QueueOrderInput} input
    * @param {RecordMpesaPaymentInput} payment
-   * @returns {{ localId: number; queueId: number } | null} `null` when that code was already recorded
+   * @returns {QueuedOrder | null} `null` when that code was already recorded
    */
   queueOrderRecordingManualPayment(
     input: QueueOrderInput,
     payment: RecordMpesaPaymentInput
-  ): { localId: number; queueId: number } | null {
+  ): QueuedOrder | null {
     const run = this.conn.transaction(() => {
       const queued = this.queueOrder(input)
       if (!this.insertMpesaPayment(queued.localId, payment)) {

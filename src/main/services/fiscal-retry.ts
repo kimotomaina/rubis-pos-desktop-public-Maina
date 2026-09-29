@@ -38,6 +38,22 @@ import { routeFiscalOutcome } from './fiscal-routing.js'
 /** Why a voided sale is never resubmitted to the fiscal device. */
 export const VOIDED_ORDER_NOT_FILED_REASON = 'This sale was voided and will not be filed with KRA.'
 
+/** Why a resend is refused while checkout is still filing the same sale. */
+export const SALE_STILL_FILING_REASON =
+  'This sale is still being sent to the tax device. Wait a moment, then check it again.'
+
+/**
+ * The resend entry points' dependencies. `isFiling` is the fiscal
+ * engine's `isClaimed` (docs/phase-185.md §5): a sale checkout is filing
+ * right now is never resubmitted alongside it.
+ */
+export interface FiscalResendDeps {
+  db: FiscalResendDb
+  fiscalizationProvider: FiscalRetryProvider
+  logger?: Logger
+  isFiling?: (localId: number) => boolean
+}
+
 /** The order fields `attemptFiscalRetry` needs to read before resubmitting. */
 export interface FiscalRetryOrder {
   /** The order's lifecycle status. Optional so fakes that predate the void guard still fit. */
@@ -156,11 +172,12 @@ export interface FiscalResendDb extends FiscalRetryDb {
  * race guard both apply here too — there is exactly one "resubmit a
  * sale" code path, not two.
  */
-export async function resendFiscalization(
-  deps: { db: FiscalResendDb; fiscalizationProvider: FiscalRetryProvider; logger?: Logger },
-  localId: number
-): Promise<FiscalSubmitOutcome> {
+export async function resendFiscalization(deps: FiscalResendDeps, localId: number): Promise<FiscalSubmitOutcome> {
   const logger = deps.logger ?? console
+  if (deps.isFiling?.(localId)) {
+    logger.warn(`[rubis-pos] Sale ${localId}: resend refused, checkout is still filing it`)
+    return { ok: false, reason: SALE_STILL_FILING_REASON, kind: 'technical', retryable: true }
+  }
   const order = deps.db.getOrder(localId)
   if (!order) {
     logger.error(`[rubis-pos] Sale ${localId}: resend requested but no such order exists`)
@@ -245,11 +262,15 @@ export async function resendFiscalization(
  * own pre-send validation is the last-resort backstop either way.
  */
 export async function correctPinAndResend(
-  deps: { db: FiscalResendDb; fiscalizationProvider: FiscalRetryProvider; logger?: Logger },
+  deps: FiscalResendDeps,
   localId: number,
   buyerPin: string | undefined
 ): Promise<FiscalSubmitOutcome> {
   const logger = deps.logger ?? console
+  // Checked before the stored request is rewritten, not only in the resend.
+  if (deps.isFiling?.(localId)) {
+    return resendFiscalization(deps, localId)
+  }
   const order = deps.db.getOrder(localId)
   if (order?.fiscal_request_json) {
     const storedRequest = JSON.parse(order.fiscal_request_json) as FiscalInvoiceRequest

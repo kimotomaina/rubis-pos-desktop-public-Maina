@@ -69,7 +69,7 @@ function makeDeps(db: RubisDatabase, overrides: Partial<RunCheckoutDeps> = {}): 
         data: { invoiceNumber: 'KRA-1', qrCode: 'qr', fiscalizedAt: '2026-01-01T00:00:00.000Z' }
       })
     },
-    fiscalEngine: { onCheckoutMade: vi.fn() },
+    fiscalEngine: { onCheckoutMade: vi.fn(), claim: vi.fn(), release: vi.fn() },
     monitor: { isOnline: () => false },
     engineTick: vi.fn().mockResolvedValue(undefined),
     idGen: () => `uuid-${++uuid}`,

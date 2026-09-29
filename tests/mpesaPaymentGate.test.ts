@@ -73,7 +73,7 @@ function makeDeps(db: CheckoutDb, overrides: Partial<RunCheckoutDeps> = {}): Run
     db,
     mpesaProvider: { verifyTransactionCode: vi.fn() },
     fiscalizationProvider: fiscalOk(),
-    fiscalEngine: { onCheckoutMade: vi.fn() },
+    fiscalEngine: { onCheckoutMade: vi.fn(), claim: vi.fn(), release: vi.fn() },
     monitor: { isOnline: () => false },
     engineTick: vi.fn().mockResolvedValue(undefined),
     idGen: () => `uuid-${++uuidCounter}`,

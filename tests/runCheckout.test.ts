@@ -74,7 +74,7 @@ function makeDeps(db: CheckoutDb, overrides: Partial<RunCheckoutDeps> = {}): Run
     db,
     mpesaProvider: { verifyTransactionCode: vi.fn() },
     fiscalizationProvider: { submitInvoice: vi.fn() },
-    fiscalEngine: { onCheckoutMade: vi.fn() },
+    fiscalEngine: { onCheckoutMade: vi.fn(), claim: vi.fn(), release: vi.fn() },
     monitor: { isOnline: () => false },
     engineTick: vi.fn().mockResolvedValue(undefined),
     idGen: () => `uuid-${++uuidCounter}`,
@@ -175,10 +175,8 @@ describe('runCheckout — success (device accepts)', () => {
       queueOrderRecordingManualPayment: db.queueOrderRecordingManualPayment.bind(db),
       queueOrder: db.queueOrder.bind(db),
       getOrder: (localId) => ({ ...db.getOrder(localId)!, status: 'synced', shopify_order_id: 'gid://shopify/Order/9' }),
-      setOrderFiscalInfo: db.setOrderFiscalInfo.bind(db),
-      setOrderFiscalFailure: db.setOrderFiscalFailure.bind(db),
-      queueFiscalInvoice: db.queueFiscalInvoice.bind(db),
-      setOrderFiscalRequest: db.setOrderFiscalRequest.bind(db)
+      settleCheckoutFiscalSuccess: db.settleCheckoutFiscalSuccess.bind(db),
+      settleCheckoutFiscalFailure: db.settleCheckoutFiscalFailure.bind(db)
     }
     const deps = makeDeps(syncedDb, { fiscalizationProvider: { submitInvoice } })
 
@@ -604,10 +602,8 @@ describe('runCheckout — outer-catch path (a dependency throws outside the fisc
         throw new Error('disk full')
       },
       getOrder: db.getOrder.bind(db),
-      setOrderFiscalInfo: db.setOrderFiscalInfo.bind(db),
-      setOrderFiscalFailure: db.setOrderFiscalFailure.bind(db),
-      queueFiscalInvoice: db.queueFiscalInvoice.bind(db),
-      setOrderFiscalRequest: db.setOrderFiscalRequest.bind(db)
+      settleCheckoutFiscalSuccess: db.settleCheckoutFiscalSuccess.bind(db),
+      settleCheckoutFiscalFailure: db.settleCheckoutFiscalFailure.bind(db)
     }
     const deps = makeDeps(throwingDb)
 
@@ -642,10 +638,8 @@ describe('runCheckout — outer-catch path (a dependency throws outside the fisc
       getOrder: () => {
         throw new Error('read-back exploded')
       },
-      setOrderFiscalInfo: db.setOrderFiscalInfo.bind(db),
-      setOrderFiscalFailure: db.setOrderFiscalFailure.bind(db),
-      queueFiscalInvoice: db.queueFiscalInvoice.bind(db),
-      setOrderFiscalRequest: db.setOrderFiscalRequest.bind(db)
+      settleCheckoutFiscalSuccess: db.settleCheckoutFiscalSuccess.bind(db),
+      settleCheckoutFiscalFailure: db.settleCheckoutFiscalFailure.bind(db)
     }
     const deps = makeDeps(throwingDb)
 

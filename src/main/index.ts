@@ -492,6 +492,19 @@ app.whenReady().then(async () => {
   runPostUpdateCheck({ db, installedVersion: app.getVersion() })
 
   /**
+   * Rule 3 (docs/phase-185.md §4.2): a sale stopped mid-filing by an
+   * older build has `fiscal_status` NULL and no fiscal row, so nothing
+   * would ever retry or count it. Runs before `fiscalEngine.start()`,
+   * whose first tick is immediate, and is a no-op once nothing is NULL.
+   */
+  const swept = db.sweepUnqueuedFiscalOrders()
+  if (swept.queued > 0 || swept.flagged > 0) {
+    console.warn(
+      `[rubis-pos] Start-up sweep: ${swept.queued} interrupted sale(s) re-queued for filing, ${swept.flagged} flagged for support`
+    )
+  }
+
+  /**
    * docs/phase-169-1 commit A: `scripts/check-fit.mjs` sets
    * `RUBIS_CHECK_FIT` on every one of its throwaway launches. When set,
    * nothing real may ever be sent — no Shopify push, no fiscal device
@@ -2578,7 +2591,7 @@ app.whenReady().then(async () => {
       const { localId, buyerPin } = validation.data
       try {
         const outcome = await correctPinAndResend(
-          { db, fiscalizationProvider, logger: console },
+          { db, fiscalizationProvider, logger: console, isFiling: (id) => fiscalEngine.isClaimed(id) },
           localId,
           buyerPin ?? undefined
         )
@@ -2613,7 +2626,10 @@ app.whenReady().then(async () => {
       }
       const { localId } = validation.data
       try {
-        const outcome = await resendFiscalization({ db, fiscalizationProvider, logger: console }, localId)
+        const outcome = await resendFiscalization(
+          { db, fiscalizationProvider, logger: console, isFiling: (id) => fiscalEngine.isClaimed(id) },
+          localId
+        )
         return { success: true, data: buildFiscalResendResult(db, localId, outcome) }
       } catch (err) {
         return {

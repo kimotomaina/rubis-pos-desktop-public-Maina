@@ -122,7 +122,7 @@ async function attemptFiscalization(params: {
       db: params.db,
       mpesaProvider: { verifyTransactionCode: vi.fn() },
       fiscalizationProvider: params.provider,
-      fiscalEngine: { onCheckoutMade: vi.fn() },
+      fiscalEngine: { onCheckoutMade: vi.fn(), claim: vi.fn(), release: vi.fn() },
       monitor: { isOnline: () => false },
       engineTick: vi.fn().mockResolvedValue(undefined),
       idGen: () => params.clientOrderUuid,
