@@ -1021,9 +1021,9 @@ export interface InsertMpesaSmsMessageInput {
  */
 export const STUCK_WAITING_THRESHOLD_MS = 15 * 60_000
 
-/** Reason {@link RubisDatabase.sweepUnqueuedFiscalOrders} gives a stopped sale it re-queues. */
+/** Reason {@link RubisDatabase.sweepUnqueuedFiscalOrders} gives a stopped sale whose request was saved. */
 export const INTERRUPTED_FILING_REASON =
-  'The till stopped while this sale was being sent to the tax device. It will be sent automatically.'
+  'The till stopped while this sale was being sent to the tax device, so it may not have been filed. Check whether it was a real sale, then press Resend. Nothing is sent automatically.'
 
 /** Reason {@link RubisDatabase.sweepUnqueuedFiscalOrders} gives a stopped sale it cannot resend. */
 export const INTERRUPTED_UNSENT_REASON =
@@ -1728,34 +1728,36 @@ export class RubisDatabase {
    * Makes every sale left with `fiscal_status` NULL visible again — the
    * start-up sweep for sales stopped mid-filing before
    * {@link queueOrder} wrote the status in its own transaction
-   * (docs/phase-185.md §4.2). A sale with a stored request goes back to
-   * `waiting` with a due fiscal row; one without is flagged for a person,
-   * never refiled from a rebuilt request (`payload_json` lacks the VAT
-   * class and HS fields). Idempotent by its `WHERE`: a swept sale is no
-   * longer NULL. Must run before the fiscal engine starts.
+   * (docs/phase-185.md §4.2). Every such sale is flagged `needs_fixing`
+   * for a person and none is queued or filed here: a sale stopped long
+   * ago may be a test or training sale, and a filed invoice cannot be
+   * taken back. One with a stored request can be resent from Needs
+   * Attention (`resendFiscalization` uses that request); one without
+   * cannot, since `payload_json` lacks the VAT class and HS fields.
+   * Idempotent by its `WHERE`: a swept sale is no longer NULL. Must run
+   * before the fiscal engine starts.
    *
-   * @returns {{ queued: number; flagged: number }}
+   * @returns {{ resendable: number; unsendable: number }}
    */
-  sweepUnqueuedFiscalOrders(): { queued: number; flagged: number } {
+  sweepUnqueuedFiscalOrders(): { resendable: number; unsendable: number } {
     const sweep = this.conn.transaction(() => {
       const rows = this.conn
         .prepare(
           "SELECT local_id, fiscal_request_json FROM orders WHERE fiscal_status IS NULL AND status != 'voided' ORDER BY local_id ASC"
         )
         .all() as { local_id: number; fiscal_request_json: string | null }[]
-      let queued = 0
-      let flagged = 0
+      let resendable = 0
+      let unsendable = 0
       for (const row of rows) {
         if (row.fiscal_request_json) {
-          this.setOrderFiscalFailure(row.local_id, 'waiting', INTERRUPTED_FILING_REASON, 'technical')
-          this.queueFiscalInvoice(row.local_id, JSON.parse(row.fiscal_request_json) as FiscalInvoiceRequest)
-          queued++
+          this.setOrderFiscalFailure(row.local_id, 'needs_fixing', INTERRUPTED_FILING_REASON, 'system')
+          resendable++
         } else {
           this.setOrderFiscalFailure(row.local_id, 'needs_fixing', INTERRUPTED_UNSENT_REASON, 'system')
-          flagged++
+          unsendable++
         }
       }
-      return { queued, flagged }
+      return { resendable, unsendable }
     })
     return sweep()
   }

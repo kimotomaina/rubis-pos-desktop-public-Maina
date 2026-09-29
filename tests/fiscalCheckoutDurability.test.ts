@@ -354,7 +354,7 @@ describe('the start-up sweep for sales already stuck with no fiscal status (opti
     }).localId
   }
 
-  it('re-queues a stuck sale that has its request, flags one that does not, and leaves the rest alone', () => {
+  it('flags every stuck sale for a person, files and queues none, and leaves the rest alone', () => {
     const db = freshDb()
     const staffId = seedStaff(db)
     const withRequest = stuckOrder(db, staffId, 'uuid-a')
@@ -374,17 +374,15 @@ describe('the start-up sweep for sales already stuck with no fiscal status (opti
     const filed = stuckOrder(db, staffId, 'uuid-d')
     db.setOrderFiscalInfo(filed, 'KRA-OLD', 'qr')
 
-    expect(db.sweepUnqueuedFiscalOrders()).toEqual({ queued: 1, flagged: 1 })
+    expect(db.sweepUnqueuedFiscalOrders()).toEqual({ resendable: 1, unsendable: 1 })
 
     expect(db.getOrder(withRequest)).toMatchObject({
-      fiscal_status: 'waiting',
+      fiscal_status: 'needs_fixing',
       fiscal_error_reason: INTERRUPTED_FILING_REASON,
-      fiscal_error_kind: 'technical'
+      fiscal_error_kind: 'system'
     })
-    const rows = fiscalRows(db)
-    expect(rows.map((row) => row.entity_id)).toEqual([withRequest])
-    expect(rows[0].payload).toEqual(request)
-    expect(rows[0].next_attempt_at).toBe(0)
+    expect(JSON.parse(db.getOrder(withRequest)!.fiscal_request_json!)).toEqual(request)
+    expect(fiscalRows(db)).toHaveLength(0)
 
     expect(db.getOrder(withoutRequest)).toMatchObject({
       fiscal_status: 'needs_fixing',
@@ -396,6 +394,33 @@ describe('the start-up sweep for sales already stuck with no fiscal status (opti
     expect(db.getUnfiledOrderCount()).toBe(2)
   })
 
+  it('files nothing on its own: the engine makes no device call for a swept sale, and a person can still resend it', async () => {
+    const db = freshDb()
+    const staffId = seedStaff(db)
+    const localId = stuckOrder(db, staffId, 'uuid-a')
+    const request: FiscalInvoiceRequest = {
+      clientOrderUuid: 'uuid-a',
+      localId,
+      items: [{ description: 'RUBIS Mug', quantity: 2, unitPrice: 60, taxRate: 0.16 }],
+      total: 139.2,
+      taxAmount: 19.2,
+      paymentMethod: 'cash',
+      amountTendered: 150
+    }
+    db.setOrderFiscalRequest(localId, request)
+    db.sweepUnqueuedFiscalOrders()
+
+    const submitInvoice = vi.fn().mockResolvedValue(FILED)
+    await createFiscalEngine({ db, submitInvoice, logger: silentLogger }).tick()
+    expect(submitInvoice).not.toHaveBeenCalled()
+    expect(db.getOrder(localId)?.fiscal_status).toBe('needs_fixing')
+
+    await resendFiscalization({ db, fiscalizationProvider: { submitInvoice }, logger: silentLogger }, localId)
+    expect(submitInvoice).toHaveBeenCalledTimes(1)
+    expect(submitInvoice.mock.calls[0][0]).toMatchObject({ localId, isRetry: true })
+    expect(db.getOrder(localId)?.fiscal_status).toBe('fiscalized')
+  })
+
   it('is a no-op the second time, and never touches a sale checkout queued', async () => {
     const db = freshDb()
     const staffId = seedStaff(db)
@@ -405,9 +430,9 @@ describe('the start-up sweep for sales already stuck with no fiscal status (opti
       makeInput(staffId)
     )
 
-    expect(db.sweepUnqueuedFiscalOrders()).toEqual({ queued: 0, flagged: 1 })
+    expect(db.sweepUnqueuedFiscalOrders()).toEqual({ resendable: 0, unsendable: 1 })
     const rowsAfterFirst = fiscalRows(db)
-    expect(db.sweepUnqueuedFiscalOrders()).toEqual({ queued: 0, flagged: 0 })
+    expect(db.sweepUnqueuedFiscalOrders()).toEqual({ resendable: 0, unsendable: 0 })
     expect(fiscalRows(db)).toEqual(rowsAfterFirst)
     expect(rowsAfterFirst).toHaveLength(1)
   })

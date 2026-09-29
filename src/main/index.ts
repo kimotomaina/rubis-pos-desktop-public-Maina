@@ -494,13 +494,13 @@ app.whenReady().then(async () => {
   /**
    * Rule 3 (docs/phase-185.md §4.2): a sale stopped mid-filing by an
    * older build has `fiscal_status` NULL and no fiscal row, so nothing
-   * would ever retry or count it. Runs before `fiscalEngine.start()`,
-   * whose first tick is immediate, and is a no-op once nothing is NULL.
+   * would ever retry or count it. The sweep only flags them for a person
+   * (nothing is filed), and is a no-op once nothing is NULL.
    */
   const swept = db.sweepUnqueuedFiscalOrders()
-  if (swept.queued > 0 || swept.flagged > 0) {
+  if (swept.resendable > 0 || swept.unsendable > 0) {
     console.warn(
-      `[rubis-pos] Start-up sweep: ${swept.queued} interrupted sale(s) re-queued for filing, ${swept.flagged} flagged for support`
+      `[rubis-pos] Start-up sweep: ${swept.resendable} interrupted sale(s) flagged for a check before resending, ${swept.unsendable} flagged for support`
     )
   }
 
