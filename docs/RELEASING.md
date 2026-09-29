@@ -27,7 +27,7 @@ chore: bump to x.y.z
 npm run dist:publish
 ```
 
-This runs the same typecheck, build and guard scripts as `npm run dist`, then uploads to GitHub as a **draft** release named after the version tag. Expect three assets:
+This runs the same typecheck, build and guard scripts as `npm run dist`, then uploads to GitHub as a **draft** release named after the version tag. The build stops if `.env` holds a store URL, Shopify token, location or M-Pesa credential: `.env` ships inside every installer as a plain file anyone can read. Keep those fields blank; each till sets them itself (see "First install on a new till" below). Expect three assets:
 
 - `RUBIS POS Setup x.y.z.exe`
 - `RUBIS POS Setup x.y.z.exe.blockmap`
@@ -58,3 +58,12 @@ Tills currently running 2.0.x have the old private repo baked into their update 
 ## h. SmartScreen on manual install
 
 The installer is not code-signed, so a manual install shows Windows SmartScreen. Choose **More info > Run anyway**.
+
+## First install on a new till
+
+The installer carries no credentials, so a new till asks for them once. They are then stored on the till (encrypted vault and database) and kept through every update.
+
+1. First-run wizard: enter the Shopify store URL and Admin API token, then confirm the location.
+2. Admin > Integrations > Fiscal Device: device address, port and password.
+3. Admin > Integrations > M-Pesa: only if the till uses Daraja (consumer key, secret, passkey, shortcode).
+4. Admin > Integrations > Fiscal Device > Store Details: store name, KRA PIN and receipt lines.
