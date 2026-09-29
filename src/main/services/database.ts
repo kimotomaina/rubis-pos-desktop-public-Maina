@@ -234,7 +234,7 @@ export interface CheckoutReceipt {
    * never recorded at all.
    */
   fiscalStatus: FiscalStatus | null
-  /** Plain-language failure reason, set when `fiscalStatus` is `'waiting'` or `'needs_fixing'`. Never a code. */
+  /** Failure reason, set when `fiscalStatus` is `'waiting'` or `'needs_fixing'`: the device's message (with its code for a device refusal) and, when a device step failed, "Refused while <step> (<Command>)." — docs/phase-184 §3. */
   fiscalErrorReason: string | null
   /** Classification of `fiscalErrorReason` — see {@link FiscalFailureKind}. */
   fiscalErrorKind: FiscalFailureKind | null

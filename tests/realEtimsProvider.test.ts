@@ -2456,3 +2456,55 @@ describe('STE2 codes and their guards (docs/phase-184, commit 2)', () => {
     expect(commandSequence(post).filter((c) => c === 'SellPLUfromExtDB')).toHaveLength(1)
   })
 })
+
+describe('the stored reason names the refused step (docs/phase-184, commit 3)', () => {
+  it.each([
+    ['ReadStatus', 'Refused while checking the device status (ReadStatus).'],
+    ['OpenInvoiceWithFreeCustomerData', 'Refused while opening the invoice (OpenInvoiceWithFreeCustomerData).'],
+    ['ReadCurrentReceiptInfo', 'Refused while reading the receipt totals (ReadCurrentReceiptInfo).'],
+    ['CloseReceipt', 'Refused while closing the invoice (CloseReceipt).']
+  ])('a refusal at %s ends the reason with its step and command', async (failing, expectedStep) => {
+    const post = vi.fn().mockImplementation((path: string, body: string) =>
+      commandNameOf([path, body]) === failing
+        ? Promise.resolve({ data: xmlCommandError(57, 'Conflict in tax group') })
+        : makeSuccessfulPostImpl()(path, body)
+    )
+    const provider = new RealFiscalizationProvider({ ...TEST_DEVICE, httpClient: makeMockClient(post) })
+
+    const result = await provider.submitInvoice(SAMPLE_REQUEST)
+
+    expect(result.ok).toBe(false)
+    expect(!result.ok && result.reason).toBe(
+      `Fiscal device error (Code 40, STE2=57): Conflict in tax group. ${expectedStep}`
+    )
+  })
+
+  it('a failed session handshake ends the reason with the settings step', async () => {
+    const get = vi.fn().mockResolvedValue({ data: xmlServerError('30', 'ServSockConnectionFailed') })
+    const provider = new RealFiscalizationProvider({
+      ...TEST_DEVICE,
+      httpClient: makeMockClient(makeSuccessfulPostImpl(), get)
+    })
+
+    const result = await provider.submitInvoice(SAMPLE_REQUEST)
+
+    expect(!result.ok && result.reason).toMatch(/Refused while opening the device session \(settings\)\.$/)
+  })
+
+  it('names which line was refused, and the sell command actually sent', async () => {
+    let sells = 0
+    const post = vi.fn().mockImplementation((path: string, body: string) => {
+      if (commandNameOf([path, body]) === 'SellPLUfromExtDB' && ++sells === 2) {
+        return Promise.resolve({ data: xmlCommandError(62, 'Item amount too large') })
+      }
+      return makeSuccessfulPostImpl()(path, body)
+    })
+    const provider = new RealFiscalizationProvider({ ...TEST_DEVICE, httpClient: makeMockClient(post) })
+
+    const result = await provider.submitInvoice(SAMPLE_REQUEST)
+
+    expect(!result.ok && result.reason).toBe(
+      'Fiscal device error (Code 40, STE2=62): Item amount too large. Refused while adding item 2 of 2 (SellPLUfromExtDB).'
+    )
+  })
+})

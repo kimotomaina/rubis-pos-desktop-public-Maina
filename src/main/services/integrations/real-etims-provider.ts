@@ -604,6 +604,14 @@ function checkDeviceResponse(result: ServiceResult<Record<string, string>>): Dev
   }
 }
 
+/** The step of a sale a device failure happened at, named in the stored reason. */
+interface RefusedStep {
+  /** Plain words completing "Refused while …", e.g. "closing the invoice". */
+  label: string
+  /** The exact command name, for support, e.g. `CloseReceipt`. */
+  command: string
+}
+
 /**
  * Maps a failed {@link DeviceResult} into the `(reason, kind, retryable)`
  * triple {@link FiscalSubmitOutcome} needs — the bridge between
@@ -632,17 +640,29 @@ function checkDeviceResponse(result: ServiceResult<Record<string, string>>): Dev
  * the till to offer a same-visit fix. Never set from `reason`'s message
  * text; always from the code already computed upstream.
  *
+ * Ends `reason` with the step that failed, e.g. "Refused while closing
+ * the invoice (CloseReceipt).", so Needs Attention shows which command
+ * the device refused (docs/phase-184 §3). Left off
+ * {@link DAILY_CLOSURE_BLOCK_REASON}, a device-wide condition already
+ * written as finished cashier copy.
+ *
  * @param {Pick<DeviceResult, 'error' | 'retryable' | 'code'>} result
+ * @param {RefusedStep} step the step `result` came from
  * @param {string} fallbackReason used when `result.error` is unset
  * @param {FiscalFailureKind} [fallbackKind='data']
  * @returns {Extract<FiscalSubmitOutcome, { ok: false }>}
  */
 function classifyDeviceFailure(
   result: Pick<DeviceResult, 'error' | 'retryable' | 'code'>,
+  step: RefusedStep,
   fallbackReason: string,
   fallbackKind: FiscalFailureKind = 'data'
 ): Extract<FiscalSubmitOutcome, { ok: false }> {
-  const reason = result.error ?? fallbackReason
+  const baseReason = result.error ?? fallbackReason
+  const reason =
+    result.code === CODE_DAILY_CLOSURE_BLOCK
+      ? baseReason
+      : `${baseReason.replace(/\.\s*$/, '')}. Refused while ${step.label} (${step.command}).`
   if (result.retryable) {
     return { ok: false, reason, kind: 'technical', retryable: true }
   }
@@ -989,7 +1009,11 @@ export class RealFiscalizationProvider implements FiscalizationProvider {
     logStep(1, `settings(ip=${this.deviceIp},port=${this.devicePort})`)
     const settingsResult = await this.ensureSettings()
     if (!settingsResult.success) {
-      return classifyDeviceFailure(settingsResult, 'Unable to initialize the fiscal device session')
+      return classifyDeviceFailure(
+        settingsResult,
+        { label: 'opening the device session', command: 'settings' },
+        'Unable to initialize the fiscal device session'
+      )
     }
     const defVerStatus = (settingsResult.data?.defVerStatus as DefVersionStatus | undefined) ?? 'unknown'
     const defVer = settingsResult.data?.defVer
@@ -1017,7 +1041,12 @@ export class RealFiscalizationProvider implements FiscalizationProvider {
     logStep(2, 'ReadStatus')
     const statusResult = await this.readStatus()
     if (!statusResult.success) {
-      return classifyDeviceFailure(statusResult, 'Fiscal device status check failed', 'system')
+      return classifyDeviceFailure(
+        statusResult,
+        { label: 'checking the device status', command: 'ReadStatus' },
+        'Fiscal device status check failed',
+        'system'
+      )
     }
 
     // Step 3/7: OpenInvoiceWithFreeCustomerData, retrying once when the
@@ -1081,7 +1110,11 @@ export class RealFiscalizationProvider implements FiscalizationProvider {
       }
     }
     if (!openResult.success) {
-      return classifyDeviceFailure(openResult, 'Failed to open the fiscal invoice')
+      return classifyDeviceFailure(
+        openResult,
+        { label: 'opening the invoice', command: 'OpenInvoiceWithFreeCustomerData' },
+        'Failed to open the fiscal invoice'
+      )
     }
 
     // Step 4/7: SellPLUfromExtDB (class A) or SellPLUfromExtDB_HS (any other class) per line item.
@@ -1091,7 +1124,11 @@ export class RealFiscalizationProvider implements FiscalizationProvider {
       const sellResult = await this.sendCommand(path, commandName, args)
       if (!sellResult.success) {
         await this.rollback()
-        return classifyDeviceFailure(sellResult, 'Failed to record a sold item on the fiscal device')
+        return classifyDeviceFailure(
+          sellResult,
+          { label: `adding item ${index + 1} of ${request.items.length}`, command: commandName },
+          'Failed to record a sold item on the fiscal device'
+        )
       }
     }
 
@@ -1104,7 +1141,11 @@ export class RealFiscalizationProvider implements FiscalizationProvider {
     )
     if (!receiptInfoResult.success) {
       await this.rollback()
-      return classifyDeviceFailure(receiptInfoResult, 'Failed to read the fiscal receipt')
+      return classifyDeviceFailure(
+        receiptInfoResult,
+        { label: 'reading the receipt totals', command: 'ReadCurrentReceiptInfo' },
+        'Failed to read the fiscal receipt'
+      )
     }
     const receiptInfo = receiptInfoResult.data ?? {}
     const isReceiptOpened = receiptInfo.OptionIsReceiptOpened === '1'
@@ -1128,7 +1169,11 @@ export class RealFiscalizationProvider implements FiscalizationProvider {
     const closeResult = await this.sendCommand(this.endpoints.closeReceipt, 'CloseReceipt', {})
     if (!closeResult.success) {
       await this.rollback()
-      return classifyDeviceFailure(closeResult, 'Failed to close the fiscal receipt')
+      return classifyDeviceFailure(
+        closeResult,
+        { label: 'closing the invoice', command: 'CloseReceipt' },
+        'Failed to close the fiscal receipt'
+      )
     }
 
     const invoiceNumber = extractInvoiceNumberFromXml(closeResult.data ?? {})
