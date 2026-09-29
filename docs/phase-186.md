@@ -155,3 +155,97 @@ Two small parts. Both are needed, because part A alone would turn `needs_fixing`
 ## 8. Rollback
 
 Nothing to roll back. No code changed; the only file added is this report.
+
+---
+
+# Part 2 — Implementation
+
+- **Date:** 2026-09-29
+- **Commit:** `2555486` on `staging`, on top of phase 185 Part 2 (`4d75f1d`). Not pushed.
+- **Built as proposed in §5.** You chose the recommended answer to the one decision: **the missing daily closure (`STE1=59`) counts as unreachable**.
+- **Device calls:** none.
+
+### What changed
+
+| File | Change |
+| --- | --- |
+| `etims.ts` | The failure branch of `FiscalSubmitOutcome` gains `unreachable?: true`, documented. |
+| `real-etims-provider.ts` | `classifyDeviceFailure` also reads `serverFailure` and `notReady`. It returns `{ retryable: true, kind: 'technical', unreachable: true }` when:<br>• no `<Res>` came back (`code` undefined and not a `notReady` read);<br>• ZFPLabServer reported a retryable server code (`serverFailure` set: 19/30/31/53);<br>• the device answered `STE1=59`.<br>The one exception, a lost reply (no `<Res>`) at `CloseReceipt`, keeps today's non-retryable routing. |
+| `fiscal-engine.ts` | `tick`: on an `unreachable` failure, **no `recordFiscalQueueFailure` and `break`**. One log line per pass. The file doc now says so. |
+
+**Left exactly as today:**
+- Code 40 refusals, including `0x32` (retryable, counted).
+- `STE1=52` (opened receipt).
+- Server codes 50-52, 62 and 63.
+- `notReady`.
+- The not-configured short-circuit (retryable, counted).
+- The Shopify queue, the schema and `database.ts`.
+
+### Every changed test
+
+**None.** All 2,328 existing tests passed unchanged after the provider and engine edits. None of them asserts the full shape of an outcome the new flag appears on.
+
+### New tests (`tests/fiscalOfflineEndurance.test.ts`, 14)
+
+**Provider** (real provider, mocked transport):
+- **Unreachable:** connection refused at `ReadStatus`, our own timeout at `OpenInvoice`, Code 30 at `OpenInvoice`, Code 30 at `CloseReceipt` and Code 19 at a sell command are all `unreachable`, retryable and `technical`. `STE1=59` is `unreachable` too, with its cashier reason unchanged.
+- **Not unreachable:**
+  - a lost `CloseReceipt` reply: not retryable (the device may already have filed);
+  - `0x32`: retryable, not unreachable;
+  - a wrong client PIN: `data`/`wrong-pin`;
+  - "not fiscalized": `system`.
+
+**Engine** (real engine, real database, real provider):
+- **A 72-hour outage:**
+  - Five sales are made at checkout while the device is refused.
+  - Then the engine runs **8,640 passes**, 30 s of simulated time each.
+  - Every sale is still `waiting`, due, at 0 attempts with no error, and all are counted as unfiled.
+  - The device returns, and one pass files all five **in id order** (the `TraderSystemInvNum` sequence on `OpenInvoice`), each once, with five distinct invoice numbers and no rows left.
+- **While unreachable,** one pass tries only the oldest sale.
+- **Real refusals keep their routing:**
+  - A data refusal on retry still ends in `needs_fixing` and leaves the queue.
+  - A device-answered `0x32` still counts: ten of them abandon the row (`ABANDONED…`), as before.
+
+### Mutation checks (each applied, run, then the file restored)
+
+| # | Mutation | Tests that failed |
+| --- | --- | --- |
+| N1 | a missing `<Res>` is not unreachable | 3 (including the 72-hour run) |
+| N2 | a server code is not unreachable | 3 |
+| N3 | a lost `CloseReceipt` reply treated as unreachable | 1 |
+| N4 | `STE1=59` counted | 1 |
+| N5 | a `notReady` read treated as unreachable | 1 |
+| N6 | the pass keeps going after an unreachable failure | 1 |
+| N7 | the engine counts unreachable failures | 2 |
+
+`git diff --stat` was clean after all seven.
+
+### Verification
+
+- **Type check:** `npm run typecheck` clean.
+- **Tests:** `npx vitest run`, **153 files, 2,342 tests, all passing.**
+- **Build:** `npm run build` succeeds.
+- **Tripwires unchanged:** `receiptLayout.ts`, `printer.ts`, the renderer components, `fiscal-routing.ts`, `checkout.ts` and `database.ts`.
+
+### What this changes on the till
+
+- **During an outage of any length**, every sale made or queued stays `waiting`, never abandoned. The engine sends one quick request every 30 s until the device answers.
+- **When the device answers again**, the queue files everything oldest-first in one pass.
+- **Needs Attention** still lists each sale after 15 minutes, and the unfiled count is right throughout.
+- **A wrong TCP password (Code 31)** now also waits instead of being abandoned after about 2 h. It shows in Needs Attention and heals once the password is fixed.
+- **The shop still has to measure which form an outage takes** (§3: an offline test sale, or Test Connection with the cable out). Both forms are now handled the same way.
+
+### Rollback
+
+`git revert 2555486`. There is no schema or data change.
+
+### Observed but not changed (Part 2)
+
+1. **A retry whose `OpenInvoice` itself times out**, on a server with the old definitions, is still flagged `unverifiable`:
+   - `verifyAlreadyFiled` treats a missing `<Res>` as "the device may have seen it".
+   - It only happens if an outage starts between `ReadStatus` and `OpenInvoice`, and flagging is the safe side.
+   - Changing it would touch the Rule-1 recovery logic, so it is left alone.
+2. **The Code 53 re-send path** (`sendCommand`: `settings()` fails again after a 53) returns a bare `code '53'` without the settings failure's classification, so it still ends in `needs_fixing`.
+   - It needs ZFPLabServer itself to go down between two calls; `settings()` never contacts the device.
+   - A one-line fix (return the settings result as-is) would also change `verifyAlreadyFiled`'s `deviceNeverSawIt`, so it is deferred.
+3. **Checkout during an outage still makes its own first attempt** (§7.1), up to about 10-20 s per sale in the timeout form. Skipping it when the engine already knows the device is away is a separate change.
