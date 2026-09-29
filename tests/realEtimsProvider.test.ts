@@ -2266,3 +2266,97 @@ describe('TEST B: nothing after a successful CloseReceipt can mark a filed sale 
     expect(sequence.filter((c) => c === 'ReadCUnumbers')).toHaveLength(1)
   })
 })
+
+describe('device session lock (docs/phase-184, commit 1)', () => {
+  /** One full sale's commands after the session-level ReadCUnumbers, in order. */
+  const ONE_SALE = [
+    'ReadStatus',
+    'OpenInvoiceWithFreeCustomerData',
+    'SellPLUfromExtDB',
+    'SellPLUfromExtDB',
+    'ReadCurrentReceiptInfo',
+    'CloseReceipt',
+    'ReadDateTime'
+  ]
+
+  /**
+   * Wraps the successful post so replies arrive after uneven delays —
+   * without the lock, two concurrent sales would interleave their
+   * commands under this mock.
+   *
+   * @returns {ReturnType<typeof vi.fn>}
+   */
+  function makeUnevenPost(): ReturnType<typeof vi.fn> {
+    const success = makeSuccessfulPostImpl()
+    let call = 0
+    return vi.fn().mockImplementation((path: string, body: string) => {
+      const delayMs = 3 - (call++ % 3)
+      return new Promise((resolve) => setTimeout(resolve, delayMs)).then(() => success(path, body))
+    })
+  }
+
+  it('never interleaves two concurrent sales: the second starts only after the first has finished', async () => {
+    const post = makeUnevenPost()
+    const provider = new RealFiscalizationProvider({ ...TEST_DEVICE, httpClient: makeMockClient(post) })
+
+    const [first, second] = await Promise.all([
+      provider.submitInvoice({ ...SAMPLE_REQUEST, localId: 1 }),
+      provider.submitInvoice({ ...SAMPLE_REQUEST, localId: 2 })
+    ])
+
+    expect(first.ok).toBe(true)
+    expect(second.ok).toBe(true)
+    expect(commandSequence(post)).toEqual(['ReadCUnumbers', ...ONE_SALE, ...ONE_SALE])
+    const openBodies = post.mock.calls
+      .filter((call) => commandNameOf(call) === 'OpenInvoiceWithFreeCustomerData')
+      .map((call) => String(call[1]))
+    expect(openBodies[0]).toContain('INV-000000001')
+    expect(openBodies[1]).toContain('INV-000000002')
+  })
+
+  it('releases the lock when a sale throws, so the next sale still runs', async () => {
+    const post = makeSuccessfulPostImpl()
+    const provider = new RealFiscalizationProvider({ ...TEST_DEVICE, httpClient: makeMockClient(post) })
+    const throwing = provider.submitInvoice({
+      ...SAMPLE_REQUEST,
+      items: [null as unknown as FiscalInvoiceRequest['items'][number]]
+    })
+    const next = provider.submitInvoice(SAMPLE_REQUEST)
+
+    await expect(throwing).rejects.toThrow(TypeError)
+    const result = await next
+    expect(result.ok).toBe(true)
+  })
+
+  it('makes the status badge wait: its ReadStatus is sent only after the sale in flight has finished', async () => {
+    const post = makeUnevenPost()
+    const provider = new RealFiscalizationProvider({ ...TEST_DEVICE, httpClient: makeMockClient(post) })
+
+    const sale = provider.submitInvoice(SAMPLE_REQUEST)
+    const badge = provider.checkConnectivity()
+    await Promise.all([sale, badge])
+
+    expect(commandSequence(post)).toEqual(['ReadCUnumbers', ...ONE_SALE, 'ReadStatus'])
+  })
+
+  it('makes the quit-time session close wait: clientremove is sent only after the sale in flight has finished', async () => {
+    const events: string[] = []
+    const success = makeSuccessfulPostImpl()
+    const post = vi.fn().mockImplementation((path: string, body: string) => {
+      events.push(commandNameOf([path, body]))
+      return new Promise((resolve) => setTimeout(resolve, 2)).then(() => success(path, body))
+    })
+    const get = vi.fn().mockImplementation((url: string) => {
+      events.push(String(url).includes('clientremove') ? 'clientremove' : 'settings')
+      return Promise.resolve({ data: '<Res Code="0"/>' })
+    })
+    const provider = new RealFiscalizationProvider({ ...TEST_DEVICE, httpClient: makeMockClient(post, get) })
+
+    const sale = provider.submitInvoice(SAMPLE_REQUEST)
+    const close = provider.closeServerConnection()
+    await Promise.all([sale, close])
+
+    expect(events.indexOf('clientremove')).toBe(events.length - 1)
+    expect(events.indexOf('clientremove')).toBeGreaterThan(events.indexOf('ReadDateTime'))
+  })
+})

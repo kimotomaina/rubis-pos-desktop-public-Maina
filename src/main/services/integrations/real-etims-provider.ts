@@ -730,6 +730,8 @@ export class RealFiscalizationProvider implements FiscalizationProvider {
    * fiscalize) — see {@link ensureCUNumbers}.
    */
   private cuNumbersPromise: Promise<ServiceResult<{ serialNumber: string }>> | null = null
+  /** Tail of the chain every device-facing public method waits on — see {@link exclusive}. */
+  private deviceQueue: Promise<void> = Promise.resolve()
 
   constructor(options: RealFiscalizationProviderOptions = {}) {
     this.deviceIp = options.deviceIp?.trim() ?? ''
@@ -741,6 +743,29 @@ export class RealFiscalizationProvider implements FiscalizationProvider {
     this.lookupInvoice = options.lookupInvoice
     this.logger = options.logger ?? console
     this.debugLogging = options.debugLogging ?? false
+  }
+
+  /**
+   * Runs `task` after every device call already queued on this provider
+   * has settled, so checkout, the fiscal queue, resend, the badge and
+   * Test connection never interleave on the device (docs/phase-184). A
+   * failed task still releases the chain. Public entry points only: the
+   * chain is not re-entrant, so a private helper that took it would wait
+   * on itself.
+   *
+   * Serialises this till's own calls only. The CU may be shared with other
+   * tills; cross-client safety depends on the vendor (VIL question 6).
+   *
+   * @param {() => Promise<T>} task
+   * @returns {Promise<T>}
+   */
+  private exclusive<T>(task: () => Promise<T>): Promise<T> {
+    const run = this.deviceQueue.then(task)
+    this.deviceQueue = run.then(
+      () => undefined,
+      () => undefined
+    )
+    return run
   }
 
   /**
@@ -785,7 +810,8 @@ export class RealFiscalizationProvider implements FiscalizationProvider {
    * at the first failure, and reports which one broke in plain words.
    *
    * Clears the cached handshake first: a "test" that reported a session
-   * opened minutes ago under different settings would not be a test.
+   * opened minutes ago under different settings would not be a test. The
+   * clearing happens inside {@link exclusive}, so it never lands mid-sale.
    *
    * @returns {Promise<FiscalConnectionTestResult>}
    */
@@ -794,8 +820,10 @@ export class RealFiscalizationProvider implements FiscalizationProvider {
       return connectionTestFailed('device', NOT_CONFIGURED_MESSAGE)
     }
 
-    this.settingsPromise = null
-    return this.runConnectionHops()
+    return this.exclusive(() => {
+      this.settingsPromise = null
+      return this.runConnectionHops()
+    })
   }
 
   /**
@@ -807,6 +835,10 @@ export class RealFiscalizationProvider implements FiscalizationProvider {
    * `settingsPromise` doc comment and the before-quit handler in
    * `index.ts` that both exist to avoid exactly that churn.
    *
+   * Runs under {@link exclusive} even though `ReadStatus` is a read: it
+   * can also send `settings()`, and the vendor's own client never has two
+   * requests in flight (docs/phase-184 §1).
+   *
    * @returns {Promise<FiscalConnectionTestResult>}
    */
   async checkConnectivity(): Promise<FiscalConnectionTestResult> {
@@ -814,7 +846,7 @@ export class RealFiscalizationProvider implements FiscalizationProvider {
       return connectionTestFailed('device', NOT_CONFIGURED_MESSAGE)
     }
 
-    return this.runConnectionHops()
+    return this.exclusive(() => this.runConnectionHops())
   }
 
   /**
@@ -868,7 +900,19 @@ export class RealFiscalizationProvider implements FiscalizationProvider {
     return connectionTestFailed('ready', STATUS_UNREADABLE_MESSAGE)
   }
 
-  async submitInvoice(request: FiscalInvoiceRequest): Promise<FiscalSubmitOutcome> {
+  /**
+   * Files one sale, holding the device for the whole sequence so no other
+   * caller's command can land inside this sale's receipt (docs/phase-184).
+   *
+   * @param {FiscalInvoiceRequest} request
+   * @returns {Promise<FiscalSubmitOutcome>}
+   */
+  submitInvoice(request: FiscalInvoiceRequest): Promise<FiscalSubmitOutcome> {
+    return this.exclusive(() => this.submitInvoiceExclusive(request))
+  }
+
+  /** The body of {@link submitInvoice}; only ever run under {@link exclusive}. */
+  private async submitInvoiceExclusive(request: FiscalInvoiceRequest): Promise<FiscalSubmitOutcome> {
     if (!request.clientOrderUuid) {
       return {
         ok: false,
@@ -1159,10 +1203,12 @@ export class RealFiscalizationProvider implements FiscalizationProvider {
       }
     }
 
-    const result = await this.sendCommand(
-      this.endpoints.openCreditNote,
-      'OpenCreditNoteWithFreeCustomerData',
-      buildOpenCreditNoteArgs(details)
+    const result = await this.exclusive(() =>
+      this.sendCommand(
+        this.endpoints.openCreditNote,
+        'OpenCreditNoteWithFreeCustomerData',
+        buildOpenCreditNoteArgs(details)
+      )
     )
     if (!result.success) {
       return {
@@ -1192,7 +1238,7 @@ export class RealFiscalizationProvider implements FiscalizationProvider {
    * @returns {Promise<ServiceResult<{ cuInvoiceNumber: string }>>}
    */
   async readCUInvoiceNumber(): Promise<ServiceResult<{ cuInvoiceNumber: string }>> {
-    const result = await this.sendReadCUinvoiceNumber()
+    const result = await this.exclusive(() => this.sendReadCUinvoiceNumber())
     if (!result.success) {
       return { success: false, error: result.error }
     }
@@ -1342,14 +1388,18 @@ export class RealFiscalizationProvider implements FiscalizationProvider {
   /**
    * Releases this client's device session on the ZFPLabServer. Call
    * once on app shutdown — never per sale, which would force a fresh
-   * `settings()` handshake on every transaction.
+   * `settings()` handshake on every transaction. Runs under
+   * {@link exclusive}, so it waits for a sale in flight rather than
+   * dropping that sale's session mid-receipt.
    *
    * @returns {Promise<ServiceResult<Record<string, string>>>}
    */
   async closeServerConnection(): Promise<ServiceResult<Record<string, string>>> {
-    this.settingsPromise = null
-    this.cuNumbersPromise = null
-    return closeDeviceConnection(this.http, this.debugLogging)
+    return this.exclusive(() => {
+      this.settingsPromise = null
+      this.cuNumbersPromise = null
+      return closeDeviceConnection(this.http, this.debugLogging)
+    })
   }
 
   /**
