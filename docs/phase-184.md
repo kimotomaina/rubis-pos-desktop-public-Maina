@@ -300,3 +300,149 @@ Each commit runs `npm run typecheck` and the fiscal test files, and gets the mut
 ## 8. Rollback
 
 Nothing to roll back. This Part changed no code; the only file added is this report.
+
+---
+
+# Part 2 — Implementation
+
+- **Date:** 2026-09-29
+- **Requested:** Build items 1-3 from Part 1 as three separate commits in that order, with the brief's decisions. Item 4 is held for VIL questions 6 and 8. Stop after the three commits and report.
+- **Outcome:** Implemented. All three commits are local on `staging` and not pushed.
+- **Base:** staging @ 8457312 (the Part 1 report), tree clean.
+
+| # | Commit | What |
+| --- | --- | --- |
+| 1 | `39d2992` | The device session lock (Part 1 §1) |
+| 2 | `1b73c77` | The seven STE2 codes, `0x32` retryable, guards 2.3a and 2.3b (Part 1 §2) |
+| 3 | `a82ee3c` | The refused step in the stored reason, and the database.ts doc comment (Part 1 §3) |
+
+### New context from the brief: one CU for every shop
+
+Per ICT's written answer of 24 Sep 2026, all COCO shops share **one** Tremol CU at head office.
+- **The lock only serialises this till's own process.** It can't stop another till's commands landing between this till's, and the comment on `exclusive()` says so in the brief's words.
+- **This changes part of Part 1's safety argument.** Part 1 §2.2 said a retried `0x32` cannot file twice *once the lock exists*. That still holds for this till's own callers. It does **not** yet hold across tills: if the CU or ZFPLabServer let another till's `CloseReceipt` close a receipt that holds this till's lines, retrying this sale would file those lines again.
+- Whether the CU keeps each client's receipt apart is exactly VIL question 6. Two pieces of evidence bear on it:
+  - PDF §1.3 lists `60` "CU is already busy with another connection (LAN or WiFi connection only)".
+  - Code 19, "FP refuses new socket connection", has been captured live (`tests/fixtures/wire/readstatus-live-captured-code19.xml`).
+
+  Both suggest the CU takes one TCP connection at a time. Neither says whether it holds that connection for a whole receipt or only for one command.
+
+### Commit 1 — the lock (`39d2992`)
+
+**[real-etims-provider.ts](../src/main/services/integrations/real-etims-provider.ts):**
+- A new private field `deviceQueue: Promise<void>`.
+- A new private `exclusive(task)`, which chains `task` after `deviceQueue` and sets `deviceQueue` to that run with both outcomes swallowed. Its JSDoc carries the brief's sentence verbatim: "Serialises this till's own calls only. The CU may be shared with other tills; cross-client safety depends on the vendor (VIL question 6)."
+- **Wrapped:** `submitInvoice` (its body moved unchanged into a private `submitInvoiceExclusive`), `cancelInvoice` (the device call only; its no-details early return sends nothing), `readCUInvoiceNumber`, `testConnection` (the cache clear moved inside the lock), `checkConnectivity` (the badge joins, as Part 1 §1 decided) and `closeServerConnection` (the cache clears moved inside).
+- **Not wrapped, as planned:** every private helper, plus `getInvoiceDetails` and `reconfigure`.
+
+**Tests** ([realEtimsProvider.test.ts](../tests/realEtimsProvider.test.ts), `describe('device session lock (docs/phase-184, commit 1)')`):
+1. **Two concurrent sales never interleave.** The mock replies after uneven 1-3 ms delays, and the sequence must be `ReadCUnumbers` plus one whole sale, then the second whole sale. The OpenInvoice bodies carry `INV-000000001` then `INV-000000002`.
+2. **A sale that throws releases the lock.** A `null` line makes `validateFiscalInvoiceRequest` throw a `TypeError`, and the next sale is still filed.
+3. **The badge waits.** Its `ReadStatus` comes after the sale's `ReadDateTime`.
+4. **The quit-time close waits.** `clientremove` is the last event, after `ReadDateTime`.
+5. **No deadlock.** All 139 tests that existed before still pass unchanged, including every isRetry, `verifyAlreadyFiled` and rollback test.
+
+### Commit 2 — STE2 codes and guards (`1b73c77`)
+
+**Changes in `real-etims-provider.ts`:**
+- **`mapFiscalDeviceError`:** seven new cases, with the PDF §1.2.1 text verbatim (without the "!"):
+  - 49 Invalid command
+  - **50 Illegal command → `retryable: true`**
+  - 51 Z daily report is not zero
+  - 53 Input registers overflow
+  - 54 Zero input registers
+  - 55 Unavailable transaction for correction
+  - 56 Insufficient amount on hand
+
+  All except 50 are `retryable: false`. The JSDoc now names `'50'` as the one exception, and says the table is only ever used for a Code 40 STE2.
+- **Guard 2.3a (`checkDeviceResponse` fallback):** a non-40 code that isn't in the server table is now reported with the server's own `<Message>`, `retryable: false`, and is no longer looked up in the STE2 table. JSDoc point 3 is updated, citing `Tremol.ServerErrorType` (`fp_core.js:547-552`).
+- **Guard 2.3b (`sendCommand`):** a Code 53 re-sends `settings()` and repeats the command only when `first.serverFailure` is set, which is only ever the case for a server-sourced 53. The JSDoc explains the STE2 `0x35` collision.
+- **The `classifyDeviceFailure` JSDoc** now lists `STE2=0x32` among the `'technical'` codes. Leaving it out would have made the comment wrong.
+
+**The phase-183 sale:** no database code, migration or query changed. Only *new* outcomes are routed by the new table, so the sale stays `needs_fixing` and nothing retries it.
+
+**Tests** (`describe('STE2 codes and their guards (docs/phase-184, commit 2)')`, plus the table test):
+- `'50'` maps to "Illegal command" with `retryable: true`, in its own test.
+- New 1: SellPLU refused with `0x32` gives `technical` and retryable, `CancelReceipt` is sent and `CloseReceipt` is not, and `routeFiscalOutcome` gives `{ status: 'waiting', enqueue: true }`.
+- New 2: an isRetry sale whose OpenInvoice is refused with `0x32` asks `ReadCUinvoiceNumber`. With no number returned, it ends as a retryable failure with no SellPLU and no CloseReceipt, so it is never reported as filed.
+- New 3: a server `<Res Code="50" … Type="ClientArgDefMissing">` is non-retryable, and its reason carries the server's message, not "Illegal command".
+- New 4: STE2 `0x35` on SellPLU gives exactly one `settings()` GET and one `SellPLUfromExtDB` post, and the sale is non-retryable.
+
+### Commit 3 — the refused step (`a82ee3c`)
+
+**[real-etims-provider.ts](../src/main/services/integrations/real-etims-provider.ts):**
+- A new private `RefusedStep` interface (`label`, `command`).
+- `classifyDeviceFailure` takes it as its second parameter. It strips one trailing full stop from the reason and appends `. Refused while <label> (<command>).`, except when `result.code` is `CODE_DAILY_CLOSURE_BLOCK`.
+- The six call sites pass their step:
+
+| Command | Label |
+| --- | --- |
+| `settings` | opening the device session |
+| `ReadStatus` | checking the device status |
+| `OpenInvoiceWithFreeCustomerData` | opening the invoice |
+| the sell command actually sent | adding item *n* of *m* |
+| `ReadCurrentReceiptInfo` | reading the receipt totals |
+| `CloseReceipt` | closing the invoice |
+
+Example of a stored reason: `Fiscal device error (Code 40, STE2=62): Item amount too large. Refused while adding item 2 of 2 (SellPLUfromExtDB).`
+
+**[database.ts:237](../src/main/services/database.ts#L237):** the `fiscalErrorReason` doc comment now describes what is actually stored. This is the only line changed in database.ts (`git diff --numstat`: 1 added, 1 removed).
+
+**Tests** (`describe('the stored reason names the refused step (docs/phase-184, commit 3)')`):
+- An `it.each` over `ReadStatus`, `OpenInvoice…`, `ReadCurrentReceiptInfo` and `CloseReceipt`, each asserting the whole reason exactly.
+- A failed `settings()` handshake ends with the settings step.
+- The second of two lines refused asserts "item 2 of 2 (SellPLUfromExtDB)" exactly.
+
+### Every changed assertion
+
+Only one existing test was edited: the `mapFiscalDeviceError` `it.each` in [realEtimsProvider.test.ts](../tests/realEtimsProvider.test.ts) (commit 2).
+- Its title changed from "maps STE2 decimal %s to the PDF-correct message, **always** non-retryable" to "… non-retryable", because `'50'` is now the exception and has its own test.
+- Six rows were added: 49, 51, 53, 54, 55, 56.
+- The nine existing rows and their expected values are unchanged.
+
+No other existing assertion was changed, and every other test in the repo passes unmodified. That includes the four `toBe(DAILY_CLOSURE_BLOCK_REASON)` checks, which pin the exclusion in commit 3.
+
+### Mutation checks (each applied, run, then reverted)
+
+| Commit | Mutation | Failed | Result |
+| --- | --- | --- | --- |
+| 1 | `submitInvoice` calls `submitInvoiceExclusive` directly (no lock) | lock tests 1, 3 and 4 | Caught |
+| 1 | `deviceQueue = run.then(() => undefined)` (a failure jams the chain) | lock test 2 | Caught |
+| 2 | `'50'` set to `retryable: false` | the `'50'` table test, new tests 1 and 2 | Caught |
+| 2 | Fallback reads `mapFiscalDeviceError` again (guard 2.3a removed) | new test 3 | Caught |
+| 2 | `sendCommand` drops `\|\| !first.serverFailure` (guard 2.3b removed) | new test 4 | Caught |
+| 3 | CloseReceipt call site given the OpenInvoice step | the CloseReceipt row | Caught |
+| 3 | Extra: daily-closure exclusion removed | 17 existing daily-closure and TEST A tests | Caught |
+
+After each revert, `git diff` showed only the intended change, and each commit's tree was clean after committing.
+
+### Verification
+
+| When | Command | Result |
+| --- | --- | --- |
+| Each commit | `npm run typecheck` | Clean |
+| Commit 1 | 28 fiscal test files (`vitest run realEtimsProvider fiscal defVersionCompatibility tremolConformance wireFixtures mockServerHappyPath runCheckout traderSystemInvoiceNumber needsAttention NeedsAttentionPage http-client`) | 522 passed |
+| Commit 2 | Same files | 533 passed |
+| Commit 3 | Same files | 539 passed |
+| After commit 3 | `npx vitest run` (full suite) | 151 files, **2,314 passed** (2,293 before this phase, plus 21 new) |
+| After commit 3 | `npx electron-vite build` | Built (main, preload, renderer) |
+
+**Tripwires:** `git diff --stat` was empty at every commit for `checkout.ts`, `fiscal-engine.ts`, `fiscal-routing.ts`, `fiscal-retry.ts`, `src/main/lib/receiptLayout.ts`, `printer.ts` and `PosCheckoutPanel.tsx`. `database.ts` changed by one comment line, in commit 3 only. The brief lists `receiptLayout.ts` without a folder; its real path is `src/main/lib/`, and that path was checked.
+
+**No calls** were made to the device, ZFPLabServer or Shopify.
+
+### Rollback
+
+Revert newest first: `git revert a82ee3c 1b73c77 39d2992`. There is no data, schema or config change, so a revert restores the old behaviour completely. Reasons already stored with the new suffix keep it; they are plain text.
+
+### Residual risk
+
+- **Across tills (see above):** retrying `0x32` is only safe from double filing if the CU keeps each client's receipt apart. That is VIL question 6, and until it is answered this is the one open risk in this phase.
+- A checkout can wait behind one in-flight queued sale on this till. That was measured only against mocks, not on a device.
+- Item 4 (cancel an open receipt before `OpenInvoice`) is not built. A receipt left open by a quit mid-sale is still only cleared by the existing `STE1=0x34` path or by hand.
+
+### Observed but not changed (Part 2)
+
+1. [database.ts:65](../src/main/services/database.ts#L65), the `fiscal_error_reason` column's doc comment, still reads "Short plain-language failure reason, e.g. 'Wrong client PIN'". The brief allowed only the line 237 comment in database.ts, so this one is now slightly stale.
+2. The cashier's "rejected" notice ([fiscalNotice.ts:61-64](../src/renderer/src/lib/fiscalNotice.ts#L61-L64)) shows the reason verbatim, so it now ends with "Refused while … (Command)." The command name in brackets breaks that file's "no device codes" copy rule, as the "Code 40, STE2=…" prefix already did. It is left for a copy review.
+3. Part 1 §7 items 1-5 still stand.
