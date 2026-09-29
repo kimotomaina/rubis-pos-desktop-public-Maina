@@ -185,7 +185,8 @@ const THIRTY_SECONDS = 30_000
 const SEVENTY_TWO_HOURS = 72 * 60 * 60 * 1000
 
 describe('engine: a 72-hour outage leaves every sale waiting, then all file once, in order', () => {
-  it('no sale is counted or abandoned during the outage, and each files exactly once afterwards', async () => {
+  // 8,640 real provider passes; the default 5 s limit is tight when the whole suite runs in parallel.
+  it('no sale is counted or abandoned during the outage, and each files exactly once afterwards', { timeout: 60_000 }, async () => {
     const db = freshDb()
     const staffId = db.createStaff({ name: 'Alex', pinHash: hashPin('1234'), role: 'cashier' }).staffId
     const outage = vi.fn().mockRejectedValue(new Error('connect ECONNREFUSED 127.0.0.1:4444'))

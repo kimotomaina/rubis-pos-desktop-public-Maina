@@ -1,6 +1,7 @@
 import { useLayoutEffect, useRef, useState } from 'react'
 import rubisLogo from '../assets/logo-rubis.png'
 import LocationPicker, { type ShopifyLocationOption } from './LocationPicker.js'
+import { PasswordField } from './HoldToReveal.js'
 import { useKeyboardStore } from '../stores/keyboardStore.js'
 import { blurRestoredFocus } from '../lib/blurRestoredFocus.js'
 
@@ -157,9 +158,8 @@ export default function OnboardingScreen() {
                 <label htmlFor="onboarding-token" className={LABEL_CLASS}>
                   Admin API Access Token
                 </label>
-                <input
+                <PasswordField
                   id="onboarding-token"
-                  type="password"
                   value={token}
                   readOnly
                   onFocus={() => openKeyboard('Admin API Access Token', token, setToken, true)}

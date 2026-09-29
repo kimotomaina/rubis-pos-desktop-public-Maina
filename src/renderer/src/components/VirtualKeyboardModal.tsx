@@ -1,6 +1,9 @@
+import { useCallback, useEffect, useState } from 'react'
 import VirtualKeyboard from './VirtualKeyboard.js'
 import VirtualNumpad from './VirtualNumpad.js'
+import { HoldToRevealButton, useHoldToReveal } from './HoldToReveal.js'
 import { useKeyboardStore } from '../stores/keyboardStore.js'
+import { pasteIntoValue } from '../lib/pasteText.js'
 
 /** Ties the echo's accessible name to the label above it — one keyboard exists at a time, so a constant id is safe. */
 const LABEL_ID = 'virtual-keyboard-label'
@@ -31,7 +34,15 @@ const LABEL_ID = 'virtual-keyboard-label'
  * a `readOnly` input: an input can still take focus, and focus is what
  * opens this keyboard on the setup screens, which would loop. With
  * `request.secret` it shows one `•` per character, never the characters,
- * so the Shopify token and the fiscal device password stay off screen.
+ * so the Shopify token and the fiscal device password stay off screen —
+ * except while the eye beside it is held down (`HoldToReveal`), which
+ * shows the characters for exactly as long as it is pressed.
+ *
+ * Beside the echo, a Paste key adds the clipboard's text to the field, and
+ * so does Ctrl+V while the keyboard is open. The setup and admin fields
+ * are read-only inputs that hand editing to this overlay, so a native
+ * paste into them does nothing; the text goes through `pasteIntoValue`,
+ * which cuts it to what typing it here could have produced.
  *
  * Modal (the default): `fixed inset-0 z-[60]` — deliberately above
  * `ToastStack`'s `z-50` (phase-84), so opening the keyboard from the
@@ -53,6 +64,51 @@ const LABEL_ID = 'virtual-keyboard-label'
 export default function VirtualKeyboardModal() {
   const request = useKeyboardStore((state) => state.request)
   const close = useKeyboardStore((state) => state.close)
+  const { revealed, hide, holdProps } = useHoldToReveal()
+  const [pasteNote, setPasteNote] = useState<string | null>(null)
+  const isOpen = request !== null
+
+  /** Adds `text` to whatever the field holds now, read fresh because the relay updates it on every key. */
+  const applyPaste = useCallback((text: string): void => {
+    const current = useKeyboardStore.getState().request
+    if (!current) return
+    const next = pasteIntoValue(current.value, text, current.mode, current.maxLength)
+    if (next !== current.value) current.onChange(next)
+  }, [])
+
+  const pasteFromClipboard = async (): Promise<void> => {
+    try {
+      const text = await navigator.clipboard.readText()
+      if (!text.trim()) {
+        setPasteNote('Nothing to paste')
+        return
+      }
+      applyPaste(text)
+      setPasteNote(null)
+    } catch {
+      setPasteNote('Could not read the clipboard')
+    }
+  }
+
+  /** A hold cannot outlive the request: the icon is gone before its release arrives. */
+  useEffect(() => {
+    if (!isOpen) {
+      hide()
+      setPasteNote(null)
+    }
+  }, [isOpen, hide])
+
+  useEffect(() => {
+    if (!isOpen) return undefined
+    const onPaste = (event: ClipboardEvent): void => {
+      const text = event.clipboardData?.getData('text') ?? ''
+      if (!text) return
+      event.preventDefault()
+      applyPaste(text)
+    }
+    document.addEventListener('paste', onPaste)
+    return () => document.removeEventListener('paste', onPaste)
+  }, [isOpen, applyPaste])
 
   if (!request) return null
 
@@ -85,16 +141,31 @@ export default function VirtualKeyboardModal() {
    */
   const header = (
     <>
-      <p id={LABEL_ID} className="mb-2 text-base font-semibold text-slate-700">
-        {request.label}
-      </p>
-      <div
-        role="textbox"
-        aria-readonly="true"
-        aria-labelledby={LABEL_ID}
-        className="mb-2 flex h-12 items-center overflow-x-auto whitespace-pre rounded-lg border border-slate-300 bg-slate-50 px-3 text-xl text-slate-900"
-      >
-        {request.secret ? '•'.repeat(request.value.length) : request.value}
+      <div className="mb-2 flex items-baseline justify-between gap-2">
+        <p id={LABEL_ID} className="text-base font-semibold text-slate-700">
+          {request.label}
+        </p>
+        <p role="status" className="text-sm font-medium text-rose-600">
+          {pasteNote}
+        </p>
+      </div>
+      <div className="mb-2 flex h-12 items-center gap-2">
+        <div
+          role="textbox"
+          aria-readonly="true"
+          aria-labelledby={LABEL_ID}
+          className="flex h-12 min-w-0 flex-1 items-center overflow-x-auto whitespace-pre rounded-lg border border-slate-300 bg-slate-50 px-3 text-xl text-slate-900"
+        >
+          {request.secret && !revealed ? '•'.repeat(request.value.length) : request.value}
+        </div>
+        <button
+          type="button"
+          onClick={() => void pasteFromClipboard()}
+          className="h-12 shrink-0 rounded-lg border border-slate-300 bg-white px-4 text-base font-semibold text-slate-700 active:bg-slate-200"
+        >
+          Paste
+        </button>
+        {request.secret && <HoldToRevealButton revealed={revealed} className="h-12 w-12" {...holdProps} />}
       </div>
     </>
   )

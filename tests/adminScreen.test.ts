@@ -170,8 +170,10 @@ function inputByLabel(labelText: string): HTMLInputElement {
   const labels = Array.from(container.querySelectorAll('label'))
   const label = labels.find((l) => l.textContent?.trim().startsWith(labelText))
   if (!label) throw new Error(`No label "${labelText}"`)
-  // Every converted field's <input> is its label's next sibling in the markup.
-  const input = label.nextElementSibling as HTMLInputElement | null
+  // A converted field's <input> is its label's next sibling, or sits inside the wrapper
+  // that carries the hold-to-show icon (PasswordField).
+  const next = label.nextElementSibling
+  const input = (next?.tagName === 'DIV' ? next.querySelector('input') : next) as HTMLInputElement | null
   if (!input || input.tagName !== 'INPUT') throw new Error(`No input after label "${labelText}"`)
   return input
 }

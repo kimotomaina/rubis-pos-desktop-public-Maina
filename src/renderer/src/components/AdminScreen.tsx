@@ -28,6 +28,7 @@ import EndOfDayPage from '../pages/EndOfDayPage.js'
 import ReportsPage from '../pages/ReportsPage.js'
 import RestartCountdownModal from './RestartCountdownModal.js'
 import { useKeyboardStore, type KeyboardMode } from '../stores/keyboardStore.js'
+import { PasswordField } from './HoldToReveal.js'
 import type { DailySummary, ZReport } from '../../../main/services/reports.js'
 import type {
   ShiftRow,
@@ -1369,8 +1370,7 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
                     <label className="mb-1 block text-lg font-medium text-slate-600">
                       New Token (starts with shpat_)
                     </label>
-                    <input
-                      type="password"
+                    <PasswordField
                       readOnly
                       value={shopifyTokenInput}
                       onClick={() =>
@@ -1380,7 +1380,8 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
                         })
                       }
                       placeholder="shpat_••••••••••••••••"
-                      className="mb-3 w-full h-12 rounded-lg border border-slate-300 px-3 text-lg focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-100"
+                      wrapperClassName="mb-3"
+                      className="w-full h-12 rounded-lg border border-slate-300 px-3 text-lg focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-100"
                     />
 
                     {shopifyTokenMessage && (
@@ -1535,8 +1536,7 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
                         <label className="mb-1 flex items-center gap-1 text-lg font-medium text-slate-600">
                           Consumer Secret <LockIcon className="h-4 w-4 text-slate-400" />
                         </label>
-                        <input
-                          type="password"
+                        <PasswordField
                           readOnly
                           value={mpesaConsumerSecretInput}
                           onClick={() =>
@@ -1555,8 +1555,7 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
                         <label className="mb-1 flex items-center gap-1 text-lg font-medium text-slate-600">
                           Passkey <LockIcon className="h-4 w-4 text-slate-400" />
                         </label>
-                        <input
-                          type="password"
+                        <PasswordField
                           readOnly
                           value={mpesaPasskeyInput}
                           onClick={() =>
@@ -1758,8 +1757,7 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
                     <label className="mb-1 block text-lg font-medium text-slate-600">
                       Fiscal device password
                     </label>
-                    <input
-                      type="password"
+                    <PasswordField
                       readOnly
                       value={etimsPassword}
                       onClick={() =>

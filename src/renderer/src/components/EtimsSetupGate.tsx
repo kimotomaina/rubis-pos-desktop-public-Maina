@@ -1,5 +1,6 @@
-import { useLayoutEffect, useRef, useState } from 'react'
+import { useLayoutEffect, useRef, useState, type InputHTMLAttributes } from 'react'
 import { WarningIcon } from './icons.js'
+import { PasswordField } from './HoldToReveal.js'
 import {
   validateEtimsConnection,
   DEFAULT_ETIMS_BASE_URL,
@@ -52,6 +53,14 @@ const FIELDS: {
   { key: 'devicePort', label: 'Fiscal device port', type: 'text', mode: 'numeric', placeholder: DEFAULT_ETIMS_DEVICE_PORT },
   { key: 'password', label: 'Fiscal device password', type: 'password', mode: 'text', placeholder: '••••••••' }
 ]
+
+/** A form field's input: the device password gets the hold-to-show icon, the rest are plain. */
+function FieldInput({
+  type,
+  ...props
+}: Omit<InputHTMLAttributes<HTMLInputElement>, 'type'> & { type: 'text' | 'password' }) {
+  return type === 'password' ? <PasswordField {...props} /> : <input {...props} type="text" />
+}
 
 /** Props accepted by {@link EtimsSetupGate}. */
 interface EtimsSetupGateProps {
@@ -158,7 +167,7 @@ export default function EtimsSetupGate({ onComplete }: EtimsSetupGateProps) {
               >
                 {field.label}
               </label>
-              <input
+              <FieldInput
                 id={`etims-${field.key}`}
                 type={field.type}
                 value={form[field.key]}

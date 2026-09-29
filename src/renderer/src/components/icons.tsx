@@ -198,3 +198,33 @@ export function DownloadIcon({ className = 'h-5 w-5' }: IconProps) {
     </svg>
   )
 }
+
+/** Hold-to-show on secret fields — an open eye. */
+export function EyeIcon({ className = 'h-6 w-6' }: IconProps) {
+  return (
+    <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
+      <path
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        strokeWidth={2}
+        d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12z"
+      />
+      <circle cx="12" cy="12" r="3" strokeWidth={2} />
+    </svg>
+  )
+}
+
+/** Shown while a secret is being held visible — the eye struck through. */
+export function EyeOffIcon({ className = 'h-6 w-6' }: IconProps) {
+  return (
+    <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
+      <path
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        strokeWidth={2}
+        d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12zM4 4l16 16"
+      />
+      <circle cx="12" cy="12" r="3" strokeWidth={2} />
+    </svg>
+  )
+}
