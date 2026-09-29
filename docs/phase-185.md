@@ -218,3 +218,82 @@ The request stored at insert carries `localId`, so the retry reuses the same `Tr
 ## 9. Rollback
 
 Nothing to roll back. No code changed; the only file added is this report.
+
+---
+
+# Part 2 — Implementation
+
+- **Date:** 2026-09-29
+- **Commit:** `4d75f1d` on `staging`, not pushed.
+- **Built as recommended in Part 1:** option A, the in-flight claim (§5) and option B, the start-up sweep. You said "proceed" after the recommendation.
+- **One change from §4.1:** the retryable branch needs no `releaseFiscalQueueItem`. The row is inserted already due (`next_attempt_at = 0`), and nothing moves it while checkout holds the claim. So a retryable failure only writes the status.
+- **Device calls:** none.
+
+### What changed
+
+| File | Change |
+| --- | --- |
+| `database.ts` | `QueueOrderInput.buildFiscalRequest(localId)` (optional). When given, `queueOrder` also writes `fiscal_status='waiting'`, `fiscal_request_json` and the due `etims_invoice` row **inside its existing transaction**, and returns `fiscalQueueId`. The three M-Pesa wrappers pass it through unchanged; their return type is now the named `QueuedOrder`. |
+| `database.ts` | `settleCheckoutFiscalSuccess(localId, fiscalQueueId, invoice)` and `settleCheckoutFiscalFailure(localId, fiscalQueueId, status, …)`. Each writes the order's outcome and the row's fate **in one transaction**: success and `needs_fixing` delete the row, `waiting` keeps it. Keyed on `localId`, so a filing is recorded even if the row has gone (a void during filing). |
+| `database.ts` | `sweepUnqueuedFiscalOrders()` and the two reason constants. Each NULL-status sale that isn't voided is handled as follows:<br>• **With a stored request:** set to `waiting`/`technical` and queued from that request.<br>• **Without one:** set to `needs_fixing`/`system`, "Ask support to check it", and never refiled.<br>It is idempotent by its `WHERE`. |
+| `checkout.ts` | Checkout passes `buildFiscalRequest` into every insert.<br>• **Claim:** it claims the sale **before the first `await`** and releases it in a `finally`. The retry hand-off (`onCheckoutMade`) runs **after** the release.<br>• **Removed:** `setOrderFiscalRequest` and `queueFiscalInvoice`, which the insert now does. The thrown-exception branch no longer rebuilds or re-queues anything.<br>• **`CheckoutDb`:** four methods are replaced by the two `settle…` methods. |
+| `fiscal-engine.ts` | `claim` / `release` / `isClaimed` over an in-memory `Set`. `tick` skips a claimed sale **before** `attemptFiscalRetry`, so no attempt is counted and no backoff applies. |
+| `fiscal-retry.ts` | `FiscalResendDeps.isFiling`. `resendFiscalization` refuses a sale checkout is filing with `SALE_STILL_FILING_REASON`, with no device call and no write. `correctPinAndResend` checks it **before** rewriting the stored request. |
+| `index.ts` | The sweep runs after `runPostUpdateCheck` and before the fiscal engine is created or started. Both resend handlers pass `isFiling: fiscalEngine.isClaimed`. |
+
+**The claim can't be skipped:** there is no `await` between the insert and `claim`, only synchronous code (the fire-and-forget Shopify tick and a `getOrder`). JavaScript runs one thing at a time, so no fiscal tick or IPC handler can run in between.
+
+### Every changed test (no assertion changed)
+
+- **The six checkout fakes** (`runCheckout`, `fiscalIntegration`, `cardManualPayment`, `mpesaManualPayment`, `mpesaPaymentGate`, `mpesaPaymentsRecord`): `fiscalEngine: { onCheckoutMade }` gains `claim: vi.fn(), release: vi.fn()`. Without them, 62 tests failed on `claim is not a function`.
+- **`runCheckout.test.ts`'s three hand-built `CheckoutDb` fakes** (lines ~168, ~596, ~631): the four removed methods are replaced by `settleCheckoutFiscalSuccess`/`Failure` bound to the real database.
+- **No expected value changed.** Part 1 §4.1 expected about 81 queue-count references to need updating. None did: each outcome ends in the same state as before (success: no row; retryable: one due row with 0 attempts; refusal: no row). Only the moment the row is written moved.
+
+### New tests (`tests/fiscalCheckoutDurability.test.ts`, 14)
+
+| Area | Tests |
+| --- | --- |
+| **A** | A stop during the device call leaves the sale `waiting`, counted and queued, with the exact request in both the order and the row. The next start then files it once, with `isRetry: true`, so `verifyAlreadyFiled` applies. A manual M-Pesa sale gets the same treatment through its wrapper. |
+| Outcomes | Success leaves no row. A retryable failure leaves exactly one due row with 0 attempts. A refusal leaves no row. A thrown exception leaves one row. A void during filing still records the filing. |
+| Claim | A tick during checkout skips the sale: one device call, 0 attempts. The retryable hand-off tick isn't blocked by the claim. A resend and a PIN correction during checkout are refused, with no call, no write and no rewrite. |
+| **B** | The sweep re-queues a stuck sale that has its request (payload verbatim, class-B line kept), flags one without a request, and leaves voided and filed sales alone. A second run changes nothing, and the sweep never touches a sale checkout queued. |
+
+### Mutation checks (each applied, run, then the file restored)
+
+| # | Mutation | Tests that failed |
+| --- | --- | --- |
+| M1 | `queueOrder` ignores `buildFiscalRequest` | 9 |
+| M2 | `tick` doesn't skip a claimed sale | 1 (the tick-during-checkout test: two device calls) |
+| M3 | checkout never claims | 3 |
+| M4 | hand-off fired before the release | 1 |
+| M5 | resend ignores `isFiling` | 2 |
+| M6 | PIN correction ignores `isFiling` | 1 |
+| M7 | `needs_fixing` keeps its row | 1 |
+| M8 | success keeps its row | 1 |
+| M9 | success skipped when the row is gone | 1 (void during filing) |
+| M10 | sweep refiles a sale with no stored request | 2 |
+| M11 | sweep includes voided sales | 1 |
+
+`git diff --stat` was the same after all eleven as before them.
+
+### Verification
+
+- **Type check:** `npm run typecheck` (node and web) clean.
+- **Tests:** `npx vitest run`, **152 files, 2,328 tests, all passing** (2,314 before, plus 14 new).
+- **Build:** `npm run build` succeeds.
+- **Tripwires unchanged:** `real-etims-provider.ts`, `fiscal-routing.ts`, `receiptLayout.ts`, `printer.ts` and `PosCheckoutPanel.tsx`.
+
+### Before this reaches the till
+
+**Run phase 187 first.** The sweep will **file every stuck sale that has a stored request on the first start**, possibly days after the sale (§4.2). If any of them are set-up or training sales, void them before installing. Phase 187's NULL-row count answers this, together with the database-reset check (§6).
+
+### Rollback
+
+- **Code:** `git revert 4d75f1d`. There is no schema change.
+- **What a revert doesn't undo:** on a till that has already run this build, the sweep's writes stay. Each is a normal state (`waiting` with a row, or `needs_fixing`) that the older code handles.
+
+### Observed but not changed (Part 2)
+
+1. **A resend that fails retryably still inserts a second row** (§7.2). Under A every `waiting` sale already has one, so this now happens on every such resend rather than occasionally. It is still safe: the second row is short-circuited by the `fiscalized` check.
+2. **If `buildFiscalRequest` threw inside the insert, the sale would not be recorded** and checkout would report a failure. Today it is a pure field mapping, but this tightens the old behaviour, where a throw there still completed the sale.
+3. **`fiscalQueueId` is read with a cast** in `checkout.ts`. It is always set because checkout always passes the builder, and a runtime throw at that point would break Rule 4 after the sale is recorded, so the cast is the safer choice.
