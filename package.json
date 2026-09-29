@@ -38,6 +38,7 @@
     "predist": "npm run check-node-version && npm run check-env",
     "dist": "npm run build && electron-builder --win",
     "postdist": "node scripts/verify-dist.cjs",
+    "dist:publish": "npm run dist -- --publish always",
     "predist:dir": "npm run check-node-version && npm run check-env",
     "dist:dir": "npm run build && electron-builder --win --dir",
     "postdist:dir": "node scripts/verify-dist.cjs",

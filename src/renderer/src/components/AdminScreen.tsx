@@ -200,6 +200,7 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
 
   const [checkingForUpdates, setCheckingForUpdates] = useState(false)
   const [updateCheckMessage, setUpdateCheckMessage] = useState<string | null>(null)
+  const [installedVersion, setInstalledVersion] = useState<string | null>(null)
 
   const [resettingConfig, setResettingConfig] = useState(false)
   const [resetConfigError, setResetConfigError] = useState<string | null>(null)
@@ -957,6 +958,14 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
 
   useEffect(() => {
     void refresh()
+  }, [])
+
+  /**
+   * Phase 177: a human's only way to confirm an over-the-air update landed
+   * without opening Windows Settings — read once on mount, no new IPC.
+   */
+  useEffect(() => {
+    void window.api.getAppVersion().then(setInstalledVersion)
   }, [])
 
   if (!currentStaff || currentStaff.role !== 'admin') {
@@ -2334,6 +2343,9 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
       {/* App & Updates */}
       <section className="rounded-xl border border-slate-200 bg-white p-4">
         <h3 className="mb-3 text-base font-semibold text-slate-800">App &amp; Updates</h3>
+        {installedVersion && (
+          <p className="mb-3 text-base text-slate-500">Installed version: {installedVersion}</p>
+        )}
         <button
           type="button"
           disabled={checkingForUpdates}

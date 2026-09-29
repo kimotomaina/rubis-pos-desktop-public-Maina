@@ -110,7 +110,10 @@ function stubApi(): void {
     getShopifyTokenStatus: vi.fn().mockResolvedValue(ok({ configured: false })),
     getShopifyStoreUrl: vi.fn().mockResolvedValue(ok({ storeUrl: '' })),
     getConfigStatus: vi.fn().mockResolvedValue(ok({ config: null })),
-    getPrinters: vi.fn().mockResolvedValue(ok([]))
+    getPrinters: vi.fn().mockResolvedValue(ok([])),
+    // Phase 177: not wrapped in ok(...) — the preload's getAppVersion
+    // resolves the bare version string, unlike every ServiceResult call above.
+    getAppVersion: vi.fn().mockResolvedValue('2.0.4')
   } as unknown as typeof window.api
 }
 

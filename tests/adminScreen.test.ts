@@ -105,7 +105,10 @@ function stubApi(
     openShift: vi.fn().mockResolvedValue(ok(undefined)),
     closeShift: vi.fn().mockResolvedValue(ok({ expectedCash: 100, discrepancy: 0 })),
     getZReport: vi.fn().mockResolvedValue(ok(null)),
-    checkForUpdates: vi.fn().mockResolvedValue(ok(undefined))
+    checkForUpdates: vi.fn().mockResolvedValue(ok(undefined)),
+    // Phase 177: not wrapped in ok(...) — the preload's getAppVersion
+    // resolves the bare version string, unlike every ServiceResult call above.
+    getAppVersion: vi.fn().mockResolvedValue('2.0.4')
   } as unknown as typeof window.api
 }
 
@@ -444,6 +447,16 @@ describe('AdminScreen > Integrations > Printer > Windows printer (docs/phase-174
 
     expect(container.textContent).toContain('Missing')
     expect(container.textContent).toContain('Windows printer: EPSON-TM-T88')
+  })
+})
+
+describe('AdminScreen > Overview > App & Updates', () => {
+  it('shows the installed version from window.api.getAppVersion on mount', async () => {
+    stubApi()
+    await mount()
+    await click('Overview')
+
+    expect(container.textContent).toContain('Installed version: 2.0.4')
   })
 })
 

@@ -1,8 +1,8 @@
 # Phase 177 — Over-the-air updates via a public releases-only GitHub repo: read-only audit
 
 - **Date:** 2026-09-29
-- **Requested:** Part 1 (read-only) of switching OTA updates from the never-published private source repo to a new public, releases-only repo (`Volcha-Enterprises/rubis-pos-releases`), and confirming the NSIS uninstall path is safe to run during an update. No code changes in this part.
-- **Outcome:** Audit complete. STOP for review, per the request — Part 2 not started.
+- **Requested:** Part 1 (read-only) of switching OTA updates from the never-published private source repo to a new public, releases-only repo (`Volcha-Enterprises/rubis-pos-releases`), and confirming the NSIS uninstall path is safe to run during an update. Part 2: apply the fix and the publish wiring the audit called for.
+- **Outcome:** Part 1 audit complete, reviewed. Part 2 implemented.
 - **Branch / base commit:** staging @ 587047e (feat: card tender on the live checkout panel, Option A (phase 176))
 
 ---
@@ -166,3 +166,101 @@ None of these assertions concern `electron-builder.yml`, `installer.nsh`, or the
 Nothing else audited above blocks Part 2 as scoped in the request.
 
 **STOP — awaiting review before Part 2.**
+
+---
+
+## Part 2 — Setup
+
+### Changes made
+
+1. **`build/installer.nsh`** — wrapped the `customUnInstall` app-data removal in the electron-builder NSIS guard:
+   ```nsis
+   !macro customUnInstall
+     ${ifNot} ${isUpdated}
+       RMDir /r "$APPDATA\rubis-pos-desktop"
+       RMDir "$APPDATA"
+     ${endIf}
+   !macroend
+   ```
+   Added a comment above it citing the electron-builder NSIS docs (`https://www.electron.build/nsis#custom-nsis-script`) and explaining why the guard exists (the OTA update path silently runs this same uninstaller). Nothing else in the file changed — `customInstall` is still the phase-20 no-op.
+
+2. **`electron-builder.yml`** — repointed the publish block's `repo`:
+   ```yaml
+   publish:
+     provider: github
+     owner: Volcha-Enterprises
+     repo: rubis-pos-releases
+   ```
+   No `releaseType` key added — the electron-builder default (`draft`) applies, per the request. `win.target`, `nsis.oneClick`, `nsis.include`, and every other key are unchanged.
+
+3. **`package.json`** — added `"dist:publish": "npm run dist -- --publish always"` right after `dist`/`postdist`. Because `dist:publish` invokes `npm run dist`, npm's own `pre`/`post` lifecycle hooks (`predist` → `check-node-version` + `check-env`; `postdist` → `verify-dist.cjs`) still run around it automatically — no separate guard duplication was needed. `version`, `repository`, and `homepage` are unchanged; `repository`/`homepage` keep pointing at the source repo (`rubis-pos-desktop`) since they are npm/GitHub metadata only and do not feed electron-builder's `publish` config.
+
+4. **`src/renderer/src/components/AdminScreen.tsx`** — added `installedVersion` state, a dedicated `useEffect(() => { void window.api.getAppVersion().then(setInstalledVersion) }, [])` (single read on mount, no new IPC — `getAppVersion`/`app:get-version` already existed), and a `"Installed version: x.y.z"` line inside the existing "App & Updates" section, rendered only once `installedVersion` is populated.
+
+5. **`docs/RELEASING.md`** (new) — the release runbook: `GH_TOKEN` handling, version bump, `dist:publish`, reviewing/publishing the draft, updating a till, rollback, the one-time manual-install note for tills still on 2.0.x, and the SmartScreen note for a manual install.
+
+6. **Tests:**
+   - `tests/updateReleaseConfig.test.ts` (new) — string/regex checks (no YAML parser added) that `electron-builder.yml`'s `publish` block has `provider: github`, `owner: Volcha-Enterprises`, `repo: rubis-pos-releases`, that the file contains no `ghp_`/`token:` pattern anywhere, and that `build/installer.nsh`'s `customUnInstall` macro wraps the `RMDir /r` deletion between `${ifNot} ${isUpdated}` and `${endIf}` (not just that both strings appear somewhere in the macro).
+   - `tests/adminScreen.test.ts` — added `getAppVersion` to the shared `stubApi()` (unwrapped string, unlike every `ServiceResult` call already there) and a new test asserting the Overview tab shows `"Installed version: 2.0.4"` after mount.
+   - `tests/adminIntegrationsSections.test.ts` — same `getAppVersion` addition to its own separate `stubApi()`; this file also mounts `AdminScreen` and started throwing `TypeError: window.api.getAppVersion is not a function` once the new mount effect was added, until fixed.
+   - `tests/updater.test.ts` — unchanged, confirmed no assertion needed to change (Part 1 item 4/8 held: `autoDownload`, launch-check behaviour, and event wiring are untouched by this phase).
+
+### Mutation checks (each applied, verified, then reverted)
+
+| # | Mutation | Result |
+| --- | --- | --- |
+| i | Removed the `${ifNot} ${isUpdated}` guard from `installer.nsh` | `build/installer.nsh update-safety guard` test failed as expected |
+| ii | Changed `electron-builder.yml`'s `repo` back to `rubis-pos-desktop` | `electron-builder.yml publish config` "publishes to the public releases-only repo" test failed as expected |
+| iii | Added `token: ghp_x` under `electron-builder.yml`'s `publish` block | `electron-builder.yml publish config` "contains no token-like string" test failed as expected (both the `ghp_` and `token:` assertions) |
+
+`git diff --stat build/installer.nsh electron-builder.yml` after all three reverts showed only the two permanent Part 2 edits — no mutation leaked through.
+
+### Tripwires
+
+`git diff --stat` was empty for all nine files: `checkout.ts`, `fiscal-engine.ts`, `fiscal-routing.ts`, `real-etims-provider.ts`, `database.ts`, `PosCheckoutPanel.tsx`, `PaymentModal.tsx`, `reports.ts`, `receiptLayout.ts`.
+
+### Verification
+
+- `npm run typecheck` (node + web) — clean.
+- `npx vitest run` — **148 files, 2247 tests, all passing** (includes the 3 new config-guard tests and the 1 new Admin renderer test).
+- `npm run dist:dir` — succeeded: built, packaged `release/win-unpacked`, no publish, no network call (electron-builder logged `no signing info identified, signing is skipped` and stopped there — it never reached a publish step). `postdist:dir`'s `verify-dist.cjs` confirmed `.env` was bundled.
+- `git status --short` after `dist:dir`: `release/` stayed untracked/ignored (`git status --short --ignored` shows `!! release/`); the only untracked entries anywhere are the two new files this phase adds (`docs/RELEASING.md`, `tests/updateReleaseConfig.test.ts`) — no stray file landed in the repo root.
+- `dist:publish` was **not** run, per the request.
+
+### Affected files and functionality
+
+| File | Change | Functionality affected |
+| --- | --- | --- |
+| `build/installer.nsh` | Modified | Uninstall/update safety — the OTA update path no longer deletes the till's database and vault |
+| `electron-builder.yml` | Modified | Where the packaged app's update feed points |
+| `package.json` | Modified | Adds the one publish entry point (`dist:publish`); nothing else in the build pipeline changes |
+| `src/renderer/src/components/AdminScreen.tsx` | Modified | Admin > App & Updates now shows the installed version |
+| `docs/RELEASING.md` | Added | Human release runbook — no runtime effect |
+| `tests/updateReleaseConfig.test.ts` | Added | Guards the publish repo/token and the NSIS guard against regression |
+| `tests/adminScreen.test.ts` | Modified | Stub + coverage for the new version line |
+| `tests/adminIntegrationsSections.test.ts` | Modified | Stub fix only — this file's own assertions are unrelated to this phase |
+
+### Possible impact
+
+- **Direct:** once a build made from this commit is installed (by hand, per the first-time note), a genuine over-the-air update on that till will no longer wipe `$APPDATA\rubis-pos-desktop`. Admin now shows the installed version.
+- **Indirect:** none identified — the `publish` block change only affects where `electron-builder --publish` uploads to; it has no effect on `dist`/`dist:dir` (which never publish) and none on any till until a new build is installed on it.
+- **Data / schema / contract:** none. No database, IPC, or wire-format change.
+- **Security posture:** unchanged. No token is committed anywhere (`updateReleaseConfig.test.ts` guards this); `GH_TOKEN` lives only in the release operator's shell per `RELEASING.md`.
+- **Idempotency / re-run safety:** `dist:publish` is safe to re-run — a re-published draft with the same version tag is still a draft until a human publishes it; nothing in this phase's code writes state that a second run would corrupt.
+- **Residual risk:** entirely the item 6/9 findings from Part 1 — tills on 2.0.x will not see any update, including the first one built from this phase, until it is installed on them by hand once. This is expected and is documented in `RELEASING.md` §g.
+
+### Rollback
+
+`git revert` of the Part 2 commit(s). The `rubis-pos-releases` GitHub repo, if already created by then, can be left in place — nothing points at it (no till's baked `app-update.yml` references it) until a build made after this commit is installed somewhere.
+
+### What only a human can do
+
+- [ ] Create the public repo `Volcha-Enterprises/rubis-pos-releases` with a README stating it holds installers only, no source.
+- [ ] Create a fine-grained GitHub token with write access to Releases on that repo only, short expiry.
+- [ ] Bump the version (`chore: bump to x.y.z`) and run `npm run dist:publish` on the build machine.
+- [ ] Install the resulting Setup exe by hand on a spare till (not the pilot till first), confirm "Installed version" in Admin, then publish a second, higher version and prove **Check for Updates > Restart & Install** lands it with the database, the vault, and the fiscal queue intact. Only after that does the pilot till get pointed at the feed.
+
+### Observed but not changed
+
+- `win.target` still lists both `nsis` and `portable` ([electron-builder.yml:26-27](../electron-builder.yml#L26-L27)). `dist:dir` (used for this phase's verification) passes `--dir`, which only produces the unpacked directory regardless of `win.target`. `dist`/`dist:publish` do not pass `--dir`, so a plain `npm run dist:publish` will build and publish both the NSIS installer and a portable `.exe` — this was already true before this phase and the request said not to change `win.target`, so it is left as-is; worth the release operator noting in `RELEASING.md` if only the NSIS asset set turns out to be wanted on GitHub.
+- `artifactName` remains unset (electron-builder default naming) — left as-is per the request ("Do not change win.target, nsis.oneClick or the include" plus no instruction to set it).

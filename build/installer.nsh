@@ -13,11 +13,20 @@
 ; folders, which all live under the same directory), so installing
 ; again afterward starts genuinely clean without needing install-time
 ; deletion at all.
+;
+; Phase 177: electron-updater's NSIS updater runs this exact uninstaller
+; silently before installing the new version, so this macro also fires on
+; every over-the-air update, not only a real uninstall. `${isUpdated}` is
+; the flag electron-builder's own NSIS include sets to tell the two apart
+; (https://www.electron.build/nsis#custom-nsis-script) — without the guard
+; below, the first OTA update would wipe the till's database and vault.
 
 !macro customInstall
 !macroend
 
 !macro customUnInstall
-  RMDir /r "$APPDATA\rubis-pos-desktop"
-  RMDir "$APPDATA"
+  ${ifNot} ${isUpdated}
+    RMDir /r "$APPDATA\rubis-pos-desktop"
+    RMDir "$APPDATA"
+  ${endIf}
 !macroend

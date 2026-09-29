@@ -38,4 +38,4 @@ nsis:
 publish:
   provider: github
   owner: Volcha-Enterprises
-  repo: rubis-pos-desktop
+  repo: rubis-pos-releases
