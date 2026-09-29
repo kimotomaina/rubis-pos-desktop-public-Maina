@@ -2,7 +2,7 @@
 
 - **Date:** 2026-09-29
 - **Requested:** Part 1 (read-only): find why `StartDocPrinter` returns 1804 (`ERROR_INVALID_DATATYPE`) on the pilot till's queue, which accepts RAW (`POS`, driver "Generic / Text Only", port `USB001`, print processor `winprint`, datatype RAW). Then STOP.
-- **Outcome:** Cause found and confirmed. STOP for review; Part 2 not started.
+- **Outcome:** Part 1 cause found and confirmed, then reviewed. Part 2 fixed, and proven byte for byte on a temporary Generic / Text Only queue on the development PC.
 - **Branch / base commit:** staging @ 71a30f7 (fix: stop tills rejecting unsigned updates (phase 181))
 - **Numbering:** the brief says `docs/phase-180.md`, but 180 (credentials out of the bundled `.env`) and 181 (2.1.0 build) already exist, so this is 182.
 
@@ -189,3 +189,123 @@ For Part 2, the brief's preferred shape (`CharSet.Unicode` on every string-beari
 `Get-Printer` here shows only Fax, Microsoft Print to PDF, Microsoft XPS Document Writer and OneNote. There is **no Generic / Text Only queue**. A like-for-like check here would mean temporarily adding one (the built-in "Generic / Text Only" driver on a `FILE:` or local file port) and removing it afterwards. That changes this machine's printer setup, so it is your call. Otherwise the till is the real test.
 
 **STOP — awaiting review before Part 2.**
+
+---
+
+## Part 2 — Fix
+
+### Change
+
+`resources/print-raw.ps1` only. Inside the `-MemberDefinition` here-string:
+
+```diff
+-[StructLayout(LayoutKind.Sequential, CharSet = CharSet.Auto)]
++// String fields must match the W entry points; a per-field LPStr overrides the struct's CharSet and caused error 1804 (docs/phase-182).
++[StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+ public struct DOCINFOA
+ {
+-    [MarshalAs(UnmanagedType.LPStr)] public string pDocName;
+-    [MarshalAs(UnmanagedType.LPStr)] public string pOutputFile;
+-    [MarshalAs(UnmanagedType.LPStr)] public string pDataType;
++    [MarshalAs(UnmanagedType.LPWStr)] public string pDocName;
++    [MarshalAs(UnmanagedType.LPWStr)] public string pOutputFile;
++    [MarshalAs(UnmanagedType.LPWStr)] public string pDataType;
+ }
+
+-[DllImport("winspool.drv", SetLastError = true, CharSet = CharSet.Auto)]
++[DllImport("winspool.drv", SetLastError = true, CharSet = CharSet.Unicode)]
+ public static extern bool OpenPrinter(...);
+ ...
+-[DllImport("winspool.drv", SetLastError = true, CharSet = CharSet.Auto)]
++[DllImport("winspool.drv", SetLastError = true, CharSet = CharSet.Unicode)]
+ public static extern bool StartDocPrinter(IntPtr hPrinter, int level, ref DOCINFOA pDocInfo);
+```
+
+Nothing else changed: the parameters, the other five DllImports, level 1, `pOutputFile = $null`, `pDataType = 'RAW'`, the write/verify loop and the error handling are identical. The comment is a C# `//` line, since the struct sits inside the here-string.
+
+### Tests
+
+`tests/windowsPrinter.test.ts`, new describe block `print-raw.ps1: DOC_INFO_1 strings match the Unicode entry point (docs/phase-182)`:
+
+| Test | Asserts |
+| --- | --- |
+| marshals no string as LPStr (ANSI), only LPWStr | No non-comment line in the here-string matches `\bLPStr\b`, and exactly three lines use `UnmanagedType.LPWStr` |
+| declares CharSet.Unicode on both DOC_INFO_1 and StartDocPrinter | The attribute line directly above `public struct DOCINFOA`, and the one above `extern bool StartDocPrinter(`, both contain `CharSet = CharSet.Unicode` |
+
+One deviation from the brief's wording: "no line contains LPStr" is checked on non-comment lines only, because the required explanatory comment itself names `LPStr`. The `\bLPStr\b` pattern never matches `LPWStr`.
+
+Mutation checks, each applied, run, then reverted by restoring the file:
+
+| Mutation | Result |
+| --- | --- |
+| `pDataType` field back to `UnmanagedType.LPStr` | "marshals no string as LPStr" failed |
+| Struct set to `CharSet = CharSet.Ansi` | "declares CharSet.Unicode on both" failed |
+| After restoring | 17/17 pass; `git diff` shows only the intended change |
+
+### Proof on a real RAW queue (development PC)
+
+A temporary queue matching the till's (driver "Generic / Text Only", print processor `winprint`, datatype RAW), printing to a file so the output can be compared byte for byte. Scratch folder `C:\rubis-scratch`, outside the repo.
+
+Setup:
+
+```powershell
+Add-PrinterPort -Name "C:\rubis-scratch\rawtest.prn"
+Add-PrinterDriver -Name "Generic / Text Only"
+Add-Printer -Name "RubisRawTest" -DriverName "Generic / Text Only" -PortName "C:\rubis-scratch\rawtest.prn"
+```
+
+`Get-Printer` confirmed: `DriverName Generic / Text Only`, `PrintProcessor winprint`, `Datatype RAW`.
+
+Input: `C:\rubis-scratch\input.bin`, 35 bytes of ESC/POS-style data, including `ESC @`, text, `0x00`, `0x7F`, `0x80`, `0xFF`, `ESC a 1` and a `GS V 0` cut.
+
+Run (each time):
+
+```powershell
+powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File resources\print-raw.ps1 -PrinterName RubisRawTest -DataPath C:\rubis-scratch\input.bin
+```
+
+| Script | Result |
+| --- | --- |
+| Before the fix | `StartDocPrinter failed (error 5)`, no output file. Same inside and outside the tool sandbox, so the sandbox was not the cause. |
+| After the fix | Exit 0, print job completed, output file written |
+| After the fix, rerun on the final file (post mutation reverts) | Exit 0, identical output again |
+
+Hashes (`Get-FileHash`, SHA-256):
+
+```
+input.bin    E18EAB1C0B3BC7C61FC912CA8F58C2A297F543E4A19B1146A16DFB244755CA0C  35 bytes
+rawtest.prn  E18EAB1C0B3BC7C61FC912CA8F58C2A297F543E4A19B1146A16DFB244755CA0C  35 bytes
+```
+
+Byte-identical: RAW passes through the spooler untouched, including the zero and high bytes.
+
+On the error code: before the fix, the pilot till reported 1804 and this PC reported 5 on the same kind of queue. Why the codes differ is not established; this PC is Windows 11 build 26200, and the till's build is unknown. What is established is that this one change turned this PC's failure into a byte-identical print. Phase 179's error 5 against Microsoft Print to PDF was probably the same struct bug rather than that driver, but the fixed script was not re-run against Print to PDF, so that remains unproven.
+
+Cleanup:
+
+```powershell
+Remove-Printer -Name RubisRawTest
+Remove-PrinterPort -Name "C:\rubis-scratch\rawtest.prn"
+```
+
+Confirmed afterwards: printer gone, port gone, "Generic / Text Only" driver kept as instructed. `C:\rubis-scratch` still holds `input.bin` and `rawtest.prn`; they are harmless and can be deleted.
+
+### Tripwires
+
+`git diff --stat` empty for `src/main/services/printer.ts`, `src/main/services/windowsPrinter.ts`, `src/main/lib/receiptLayout.ts` (the file lives under `lib/`, not `services/`) and `src/main/services/checkout.ts`.
+
+### Verification
+
+- `npm run typecheck`: clean.
+- `npx vitest run tests/windowsPrinter.test.ts tests/printer.test.ts`: 2 files, 52 tests, all passing. The printer test files only, per the brief.
+- `npx electron-vite build`: succeeded.
+
+The phase-174 tests mock `execFile`, so the script body only runs on Windows. The queue test above is the proof on this PC; on the till, the final check is the test slip from Admin > Peripherals > Printer.
+
+### Observed but not changed
+
+- The struct is still named `DOCINFOA`, and the trailing "A" (ANSI) is now misleading. Renaming it would also touch `New-Object RubisPos.RawPrinter+DOCINFOA` further down, which the brief ruled out ("change nothing else").
+
+### Rollback
+
+`git revert` this commit restores the ANSI fields and `CharSet.Auto`, and with them error 1804 on the till.

@@ -142,6 +142,35 @@ describe('print-raw.ps1: no `using` line in the Add-Type here-string (docs/phase
   })
 })
 
+/**
+ * Phase 182: StartDocPrinter binds the Unicode (W) export, so DOC_INFO_1's
+ * strings must be Unicode too. A per-field LPStr overrides the struct's
+ * CharSet, and the spooler then read a garbled pDatatype (error 1804 on
+ * the pilot till). String checks only, for the same reason as above.
+ */
+describe('print-raw.ps1: DOC_INFO_1 strings match the Unicode entry point (docs/phase-182)', () => {
+  const script = readFileSync(join(process.cwd(), 'resources', 'print-raw.ps1'), 'utf8')
+  const hereString = script.slice(script.indexOf("@'"), script.indexOf("'@", script.indexOf("@'")))
+  const codeLines = hereString.split(/\r?\n/).filter((line) => !line.trim().startsWith('//'))
+
+  /** The attribute line directly above the first line matching `declaration`. */
+  function attributeAbove(declaration: RegExp): string {
+    const index = codeLines.findIndex((line) => declaration.test(line))
+    expect(index).toBeGreaterThan(0)
+    return codeLines[index - 1]
+  }
+
+  it('marshals no string as LPStr (ANSI), only LPWStr', () => {
+    expect(codeLines.filter((line) => /\bLPStr\b/.test(line))).toEqual([])
+    expect(codeLines.filter((line) => /UnmanagedType\.LPWStr/.test(line))).toHaveLength(3)
+  })
+
+  it('declares CharSet.Unicode on both DOC_INFO_1 and StartDocPrinter', () => {
+    expect(attributeAbove(/public struct DOCINFOA/)).toMatch(/CharSet\s*=\s*CharSet\.Unicode/)
+    expect(attributeAbove(/extern bool StartDocPrinter\(/)).toMatch(/CharSet\s*=\s*CharSet\.Unicode/)
+  })
+})
+
 describe('toWindowsPrinterInfo', () => {
   it('maps name and displayName straight through', () => {
     const info = toWindowsPrinterInfo({

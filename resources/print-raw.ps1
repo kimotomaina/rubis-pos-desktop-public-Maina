@@ -39,21 +39,22 @@ $ErrorActionPreference = 'Stop'
 # -MemberDefinition is used, so both are implicit.
 # https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.utility/add-type?view=powershell-5.1
 Add-Type -Namespace RubisPos -Name RawPrinter -MemberDefinition @'
-[StructLayout(LayoutKind.Sequential, CharSet = CharSet.Auto)]
+// String fields must match the W entry points; a per-field LPStr overrides the struct's CharSet and caused error 1804 (docs/phase-182).
+[StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
 public struct DOCINFOA
 {
-    [MarshalAs(UnmanagedType.LPStr)] public string pDocName;
-    [MarshalAs(UnmanagedType.LPStr)] public string pOutputFile;
-    [MarshalAs(UnmanagedType.LPStr)] public string pDataType;
+    [MarshalAs(UnmanagedType.LPWStr)] public string pDocName;
+    [MarshalAs(UnmanagedType.LPWStr)] public string pOutputFile;
+    [MarshalAs(UnmanagedType.LPWStr)] public string pDataType;
 }
 
-[DllImport("winspool.drv", SetLastError = true, CharSet = CharSet.Auto)]
+[DllImport("winspool.drv", SetLastError = true, CharSet = CharSet.Unicode)]
 public static extern bool OpenPrinter(string pPrinterName, out IntPtr phPrinter, IntPtr pDefault);
 
 [DllImport("winspool.drv", SetLastError = true)]
 public static extern bool ClosePrinter(IntPtr hPrinter);
 
-[DllImport("winspool.drv", SetLastError = true, CharSet = CharSet.Auto)]
+[DllImport("winspool.drv", SetLastError = true, CharSet = CharSet.Unicode)]
 public static extern bool StartDocPrinter(IntPtr hPrinter, int level, ref DOCINFOA pDocInfo);
 
 [DllImport("winspool.drv", SetLastError = true)]
