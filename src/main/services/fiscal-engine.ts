@@ -22,7 +22,10 @@
  * incorrectly block retries during an internet outage even when the
  * till can still reach the device.
  *
- * A technical/retryable failure is recorded with exponential backoff by
+ * A failure where the device was never reached (`unreachable`,
+ * docs/phase-186.md §5) is not recorded at all and ends the pass: the
+ * sale keeps waiting, uncounted, however long the outage lasts. Any other
+ * technical/retryable failure is recorded with exponential backoff by
  * the database service; an exhausted item is left in the queue (not
  * deleted) for manual inspection — see
  * `RubisDatabase.recordFiscalQueueFailure`. A retry that comes back
@@ -168,6 +171,14 @@ export function createFiscalEngine(options: FiscalEngineOptions): FiscalEngine {
           logger.log(
             `[rubis-pos] Sale ${item.entity_id}: queued retry succeeded, fiscalized (invoice ${result.data.invoiceNumber})`
           )
+        } else if (result.unreachable) {
+          // The device was not reached (docs/phase-186.md §5): no attempt
+          // is counted and the row keeps its due time, so an outage of any
+          // length never abandons a sale. The pass ends here, because every
+          // later row would fail the same way and trying them could file
+          // sales out of order once the device answers again.
+          logger.log(`[rubis-pos] Sale ${item.entity_id}: fiscal device not reached, will retry — ${result.reason}`)
+          break
         } else {
           // Every item reaching this queue was originally routed here as
           // a retryable/technical failure (`checkout.ts`'s `runCheckout`

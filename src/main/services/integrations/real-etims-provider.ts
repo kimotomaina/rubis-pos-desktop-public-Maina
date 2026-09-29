@@ -646,14 +646,22 @@ interface RefusedStep {
  * {@link DAILY_CLOSURE_BLOCK_REASON}, a device-wide condition already
  * written as finished cashier copy.
  *
- * @param {Pick<DeviceResult, 'error' | 'retryable' | 'code'>} result
+ * Marks the outcome `unreachable` (docs/phase-186.md §5) when nothing
+ * refused the sale: no `<Res>` came back at all (connection refused or
+ * our own timeout, other than a `notReady` status read, which is a device
+ * answer), ZFPLabServer reported a retryable server code (19/30/31/53),
+ * or the device answered with the missing daily closure. The one
+ * exception is a lost reply at `CloseReceipt`: the device may already
+ * have filed, so it stays non-retryable for a person, as before (Rule 1).
+ *
+ * @param {Pick<DeviceResult, 'error' | 'retryable' | 'code' | 'serverFailure' | 'notReady'>} result
  * @param {RefusedStep} step the step `result` came from
  * @param {string} fallbackReason used when `result.error` is unset
  * @param {FiscalFailureKind} [fallbackKind='data']
  * @returns {Extract<FiscalSubmitOutcome, { ok: false }>}
  */
 function classifyDeviceFailure(
-  result: Pick<DeviceResult, 'error' | 'retryable' | 'code'>,
+  result: Pick<DeviceResult, 'error' | 'retryable' | 'code' | 'serverFailure' | 'notReady'>,
   step: RefusedStep,
   fallbackReason: string,
   fallbackKind: FiscalFailureKind = 'data'
@@ -663,6 +671,15 @@ function classifyDeviceFailure(
     result.code === CODE_DAILY_CLOSURE_BLOCK
       ? baseReason
       : `${baseReason.replace(/\.\s*$/, '')}. Refused while ${step.label} (${step.command}).`
+  const noAnswer = result.code === undefined && !result.notReady
+  const serverNeverReachedDevice = result.retryable === true && result.serverFailure !== undefined
+  const lostCloseReply = noAnswer && step.command === 'CloseReceipt'
+  if (
+    ((noAnswer || serverNeverReachedDevice) && !lostCloseReply) ||
+    result.code === CODE_DAILY_CLOSURE_BLOCK
+  ) {
+    return { ok: false, reason, kind: 'technical', retryable: true, unreachable: true }
+  }
   if (result.retryable) {
     return { ok: false, reason, kind: 'technical', retryable: true }
   }

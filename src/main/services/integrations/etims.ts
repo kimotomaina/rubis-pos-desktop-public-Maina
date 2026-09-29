@@ -252,6 +252,14 @@ export type FiscalSubmitOutcome =
        * other rejection, including other `'data'` ones.
        */
       dataIssue?: 'wrong-pin'
+      /**
+       * The device was never reached, or answered only with a condition
+       * that clears by itself (the missing daily closure): no refusal of
+       * this sale. Always `retryable`. The fiscal engine never counts
+       * such an attempt towards its give-up limit, so an outage of any
+       * length leaves the sale waiting (docs/phase-186.md §5).
+       */
+      unreachable?: true
     }
 
 /**
