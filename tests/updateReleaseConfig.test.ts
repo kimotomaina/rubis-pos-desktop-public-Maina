@@ -38,6 +38,22 @@ describe('electron-builder.yml publish config', () => {
   })
 })
 
+describe('electron-builder.yml update signature check (docs/phase-181)', () => {
+  /**
+   * Installers are unsigned. With the check left on, electron-builder
+   * writes `publisherName` into the app's `app-update.yml`, and
+   * electron-updater then rejects every downloaded update with
+   * ERR_UPDATER_INVALID_SIGNATURE. Remove both this test and the setting
+   * once a code-signing certificate is configured.
+   */
+  it('turns off update signature verification while installers are unsigned', () => {
+    const content = readFileSync(ELECTRON_BUILDER_YML, 'utf8')
+    const winBlock = content.slice(content.indexOf('win:'), content.indexOf('nsis:'))
+
+    expect(winBlock).toMatch(/^\s+verifyUpdateCodeSignature:\s*false\s*$/m)
+  })
+})
+
 describe('build/installer.nsh update-safety guard', () => {
   it('wraps the app-data removal in the ${isUpdated} guard so an OTA update never wipes it', () => {
     const content = readFileSync(INSTALLER_NSH, 'utf8')

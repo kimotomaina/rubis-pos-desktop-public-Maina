@@ -59,6 +59,8 @@ Tills currently running 2.0.x have the old private repo baked into their update 
 
 The installer is not code-signed, so a manual install shows Windows SmartScreen. Choose **More info > Run anyway**.
 
+Because it is unsigned, `electron-builder.yml` also sets `verifyUpdateCodeSignature: false`, otherwise tills would reject every update as unsigned. If a code-signing certificate is ever added, remove that line (and its test in `tests/updateReleaseConfig.test.ts`) so tills check the publisher again.
+
 ## First install on a new till
 
 The installer carries no credentials, so a new till asks for them once. They are then stored on the till (encrypted vault and database) and kept through every update.

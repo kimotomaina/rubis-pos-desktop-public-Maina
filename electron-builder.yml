@@ -28,6 +28,10 @@ win:
   icon: resources/icons/icon.ico
   signtoolOptions:
     publisherName: Volcha Enterprises
+  # Installers are unsigned, so electron-updater's publisher check would
+  # reject every downloaded update (ERR_UPDATER_INVALID_SIGNATURE,
+  # docs/phase-181). Remove this line once a code-signing certificate is in use.
+  verifyUpdateCodeSignature: false
 
 nsis:
   oneClick: false
