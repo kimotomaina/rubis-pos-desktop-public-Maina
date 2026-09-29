@@ -190,15 +190,26 @@ describe('every mode writes exactly one payment row, naming its sale', () => {
     expect(db.listMpesaPayments()).toHaveLength(0)
   })
 
+  /**
+   * DELIBERATE TEST CHANGE (docs/phase-176.md Part 2): a card sale now
+   * needs `cardApproval` (see `tests/cardManualPayment.test.ts` for its
+   * gate's full coverage) — this uses a valid one so the assertion below
+   * still exercises a *successful* card sale, not an incidentally
+   * refused one.
+   */
   it('writes nothing for a card sale either', async () => {
     const db = freshDb()
     const { cashierId } = seedStaff(db)
 
-    await runCheckout(
+    const result = await runCheckout(
       makeDeps(db),
-      sale(cashierId, { paymentMethod: 'card', referenceNumber: 'TXN-9001' })
+      sale(cashierId, {
+        paymentMethod: 'card',
+        cardApproval: { reference: 'TXN9001', confirmRecorded: true }
+      })
     )
 
+    expect(result.success).toBe(true)
     expect(db.listMpesaPayments()).toHaveLength(0)
   })
 

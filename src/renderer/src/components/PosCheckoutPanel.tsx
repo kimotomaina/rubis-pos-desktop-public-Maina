@@ -13,8 +13,9 @@ import { isValidKraPinFormat, KRA_PIN_MAX_LENGTH } from '../lib/kraPin.js'
 import { useKeyboardStore } from '../stores/keyboardStore.js'
 import PaymentModal from './PaymentModal.js'
 import type { ManualMpesaEntryInput, MpesaCapabilitiesState } from './PaymentModal.js'
+import CardEntryPanel from './CardEntryPanel.js'
 import VirtualNumpad from './VirtualNumpad.js'
-import type { PaymentMethod } from '../../../main/services/database.js'
+import type { CardManualEntry, PaymentMethod } from '../../../main/services/database.js'
 import type { Discount } from '../types/shopify.js'
 
 interface PosCheckoutPanelProps {
@@ -35,22 +36,29 @@ interface PosCheckoutPanelProps {
 }
 
 /**
- * Quick payment method this panel exposes as a one-tap toggle. Card
- * payments remain fully supported by the cart store/checkout IPC —
- * see this file's doc comment — just not surfaced as a third button
- * here, per Phase 44's Hick's-Law "reduce choices" instruction.
+ * Quick payment method this panel exposes as a one-tap toggle.
+ *
+ * Phase 44 limited this to Cash/M-Pesa on Hick's-Law "reduce choices"
+ * grounds — reversed in docs/phase-176.md Part 2: Rubis takes cards on
+ * a separate PDQ machine at the till itself (not a theoretical future
+ * tender), and every sale needs to be tagged `card` for End of Day and
+ * reconciliation the same way a cash or M-Pesa sale is, so all three
+ * methods `PaymentMethod` supports are now offered here.
  */
-type QuickPaymentMethod = Extract<PaymentMethod, 'cash' | 'mpesa'>
+type QuickPaymentMethod = PaymentMethod
 
 /**
  * Always-visible checkout control panel — the fast-checkout layout's
  * right zone, replacing the old cart-sidebar's totals/checkout button
- * entirely for Cash/M-Pesa sales.
+ * entirely for Cash/M-Pesa/Card sales.
  *
- * Cash and M-Pesa are deliberately the only two quick-toggle options
- * (Hick's Law: fewer choices, faster decisions) — a Card sale still
- * works through the underlying `cartStore.checkout`/`PaymentMethod`
- * contract, which is untouched, it just has no dedicated button here.
+ * Phase 44 offered only Cash and M-Pesa as quick toggles (Hick's Law:
+ * fewer choices, faster decisions), with Card left to the underlying
+ * `cartStore.checkout`/`PaymentMethod` contract but no dedicated button.
+ * docs/phase-176.md Part 2 reverses that: Rubis takes cards on a
+ * separate PDQ machine at the till, so a cashier needs to record a card
+ * sale from this same screen, tagged `card`, the same way Cash/M-Pesa
+ * are today.
  *
  * The M-Pesa branch embeds the existing `PaymentModal` verbatim rather
  * than reimplementing a keypad-driven phone entry: `PaymentModal`
@@ -61,6 +69,11 @@ type QuickPaymentMethod = Extract<PaymentMethod, 'cash' | 'mpesa'>
  * unconditional "Complete Sale" button would record a sale as M-Pesa
  * before Safaricom ever confirmed payment — reusing `PaymentModal`
  * is what keeps that guarantee intact.
+ *
+ * The Card branch embeds `CardEntryPanel` the same way, for the same
+ * reason: a PDQ card sale has no confirming provider at all (docs/
+ * phase-176.md §4.7), so the reference-plus-attestation flow is kept
+ * in one place rather than re-implemented here.
  *
  * @param {PosCheckoutPanelProps} props
  * @returns {JSX.Element}
@@ -184,6 +197,28 @@ export default function PosCheckoutPanel({
       customerPin: trimmedCustomerPin || undefined,
       companyName: trimmedCompanyName || undefined,
       mpesaManual: manual
+    })
+  }
+
+  /**
+   * Called by the embedded `CardEntryPanel` once the cashier has entered
+   * a PDQ reference and ticked the attestation. `tenderedAmount`/
+   * `changeDue` are set here the same way `handleMpesaPaid` sets them —
+   * the till's own record, not something the cashier enters — though
+   * `runCheckout`'s card gate (docs/phase-176.md Part 2 §2) derives them
+   * server-side too and does not trust these either.
+   */
+  const handleCardPaid = (referenceNumber: string, manual: CardManualEntry) => {
+    if (!currentStaff) return
+    void checkout({
+      staffId: currentStaff.id,
+      paymentMethod: 'card',
+      tenderedAmount: cartTotal,
+      changeDue: 0,
+      referenceNumber,
+      customerPin: trimmedCustomerPin || undefined,
+      companyName: trimmedCompanyName || undefined,
+      cardManual: manual
     })
   }
 
@@ -348,11 +383,21 @@ export default function PosCheckoutPanel({
           </p>
         ) : (
           <>
-            <div className="mb-2 grid grid-cols-2 gap-3">
+            {/**
+             * Three equal toggles (docs/phase-176.md Part 2 §3) — grown
+             * from two (phase-44/142's `grid-cols-2`/`h-14`). `h-12`/
+             * `text-lg`/`gap-2` (shrunk from `h-14`/`text-xl`/`gap-3`)
+             * keep the row inside the 35% checkout aside at every
+             * check:fit size with no wrap; height/padding/gap were
+             * reduced before font size, per the brief, and `h-12`
+             * (48px) stays above check-fit.mjs's `keySizes` touch floor
+             * (>= 34 physical px at 1366x768 @150%).
+             */}
+            <div className="mb-2 grid grid-cols-3 gap-2">
               <button
                 type="button"
                 onClick={() => setMethod('cash')}
-                className={`h-14 rounded-xl text-xl font-bold transition active:scale-95 ${
+                className={`h-12 rounded-xl text-lg font-bold transition active:scale-95 ${
                   method === 'cash'
                     ? 'bg-rose-600 text-white shadow'
                     : 'border border-slate-200 text-slate-700 hover:bg-slate-50'
@@ -363,7 +408,7 @@ export default function PosCheckoutPanel({
               <button
                 type="button"
                 onClick={() => setMethod('mpesa')}
-                className={`h-14 rounded-xl text-xl font-bold transition active:scale-95 ${
+                className={`h-12 rounded-xl text-lg font-bold transition active:scale-95 ${
                   method === 'mpesa'
                     ? 'bg-rose-600 text-white shadow'
                     : 'border border-slate-200 text-slate-700 hover:bg-slate-50'
@@ -371,9 +416,20 @@ export default function PosCheckoutPanel({
               >
                 M-PESA
               </button>
+              <button
+                type="button"
+                onClick={() => setMethod('card')}
+                className={`h-12 rounded-xl text-lg font-bold transition active:scale-95 ${
+                  method === 'card'
+                    ? 'bg-rose-600 text-white shadow'
+                    : 'border border-slate-200 text-slate-700 hover:bg-slate-50'
+                }`}
+              >
+                CARD
+              </button>
             </div>
 
-            {method === 'cash' ? (
+            {method === 'cash' && (
               <div>
                 {/**
                  * Amount Tendered's label and its display used to stack on
@@ -405,7 +461,9 @@ export default function PosCheckoutPanel({
                   {checkoutStatus === 'submitting' ? 'PROCESSING…' : 'COMPLETE SALE'}
                 </button>
               </div>
-            ) : (
+            )}
+
+            {method === 'mpesa' && (
               <PaymentModal
                 total={cartTotal}
                 onPaid={handleMpesaPaid}
@@ -416,6 +474,10 @@ export default function PosCheckoutPanel({
                     : undefined
                 }
               />
+            )}
+
+            {method === 'card' && (
+              <CardEntryPanel total={cartTotal} onPaid={handleCardPaid} onCancel={() => setMethod('cash')} />
             )}
           </>
         )}

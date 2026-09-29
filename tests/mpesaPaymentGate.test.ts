@@ -455,17 +455,27 @@ describe('cash and card are untouched by the M-Pesa gate', () => {
     expect(db.getOrders()).toHaveLength(1)
   })
 
-  it('a card sale completes on its reference number, with no confirmation required', async () => {
-    // Card is the cashier's record of a payment the terminal already
-    // took. There is nothing for this till to confirm, so the gate must
-    // not reach it.
+  /**
+   * DELIBERATE TEST CHANGE (docs/phase-176.md Part 2): card now has its
+   * own gate (`checkout.ts`'s `if (input.paymentMethod === 'card')`
+   * block, see `tests/cardManualPayment.test.ts` for its full coverage)
+   * — Part 1's audit found it had none at all, which is exactly what
+   * that gate closes. What survives from this test's original premise
+   * is still true and still asserted here: a card sale is never routed
+   * through the M-Pesa confirmation gate, since there is no confirming
+   * provider for a PDQ payment to check against.
+   */
+  it('a card sale completes on cardApproval, with no M-Pesa-style confirmation required', async () => {
     const db = freshDb()
     const verifyTransactionCode = vi.fn()
     const deps = makeDeps(db, { verifyReferenceNumbers: true, mpesaProvider: { verifyTransactionCode } })
 
     const result = await runCheckout(
       deps,
-      makeInput(seedStaff(db), { paymentMethod: 'card', referenceNumber: 'TXN-9001' })
+      makeInput(seedStaff(db), {
+        paymentMethod: 'card',
+        cardApproval: { reference: 'TXN9001', confirmRecorded: true }
+      })
     )
 
     expect(result.success).toBe(true)

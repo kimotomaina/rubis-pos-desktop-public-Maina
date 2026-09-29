@@ -16,6 +16,7 @@ import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import type { CartItem, Discount } from '../types/shopify.js'
 import type {
+  CardManualEntry,
   CheckoutReceipt,
   FiscalResendResult,
   ManualMpesaEntry,
@@ -115,6 +116,13 @@ export interface CheckoutParams {
    * sale through.
    */
   mpesaManual?: ManualMpesaEntry
+  /**
+   * Present only when this sale is a card (PDQ) tender, recorded
+   * manually the same way as `mpesaManual` above (docs/phase-176.md
+   * Part 2) — no manager credentials travel with it; the main process
+   * establishes the cashier from the authenticated session.
+   */
+  cardManual?: CardManualEntry
 }
 
 /**

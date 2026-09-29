@@ -83,6 +83,30 @@ export const checkoutRequestSchema = z.object({
         message: 'An unverified M-Pesa payment must be explicitly confirmed'
       })
     })
+    .optional(),
+  /**
+   * Present only when this sale is a card (PDQ) tender, recorded
+   * manually the same way as manual M-Pesa above — Rubis takes cards on
+   * a separate PDQ machine the till has no link to, so there is no
+   * confirming provider to check this against, only the cashier's own
+   * reference and attestation.
+   *
+   * 1-12 uppercase letters/digits is a working assumption (docs/
+   * phase-176.md Part 2 §1) until Rubis Finance confirms which PDQ slip
+   * number this till is meant to reconcile against — mirrored in
+   * `checkout.ts`'s `CARD_REFERENCE_PATTERN`, which is the actual
+   * control; this copy exists only to tell the cashier what is wrong
+   * before they tap Complete.
+   */
+  cardManual: z
+    .object({
+      reference: z
+        .string()
+        .regex(/^[A-Z0-9]{1,12}$/, 'Enter the reference from the PDQ slip (letters and numbers only)'),
+      confirmRecorded: z.literal(true, {
+        message: 'A card payment must be explicitly confirmed against the PDQ slip'
+      })
+    })
     .optional()
 })
 

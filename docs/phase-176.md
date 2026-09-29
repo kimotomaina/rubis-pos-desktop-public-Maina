@@ -279,3 +279,95 @@ The manual M-Pesa ledger exists because a real external statement (Safaricom's) 
 
 1. **Toggle hidden on empty cart.** The request says "Card toggle hidden when the cart is empty, same as the others," but Cash/M-Pesa are **not** currently hidden on an empty cart (§2a) — only `canSubmitCash`/`canCompleteSale` are gated on `cartCount > 0`. Implementing this literally means changing existing Cash/M-Pesa behavior, which is outside "no second sale path" but is a scope expansion beyond adding Card. Needs a decision: hide all three, or match existing (always-visible) behavior for Card too.
 2. **Tripwire file names.** The brief names `fiscalEngine`, `fiscalRouting`, and `mpesaPaymentGate` as files whose diff must stay empty. The actual files are `src/main/services/fiscal-engine.ts` and `src/main/services/fiscal-routing.ts` (kebab-case, confirmed via `Glob`) — no `fiscalEngine.ts`/`fiscalRouting.ts` exist. There is also no standalone `mpesaPaymentGate` file; the equivalent is the payment-gate block inside `checkout.ts:341-453` (the `if (input.paymentMethod === 'mpesa')` block and its surrounding comment/`mpesaSettlement` logic) — Part 2's tripwire check should diff that block's line range within `checkout.ts`, not a whole file, since the new `'card'` block necessarily lands in the same file. Suggest confirming the intended tripwire scope before Part 2 starts.
+
+---
+
+# Part 2 — Build (Option A)
+
+- **Date:** 2026-09-29
+- **Requested:** Build the card tender, Option A, per Part 1 review. Decisions taken on Part 1's open questions: toggles stay visible on an empty cart (no change to existing Cash/M-Pesa visibility); tripwire scope corrected to the real file paths / the `checkout.ts` block range; Option A confirmed (no new table, no reconciliation/report/receipt/Shopify-push changes).
+- **Outcome:** Implemented.
+- **Branch / base commit:** staging @ bd3dfce (docs: report for phase 176, Part 1)
+
+## 1. Wire contract
+
+Mirrors `mpesaManual`/`manualApproval` exactly, per Part 1 §1c/§2c:
+
+- **`ipcValidator.ts`** ([ipcValidator.ts:45-108](../src/main/lib/ipcValidator.ts#L45-L108)): added `cardManual: { reference, confirmRecorded }.optional()` beside `mpesaManual`. `reference` uses `z.string().regex(/^[A-Z0-9]{1,12}$/, ...)` — **1-12 characters is a working assumption** (see the code comment on `CARD_REFERENCE_PATTERN` in `checkout.ts` and the identical note here) **until Rubis Finance confirms which PDQ slip number this till is meant to reconcile against.** `confirmRecorded` is `z.literal(true, ...)`, matching `confirmUnverified`.
+- **`database.ts`**: added `CardManualEntry` (mirrors `ManualMpesaEntry`), `CardApproval` (mirrors `ManualMpesaApproval`, but — unlike it — carries `reference` too, not just the attestation; see the reasoning in its doc comment and in §2 below), `cardApproval?: CardApproval` on `CheckoutRequest`, and widened `CheckoutIpcRequest` to `Omit<CheckoutRequest, 'manualApproval' | 'cardApproval'> & { mpesaManual?...; cardManual?: CardManualEntry }`.
+- **`main/index.ts`**'s `orders:checkout` handler ([main/index.ts:1283-1312](../src/main/index.ts#L1283-L1312)): `cardManual` is stripped from `validation.data` the same way `mpesaManual` is, and derives `cardApproval = { reference: cardManual.reference, confirmRecorded: cardManual.confirmRecorded }`. The renderer never sets `cardApproval` directly — no field for it exists on `checkoutRequestSchema`.
+
+## 2. Server-side gate (`checkout.ts`)
+
+A new `if (input.paymentMethod === 'card')` block, placed directly after the mpesa block closes ([checkout.ts:492-522](../src/main/services/checkout.ts#L492-L522) in the final file). Refuses with a distinct, non-blaming message for each of the three missing-input cases (`CARD_REFERENCE_MISSING_MESSAGE`, `CARD_REFERENCE_INVALID_MESSAGE`, `CARD_NOT_ACKNOWLEDGED_MESSAGE`), independently re-validating the reference pattern server-side (same "renderer's copy is a courtesy, this one is the control" reasoning as `MPESA_MANUAL_CODE_PATTERN`).
+
+**Design deviation from the brief, and why:** the brief's step 2 says to derive `tenderedAmount`/`changeDue`/`referenceNumber` "before building orderInput." Rather than mutating `input` (no precedent for that in this file) or duplicating the derivation at both the `orderInput` site and inside `buildFiscalRequest`'s call, `cardApproval` itself carries the `reference` (unlike `manualApproval`, which relies on `main/index.ts` pre-writing `referenceNumber` before calling `runCheckout`). A local `cardReference: string | null` is set once the gate passes, and `orderInput`'s three fields are computed at their existing declaration site with a ternary on it — no separate pass, no mutation, and `buildFiscalRequest` stays byte-for-byte unchanged (per the brief's own last bullet in step 2), receiving whatever `input.tenderedAmount`/`referenceNumber` the renderer sent. This doesn't matter for correctness: `real-etims-provider.ts` never reads `amountTendered`/`paymentMethod` at all (confirmed by grep — those `FiscalInvoiceRequest` fields are unused past `buildFiscalRequest`), so nothing about the fiscal request's accuracy depends on this.
+
+The card sale then falls through to the same unconditional `db.queueOrder(orderInput)` path cash and every other non-mpesa method already use — no new branch, no new DB method, no settlement/ledger row.
+
+## 3. Renderer
+
+- **`PosCheckoutPanel.tsx`**: `QuickPaymentMethod` widened from `Extract<PaymentMethod, 'cash' | 'mpesa'>` to `PaymentMethod` (all three). Toggle row: `grid-cols-2 gap-3`/`h-14 text-xl` → `grid-cols-3 gap-2`/`h-12 text-lg` — height and gap shrunk before font size, per the brief. **Measured at the worst case (1366×768 @150%, 911×512 window) via `CHECK_FIT_SIZES=1 npm run check:fit`: each toggle is 149×48 CSS px** (149×1.5 = 223.5 × 48×1.5 = 72 physical px at that window's 1.5 device pixel ratio) — well clear of `check-fit.mjs`'s 34-physical-px touch floor. Doc comments at the old "two toggles, Phase 44" block updated to explain the reversal. Toggles remain visible on an empty cart (Part 1 open question 1, resolved by your instruction) — no change to that existing behavior for any of the three.
+- **`CardEntryPanel.tsx`** (new): copies `PaymentModal`'s manual-entry pattern, not the STK pattern. Read-only reference field opens the shared keyboard (`mode: 'caps'`, `docked: true`, `maxLength: 12`, filtering to `[A-Z0-9]`, label "Reference from the PDQ slip"). Checkbox text: *"I have checked the PDQ slip shows Approved for this amount."* Unlike the manual M-Pesa panel's own Complete Sale button (always clickable, validated on click), this one is `disabled` until `canCompleteSale('card', total, 0, reference) && acknowledged` — matching Cash's `canSubmitCash` pattern, per your instruction ("Complete Sale for card: enabled only when... `canCompleteSale('card', ...)` is true and the box is ticked"). `checkoutMath.ts` is unchanged, as specified. Empty-cart handling copies `PaymentModal`'s own `total <= 0` guard rather than threading a separate `cartCount` prop, matching that existing sibling component's precedent.
+- **`cartStore.ts`**: `CheckoutParams` gained `cardManual?: CardManualEntry`, passed straight through to `window.api.checkout` by the existing `{ items, total, ...params, cartDiscount }` spread — no change to `checkout()`'s body.
+
+## 4. check:fit
+
+Added a third scenario, `{ label: 'Card', setup: click 'CARD' }`, beside Cash/M-Pesa ([check-fit.mjs:752-768](../scripts/check-fit.mjs#L752-L768)).
+
+**New count: 283 fit, 0 skipped, 9 failed** (`Admin > Needs Attention: card not found` at every window size). **The delta and the failures were both isolated and confirmed independently** (`git stash` the whole Part 2 diff, rebuild, rerun):
+- **Baseline (Part 1's code, before this change): 274 fit, 9 failed** — the same 9 `Needs Attention` failures, at the same sizes. This is a pre-existing, unrelated environment condition (that Admin card is conditionally rendered off seeded/copied app state `check-fit.mjs` doesn't control) — nothing in this change touches it, and it was never in this diff's tripwire list.
+- **With Part 2 restored: 283 fit, 9 failed** — exactly +9 (one new `Card` scenario × 9 `CASES`), all nine ✔. No new failures anywhere.
+
+## 5. Tests
+
+New file `tests/cardManualPayment.test.ts` (21 tests, mirrors `tests/mpesaManualPayment.test.ts`'s structure):
+- The four guard rails: no `cardApproval`; blank/whitespace reference (→ `CARD_REFERENCE_MISSING_MESSAGE`); 13-char/lowercase/punctuation reference (→ `CARD_REFERENCE_INVALID_MESSAGE`); no attestation (→ `CARD_NOT_ACKNOWLEDGED_MESSAGE`).
+- A valid card sale: writes `payment_method='card'`, `reference_number`, `tendered_amount=total`, `change_due=0`, `staff_id`; overrides a renderer-sent `tenderedAmount:0`/`changeDue:99` (each individually and together); ignores a forged top-level `referenceNumber` in favour of `cardApproval.reference`; is queued exactly once and reaches the fiscal queue exactly once; writes no `mpesa_payments` row (Option A).
+- Wire contract: `checkoutRequestSchema` has `cardManual`, not `cardApproval`; accepts a well-formed `cardManual`; rejects the same four malformed-reference shapes at the schema layer; rejects `confirmRecorded: false`.
+
+New file `tests/posCheckoutPanelCard.test.ts` (real mount, `posCheckoutPanelFit.test.ts`'s pattern): all three toggles render; the toggle row is `grid-cols-3` (not a wrapped `grid-cols-2`, see the mutation-check note below); selecting CARD shows `CardEntryPanel` (not the cash numpad or `PaymentModal`); Complete Sale is disabled with no reference, with a reference but no tick, and with a tick but no reference; enabled once both are present; "← Change payment method" returns to Cash.
+
+**Two pre-existing tests updated** (both deliberate, both because Part 1 found card had *no* gate at all — these tests documented that absence, which this change fixes):
+- `tests/mpesaPaymentGate.test.ts` — "a card sale completes on its reference number, with no confirmation required" renamed and rewritten to use a valid `cardApproval` instead of a bare `referenceNumber: 'TXN-9001'` (which is no longer sufficient, and contains a hyphen the new pattern rejects anyway). What the test still proves — a card sale is never routed through the M-Pesa confirmation gate — is unchanged.
+- `tests/mpesaPaymentsRecord.test.ts` — "writes nothing for a card sale either" now uses a valid `cardApproval` and additionally asserts `result.success === true`, so the assertion exercises a genuinely *successful* card sale rather than an incidentally refused one.
+
+**Existing mpesa gate tests**: unchanged, and green (`tests/mpesaManualPayment.test.ts`, the rest of `tests/mpesaPaymentGate.test.ts`, `tests/runCheckout.test.ts`).
+
+### Mutation checks (each applied, confirmed, then reverted — `git diff --stat` clean after all four)
+
+| # | Mutation | Result |
+| --- | --- | --- |
+| i | Removed the blank-reference refusal from the card block | `tests/cardManualPayment.test.ts`: 3 tests failed (blank/whitespace refused with the wrong message) |
+| ii | Removed the attestation refusal | `tests/cardManualPayment.test.ts`: 1 test failed |
+| iii | Made the card block return success and bypass `db.queueOrder` entirely | `tests/cardManualPayment.test.ts`: 6 tests failed |
+| iv | Reverted the toggle row to `grid-cols-2` | `check:fit` still passed at every size (Tailwind's grid wraps the 3rd button onto its own row rather than overflowing — confirmed by rebuilding and rerunning `check:fit` against the mutation). **A new assertion was added to `posCheckoutPanelCard.test.ts`** (`row.className` contains `grid-cols-3`) specifically because `check:fit` doesn't catch this case — confirmed to fail against the mutation, then the mutation was reverted |
+
+## 6. Tripwires
+
+`git diff --stat` confirmed empty for: `src/main/services/fiscal-engine.ts`, `src/main/services/fiscal-routing.ts`, `src/main/services/integrations/real-etims-provider.ts`, `src/main/services/integrations/mock-etims-provider.ts`, `src/main/services/reports.ts`, `src/main/lib/receiptLayout.ts`, `src/main/services/orders.ts`, `src/renderer/src/pages/MpesaReconciliationPage.tsx`, `src/renderer/src/components/VirtualNumpad.tsx`, `src/renderer/src/stores/keyboardStore.ts`, `src/renderer/src/lib/checkoutMath.ts`.
+
+For `checkout.ts`: the full diff was inspected line by line. Lines 403-453 in the pre-Part-2 file (the `if (input.paymentMethod === 'mpesa')` block, from `const reference = input.referenceNumber?.trim()...` through its closing brace) are **byte-identical** in the final file — the diff shows zero changes inside that block; every change is either new constants above it, a new `let cardReference` declaration, the new `if (input.paymentMethod === 'card')` block placed immediately after it, or the three derived fields (`tenderedAmount`/`changeDue`/`referenceNumber`) plus one comment inside `orderInput`'s existing literal.
+
+## 7. Verification
+
+| Check | Result |
+| --- | --- |
+| `npm run typecheck` (node + web) | Clean, no errors |
+| `npx vitest run` (full suite) | **2243 passed, 0 failed** (147 files) — includes the two new test files (`cardManualPayment.test.ts`: 21 tests, `posCheckoutPanelCard.test.ts`: 8 tests) and the two pre-existing tests updated in place (§5) |
+| `electron-vite build` | Clean — main 407.32 kB, preload 37.85 kB, renderer 970.84 kB |
+| `npm run check:fit` | **283 fit, 0 skipped, 9 failed** (pre-existing `Needs Attention` issue only, confirmed unrelated — see §4) |
+
+## 8. What only a human can check
+
+- A card sale end to end on the pilot till at 150% scaling.
+- Three toggles visible with no scroll (check:fit confirms no page/inner overflow at every size, but a human should confirm it *looks* right, not just measures right).
+- The docked keyboard doesn't cover Complete Sale when the reference field is focused.
+- The printed receipt shows "PAID BY CARD" and the reference line (§3b's finding: this code path was already correct before Part 2 — nothing here changed it, so this is a confirmation, not a new risk).
+- End of Day shows the sale under the cashier as `card` (§3a's finding: also pre-existing and unchanged).
+- The Shopify order note reads `card (ref ...)` (§3c's finding: also pre-existing and unchanged).
+
+## Rollback
+
+`git revert` of the Part 2 commit. No schema/data migration, no new table, no changed column — a revert leaves any card sales already recorded during the window this was live exactly as they were written (`orders.payment_method='card'` rows are not touched by reverting the code that writes them).
+

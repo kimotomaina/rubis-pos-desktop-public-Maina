@@ -147,6 +147,35 @@ export const MPESA_MANUAL_NOT_ACKNOWLEDGED_MESSAGE =
 export const MPESA_MANUAL_CODE_ALREADY_USED_MESSAGE =
   'That M-Pesa code has already been recorded against another sale. Check the customer’s message and try again.'
 
+/**
+ * Shown when a card sale arrives with no PDQ reference at all — either
+ * `cardApproval` is missing entirely, or its `reference` is blank.
+ */
+export const CARD_REFERENCE_MISSING_MESSAGE =
+  'Enter the reference from the PDQ slip before completing this sale.'
+
+/**
+ * The shape of a PDQ slip reference this till accepts: 1 to 12
+ * uppercase letters/digits.
+ *
+ * The 12-character ceiling is a working assumption (docs/phase-176.md
+ * Part 2 §1) until Rubis Finance confirms which PDQ slip number this
+ * till is meant to reconcile against — not a limit any specific PDQ
+ * terminal model is known to produce. Checked here in the main process
+ * as well as in `checkoutRequestSchema` — the renderer's copy is a
+ * courtesy to the cashier, this one is the control (same reasoning as
+ * {@link MPESA_MANUAL_CODE_PATTERN}).
+ */
+export const CARD_REFERENCE_PATTERN = /^[A-Z0-9]{1,12}$/
+
+/** Shown when a card reference is not shaped like a PDQ slip reference at all. */
+export const CARD_REFERENCE_INVALID_MESSAGE =
+  'That doesn’t look like a PDQ slip reference. Enter 1-12 letters/numbers from the slip.'
+
+/** Shown when the cashier's attestation that the PDQ slip shows Approved is missing. */
+export const CARD_NOT_ACKNOWLEDGED_MESSAGE =
+  'Confirm that the PDQ slip shows Approved for this amount before completing the sale.'
+
 /** Structural slice of {@link MpesaProvider} `runCheckout` depends on. */
 export interface CheckoutMpesaProvider {
   verifyTransactionCode(
@@ -345,6 +374,14 @@ export async function runCheckout(
    */
   let mpesaSettlement: RecordMpesaPaymentInput | null = null
 
+  /**
+   * Set only by the card gate below, once a card sale passes it — the
+   * derived reference `orderInput` (below) must use instead of whatever
+   * `input.referenceNumber` holds, since a card sale has no confirming
+   * provider to have already set that field correctly.
+   */
+  let cardReference: string | null = null
+
   try {
     const { items, total } = input
 
@@ -452,6 +489,38 @@ export async function runCheckout(
       }
     }
 
+    /**
+     * The card (PDQ) gate. Rubis takes cards on a separate PDQ machine
+     * the till has no link to (docs/phase-176.md §4.7, VIL G03 manual
+     * Step 7: `CloseReceipt` has no payment argument at all) — there is
+     * no confirming provider to check a card reference against, the way
+     * M-Pesa's Daraja/SMS/manual routes above can. The whole record is
+     * the cashier's reference plus their attestation that the slip
+     * printed Approved, same shape as manual M-Pesa's exception (docs/
+     * phase-150.md step 3): no manager PIN at sale time, cashier
+     * attribution from `staffId` alone.
+     *
+     * `cardApproval` — never `input.referenceNumber` — is the only
+     * source for the reference, so a renderer cannot bypass this gate by
+     * setting the top-level field directly. Unlike M-Pesa there is no
+     * settlement/ledger row (Option A, docs/phase-176.md Part 2 §5):
+     * the `orders` row below is the entire record, and nothing here
+     * needs claiming or spending.
+     */
+    if (input.paymentMethod === 'card') {
+      const reference = input.cardApproval?.reference.trim() ?? ''
+      if (!reference) {
+        return { success: false, error: CARD_REFERENCE_MISSING_MESSAGE }
+      }
+      if (!CARD_REFERENCE_PATTERN.test(reference)) {
+        return { success: false, error: CARD_REFERENCE_INVALID_MESSAGE }
+      }
+      if (!input.cardApproval?.confirmRecorded) {
+        return { success: false, error: CARD_NOT_ACKNOWLEDGED_MESSAGE }
+      }
+      cardReference = reference
+    }
+
     const openShift = db.getOpenShift()
     const clientOrderUuid = idGen()
     const orderInput = {
@@ -461,9 +530,13 @@ export async function runCheckout(
       staffId: staff.id,
       staffName: staff.name,
       paymentMethod: input.paymentMethod,
-      tenderedAmount: input.tenderedAmount,
-      changeDue: input.changeDue,
-      referenceNumber: input.referenceNumber,
+      // Derived, never trusted, for a card sale (docs/phase-176.md Part
+      // 2 §2): the PDQ terminal already took the full amount, so the
+      // renderer's tenderedAmount/changeDue are not evidence of
+      // anything and are ignored in favour of the cart total/zero.
+      tenderedAmount: cardReference !== null ? total : input.tenderedAmount,
+      changeDue: cardReference !== null ? 0 : input.changeDue,
+      referenceNumber: cardReference ?? input.referenceNumber,
       shiftId: openShift?.id,
       customerPin: input.customerPin,
       cartDiscount: input.cartDiscount

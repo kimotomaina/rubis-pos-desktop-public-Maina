@@ -291,6 +291,18 @@ export interface CheckoutRequest {
    * the end-of-day report (Step 4), not re-verified per sale.
    */
   manualApproval?: ManualMpesaApproval
+  /**
+   * Set **only by the `orders:checkout` IPC handler**, when this sale is
+   * a card (PDQ) tender — same structural guarantee as `manualApproval`:
+   * no field on `checkoutRequestSchema` lets a renderer assert this
+   * directly (see `cardManual` on {@link CheckoutIpcRequest} instead).
+   * Unlike manual M-Pesa, the reference travels on this object rather
+   * than on `referenceNumber` — `runCheckout`'s card gate (docs/
+   * phase-176.md Part 2 §2) derives `referenceNumber`/`tenderedAmount`/
+   * `changeDue` from here, never from the top-level fields, since a PDQ
+   * sale has no confirming provider to check either against.
+   */
+  cardApproval?: CardApproval
 }
 
 /**
@@ -309,13 +321,34 @@ export interface ManualMpesaEntry {
 }
 
 /**
+ * A manually recorded card (PDQ) reference, as the renderer sends it.
+ *
+ * No manager credentials travel with it, matching manual M-Pesa entry
+ * (docs/phase-150.md step 3) — the cashier attesting to it is the till's
+ * own logged-in staff member, established server-side from `staffId`,
+ * never from this object.
+ */
+export interface CardManualEntry {
+  /**
+   * The reference the cashier read off the PDQ slip. 1-12 uppercase
+   * letters/digits is a working assumption (docs/phase-176.md Part 2
+   * §1) until Rubis Finance confirms which PDQ slip number this till is
+   * meant to reconcile against.
+   */
+  reference: string
+  /** Must be `true`: the cashier's positive attestation that the PDQ slip shows Approved for this amount. */
+  confirmRecorded: true
+}
+
+/**
  * What the renderer may send to `orders:checkout`.
  *
- * `manualApproval` is deliberately absent — that is established in the
- * main process, never asserted by a caller.
+ * `manualApproval`/`cardApproval` are deliberately absent — those are
+ * established in the main process, never asserted by a caller.
  */
-export type CheckoutIpcRequest = Omit<CheckoutRequest, 'manualApproval'> & {
+export type CheckoutIpcRequest = Omit<CheckoutRequest, 'manualApproval' | 'cardApproval'> & {
   mpesaManual?: ManualMpesaEntry
+  cardManual?: CardManualEntry
 }
 
 /**
@@ -335,6 +368,24 @@ export interface ManualMpesaApproval {
    * it, however it reached the main process.
    */
   acknowledgedUnverified: boolean
+}
+
+/**
+ * The cashier's attestation for one manually recorded card (PDQ)
+ * payment, derived server-side from `cardManual` (see
+ * {@link CheckoutIpcRequest}).
+ *
+ * Carries the reference itself — unlike {@link ManualMpesaApproval},
+ * where the reference travels on `CheckoutRequest.referenceNumber` —
+ * because a card sale has no confirming provider to have already set
+ * that field correctly; `runCheckout`'s card gate reads the reference
+ * from here alone.
+ */
+export interface CardApproval {
+  /** The reference the cashier read off the PDQ slip, as sent by `cardManual`. */
+  reference: string
+  /** The cashier's explicit, positive attestation that the PDQ slip showed Approved for this amount. */
+  confirmRecorded: boolean
 }
 
 /** Base delay for exponential backoff between sync attempts. */

@@ -757,6 +757,14 @@ async function runCase(testCase, outDir) {
           await clickWhereText(cmd, 'button', 'M-PESA')
           await new Promise((r) => setTimeout(r, 300))
         }
+      },
+      // docs/phase-176.md Part 2 §4 — the third toggle added beside Cash/M-Pesa.
+      {
+        label: 'Card',
+        setup: async () => {
+          await clickWhereText(cmd, 'button', 'CARD')
+          await new Promise((r) => setTimeout(r, 300))
+        }
       }
     ]
 

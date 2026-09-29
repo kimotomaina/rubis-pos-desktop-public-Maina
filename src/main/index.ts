@@ -82,6 +82,7 @@ import { createDatabase, STUCK_WAITING_THRESHOLD_MS } from './services/database.
 import { migrateEnvConfigToDatabase } from './services/configMigration.js'
 import { DEMO_PRODUCTS } from './services/demoData.js'
 import type {
+  CardApproval,
   CheckoutReceipt,
   FiscalResendResult,
   ManualMpesaApproval,
@@ -1279,11 +1280,19 @@ app.whenReady().then(async () => {
        * `manualApproval` carries only the cashier's own attestation,
        * never anything the renderer could use to claim a status,
        * cashier, or approver it did not earn.
+       *
+       * `cardManual` is stripped the same way, into `cardApproval` — a
+       * card (PDQ) sale, recorded manually per docs/phase-176.md Part 2,
+       * with no confirming provider to check it against either.
        */
-      const { mpesaManual, ...checkoutInput } = validation.data
+      const { mpesaManual, cardManual, ...checkoutInput } = validation.data
       let manualApproval: ManualMpesaApproval | undefined
       if (mpesaManual) {
         manualApproval = { acknowledgedUnverified: mpesaManual.confirmUnverified }
+      }
+      let cardApproval: CardApproval | undefined
+      if (cardManual) {
+        cardApproval = { reference: cardManual.reference, confirmRecorded: cardManual.confirmRecorded }
       }
 
       return runCheckout(
@@ -1305,7 +1314,8 @@ app.whenReady().then(async () => {
         {
           ...checkoutInput,
           referenceNumber: mpesaManual ? mpesaManual.code : checkoutInput.referenceNumber,
-          manualApproval
+          manualApproval,
+          cardApproval
         }
       )
     }
