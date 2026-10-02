@@ -9,6 +9,7 @@
  * augmentation lives here instead of in `index.d.ts`.
  */
 
+import type { VatMismatchRow } from '../main/services/vat-reconcile.js'
 import type { ServiceResult } from '../main/services/shopify-types.js'
 import type { FiscalConnectionTestResult } from '../main/services/integrations/fiscal-connection-test.js'
 import type { CartItem, CartRemovalRequest, ProductSummary } from '../renderer/src/types/shopify.js'
@@ -158,6 +159,8 @@ export interface PosApi {
     localId: number,
     options?: { printerType?: PrinterType; auto?: boolean; staffId?: number; fiscalOnly?: boolean }
   ) => Promise<ServiceResult<ReceiptPrintResult>>
+  /** Sales whose stored device VAT figures disagree with the till's own, for the Needs Attention list (docs/phase-198-1). */
+  getVatMismatches: () => Promise<ServiceResult<VatMismatchRow[]>>
   /** Filed sales whose fiscal slip never reached paper, for the Needs Attention list (docs/phase-198). */
   getUnprintedFiscalSlips: () => Promise<ServiceResult<UnprintedFiscalSlipRow[]>>
   /** Fetches every active staff account for the login picker. */

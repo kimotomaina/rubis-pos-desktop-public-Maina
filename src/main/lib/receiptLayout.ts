@@ -29,7 +29,8 @@
 
 import type { Discount } from '../services/shopify-types.js'
 import { computeReceiptTotals } from './receiptTotals.js'
-import { VAT_CLASSES, expectedGroupTotals, resolveVatClass, type VatClass } from './vatClass.js'
+import { VAT_CLASSES, VAT_CLASS_RATES, grossToNet, netGroupTotals, resolveVatClass, type VatClass } from './vatClass.js'
+import { reconcileVatGroups } from './vatReconcile.js'
 import type { ReceiptTotalsLineItem } from './receiptTotals.js'
 import { buildFiscalBlockLines, NOT_A_TAX_INVOICE_LINE } from './receiptFiscalBlock.js'
 
@@ -158,9 +159,6 @@ const VAT_CLASS_KEYS: Record<VatClass, string> = {
   D: 'D = Other rate',
   E: 'E = Exempt'
 }
-
-/** Statutory rate per KRA VAT class; `null` means the class has no printable rate ("n/a"). */
-const VAT_CLASS_RATES: Record<string, number | null> = { A: 0.16, B: 0.08, C: 0, D: null, E: 0 }
 
 const AMOUNT_FORMAT = new Intl.NumberFormat('en-KE', {
   minimumFractionDigits: 2,
@@ -312,7 +310,7 @@ function itemAmountLine(item: ReceiptLayoutLineItem, width: number): ReceiptLayo
 
 /** A VAT-class table row's rate/VAT/gross, from its stored taxable (ex-VAT) subtotal. */
 function vatClassFigures(letter: string, taxable: number): { rateLabel: string; vatLabel: string; gross: number } {
-  const rate = VAT_CLASS_RATES[letter] ?? null
+  const rate = VAT_CLASS_RATES[letter as VatClass] ?? null
   if (rate === null) {
     return { rateLabel: 'n/a', vatLabel: 'n/a', gross: taxable }
   }
@@ -328,20 +326,22 @@ function vatClassKeys(items: ReceiptLayoutLineItem[]): string[] {
 
 /**
  * The VAT-table amounts for a filed sale that has no stored device groups
- * (the already-filed recovery never re-reads the receipt): the lines'
- * own amounts per class, not the whole sale as class A.
+ * (the already-filed recovery never re-reads the receipt): the lines' own
+ * amounts per class, not the whole sale as class A. The table adds VAT on top
+ * of each amount, so the lines' VAT-inclusive totals are turned into net
+ * amounts first (docs/phase-198-1); the whole-receipt fallback likewise.
  *
  * @param {ReceiptLayoutLineItem[]} items
- * @param {string} fallbackA the whole-receipt amount, used when no line resolves to a class
+ * @param {string} fallbackA the whole-receipt gross amount, used when no line resolves to a class
  * @returns {ReceiptLayoutVatGroups}
  */
 function groupsFromItems(items: ReceiptLayoutLineItem[], fallbackA: string): ReceiptLayoutVatGroups {
-  const totals = expectedGroupTotals(items)
+  const totals = netGroupTotals(items)
   const groups: ReceiptLayoutVatGroups = {}
   for (const letter of VAT_CLASSES) {
     if (items.some((item) => resolveVatClass(item.vatClass) === letter)) groups[letter] = String(totals[letter])
   }
-  return Object.keys(groups).length > 0 ? groups : { A: fallbackA }
+  return Object.keys(groups).length > 0 ? groups : { A: String(grossToNet('A', Number(fallbackA))) }
 }
 
 /**
@@ -353,12 +353,13 @@ function groupsFromItems(items: ReceiptLayoutLineItem[], fallbackA: string): Rec
  * @param {ReceiptLayoutSettings} settings
  * @param {object} options
  * @param {ReceiptWidth} [options.width]
+ * @param {{ warn(message: string): void }} [options.logger] defaults to `console`; told when stored device VAT figures disagree with the till's
  * @returns {ReceiptLayoutEntry[]}
  */
 export function buildReceiptLayout(
   order: ReceiptLayoutOrder,
   settings: ReceiptLayoutSettings,
-  options: { width?: ReceiptWidth } = {}
+  options: { width?: ReceiptWidth; logger?: { warn(message: string): void } } = {}
 ): ReceiptLayoutEntry[] {
   const width = options.width ?? DEFAULT_WIDTH
   const isFiscalised = Boolean(order.fiscalInvoiceNumber)
@@ -466,10 +467,10 @@ export function buildReceiptLayout(
 
   // --- (g) VAT table (fiscalised only) ---
   if (isFiscalised) {
-    const groups: ReceiptLayoutVatGroups =
-      order.vatGroups && Object.keys(order.vatGroups).length > 0
-        ? order.vatGroups
-        : groupsFromItems(order.items, String(totals.rawSubtotal))
+    const hasDeviceGroups = Boolean(order.vatGroups && Object.keys(order.vatGroups).length > 0)
+    const groups: ReceiptLayoutVatGroups = hasDeviceGroups
+      ? order.vatGroups!
+      : groupsFromItems(order.items, String(totals.rawSubtotal))
     wrapText('VAT RATE TAXABLE VAT GROSS', width).forEach((text) => push(ln(text, 'left', 'bold')))
     push(rule(width))
     for (const letter of ['A', 'B', 'C', 'D', 'E'] as const) {
@@ -479,6 +480,18 @@ export function buildReceiptLayout(
       const figures = vatClassFigures(letter, Number.isFinite(taxable) ? taxable : 0)
       const row = `${letter} ${figures.rateLabel} ${formatAmount(Number.isFinite(taxable) ? taxable : 0)} ${figures.vatLabel} ${formatAmount(figures.gross)}`
       wrapText(row, width).forEach((text) => push(ln(text)))
+    }
+    // Only the device's own figures are checked: a table built from the lines is the till's
+    // arithmetic, so it agrees by construction. A mismatch is shown, never hidden.
+    if (hasDeviceGroups) {
+      const check = reconcileVatGroups(groups, totals)
+      if (!check.consistent) {
+        push(...wrappedLines(`Device figures. Till VAT: ${formatAmount(check.tillVat)}.`, width, 'left'))
+        const logger = options.logger ?? console
+        logger.warn(
+          `[rubis-pos] Order ${order.localId}: the device's VAT groups add up to VAT ${check.groupVat} but the till's VAT is ${check.tillVat} (difference ${check.diff}). Printed the device figures with a note.`
+        )
+      }
     }
     push(rule(width))
   }

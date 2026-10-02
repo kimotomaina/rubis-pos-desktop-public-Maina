@@ -13,6 +13,7 @@
  * can substitute a recording fake without touching the native module.
  */
 
+import type { VatReconcileOrderRow } from './vat-reconcile.js'
 import BetterSqlite3 from 'better-sqlite3'
 import type { Database as SqliteConnection } from 'better-sqlite3'
 import type { Discount, OfflineOrderPayload } from './shopify-types.js'
@@ -146,6 +147,12 @@ export interface OrderRow {
    * be printed (docs/phase-198). Cleared when that slip is printed. Never retried.
    */
   fiscal_slip_unprinted_at?: string | null
+  /**
+   * When the Enjoy customer slip first physically reached paper (docs/phase-198-1).
+   * Write-once; a PDF fallback or a failed print never sets it. The slip is
+   * stamped DUPLICATE only when this is already set at the time of printing.
+   */
+  customer_slip_printed_at?: string | null
 }
 
 /** Which slip of a sale a reprint was (docs/phase-198). */
@@ -571,8 +578,8 @@ function migrateOrdersFiscalColumns(connection: SqliteConnection): void {
  * same idempotent `ALTER TABLE` pattern.
  */
 function migrateOrdersReceiptColumns(connection: SqliteConnection): void {
-  // `fiscal_trader_inv_num` and `fiscal_slip_unprinted_at` (docs/phase-198) join here for the same reason.
-  for (const column of ['receipt_printed_at', 'fiscal_trader_inv_num', 'fiscal_slip_unprinted_at']) {
+  // `fiscal_trader_inv_num` and `fiscal_slip_unprinted_at` (docs/phase-198) and `customer_slip_printed_at` (docs/phase-198-1) join here for the same reason.
+  for (const column of ['receipt_printed_at', 'fiscal_trader_inv_num', 'fiscal_slip_unprinted_at', 'customer_slip_printed_at']) {
     try {
       connection.exec(`ALTER TABLE orders ADD COLUMN ${column} TEXT`)
     } catch {
@@ -704,6 +711,7 @@ export const SCHEMA = {
     receipt_printed_at TEXT,
     fiscal_trader_inv_num TEXT,
     fiscal_slip_unprinted_at TEXT,
+    customer_slip_printed_at TEXT,
     shopify_push_count INTEGER NOT NULL DEFAULT 0,
     shopify_last_push_at TEXT
   )`,
@@ -2041,7 +2049,7 @@ export class RubisDatabase {
   getOrder(localId: number): OrderRow | undefined {
     return this.conn
       .prepare(
-        'SELECT local_id, shopify_order_id, total, status, created_at, payload_json, staff_id, payment_method, tendered_amount, change_due, reference_number, shift_id, fiscal_invoice_number, fiscal_qr_code, fiscal_fiscalized_at, fiscal_status, fiscal_error_reason, fiscal_error_kind, fiscal_request_json, fiscal_data_issue, fiscal_vat_groups_json, fiscal_fiscalized_at_source, fiscal_cu_serial, receipt_printed_at, fiscal_trader_inv_num, fiscal_slip_unprinted_at FROM orders WHERE local_id = ?'
+        'SELECT local_id, shopify_order_id, total, status, created_at, payload_json, staff_id, payment_method, tendered_amount, change_due, reference_number, shift_id, fiscal_invoice_number, fiscal_qr_code, fiscal_fiscalized_at, fiscal_status, fiscal_error_reason, fiscal_error_kind, fiscal_request_json, fiscal_data_issue, fiscal_vat_groups_json, fiscal_fiscalized_at_source, fiscal_cu_serial, receipt_printed_at, fiscal_trader_inv_num, fiscal_slip_unprinted_at, customer_slip_printed_at FROM orders WHERE local_id = ?'
       )
       .get(localId) as OrderRow | undefined
   }
@@ -2091,6 +2099,40 @@ export class RubisDatabase {
         'UPDATE orders SET receipt_printed_at = COALESCE(receipt_printed_at, ?), fiscal_slip_unprinted_at = NULL WHERE local_id = ?'
       )
       .run(new Date().toISOString(), localId)
+  }
+
+  /**
+   * Records that the Enjoy customer slip reached paper (docs/phase-198-1).
+   * Write-once via `COALESCE`: the first physical print stands.
+   *
+   * @param {number} localId
+   */
+  markCustomerSlipPrinted(localId: number): void {
+    this.conn
+      .prepare('UPDATE orders SET customer_slip_printed_at = COALESCE(customer_slip_printed_at, ?) WHERE local_id = ?')
+      .run(new Date().toISOString(), localId)
+  }
+
+  /**
+   * Filed sales that hold stored device VAT groups, oldest first, with what the
+   * VAT reconcile needs to rebuild the till's own figures (docs/phase-198-1).
+   * Voided sales are left out.
+   *
+   * @returns {VatReconcileOrderRow[]}
+   */
+  getFiscalisedOrdersWithVatGroups(): VatReconcileOrderRow[] {
+    return this.conn
+      .prepare(
+        `SELECT o.local_id, o.created_at, o.total, s.name AS staff_name, o.payload_json,
+                o.fiscal_request_json, o.fiscal_vat_groups_json
+         FROM orders o
+         LEFT JOIN staff s ON s.id = o.staff_id
+         WHERE o.fiscal_status = 'fiscalized'
+           AND o.fiscal_vat_groups_json IS NOT NULL
+           AND o.status != 'voided'
+         ORDER BY o.created_at ASC, o.local_id ASC`
+      )
+      .all() as VatReconcileOrderRow[]
   }
 
   /**

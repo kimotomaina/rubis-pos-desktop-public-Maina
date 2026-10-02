@@ -23,6 +23,9 @@ export const DEFAULT_VAT_CLASS: VatClass = 'A'
 /** HS code shape the device accepts: `XXXX.XX.XX`. */
 export const HS_CODE_PATTERN = /^\d{4}\.\d{2}\.\d{2}$/
 
+/** Statutory rate per class; `null` means the class has no fixed rate. */
+export const VAT_CLASS_RATES: Record<VatClass, number | null> = { A: 0.16, B: 0.08, C: 0, D: null, E: 0 }
+
 /** Whole cents a sale's group total may differ from the device's by. */
 const GROUP_TOLERANCE_CENTS = 1
 
@@ -113,4 +116,34 @@ export function compareVatGroups(expected: VatGroupTotals, device: FiscalVatGrou
     }
   }
   return disagreements.length > 0 ? disagreements.join('; ') : null
+}
+
+/**
+ * The net (ex-VAT) amount of a VAT-inclusive gross amount: A is gross x 100/116,
+ * B is gross x 100/108, and C, D and E are returned unchanged (docs/phase-198-1).
+ * Rounded to two places.
+ *
+ * @param {VatClass} letter
+ * @param {number} gross
+ * @returns {number}
+ */
+export function grossToNet(letter: VatClass, gross: number): number {
+  if (letter === 'A') return round2((gross * 100) / 116)
+  if (letter === 'B') return round2((gross * 100) / 108)
+  return gross
+}
+
+/**
+ * {@link expectedGroupTotals} read as net: each class's VAT-inclusive line
+ * total turned into its ex-VAT amount. The till's own arithmetic for the
+ * groups, used where no device figures were stored and by the development mock.
+ *
+ * @param {VatClassLine[]} lines
+ * @returns {VatGroupTotals}
+ */
+export function netGroupTotals(lines: VatClassLine[]): VatGroupTotals {
+  const gross = expectedGroupTotals(lines)
+  const net: VatGroupTotals = { A: 0, B: 0, C: 0, D: 0, E: 0 }
+  for (const vatClass of VAT_CLASSES) net[vatClass] = grossToNet(vatClass, gross[vatClass])
+  return net
 }

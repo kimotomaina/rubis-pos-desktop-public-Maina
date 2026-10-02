@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import type { NeedsAttentionRow, UnprintedFiscalSlipRow } from '../../../main/services/database.js'
+import type { VatMismatchRow } from '../../../main/services/vat-reconcile.js'
 import { formatCurrency } from '../lib/currency.js'
 import { isValidKraPinFormat, KRA_PIN_MAX_LENGTH } from '../lib/kraPin.js'
 import { describeNeedsAttentionStatus, applyResendResult } from '../lib/needsAttention.js'
@@ -48,6 +49,7 @@ export default function NeedsAttentionPage({
 }: { shopifyCheckOverride?: ReconciliationResult } = {}) {
   const [rows, setRows] = useState<NeedsAttentionRow[]>([])
   const [unprinted, setUnprinted] = useState<UnprintedFiscalSlipRow[]>([])
+  const [vatMismatches, setVatMismatches] = useState<VatMismatchRow[]>([])
   const [printingId, setPrintingId] = useState<number | null>(null)
   const [printError, setPrintError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
@@ -71,6 +73,9 @@ export default function NeedsAttentionPage({
       // docs/phase-198: filed sales whose tax invoice never reached paper.
       const slips = await window.api.getUnprintedFiscalSlips()
       if (slips.success && slips.data) setUnprinted(slips.data)
+      // docs/phase-198-1: sales whose device VAT figures disagree with the till's.
+      const mismatches = await window.api.getVatMismatches()
+      if (mismatches.success && mismatches.data) setVatMismatches(mismatches.data)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load sales needing attention')
     } finally {
@@ -221,8 +226,31 @@ export default function NeedsAttentionPage({
         </div>
       )}
 
+      {vatMismatches.length > 0 && (
+        <div className="space-y-3" data-testid="vat-mismatches">
+          <h4 className="text-xl font-bold text-slate-800">VAT figures to reconcile</h4>
+          <p className="text-base text-slate-600">
+            For these sales the fiscal device&apos;s VAT figures differ from the till&apos;s. Both are on the printed
+            slip. Nothing needs to be resent.
+          </p>
+          {vatMismatches.map((row) => (
+            <div key={row.local_id} className="rounded-xl border border-slate-200 bg-white p-4">
+              <span className="text-lg font-semibold text-slate-800">Order #{row.local_id}</span>
+              <p className="mt-1 text-sm text-slate-500">
+                {new Date(row.created_at).toLocaleString()} · {row.staff_name ?? 'Unknown staff'} ·{' '}
+                {formatCurrency(row.total)}
+              </p>
+              <p className="mt-2 text-base text-slate-700">
+                Device VAT {formatCurrency(row.group_vat)} · Till VAT {formatCurrency(row.till_vat)}
+              </p>
+            </div>
+          ))}
+        </div>
+      )}
+
       {rows.length === 0 ? (
-        unprinted.length === 0 && (
+        unprinted.length === 0 &&
+        vatMismatches.length === 0 && (
           <p className="py-8 text-center text-base text-slate-500">No sales need attention.</p>
         )
       ) : (

@@ -218,17 +218,18 @@ import { printFiscalDuplicate } from './services/fiscal-duplicate-print.js'
 import { recordApprovedRemovals } from './services/cart-removals.js'
 import { createCartFlushCoordinator } from './services/cart-flush.js'
 import { printLateFiledSlip as printLateFiledSlipFor } from './services/late-filed-slip.js'
+import { recordSlipOutcome, slipStamps } from './services/slip-records.js'
+import { findVatMismatches } from './services/vat-reconcile.js'
+import type { VatMismatchRow } from './services/vat-reconcile.js'
 import { createNetworkMonitor } from './services/network.js'
 import { pushOrderToShopify } from './services/orders.js'
 import {
   printOrderSlips,
   attachCustomerSlipResult,
-  physicallyPrintedSlips,
   printZReport,
   printTestPage,
   printWindowsTestPage,
   buildPrinterRegistry,
-  shouldMarkReceiptPrinted,
   shouldShowFiscalPendingSlip,
   shouldOpenPdfFallbackViewer
 } from './services/printer.js'
@@ -2656,7 +2657,13 @@ app.whenReady().then(async () => {
       const { localId, buyerPin } = validation.data
       try {
         const outcome = await correctPinAndResend(
-          { db, fiscalizationProvider, logger: console, isFiling: (id) => fiscalEngine.isClaimed(id) },
+          {
+            db,
+            fiscalizationProvider,
+            logger: console,
+            isFiling: (id) => fiscalEngine.isClaimed(id),
+            onFiled: (id) => void printLateFiledSlip(id)
+          },
           localId,
           buyerPin ?? undefined
         )
@@ -2692,7 +2699,13 @@ app.whenReady().then(async () => {
       const { localId } = validation.data
       try {
         const outcome = await resendFiscalization(
-          { db, fiscalizationProvider, logger: console, isFiling: (id) => fiscalEngine.isClaimed(id) },
+          {
+            db,
+            fiscalizationProvider,
+            logger: console,
+            isFiling: (id) => fiscalEngine.isClaimed(id),
+            onFiled: (id) => void printLateFiledSlip(id)
+          },
           localId
         )
         return { success: true, data: buildFiscalResendResult(db, localId, outcome) }
@@ -2806,6 +2819,25 @@ app.whenReady().then(async () => {
         return {
           success: false,
           error: err instanceof Error ? err.message : 'Failed to load sales needing attention'
+        }
+      }
+    }
+  )
+
+  /**
+   * IPC handler for the sales whose stored device VAT figures disagree with the
+   * till's own (docs/phase-198-1). Read-only, and worked out from what is stored
+   * each time it is asked, so it follows any change to how the groups are read.
+   */
+  ipcMain.handle(
+    'fiscal:vat-mismatches',
+    (): ServiceResult<VatMismatchRow[]> => {
+      try {
+        return { success: true, data: findVatMismatches(db.getFiscalisedOrdersWithVatGroups(), printerSettings.taxRate) }
+      } catch (err) {
+        return {
+          success: false,
+          error: err instanceof Error ? err.message : 'Failed to load the VAT figures to reconcile'
         }
       }
     }
@@ -3075,32 +3107,18 @@ app.whenReady().then(async () => {
         // already printed once before — never from which button was
         // pressed, since `receipt:print` is the single call site for
         // both the first print and any later reprint (see docs/phase-164's
-        // audit of every receipt:print/printReceipt call site).
-        const isDuplicate = db.hasReceiptPrinted(localId)
+        // audit of every receipt:print/printReceipt call site). The Enjoy
+        // slip is decided the same way, from its own record (docs/phase-198-1).
         // docs/phase-198: the fiscal slip, then the Enjoy customer slip, as
-        // separate jobs that succeed or fail on their own. There is no record
-        // of the customer slip having been printed, so a manual Order History
-        // print is its reprint.
+        // separate jobs that succeed or fail on their own.
         const printed = await printSlipsForOrder(order, {
           slips: { fiscal: true, customer: !fiscalOnly },
-          isDuplicate,
-          customerSlipIsDuplicate: !auto,
+          ...slipStamps(db, order),
           printerType: printerType ?? 'receipt'
         })
         const fiscalResult = printed.fiscal as ServiceResult<ReceiptPrintResult>
-        // docs/phase-164-1: marked only when the CU block actually went
-        // out on paper — see shouldMarkReceiptPrinted.
-        if (shouldMarkReceiptPrinted(fiscalResult, order.fiscal_invoice_number)) {
-          db.markReceiptPrinted(localId)
-        }
-        // docs/phase-198: an Order History reprint is logged per slip that
-        // reached paper. The Needs Attention print of a late-filed sale
-        // (`fiscalOnly`) is that slip's first print, not a reprint.
-        if (!auto && !fiscalOnly) {
-          for (const slip of physicallyPrintedSlips(printed)) {
-            db.recordReceiptReprint({ order_id: localId, slip, staff_id: staffId ?? null })
-          }
-        }
+        // docs/phase-164-1, 198, 198-1: what reached paper is recorded; see slip-records.ts.
+        recordSlipOutcome(db, order, printed, { auto, fiscalOnly, staffId })
         const result = attachCustomerSlipResult(fiscalResult, printed.customer)
         // docs/phase-165: the automatic end-of-sale print never
         // force-opens a PDF viewer window when the printer was offline —

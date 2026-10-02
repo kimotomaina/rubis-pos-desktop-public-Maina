@@ -133,9 +133,9 @@ export interface ReceiptOrder {
   isDuplicate?: boolean
   /**
    * Whether the Enjoy customer slip is stamped "DUPLICATE" (docs/phase-198).
-   * Decided by the caller: there is no record of the customer slip having been
-   * printed, so a manual Order History print is the reprint. Falls back to
-   * {@link isDuplicate} when absent.
+   * Decided by the caller from `orders.customer_slip_printed_at`: only a slip
+   * that already reached paper once makes the next one a duplicate
+   * (docs/phase-198-1). Falls back to {@link isDuplicate} when absent.
    */
   customerSlipIsDuplicate?: boolean
   /** The amount actually charged (docs/phase-161) - printed verbatim, never recomputed. See {@link computeReceiptTotals}. */

@@ -88,6 +88,7 @@ const A_ONLY_SCENARIOS: Record<string, ReceiptLayoutOrder> = {
   discounted: {
     ...BASE,
     total: 1485,
+    vatGroups: { A: '1280.17' },
     items: [
       { title: 'Coca-Cola 500ml', variantTitle: '', quantity: 2, unitPrice: 100, vatClass: 'A', discount: { type: 'percent', value: 10 } },
       BASE.items[1]

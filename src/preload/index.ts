@@ -1,4 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron'
+import type { VatMismatchRow } from '../main/services/vat-reconcile.js'
 import { electronAPI } from '@electron-toolkit/preload'
 import type { ServiceResult } from '../main/services/shopify-types.js'
 import type { CartItem, CartRemovalRequest, ProductSummary } from '../renderer/src/types/shopify.js'
@@ -382,6 +383,14 @@ const api = {
       staffId: options?.staffId,
       fiscalOnly: options?.fiscalOnly
     }),
+
+  /**
+   * Sales whose stored device VAT figures disagree with the till's own
+   * (docs/phase-198-1), for the Needs Attention list.
+   *
+   * @returns {Promise<ServiceResult<VatMismatchRow[]>>}
+   */
+  getVatMismatches: (): Promise<ServiceResult<VatMismatchRow[]>> => ipcRenderer.invoke('fiscal:vat-mismatches'),
 
   /**
    * Filed sales whose fiscal slip never reached paper (docs/phase-198), for

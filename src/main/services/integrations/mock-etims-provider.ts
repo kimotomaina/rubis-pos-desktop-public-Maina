@@ -13,12 +13,14 @@
 import type { ServiceResult } from '../shopify-types.js'
 import { ln } from '../../lib/receiptLayout.js'
 import type { ReceiptLayoutEntry } from '../../lib/receiptLayout.js'
+import { VAT_CLASSES, netGroupTotals } from '../../lib/vatClass.js'
 import type {
   CreditNoteDetails,
   DuplicatePrintGate,
   DuplicatePrintOutcome,
   FiscalInvoiceRequest,
   FiscalInvoiceResult,
+  FiscalVatGroupAmounts,
   FiscalizationProvider,
   FiscalSubmitOutcome,
   TraderInvNumRecorder
@@ -117,7 +119,8 @@ export class MockFiscalizationProvider implements FiscalizationProvider {
       invoiceNumber,
       qrCode: Buffer.from(`[QR CODE]:${invoiceNumber}`).toString('base64'),
       fiscalizedAt: new Date().toISOString(),
-      cuSerialNumber: MOCK_CU_SERIAL
+      cuSerialNumber: MOCK_CU_SERIAL,
+      vatGroups: mockVatGroups(request)
     }
     this.invoices.set(invoiceNumber, result)
     this.lastInvoiceNumber = invoiceNumber
@@ -176,6 +179,28 @@ export class MockFiscalizationProvider implements FiscalizationProvider {
     console.log('mock: duplicate print')
     return { status: 'sent', deviceLastBefore: this.lastInvoiceNumber, deviceLastAfter: this.lastInvoiceNumber }
   }
+}
+
+/**
+ * The per-group amounts a mock sale reports, read as NET (ex-VAT): a 60.00
+ * class A sale reports 51.72. This is a modelling choice so dev slips agree
+ * with the till's VAT, not evidence of what the device returns: the device's
+ * contract does not say net or gross, and the live test decides (docs/phase-198-1).
+ * A class with no line is left out, as the real provider leaves out a group the
+ * device did not return.
+ *
+ * @param {FiscalInvoiceRequest} request
+ * @returns {FiscalVatGroupAmounts}
+ */
+function mockVatGroups(request: FiscalInvoiceRequest): FiscalVatGroupAmounts {
+  const net = netGroupTotals(request.items)
+  const groups: FiscalVatGroupAmounts = {}
+  for (const letter of VAT_CLASSES) {
+    if (request.items.some((item) => (item.vatClass?.trim().toUpperCase() || 'A') === letter)) {
+      groups[letter] = net[letter].toFixed(2)
+    }
+  }
+  return groups
 }
 
 /**

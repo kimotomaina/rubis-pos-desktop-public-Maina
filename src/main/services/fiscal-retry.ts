@@ -52,6 +52,13 @@ export interface FiscalResendDeps {
   fiscalizationProvider: FiscalRetryProvider
   logger?: Logger
   isFiling?: (localId: number) => boolean
+  /**
+   * Called with the local id after a resend files the sale (docs/phase-198-1), so
+   * its fiscal slip can be printed, by the same decision the fiscal engine's
+   * `onFiled` uses. Never awaited; a throw is logged and ignored. Not called when
+   * the sale was already filed, so a second resend prints nothing.
+   */
+  onFiled?: (localId: number) => void
 }
 
 /** The order fields `attemptFiscalRetry` needs to read before resubmitting. */
@@ -223,6 +230,11 @@ export async function resendFiscalization(deps: FiscalResendDeps, localId: numbe
       outcome.data.cuSerialNumber
     )
     logger.log(`[rubis-pos] Sale ${localId}: resent, fiscalized (invoice ${outcome.data.invoiceNumber})`)
+    try {
+      deps.onFiled?.(localId)
+    } catch (err) {
+      logger.warn(`[rubis-pos] Sale ${localId}: filed-sale callback failed — ${err instanceof Error ? err.message : String(err)}`)
+    }
   } else {
     const { status, enqueue } = routeFiscalOutcome(outcome)
     deps.db.setOrderFiscalFailure(localId, status, outcome.reason, outcome.kind, outcome.dataIssue ?? null)
