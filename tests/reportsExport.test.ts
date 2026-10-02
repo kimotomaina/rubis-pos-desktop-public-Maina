@@ -169,7 +169,9 @@ describe('buildOrdersCsv', () => {
     // docs/phase-163's reconciliation columns were appended after it.
     expect(dataRow[15]).toBe('uuid-42')
 
-    const shopifyInput = buildOrderInput(payload)
+    // CHANGED (docs/phase-210). OLD: buildOrderInput(payload). NEW: it also takes the till's location
+    // as a fallback, because an order cannot be built without one. The assertions are unchanged.
+    const shopifyInput = buildOrderInput(payload, { id: 'gid://shopify/Location/77557989479', name: 'Rubis Kisumu' })
     const customAttributes = shopifyInput.order.customAttributes as Array<{ key: string; value: string }>
     const metafields = shopifyInput.order.metafields as Array<{ key: string; value: string }>
     expect(dataRow[15]).toBe(customAttributes[0].value)

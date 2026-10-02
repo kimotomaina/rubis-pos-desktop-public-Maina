@@ -433,3 +433,7 @@ hides the control.
 ## voidLocalOrder has no caller (phase 209)
 
 `voidLocalOrder` in `services/voids.ts` has no caller since phase 131 disabled voiding; remove in a later cleanup.
+
+## A Shopify push with no location is retried, then abandoned (phase 210)
+
+A sale is refused at checkout when the till has no location, so an order with no location should not exist. If one does (a sale queued before phase 210 on a till whose location was since cleared), `pushOrderToShopify` fails it. A failed push counts an attempt like any other: after `SYNC_MAX_ATTEMPTS` (10, about 2.5 hours) the order is set `failed` and its queue row deleted (`recordQueueFailure`), and `sync_queue.last_error` is not shown anywhere in the app. The same is true of the existing "Shopify credentials missing" refusal. A deferral that counts no attempt, and a visible reason, are not built. Also not known: what Shopify does with an order fulfilled from a location that holds no stock of a "deny" variant (phase 210, section 3).

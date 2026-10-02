@@ -11,6 +11,16 @@
 
 import { AxiosError, type AxiosInstance, type AxiosResponse } from 'axios'
 import type { OfflineOrderPayload, ServiceResult } from './shopify-types.js'
+import { locationTag } from '../lib/locationSlug.js'
+import { resolveCheckoutLocation, type TillLocation } from '../lib/checkoutLocation.js'
+
+/** Raised when an order has no usable location (docs/phase-210): it is never pushed without one. */
+export class MissingLocationError extends Error {
+  constructor() {
+    super('This sale has no shop location, so it was not sent to Shopify. Set the till location in Admin.')
+    this.name = 'MissingLocationError'
+  }
+}
 
 /** GraphQL Admin API mutation used to sync offline orders (2026-07). */
 export const ORDER_CREATE_MUTATION = `
@@ -64,13 +74,34 @@ export interface OrderCreateResult {
  * store setting needed, unlike the metafield (docs/phase-168 section
  * 1.4). Both checked on shopify.dev (2026-07 API docs) on 2026-09-27.
  *
+ * docs/phase-210: the order also carries the shop that sold it, two ways.
+ * `fulfillment.locationId` creates the order fulfilled from that location
+ * ("The ID of the location to fulfill the order from", shopify.dev 2026-07),
+ * and a `location:<slug>` tag lets the Shopify order list filter by shop.
+ * `fulfillmentStatus: FULFILLED` is sent as well, because the reference does
+ * not say whether `fulfillment` alone implies it. NOT documented: that the
+ * fulfillment location is the one stock is decremented at; verified by one
+ * real order (docs/phase-210-1). The location is the sale's own (captured at
+ * sale time into the payload), or `fallback` for a payload queued before
+ * that phase.
+ *
  * @param {OfflineOrderPayload} payload
+ * @param {TillLocation | null} [fallback] this till's current location
  * @returns the mutation `$order` / `$options` variables
+ * @throws {MissingLocationError} when no usable location id and name exist
  */
-export function buildOrderInput(payload: OfflineOrderPayload): {
+export function buildOrderInput(
+  payload: OfflineOrderPayload,
+  fallback?: TillLocation | null
+): {
   order: Record<string, unknown>
   options: Record<string, unknown>
 } {
+  const location =
+    resolveCheckoutLocation(payload.locationId, payload.locationName) ?? fallback ?? null
+  const tag = location ? locationTag(location.name) : null
+  if (!location || !tag) throw new MissingLocationError()
+
   const paymentNote =
     payload.paymentMethod === 'cash'
       ? `cash (tendered ${payload.tenderedAmount.toFixed(2)}, change ${payload.changeDue.toFixed(2)})`
@@ -83,6 +114,9 @@ export function buildOrderInput(payload: OfflineOrderPayload): {
         quantity: line.quantity
       })),
       financialStatus: 'PAID',
+      fulfillmentStatus: 'FULFILLED',
+      fulfillment: { locationId: location.id, notifyCustomer: false },
+      tags: [tag],
       note: `RUBIS POS offline sale — local UUID ${payload.clientOrderUuid} (taken ${payload.createdAt}) — cashier ${payload.staffName} — payment: ${paymentNote}`,
       sourceIdentifier: payload.clientOrderUuid,
       customAttributes: [
@@ -130,13 +164,21 @@ function translatePushError(err: AxiosError): string {
  *
  * @param {AxiosInstance} client — pre-configured Shopify client
  * @param {OfflineOrderPayload} payload
+ * @param {TillLocation | null} [fallbackLocation] used only when the payload carries no location
  * @returns {Promise<ServiceResult<OrderCreateResult>>}
  */
 export async function pushOrderToShopify(
   client: AxiosInstance,
-  payload: OfflineOrderPayload
+  payload: OfflineOrderPayload,
+  fallbackLocation?: TillLocation | null
 ): Promise<ServiceResult<OrderCreateResult>> {
-  const variables = buildOrderInput(payload)
+  let variables: ReturnType<typeof buildOrderInput>
+  try {
+    variables = buildOrderInput(payload, fallbackLocation)
+  } catch (err) {
+    if (err instanceof MissingLocationError) return { success: false, error: err.message }
+    throw err
+  }
 
   try {
     const response: AxiosResponse<OrderCreateGraphQLResponse> =

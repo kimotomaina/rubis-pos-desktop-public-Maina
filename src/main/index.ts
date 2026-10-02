@@ -267,6 +267,7 @@ import type {
 import { buildOrdersCsv, buildLinesCsv } from './services/reportsExport.js'
 import { buildTraderSystemInvNum } from './lib/traderSystemInvoiceNumber.js'
 import { shouldRefuseCheckoutForDiscount } from './lib/requestHasDiscount.js'
+import { resolveCheckoutLocation, NO_LOCATION_MESSAGE } from './lib/checkoutLocation.js'
 import { resolveVatClass } from './lib/vatClass.js'
 
 /** One invoice-list row (docs/phase-158): an order plus its pre-computed trader invoice number. */
@@ -998,7 +999,13 @@ app.whenReady().then(async () => {
           error: 'Shopify credentials missing — order sync deferred'
         }
       }
-      return pushOrderToShopify(createShopifyClient(env.storeUrl, env.token), payload)
+      // docs/phase-210: the sale's own location is in the payload; this till's current
+      // settings cover a sale queued before that phase.
+      return pushOrderToShopify(
+        createShopifyClient(env.storeUrl, env.token),
+        payload,
+        resolveCheckoutLocation(locationId, locationName)
+      )
     },
     intervalMs: 30_000,
     reconciliation: reconciliationRunner
@@ -1357,6 +1364,18 @@ app.whenReady().then(async () => {
       }
 
       /**
+       * docs/phase-210: a sale must carry the shop that sold it. With no
+       * location (unset or empty id or name) it is refused before anything
+       * is written, paid or filed, so an order with no location can never
+       * reach Shopify. The location comes from this till's own settings,
+       * never from the renderer.
+       */
+      const saleLocation = resolveCheckoutLocation(locationId, locationName)
+      if (!saleLocation) {
+        return { success: false, error: NO_LOCATION_MESSAGE }
+      }
+
+      /**
        * A manually entered M-Pesa code completes a sale nobody has
        * confirmed. As of docs/phase-150.md step 3 (the client's POC
        * decision, consciously reversing phase-120 §7.3's original
@@ -1406,7 +1425,9 @@ app.whenReady().then(async () => {
           ...checkoutInput,
           referenceNumber: mpesaManual ? mpesaManual.code : checkoutInput.referenceNumber,
           manualApproval,
-          cardApproval
+          cardApproval,
+          locationId: saleLocation.id,
+          locationName: saleLocation.name
         }
       )
     }

@@ -305,6 +305,9 @@ export interface QueueOrderInput {
   customerPin?: string
   /** Cart-level discount, applied on top of the line-item subtotal. */
   cartDiscount?: Discount
+  /** The till's Shopify location at sale time, stored in the order payload (docs/phase-210). */
+  locationId?: string
+  locationName?: string
   /**
    * Builds the sale's fiscal request once its `localId` exists. When
    * given, {@link RubisDatabase.queueOrder} stores the request, marks the
@@ -427,6 +430,15 @@ export interface CheckoutRequest {
    * sale has no confirming provider to check either against.
    */
   cardApproval?: CardApproval
+  /**
+   * Set **only by the `orders:checkout` IPC handler** from the till's own
+   * confirmed Shopify location (docs/phase-210); never taken from the
+   * renderer. Stored in the order payload so the Shopify order carries the
+   * shop that sold it, even if the till's location is changed before the
+   * order is pushed.
+   */
+  locationId?: string
+  locationName?: string
 }
 
 /**
@@ -470,7 +482,10 @@ export interface CardManualEntry {
  * `manualApproval`/`cardApproval` are deliberately absent — those are
  * established in the main process, never asserted by a caller.
  */
-export type CheckoutIpcRequest = Omit<CheckoutRequest, 'manualApproval' | 'cardApproval'> & {
+export type CheckoutIpcRequest = Omit<
+  CheckoutRequest,
+  'manualApproval' | 'cardApproval' | 'locationId' | 'locationName'
+> & {
   mpesaManual?: ManualMpesaEntry
   cardManual?: CardManualEntry
 }
@@ -1680,7 +1695,9 @@ export class RubisDatabase {
       changeDue: input.changeDue,
       referenceNumber: input.referenceNumber,
       customerPin: input.customerPin,
-      cartDiscount: input.cartDiscount
+      cartDiscount: input.cartDiscount,
+      locationId: input.locationId,
+      locationName: input.locationName
     }
 
     const insertOrder = this.conn.prepare(

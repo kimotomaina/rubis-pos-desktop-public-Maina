@@ -547,6 +547,8 @@ export async function runCheckout(
       customerPin: input.customerPin,
       cartDiscount: input.cartDiscount,
       cartToken: input.cartToken,
+      locationId: input.locationId,
+      locationName: input.locationName,
       // Rule 3 (docs/phase-185.md §4.1): the sale is `waiting`, queued and
       // carries this exact request from the moment it exists.
       buildFiscalRequest: (id: number) => buildFiscalRequest(input, clientOrderUuid, id, taxRate)

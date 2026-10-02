@@ -225,4 +225,8 @@ export interface OfflineOrderPayload {
   customerPin?: string
   /** Cart-level discount applied on top of the line-item subtotal. */
   cartDiscount?: Discount
+  /** The Shopify location the sale was taken at, captured at sale time (docs/phase-210). Absent on a sale queued before that phase. */
+  locationId?: string
+  /** The name of {@link OfflineOrderPayload.locationId}, as the till had it at sale time. */
+  locationName?: string
 }

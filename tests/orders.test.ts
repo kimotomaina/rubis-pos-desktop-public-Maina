@@ -11,11 +11,16 @@ import {
   CLIENT_ORDER_UUID_KEY,
   RUBIS_NAMESPACE,
   buildOrderInput,
-  pushOrderToShopify
+  pushOrderToShopify,
+  MissingLocationError
 } from '../src/main/services/orders.js'
 import type { OfflineOrderPayload } from '../src/main/services/shopify-types.js'
 
+// CHANGED (docs/phase-210). OLD: the sample payload carried no location. NEW: it carries one,
+// because buildOrderInput now refuses (throws) without a location. Nothing else in it changed.
 const samplePayload: OfflineOrderPayload = {
+  locationId: 'gid://shopify/Location/77557989479',
+  locationName: 'Rubis Kisumu',
   clientOrderUuid: 'uuid-offline-1',
   total: 25,
   createdAt: '2026-08-24T10:00:00.000Z',
@@ -78,11 +83,23 @@ describe('buildOrderInput', () => {
     expect(variables.order.sourceIdentifier).toBe(samplePayload.clientOrderUuid)
   })
 
+  // CHANGED (docs/phase-210). OLD: the order's keys, apart from sourceIdentifier, were
+  // customAttributes, financialStatus, lineItems, metafields, note. NEW: fulfillment, fulfillmentStatus
+  // and tags are added (the location, two ways); every other field and its value is unchanged.
   it('adds sourceIdentifier without changing any other order field', () => {
     const { sourceIdentifier: _added, ...rest } = buildOrderInput(samplePayload).order
 
     expect(Object.keys(rest).sort()).toEqual(
-      ['customAttributes', 'financialStatus', 'lineItems', 'metafields', 'note'].sort()
+      [
+        'customAttributes',
+        'financialStatus',
+        'fulfillment',
+        'fulfillmentStatus',
+        'lineItems',
+        'metafields',
+        'note',
+        'tags'
+      ].sort()
     )
     expect(rest.customAttributes).toEqual([{ key: CLIENT_ORDER_UUID_KEY, value: 'uuid-offline-1' }])
     expect(rest.metafields).toEqual([
@@ -108,6 +125,73 @@ describe('buildOrderInput', () => {
       referenceNumber: 'QGH7XJ2K1L'
     })
     expect(String(variables.order.note)).toContain('mpesa (ref QGH7XJ2K1L)')
+  })
+})
+
+describe('buildOrderInput: the location (docs/phase-210)', () => {
+  it('creates the order fulfilled from the sale\'s location, without notifying the customer', () => {
+    const { order } = buildOrderInput(samplePayload)
+
+    expect(order.fulfillment).toEqual({ locationId: 'gid://shopify/Location/77557989479', notifyCustomer: false })
+    expect(order.fulfillmentStatus).toBe('FULFILLED')
+  })
+
+  it('tags the order with exactly one tag, location:<slug> of the stored name', () => {
+    expect(buildOrderInput(samplePayload).order.tags).toEqual(['location:rubis-kisumu'])
+    expect(
+      buildOrderInput({ ...samplePayload, locationName: 'Enjoy Haile Selassie' }).order.tags
+    ).toEqual(['location:enjoy-haile-selassie'])
+  })
+
+  it('uses the location captured in the payload even when the till\'s current one has changed', () => {
+    const { order } = buildOrderInput(samplePayload, { id: 'gid://shopify/Location/1', name: 'Elsewhere' })
+
+    expect((order.fulfillment as { locationId: string }).locationId).toBe('gid://shopify/Location/77557989479')
+    expect(order.tags).toEqual(['location:rubis-kisumu'])
+  })
+
+  it('falls back to the till\'s current location for a payload queued before this phase', () => {
+    const { locationId: _id, locationName: _name, ...old } = samplePayload
+
+    const { order } = buildOrderInput(old, { id: 'gid://shopify/Location/9', name: 'Westlands' })
+
+    expect((order.fulfillment as { locationId: string }).locationId).toBe('gid://shopify/Location/9')
+    expect(order.tags).toEqual(['location:westlands'])
+  })
+
+  it.each([
+    ['no id and no fallback', { locationName: 'Rubis Kisumu' }, undefined],
+    ['no name and no fallback', { locationId: 'gid://shopify/Location/1' }, undefined],
+    ['an empty id', { locationId: '', locationName: 'Rubis Kisumu' }, null],
+    ['an empty name', { locationId: 'gid://shopify/Location/1', locationName: '' }, null],
+    ['a name with no usable characters', { locationId: 'gid://shopify/Location/1', locationName: '###' }, null]
+  ])('refuses to build an order with %s', (_label, location, fallback) => {
+    const { locationId: _id, locationName: _name, ...old } = samplePayload
+
+    expect(() => buildOrderInput({ ...old, ...location }, fallback)).toThrow(MissingLocationError)
+  })
+
+  it('pushOrderToShopify with no location sends nothing and fails with a clear message', async () => {
+    const post = vi.fn()
+    const { locationId: _id, locationName: _name, ...old } = samplePayload
+
+    const result = await pushOrderToShopify(mockClient(post), old, null)
+
+    expect(post).not.toHaveBeenCalled()
+    expect(result.success).toBe(false)
+    expect(result.error).toMatch(/no shop location/i)
+  })
+
+  it('pushOrderToShopify sends the location in the posted variables', async () => {
+    const post = vi.fn().mockResolvedValue({
+      data: { data: { orderCreate: { order: { id: 'gid://shopify/Order/1', name: '#1' }, userErrors: [] } } }
+    })
+
+    await pushOrderToShopify(mockClient(post), samplePayload)
+
+    const [, body] = post.mock.calls[0]
+    expect(body.variables.order.fulfillment.locationId).toBe('gid://shopify/Location/77557989479')
+    expect(body.variables.order.tags).toEqual(['location:rubis-kisumu'])
   })
 })
 
