@@ -1389,66 +1389,71 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
                 <section className="rounded-xl border border-slate-200 bg-white p-4">
                   <h3 className="mb-1 text-2xl font-bold text-slate-800">Shopify Connection</h3>
 
-                  <label className="mb-1 block text-lg font-medium text-slate-600">Store URL</label>
-                  <input
-                    type="text"
-                    readOnly
-                    value={shopifyStoreUrl}
-                    onClick={() =>
-                      openField(shopifyStoreUrl, setShopifyStoreUrlInput, 'Store URL', { mode: 'text' })
-                    }
-                    placeholder="https://your-store.myshopify.com"
-                    className="mb-1 w-full h-12 rounded-lg border border-slate-300 px-3 text-lg focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-100"
-                  />
-                  {shopifyStoreUrlMessage && (
-                    <p className="mb-2 text-base text-slate-500">{shopifyStoreUrlMessage}</p>
-                  )}
-                  <button
-                    type="button"
-                    onClick={() => handleSaveShopifyStoreUrl()}
-                    className="mb-4 rounded-lg border border-slate-300 px-4 py-2 text-base font-medium text-slate-700 hover:bg-slate-50"
-                  >
-                    Save Store URL
-                  </button>
+                  <div className="mt-3 grid grid-cols-2 items-start gap-4">
+                    <div>
+                      <h4 className="mb-1 text-xl font-semibold text-slate-700">Store URL</h4>
+                      <label className="mb-1 block text-lg font-medium text-slate-600">Store URL</label>
+                      <input
+                        type="text"
+                        readOnly
+                        value={shopifyStoreUrl}
+                        onClick={() =>
+                          openField(shopifyStoreUrl, setShopifyStoreUrlInput, 'Store URL', { mode: 'text' })
+                        }
+                        placeholder="https://your-store.myshopify.com"
+                        className="mb-3 w-full h-12 rounded-lg border border-slate-300 px-3 text-lg focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-100"
+                      />
+                      {shopifyStoreUrlMessage && (
+                        <p className="mb-3 text-base text-slate-500">{shopifyStoreUrlMessage}</p>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => handleSaveShopifyStoreUrl()}
+                        className="rounded-lg border border-slate-300 px-4 py-2 text-base font-medium text-slate-700 hover:bg-slate-50"
+                      >
+                        Save Store URL
+                      </button>
+                    </div>
 
-                  <div className="border-t border-slate-100 pt-4">
-                    <h4 className="mb-1 text-xl font-semibold text-slate-700">Admin API Token</h4>
+                    <div>
+                      <div className="mb-1 flex items-center justify-between">
+                        <h4 className="text-xl font-semibold text-slate-700">Admin API Token</h4>
+                        <span
+                          className={`text-base font-medium ${shopifyTokenConfigured ? 'text-emerald-600' : 'text-amber-600'}`}
+                        >
+                          {shopifyTokenConfigured ? 'Configured' : 'Not configured'}
+                        </span>
+                      </div>
 
-                    <p className="mb-3 text-base font-medium">
-                      Status:{' '}
-                      <span className={shopifyTokenConfigured ? 'text-emerald-600' : 'text-amber-600'}>
-                        {shopifyTokenConfigured ? 'Configured' : 'Not configured'}
-                      </span>
-                    </p>
+                      <label className="mb-1 block text-lg font-medium text-slate-600">
+                        New Token (starts with shpat_)
+                      </label>
+                      <PasswordField
+                        readOnly
+                        value={shopifyTokenInput}
+                        onClick={() =>
+                          openField(shopifyTokenInput, setShopifyTokenInput, 'Shopify Admin API Token', {
+                            mode: 'text',
+                            secret: true
+                          })
+                        }
+                        placeholder="shpat_••••••••••••••••"
+                        wrapperClassName="mb-3"
+                        className="w-full h-12 rounded-lg border border-slate-300 px-3 text-lg focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-100"
+                      />
 
-                    <label className="mb-1 block text-lg font-medium text-slate-600">
-                      New Token (starts with shpat_)
-                    </label>
-                    <PasswordField
-                      readOnly
-                      value={shopifyTokenInput}
-                      onClick={() =>
-                        openField(shopifyTokenInput, setShopifyTokenInput, 'Shopify Admin API Token', {
-                          mode: 'text',
-                          secret: true
-                        })
-                      }
-                      placeholder="shpat_••••••••••••••••"
-                      wrapperClassName="mb-3"
-                      className="w-full h-12 rounded-lg border border-slate-300 px-3 text-lg focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-100"
-                    />
+                      {shopifyTokenMessage && (
+                        <p className="mb-3 text-base text-slate-500">{shopifyTokenMessage}</p>
+                      )}
 
-                    {shopifyTokenMessage && (
-                      <p className="mb-3 text-base text-slate-500">{shopifyTokenMessage}</p>
-                    )}
-
-                    <button
-                      type="button"
-                      onClick={() => void handleSaveShopifyToken()}
-                      className="rounded-lg bg-rose-600 px-4 py-2 text-base font-semibold text-white hover:bg-rose-700"
-                    >
-                      Save Token
-                    </button>
+                      <button
+                        type="button"
+                        onClick={() => void handleSaveShopifyToken()}
+                        className="rounded-lg bg-rose-600 px-4 py-2 text-base font-semibold text-white hover:bg-rose-700"
+                      >
+                        Save Token
+                      </button>
+                    </div>
                   </div>
 
                   <div className="mt-4 border-t border-slate-100 pt-4">

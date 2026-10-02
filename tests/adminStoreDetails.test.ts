@@ -132,3 +132,46 @@ describe('Store Details', () => {
     expect(values.slice(0, 2)).toEqual(['Enjoy', 'P051234567X'])
   })
 })
+
+describe('Shopify Connection and the Admin API token (docs/phase-203)', () => {
+  const row = (): HTMLElement => {
+    const heading = Array.from(container.querySelectorAll('h4')).find((h) => h.textContent === 'Admin API Token')
+    const grid = heading?.parentElement?.parentElement?.parentElement as HTMLElement | undefined
+    if (!grid) throw new Error('No connection row')
+    return grid
+  }
+
+  it('puts the store URL and the token side by side in one two-column row', async () => {
+    await mount()
+    await click('Integrations')
+    await click('Shopify')
+
+    const grid = row()
+    expect(grid.className).toContain('grid-cols-2')
+    expect(grid.children).toHaveLength(2)
+    expect(grid.children[0].textContent).toContain('Store URL')
+    expect(grid.children[0].textContent).not.toContain('Token')
+    expect(grid.children[1].textContent).toContain('Admin API Token')
+    expect(grid.children[1].textContent).toContain('New Token (starts with shpat_)')
+  })
+
+  it('keeps each half’s own save button, and the token status beside its heading', async () => {
+    await mount()
+    await click('Integrations')
+    await click('Shopify')
+
+    const [left, right] = Array.from(row().children)
+    expect(Array.from(left.querySelectorAll('button')).map((b) => b.textContent)).toEqual(['Save Store URL'])
+    expect(Array.from(right.querySelectorAll('button')).map((b) => b.textContent)).toContain('Save Token')
+    expect(right.textContent).toContain('Not configured')
+  })
+
+  it('keeps Store Details below the row, not inside it', async () => {
+    await mount()
+    await click('Integrations')
+    await click('Shopify')
+
+    expect(row().textContent).not.toContain('Store Details')
+    expect(container.textContent!.indexOf('Store Details')).toBeGreaterThan(container.textContent!.indexOf('Save Token'))
+  })
+})
