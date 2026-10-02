@@ -3,6 +3,8 @@ import type { OrderRow } from '../../../main/services/database.js'
 import type { OfflineOrderLine } from '../../../main/services/shopify-types.js'
 import { formatCurrency } from '../lib/currency.js'
 import { parseFiscalTimestamp } from '../lib/fiscalDate.js'
+import { getEtrCopyEligibility } from '../lib/etrCopy.js'
+import { useToastStore } from '../stores/toastStore.js'
 import { paginate } from '../lib/paginate.js'
 import Pager from './Pager.js'
 import etimsLogoSrc from '../assets/logo-etims.png'
@@ -35,9 +37,19 @@ function EtimsLogo() {
 
 type OrderStatus = 'synced' | 'pending_sync' | 'failed' | 'voided'
 
+/** How long the "Print ETR copy" outcome toast stays up (docs/phase-196-2). */
+const ETR_COPY_TOAST_TIMEOUT_MS = 8000
+
+const ETR_COPY_TOAST_ID = 'etr-copy'
+
 interface OrderHistoryProps {
   onRetry: (localId: number) => void
   onPrint: (localId: number) => void
+  /** Asks for a manager PIN, then calls `onAuthorized` with the manager's id and PIN. */
+  requestManagerPin: (
+    title: string,
+    onAuthorized: (managerId: number, managerPin: string) => void
+  ) => void
 }
 
 /**
@@ -53,7 +65,7 @@ interface OrderHistoryProps {
  * @param {OrderHistoryProps} props
  * @returns {JSX.Element}
  */
-export default function OrderHistory({ onRetry, onPrint }: OrderHistoryProps) {
+export default function OrderHistory({ onRetry, onPrint, requestManagerPin }: OrderHistoryProps) {
   const [orders, setOrders] = useState<OrderRow[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -80,6 +92,48 @@ export default function OrderHistory({ onRetry, onPrint }: OrderHistoryProps) {
   useEffect(() => {
     void fetchOrders()
   }, [])
+
+  /**
+   * Shows one outcome toast for "Print ETR copy". A refusal shows the
+   * reason the main process gave, verbatim.
+   *
+   * @param {string} message
+   * @param {'success' | 'warning'} tone
+   */
+  const showEtrCopyToast = (message: string, tone: 'success' | 'warning') => {
+    useToastStore.getState().show({
+      id: ETR_COPY_TOAST_ID,
+      tone,
+      message,
+      timeoutMs: ETR_COPY_TOAST_TIMEOUT_MS,
+      onDismiss: () => useToastStore.getState().dismiss(ETR_COPY_TOAST_ID)
+    })
+  }
+
+  /**
+   * Asks for a manager PIN, then sends one duplicate-print request for the order.
+   *
+   * @param {number} localId
+   */
+  const handlePrintEtrCopy = (localId: number) => {
+    requestManagerPin('Print the ETR copy at the fiscal device', (managerId, managerPin) => {
+      void window.api
+        .printFiscalDuplicate(localId, managerId, managerPin)
+        .then((result) => {
+          if (!result.success) {
+            showEtrCopyToast(result.error ?? 'The ETR copy could not be printed.', 'warning')
+          } else if (result.data?.issuedNewReceipt) {
+            showEtrCopyToast(
+              "Sent to the fiscal device, but its last receipt number changed. A new document may have been issued - tell support.",
+              'warning'
+            )
+          } else {
+            showEtrCopyToast("Sent to the fiscal device. Check the device's printer.", 'success')
+          }
+        })
+        .catch(() => showEtrCopyToast('The ETR copy could not be printed.', 'warning'))
+    })
+  }
 
   const toggleExpanded = (localId: number) => {
     setExpandedOrderId((prev) => (prev === localId ? null : localId))
@@ -171,6 +225,7 @@ export default function OrderHistory({ onRetry, onPrint }: OrderHistoryProps) {
     <div className="space-y-3">
       {pageResult.items.map((order) => {
         const isExpanded = expandedOrderId === order.local_id
+        const etrCopy = getEtrCopyEligibility(orders, order)
         return (
           <div
             key={order.local_id}
@@ -197,6 +252,17 @@ export default function OrderHistory({ onRetry, onPrint }: OrderHistoryProps) {
                   className="h-11 rounded-md border border-slate-300 px-4 text-base font-medium text-slate-700 hover:bg-slate-50"
                 >
                   Print Receipt
+                </button>
+                <button
+                  type="button"
+                  disabled={!etrCopy.enabled}
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    handlePrintEtrCopy(order.local_id)
+                  }}
+                  className="h-11 rounded-md border border-slate-300 px-4 text-base font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent"
+                >
+                  Print ETR copy (prints at the fiscal device, not this till)
                 </button>
                 {(order.status === 'failed' ||
                   order.status === 'pending_sync') && (
@@ -226,6 +292,9 @@ export default function OrderHistory({ onRetry, onPrint }: OrderHistoryProps) {
                 </p>
               )}
             </div>
+            {!etrCopy.enabled && etrCopy.reason && order.fiscal_invoice_number && (
+              <p className="mt-2 text-sm text-slate-400">ETR copy: {etrCopy.reason}</p>
+            )}
             {order.fiscal_invoice_number && (
               <div
                 className="mt-2 flex items-center gap-3 border-t border-slate-100 pt-2"

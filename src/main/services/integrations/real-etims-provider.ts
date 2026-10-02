@@ -49,6 +49,8 @@ import type { ServiceResult } from '../shopify-types.js'
 import type { Logger } from '../logger.js'
 import type {
   CreditNoteDetails,
+  DuplicatePrintGate,
+  DuplicatePrintOutcome,
   FiscalFailureKind,
   FiscalInvoiceLine,
   FiscalInvoiceRequest,
@@ -308,6 +310,10 @@ export interface FiscalEndpointPaths {
   readCUinvoiceNumber: string
   /** Reads the CU's serial/PIN numbers — static per device, read once per session. See {@link RealFiscalizationProvider.ensureCUNumbers}. */
   readCUnumbers: string
+  /** `ReadLastAndTotalReceiptNum` — the number of the last receipt the device issued. See {@link RealFiscalizationProvider.printLastReceiptDuplicate}. */
+  readLastAndTotalReceiptNum: string
+  /** `InfoLastReceiptDuplicate` — asks the device to print a duplicate of its last receipt. */
+  infoLastReceiptDuplicate: string
 }
 
 /**
@@ -328,7 +334,9 @@ export const DEFAULT_FISCAL_ENDPOINTS: FiscalEndpointPaths = {
   cancelReceipt: '',
   openCreditNote: '',
   readCUinvoiceNumber: '',
-  readCUnumbers: ''
+  readCUnumbers: '',
+  readLastAndTotalReceiptNum: '',
+  infoLastReceiptDuplicate: ''
 }
 
 /** Friendly translation of a fiscal error, from either the server or the device. */
@@ -801,6 +809,8 @@ export class RealFiscalizationProvider implements FiscalizationProvider {
   private cuNumbersPromise: Promise<ServiceResult<{ serialNumber: string }>> | null = null
   /** Tail of the chain every device-facing public method waits on — see {@link exclusive}. */
   private deviceQueue: Promise<void> = Promise.resolve()
+  /** Calls waiting on or running in {@link exclusive}; read by {@link printLastReceiptDuplicate} to refuse rather than queue. */
+  private pendingDeviceCalls = 0
 
   constructor(options: RealFiscalizationProviderOptions = {}) {
     this.deviceIp = options.deviceIp?.trim() ?? ''
@@ -828,11 +838,12 @@ export class RealFiscalizationProvider implements FiscalizationProvider {
    * @returns {Promise<T>}
    */
   private exclusive<T>(task: () => Promise<T>): Promise<T> {
+    this.pendingDeviceCalls++
     const run = this.deviceQueue.then(task)
-    this.deviceQueue = run.then(
-      () => undefined,
-      () => undefined
-    )
+    const release = (): void => {
+      this.pendingDeviceCalls--
+    }
+    this.deviceQueue = run.then(release, release)
     return run
   }
 
@@ -1361,6 +1372,110 @@ export class RealFiscalizationProvider implements FiscalizationProvider {
       }
     }
     return { success: true, data: { cuInvoiceNumber } }
+  }
+
+  /**
+   * Asks the device to print a duplicate of the last receipt it issued.
+   *
+   * Refused outright, never queued, while any other call is using the
+   * device: a sale in flight must not wait behind a reprint. Otherwise
+   * runs as one {@link exclusive} section: `ReadStatus` (is a receipt
+   * open?), `ReadLastAndTotalReceiptNum` (which receipt is last?), the
+   * caller's `gate`, then `InfoLastReceiptDuplicate` exactly once, then
+   * the last number read again so a send that issued a new document is
+   * visible. `ReadCUinvoiceNumber` is not used for the "which is last"
+   * read: it answers only a duplicate-`TraderSystemInvNum` rejection and
+   * is absent from the older definitions (docs/phase-196-2).
+   *
+   * Nothing is retried: the send bypasses {@link sendCommand}'s Code 53
+   * re-send, so it is posted at most once.
+   *
+   * VERIFY-ON-DEVICE: that `LastCUInvoiceNum` has the same form as the
+   * `InvoiceNum` `CloseReceipt` returned; if not, the gate always refuses.
+   * VERIFY-ON-DEVICE: that the command prints, and what it prints.
+   *
+   * @param {DuplicatePrintGate} gate
+   * @returns {Promise<DuplicatePrintOutcome>}
+   */
+  async printLastReceiptDuplicate(gate: DuplicatePrintGate): Promise<DuplicatePrintOutcome> {
+    if (!this.isConfigured()) {
+      return { status: 'error', reason: NOT_CONFIGURED_MESSAGE, deviceLastBefore: null, sent: false }
+    }
+    if (this.pendingDeviceCalls > 0) {
+      const verdict = gate({ deviceLastCuInvoiceNumber: '', receiptOpen: false, queueHasInFlight: true })
+      return { status: 'refused', reason: verdict.reason, deviceLastBefore: null }
+    }
+    return this.exclusive(() => this.runDuplicatePrint(gate))
+  }
+
+  /** The body of {@link printLastReceiptDuplicate}; runs inside {@link exclusive}. */
+  private async runDuplicatePrint(gate: DuplicatePrintGate): Promise<DuplicatePrintOutcome> {
+    const fail = (reason: string, deviceLastBefore: string | null = null): DuplicatePrintOutcome => ({
+      status: 'error',
+      reason,
+      deviceLastBefore,
+      sent: false
+    })
+
+    const settings = await this.ensureSettings()
+    if (!settings.success) {
+      return fail(settings.error ?? 'Unable to open the fiscal device session')
+    }
+    const status = await this.readStatus()
+    if (!status.success) {
+      return fail(status.error ?? 'Fiscal device status check failed')
+    }
+    const receiptOpenBit = status.data?.Opened_Fiscal_Receipt
+    if (receiptOpenBit !== '0' && receiptOpenBit !== '1') {
+      return fail('The fiscal device did not say whether a receipt is open, so nothing was sent.')
+    }
+
+    const lastBefore = await this.sendCommand(
+      this.endpoints.readLastAndTotalReceiptNum,
+      'ReadLastAndTotalReceiptNum',
+      {}
+    )
+    if (!lastBefore.success) {
+      return fail(lastBefore.error ?? 'Could not read the fiscal device\'s last receipt number')
+    }
+    const deviceLastBefore = (lastBefore.data?.LastCUInvoiceNum ?? '').trim()
+
+    const verdict = gate({
+      deviceLastCuInvoiceNumber: deviceLastBefore,
+      receiptOpen: receiptOpenBit === '1',
+      queueHasInFlight: false
+    })
+    if (!verdict.allowed) {
+      return { status: 'refused', reason: verdict.reason, deviceLastBefore: deviceLastBefore || null }
+    }
+
+    // Posted directly, not through `sendCommand`, so its Code 53
+    // re-send-and-retry can never post this command a second time.
+    const sent = checkDeviceResponse(
+      await postXml(this.http, this.endpoints.infoLastReceiptDuplicate, 'InfoLastReceiptDuplicate', {}, this.debugLogging)
+    )
+    if (!sent.success) {
+      return {
+        status: 'error',
+        reason: sent.error ?? 'The fiscal device did not accept the duplicate print',
+        deviceLastBefore,
+        sent: true
+      }
+    }
+
+    const lastAfter = await this.sendCommand(
+      this.endpoints.readLastAndTotalReceiptNum,
+      'ReadLastAndTotalReceiptNum',
+      {}
+    )
+    const deviceLastAfter = lastAfter.success ? (lastAfter.data?.LastCUInvoiceNum ?? '').trim() || null : null
+    if (deviceLastAfter !== null && deviceLastAfter !== deviceLastBefore) {
+      this.logger.error(
+        `[rubis-pos] InfoLastReceiptDuplicate changed the device's last receipt number ` +
+          `(${deviceLastBefore} -> ${deviceLastAfter}): the command may have issued a new document`
+      )
+    }
+    return { status: 'sent', deviceLastBefore, deviceLastAfter }
   }
 
   /**

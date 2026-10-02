@@ -150,6 +150,15 @@ const managerAuthzSchema = z.object({
   managerPin: z.string().min(1, 'Manager PIN is required')
 })
 
+/**
+ * `fiscal:print-duplicate` request payload (docs/phase-196-2) — prints an
+ * order's receipt at the fiscal device, so it needs a re-verified admin
+ * Manager PIN like every other privileged action.
+ */
+export const printFiscalDuplicateSchema = managerAuthzSchema.extend({
+  orderId: z.number().int().positive()
+})
+
 /** `staff:create` request payload (manager re-authorization required). */
 export const staffCreateSchema = managerAuthzSchema.extend({
   name: z.string().min(1, 'Name is required'),

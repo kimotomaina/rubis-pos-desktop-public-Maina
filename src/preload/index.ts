@@ -258,6 +258,23 @@ const api = {
     ipcRenderer.invoke('fiscal:resend', { localId }),
 
   /**
+   * Prints an order's receipt at the fiscal device (docs/phase-196-2).
+   * Requires a re-verified admin Manager PIN, and succeeds only when the
+   * device's last receipt is this order's.
+   *
+   * @param {number} orderId
+   * @param {number} managerId — admin staff id authorizing this action
+   * @param {string} managerPin — that admin's PIN, captured via `ManagerPinModal`
+   * @returns {Promise<ServiceResult<{ issuedNewReceipt: boolean }>>}
+   */
+  printFiscalDuplicate: (
+    orderId: number,
+    managerId: number,
+    managerPin: string
+  ): Promise<ServiceResult<{ issuedNewReceipt: boolean }>> =>
+    ipcRenderer.invoke('fiscal:print-duplicate', { orderId, managerId, managerPin }),
+
+  /**
    * The back-office "needs attention" list — every `needs_fixing` sale
    * plus every stuck-`waiting` sale (phase-88, Step 4).
    *

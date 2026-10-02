@@ -13,6 +13,8 @@
 import type { ServiceResult } from '../shopify-types.js'
 import type {
   CreditNoteDetails,
+  DuplicatePrintGate,
+  DuplicatePrintOutcome,
   FiscalInvoiceRequest,
   FiscalInvoiceResult,
   FiscalizationProvider,
@@ -33,6 +35,7 @@ export const MOCK_ETIMS_DELAY_MS = 1000
 export class MockFiscalizationProvider implements FiscalizationProvider {
   private readonly delayMs: number
   private readonly invoices = new Map<string, FiscalInvoiceResult>()
+  private lastInvoiceNumber = ''
 
   /**
    * @param {number} [delayMs] — simulated round-trip time. Defaults to
@@ -73,6 +76,7 @@ export class MockFiscalizationProvider implements FiscalizationProvider {
       fiscalizedAt: new Date().toISOString()
     }
     this.invoices.set(invoiceNumber, result)
+    this.lastInvoiceNumber = invoiceNumber
 
     return { ok: true, data: result }
   }
@@ -107,6 +111,26 @@ export class MockFiscalizationProvider implements FiscalizationProvider {
       return { success: false, error: `Invoice ${invoiceNumber} not found` }
     }
     return { success: true, data: invoice }
+  }
+
+  /**
+   * Stands in for the device: its "last receipt" is the last invoice this
+   * mock issued, and nothing is printed.
+   *
+   * @param {DuplicatePrintGate} gate
+   * @returns {Promise<DuplicatePrintOutcome>}
+   */
+  async printLastReceiptDuplicate(gate: DuplicatePrintGate): Promise<DuplicatePrintOutcome> {
+    const verdict = gate({
+      deviceLastCuInvoiceNumber: this.lastInvoiceNumber,
+      receiptOpen: false,
+      queueHasInFlight: false
+    })
+    if (!verdict.allowed) {
+      return { status: 'refused', reason: verdict.reason, deviceLastBefore: this.lastInvoiceNumber || null }
+    }
+    console.log('mock: duplicate print')
+    return { status: 'sent', deviceLastBefore: this.lastInvoiceNumber, deviceLastAfter: this.lastInvoiceNumber }
   }
 }
 

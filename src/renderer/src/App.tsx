@@ -681,6 +681,7 @@ export default function App() {
           <OrderHistory
             onRetry={(localId) => void handleRetryOrder(localId)}
             onPrint={(localId) => void handlePrintReceipt(localId)}
+            requestManagerPin={requestManagerPin}
           />
         </main>
       ) : (

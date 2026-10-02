@@ -159,6 +159,7 @@ import {
   storeIdentitySetSchema,
   correctPinAndResendSchema,
   resendFiscalizationSchema,
+  printFiscalDuplicateSchema,
   reconcileMpesaPaymentSchema,
   endOfDayReportSchema,
   approveDayReportSchema,
@@ -209,6 +210,7 @@ import {
   buildFiscalResendResult,
   resendFiscalization
 } from './services/fiscal-retry.js'
+import { printFiscalDuplicate } from './services/fiscal-duplicate-print.js'
 import { createNetworkMonitor } from './services/network.js'
 import { pushOrderToShopify } from './services/orders.js'
 import {
@@ -2636,6 +2638,42 @@ app.whenReady().then(async () => {
         return {
           success: false,
           error: err instanceof Error ? err.message : 'Failed to resend the fiscal invoice'
+        }
+      }
+    }
+  )
+
+  /**
+   * IPC handler for "Print ETR copy at the fiscal device" (docs/phase-196-2).
+   * Sends `InfoLastReceiptDuplicate` once, and only when the device's last
+   * receipt is this order's. Requires a re-verified admin Manager PIN; the
+   * manager who authorised it is recorded in the audit row. Issues no new
+   * fiscal document and never enters the fiscal queue or `sync_queue`.
+   */
+  ipcMain.handle(
+    'fiscal:print-duplicate',
+    async (_event, request: unknown): Promise<ServiceResult<{ issuedNewReceipt: boolean }>> => {
+      const sendingGuard = guardCheckFitSending(checkFitSendingDisabled)
+      if (sendingGuard) return sendingGuard
+
+      const validation = validate(printFiscalDuplicateSchema, request)
+      if (!validation.success) {
+        return { success: false, error: validation.error }
+      }
+      const authz = requireAdminPin(db, validation.data.managerId, validation.data.managerPin)
+      if (!authz.success) {
+        return { success: false, error: authz.error }
+      }
+      try {
+        return await printFiscalDuplicate(
+          { db, fiscalizationProvider },
+          validation.data.orderId,
+          validation.data.managerId
+        )
+      } catch (err) {
+        return {
+          success: false,
+          error: err instanceof Error ? err.message : 'Failed to print the ETR copy'
         }
       }
     }

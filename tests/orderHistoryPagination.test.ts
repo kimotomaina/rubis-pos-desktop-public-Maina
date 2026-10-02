@@ -62,7 +62,7 @@ async function mount(orders: OrderRow[]): Promise<void> {
   document.body.appendChild(container)
   root = createRoot(container)
   await act(async () => {
-    root.render(createElement(OrderHistory, { onRetry: vi.fn(), onPrint: vi.fn() }))
+    root.render(createElement(OrderHistory, { onRetry: vi.fn(), onPrint: vi.fn(), requestManagerPin: vi.fn() }))
     await Promise.resolve()
   })
 }

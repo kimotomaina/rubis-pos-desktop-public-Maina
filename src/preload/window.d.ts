@@ -125,6 +125,12 @@ export interface PosApi {
   ) => Promise<ServiceResult<FiscalResendResult>>
   /** Resends a sale's fiscalization as-is (no PIN change) — the back-office list's plain "Resend" action. */
   resendFiscalization: (localId: number) => Promise<ServiceResult<FiscalResendResult>>
+  /** Prints an order's receipt at the fiscal device. Requires a re-verified admin Manager PIN; succeeds only when the device's last receipt is this order's. */
+  printFiscalDuplicate: (
+    orderId: number,
+    managerId: number,
+    managerPin: string
+  ) => Promise<ServiceResult<{ issuedNewReceipt: boolean }>>
   /** The back-office "needs attention" list — every needs_fixing sale plus every stuck-waiting sale. */
   getSalesNeedingAttention: () => Promise<ServiceResult<NeedsAttentionRow[]>>
   /** The Rule-3 safety-net count: every completed-but-unfiled sale, regardless of the stuck threshold. */

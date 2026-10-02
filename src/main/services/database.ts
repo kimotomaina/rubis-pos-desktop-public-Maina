@@ -137,6 +137,24 @@ export interface OrderRow {
   receipt_printed_at: string | null
 }
 
+/** Result recorded for one request to print an order's receipt at the fiscal device. */
+export type FiscalDuplicatePrintResult = 'sent' | 'refused' | 'error'
+
+/** One row of `fiscal_duplicate_prints` (docs/phase-196-2). */
+export interface FiscalDuplicatePrintRow {
+  id: number
+  order_id: number
+  /** The manager who authorised the print. */
+  staff_id: number
+  requested_at: string
+  /** The device's last CU invoice number read before the send, or `null` when none was read. */
+  device_last_cu_inv: string | null
+  /** The same read after the send, or `null` when nothing was sent or the read failed. */
+  device_last_cu_inv_after: string | null
+  result: FiscalDuplicatePrintResult
+  error: string | null
+}
+
 /** Role assignable to a staff account. */
 export type StaffRole = 'admin' | 'cashier'
 
@@ -873,7 +891,24 @@ export const SCHEMA = {
     payment_id INTEGER NOT NULL,
     reason TEXT
   )`,
-  mpesaDayExclusionsPaymentIndex: `CREATE INDEX IF NOT EXISTS idx_mpesa_day_exclusions_payment ON mpesa_day_exclusions (payment_id)`
+  mpesaDayExclusionsPaymentIndex: `CREATE INDEX IF NOT EXISTS idx_mpesa_day_exclusions_payment ON mpesa_day_exclusions (payment_id)`,
+  /**
+   * One row per request to print an order's receipt at the fiscal device
+   * (docs/phase-196-2), written whatever the outcome. Append-only: the
+   * only writer is {@link RubisDatabase.recordFiscalDuplicatePrint}. It
+   * never touches `orders`' fiscal columns, `sync_queue` or the fiscal queue.
+   */
+  fiscalDuplicatePrints: `CREATE TABLE IF NOT EXISTS fiscal_duplicate_prints (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    order_id INTEGER NOT NULL,
+    staff_id INTEGER NOT NULL,
+    requested_at TEXT NOT NULL,
+    device_last_cu_inv TEXT,
+    device_last_cu_inv_after TEXT,
+    result TEXT NOT NULL CHECK (result IN ('sent', 'refused', 'error')),
+    error TEXT
+  )`,
+  fiscalDuplicatePrintsOrderIndex: `CREATE INDEX IF NOT EXISTS idx_fiscal_duplicate_prints_order ON fiscal_duplicate_prints (order_id)`
 } as const
 
 /** Options accepted by {@link createDatabase}. */
@@ -1347,6 +1382,8 @@ export class RubisDatabase {
     migrateMpesaDayApprovalsColumns(connection)
     connection.exec(SCHEMA.mpesaDayExclusions)
     connection.exec(SCHEMA.mpesaDayExclusionsPaymentIndex)
+    connection.exec(SCHEMA.fiscalDuplicatePrints)
+    connection.exec(SCHEMA.fiscalDuplicatePrintsOrderIndex)
     migrateOrdersFiscalColumns(connection)
     migrateOrdersReceiptColumns(connection)
     migrateOrdersPushColumns(connection)
@@ -1849,6 +1886,39 @@ export class RubisDatabase {
     this.conn
       .prepare('UPDATE orders SET receipt_printed_at = COALESCE(receipt_printed_at, ?) WHERE local_id = ?')
       .run(new Date().toISOString(), localId)
+  }
+
+  /**
+   * Appends one row to `fiscal_duplicate_prints` (docs/phase-196-2).
+   * Insert-only by design: nothing updates or deletes these rows.
+   *
+   * @param {Omit<FiscalDuplicatePrintRow, 'id'>} row
+   */
+  recordFiscalDuplicatePrint(row: Omit<FiscalDuplicatePrintRow, 'id'>): void {
+    this.conn
+      .prepare(
+        'INSERT INTO fiscal_duplicate_prints (order_id, staff_id, requested_at, device_last_cu_inv, device_last_cu_inv_after, result, error) VALUES (?, ?, ?, ?, ?, ?, ?)'
+      )
+      .run(
+        row.order_id,
+        row.staff_id,
+        row.requested_at,
+        row.device_last_cu_inv,
+        row.device_last_cu_inv_after,
+        row.result,
+        row.error
+      )
+  }
+
+  /**
+   * Every duplicate-print request, oldest first — for support and tests.
+   *
+   * @returns {FiscalDuplicatePrintRow[]}
+   */
+  listFiscalDuplicatePrints(): FiscalDuplicatePrintRow[] {
+    return this.conn
+      .prepare('SELECT * FROM fiscal_duplicate_prints ORDER BY id ASC')
+      .all() as FiscalDuplicatePrintRow[]
   }
 
   /**

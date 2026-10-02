@@ -153,7 +153,8 @@ function makeProvider(submitInvoice: FiscalizationProvider['submitInvoice']): Fi
   return {
     submitInvoice,
     getInvoiceDetails: vi.fn(),
-    cancelInvoice: vi.fn()
+    cancelInvoice: vi.fn(),
+    printLastReceiptDuplicate: vi.fn()
   }
 }
 

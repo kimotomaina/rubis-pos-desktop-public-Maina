@@ -262,6 +262,45 @@ export type FiscalSubmitOutcome =
       unreachable?: true
     }
 
+/** What the fiscal device reported just before a duplicate print — the input to a {@link DuplicatePrintGate}. */
+export interface DuplicatePrintDeviceState {
+  /** `LastCUInvoiceNum` from `ReadLastAndTotalReceiptNum`; `''` when no device read was made. */
+  deviceLastCuInvoiceNumber: string
+  /** The device's `Opened_Fiscal_Receipt` status bit. */
+  receiptOpen: boolean
+  /** Another call was already using the device on this till when the print was requested. */
+  queueHasInFlight: boolean
+}
+
+/** The caller's verdict on {@link DuplicatePrintDeviceState}; `reason` is shown to the cashier. */
+export interface DuplicatePrintVerdict {
+  allowed: boolean
+  reason: string
+}
+
+/**
+ * Decides, from the device's own state, whether the duplicate print may
+ * go ahead. Run by the provider inside its device lock, between the reads
+ * and the send, so nothing else can reach the device in between.
+ */
+export type DuplicatePrintGate = (state: DuplicatePrintDeviceState) => DuplicatePrintVerdict
+
+/**
+ * Outcome of {@link FiscalizationProvider.printLastReceiptDuplicate}.
+ *
+ *   - `'sent'`: `InfoLastReceiptDuplicate` was posted once and the device
+ *     acknowledged it. `deviceLastAfter` is the last receipt number read
+ *     back afterwards (`null` when that read failed); a value different
+ *     from `deviceLastBefore` means the command issued a new document.
+ *   - `'refused'`: the gate said no, or the device was busy. Nothing was sent.
+ *   - `'error'`: a read or the send failed. `sent` is `true` only when the
+ *     send itself was posted. Nothing is ever re-sent.
+ */
+export type DuplicatePrintOutcome =
+  | { status: 'sent'; deviceLastBefore: string; deviceLastAfter: string | null }
+  | { status: 'refused'; reason: string; deviceLastBefore: string | null }
+  | { status: 'error'; reason: string; deviceLastBefore: string | null; sent: boolean }
+
 /**
  * Narrow surface every fiscalization backend (mock or real eTIMS
  * middleware) must implement.
@@ -281,4 +320,12 @@ export interface FiscalizationProvider {
 
   /** Reads back the current status of a previously submitted invoice. */
   getInvoiceDetails(invoiceNumber: string): Promise<ServiceResult<FiscalInvoiceResult>>
+
+  /**
+   * Asks the fiscal device to print a duplicate of the last receipt it
+   * issued (`InfoLastReceiptDuplicate`). Issues no new fiscal document as
+   * far as the protocol says, and is sent at most once, never retried.
+   * `gate` runs against the device's own state before anything is sent.
+   */
+  printLastReceiptDuplicate(gate: DuplicatePrintGate): Promise<DuplicatePrintOutcome>
 }
