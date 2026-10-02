@@ -84,6 +84,12 @@ import {
 import { extractInvoiceNumberFromXml, extractQrCodeFromXml } from './xml-utils.js'
 import { sanitizeFiscalText } from './fiscal-sanitize.js'
 import { validateFiscalInvoiceRequest } from './fiscal-validate.js'
+import {
+  compareVatGroups,
+  expectedGroupTotals,
+  hasNonAClass,
+  resolveVatClass
+} from '../../lib/vatClass.js'
 
 /**
  * VAT class applied to a line item with no product-level tax class
@@ -701,7 +707,10 @@ export interface RealFiscalizationProviderOptions {
   httpClient?: AxiosInstance
   /** Overrides for one or more endpoint paths. Unset paths fall back to {@link DEFAULT_FISCAL_ENDPOINTS}. */
   endpoints?: Partial<FiscalEndpointPaths>
-  /** VAT class applied to a line item with no `vatClass` of its own. Defaults to `'A'`. */
+  /**
+   * Retained so the Admin setting still saves. No longer consulted: a line with no class is class A
+   * (docs/phase-194), whatever this holds.
+   */
   defaultVatClass?: string
   /** Device TCP password, sent once in the `settings()` handshake. */
   password?: string
@@ -771,11 +780,10 @@ export class RealFiscalizationProvider implements FiscalizationProvider {
   private readonly lookupInvoice?: FiscalInvoiceLookupFn
   private readonly logger: Logger
   /**
-   * The four values the Admin screen owns. Mutable, and replaced
+   * The three values the Admin screen owns. Mutable, and replaced
    * together by {@link reconfigure}, so saving new device details
    * applies to the next sale without relaunching the app.
    */
-  private defaultVatClass: string
   private deviceIp: string
   private devicePort: string
   private password: string
@@ -800,7 +808,6 @@ export class RealFiscalizationProvider implements FiscalizationProvider {
     this.password = options.password?.trim() ?? ''
     this.http = options.httpClient ?? createFiscalHttpClient({ baseUrl: options.baseUrl })
     this.endpoints = { ...DEFAULT_FISCAL_ENDPOINTS, ...options.endpoints }
-    this.defaultVatClass = options.defaultVatClass ?? DEFAULT_VAT_CLASS
     this.lookupInvoice = options.lookupInvoice
     this.logger = options.logger ?? console
     this.debugLogging = options.debugLogging ?? false
@@ -860,7 +867,6 @@ export class RealFiscalizationProvider implements FiscalizationProvider {
     this.deviceIp = options.deviceIp?.trim() ?? ''
     this.devicePort = options.devicePort?.trim() ?? ''
     this.password = options.password?.trim() ?? ''
-    this.defaultVatClass = options.defaultVatClass?.trim() || DEFAULT_VAT_CLASS
     this.http.defaults.baseURL = normalizeBaseUrl(options.baseUrl?.trim() || DEFAULT_ETIMS_BASE_URL)
     this.settingsPromise = null
     this.cuNumbersPromise = null
@@ -1178,6 +1184,25 @@ export class RealFiscalizationProvider implements FiscalizationProvider {
         reason: `Fiscal receipt validation failed — receipt open: ${isReceiptOpened}, VAT-group subtotal: ${subtotal}`,
         kind: 'system',
         retryable: false
+      }
+    }
+
+    // Before the point of no return: a sale with a non-A line must have put
+    // each non-A amount in the group its class names. An A-only sale is not
+    // compared, so it sends exactly the commands it always has.
+    if (hasNonAClass(request.items)) {
+      const groupMismatch = compareVatGroups(
+        expectedGroupTotals(request.items),
+        extractVatGroupAmounts(receiptInfo)
+      )
+      if (groupMismatch) {
+        await this.rollback()
+        return {
+          ok: false,
+          reason: `The fiscal device filed this sale's items under a different VAT group than their tax class (${groupMismatch}). Nothing was filed.`,
+          kind: 'system',
+          retryable: false
+        }
       }
     }
 
@@ -1708,7 +1733,10 @@ export class RealFiscalizationProvider implements FiscalizationProvider {
     commandName: string
     args: Record<string, string | undefined>
   } {
-    const vatClass = item.vatClass ?? this.defaultVatClass
+    const vatClass = resolveVatClass(item.vatClass)
+    if (vatClass === null) {
+      throw new Error('Unreachable: validateFiscalInvoiceRequest refuses a line with an unknown VAT class')
+    }
     if (vatClass === DEFAULT_VAT_CLASS) {
       return {
         path: this.endpoints.sellPLU,

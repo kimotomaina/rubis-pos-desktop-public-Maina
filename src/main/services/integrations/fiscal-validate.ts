@@ -17,12 +17,7 @@
  */
 
 import type { FiscalInvoiceLine, FiscalInvoiceRequest } from './etims.js'
-
-/** VAT class applied when a line has none of its own — mirrors `real-etims-provider.ts`'s default. */
-const DEFAULT_VAT_CLASS = 'A'
-
-/** The five VAT classes the VIL manual documents (16% / 8% / 0% / other-rate / exempt). Version-independent — see `docs/phase-65.md` finding #1. */
-const VALID_VAT_CLASSES = new Set(['A', 'B', 'C', 'D', 'E'])
+import { DEFAULT_VAT_CLASS, resolveVatClass } from '../../lib/vatClass.js'
 
 /**
  * KRA PIN shape: one leading letter, nine digits, one trailing letter (11
@@ -56,9 +51,9 @@ function validateLine(item: FiscalInvoiceLine, index: number): string | undefine
     return `${label}: unit price is required and cannot be negative`
   }
 
-  const vatClass = item.vatClass ?? DEFAULT_VAT_CLASS
-  if (!VALID_VAT_CLASSES.has(vatClass)) {
-    return `${label}: VAT class "${vatClass}" is not one of A/B/C/D/E`
+  const vatClass = resolveVatClass(item.vatClass)
+  if (vatClass === null) {
+    return `${label}: VAT class "${String(item.vatClass)}" is not one of A/B/C/D/E`
   }
   if (vatClass !== DEFAULT_VAT_CLASS) {
     if (!item.hsCode || !item.hsCode.trim()) {

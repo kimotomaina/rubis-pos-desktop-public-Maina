@@ -102,7 +102,7 @@ function healthyResponseFor(command: string): string {
     case 'ReadStatus':
       return '<Res Code="0"><Res Name="CU_fiscalized" Value="1"/><Res Name="Paired_with_TIMS" Value="1"/></Res>'
     case 'ReadCurrentReceiptInfo':
-      return '<Res Code="0"><OptionIsReceiptOpened>1</OptionIsReceiptOpened><SubtotalAmountVATGA>219.20</SubtotalAmountVATGA></Res>'
+      return '<Res Code="0"><OptionIsReceiptOpened>1</OptionIsReceiptOpened><SubtotalAmountVATGA>120.00</SubtotalAmountVATGA><SubtotalAmountVATGC>150.00</SubtotalAmountVATGC></Res>'
     case 'CloseReceipt':
       return '<Res Code="0"><InvoiceNum>KRA-0001</InvoiceNum><QRcode>base64qr</QRcode></Res>'
     case 'ReadDateTime':

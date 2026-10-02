@@ -1,0 +1,136 @@
+{
+  "one-ksh": {
+    "commands": [
+      "ReadCUnumbers",
+      "ReadStatus",
+      "OpenInvoiceWithFreeCustomerData",
+      "SellPLUfromExtDB",
+      "ReadCurrentReceiptInfo",
+      "CloseReceipt",
+      "ReadDateTime"
+    ],
+    "bodies": [
+      "<Command Name=\"ReadCUnumbers\"/>",
+      "<Command Name=\"ReadStatus\"/>",
+      "<Command Name=\"OpenInvoiceWithFreeCustomerData\"><Args><Arg Name=\"CompanyName\" Value=\"\"/><Arg Name=\"ClientPINnum\" Value=\"\"/><Arg Name=\"HeadQuarters\" Value=\"\"/><Arg Name=\"Address\" Value=\"\"/><Arg Name=\"PostalCodeAndCity\" Value=\"\"/><Arg Name=\"ExemptionNum\" Value=\"\"/><Arg Name=\"TraderSystemInvNum\" Value=\"INV-000000001\"/></Args></Command>",
+      "<Command Name=\"SellPLUfromExtDB\"><Args><Arg Name=\"NamePLU\" Value=\"Maize\"/><Arg Name=\"OptionVATClass\" Value=\"A\"/><Arg Name=\"Price\" Value=\"1\"/><Arg Name=\"MeasureUnit\" Value=\"pcs\"/><Arg Name=\"HSCode\" Value=\"\"/><Arg Name=\"HSName\" Value=\"\"/><Arg Name=\"VATGrRate\" Value=\"16.00\"/><Arg Name=\"Quantity\" Value=\"1\"/></Args></Command>",
+      "<Command Name=\"ReadCurrentReceiptInfo\"/>",
+      "<Command Name=\"CloseReceipt\"/>",
+      "<Command Name=\"ReadDateTime\"/>"
+    ],
+    "request": {
+      "clientOrderUuid": "uuid-golden-1",
+      "localId": 1,
+      "items": [
+        {
+          "description": "Maize",
+          "quantity": 1,
+          "unitPrice": 1,
+          "taxRate": 0.16,
+          "pluCode": "gid://shopify/ProductVariant/2",
+          "vatClass": "A",
+          "hsCode": "",
+          "hsName": ""
+        }
+      ],
+      "total": 1,
+      "taxAmount": 0.16,
+      "paymentMethod": "cash",
+      "amountTendered": 1
+    }
+  },
+  "two-lines": {
+    "commands": [
+      "ReadCUnumbers",
+      "ReadStatus",
+      "OpenInvoiceWithFreeCustomerData",
+      "SellPLUfromExtDB",
+      "SellPLUfromExtDB",
+      "ReadCurrentReceiptInfo",
+      "CloseReceipt",
+      "ReadDateTime"
+    ],
+    "bodies": [
+      "<Command Name=\"ReadCUnumbers\"/>",
+      "<Command Name=\"ReadStatus\"/>",
+      "<Command Name=\"OpenInvoiceWithFreeCustomerData\"><Args><Arg Name=\"CompanyName\" Value=\"\"/><Arg Name=\"ClientPINnum\" Value=\"\"/><Arg Name=\"HeadQuarters\" Value=\"\"/><Arg Name=\"Address\" Value=\"\"/><Arg Name=\"PostalCodeAndCity\" Value=\"\"/><Arg Name=\"ExemptionNum\" Value=\"\"/><Arg Name=\"TraderSystemInvNum\" Value=\"INV-000000001\"/></Args></Command>",
+      "<Command Name=\"SellPLUfromExtDB\"><Args><Arg Name=\"NamePLU\" Value=\"Caf Latte 500ml\"/><Arg Name=\"OptionVATClass\" Value=\"A\"/><Arg Name=\"Price\" Value=\"150\"/><Arg Name=\"MeasureUnit\" Value=\"pcs\"/><Arg Name=\"HSCode\" Value=\"\"/><Arg Name=\"HSName\" Value=\"\"/><Arg Name=\"VATGrRate\" Value=\"16.00\"/><Arg Name=\"Quantity\" Value=\"3\"/></Args></Command>",
+      "<Command Name=\"SellPLUfromExtDB\"><Args><Arg Name=\"NamePLU\" Value=\"Bread\"/><Arg Name=\"OptionVATClass\" Value=\"A\"/><Arg Name=\"Price\" Value=\"80.5\"/><Arg Name=\"MeasureUnit\" Value=\"pcs\"/><Arg Name=\"HSCode\" Value=\"\"/><Arg Name=\"HSName\" Value=\"\"/><Arg Name=\"VATGrRate\" Value=\"16.00\"/><Arg Name=\"Quantity\" Value=\"1\"/></Args></Command>",
+      "<Command Name=\"ReadCurrentReceiptInfo\"/>",
+      "<Command Name=\"CloseReceipt\"/>",
+      "<Command Name=\"ReadDateTime\"/>"
+    ],
+    "request": {
+      "clientOrderUuid": "uuid-golden-1",
+      "localId": 1,
+      "items": [
+        {
+          "description": "Café Latte (500ml)",
+          "quantity": 3,
+          "unitPrice": 150,
+          "taxRate": 0.16,
+          "pluCode": "gid://shopify/ProductVariant/3",
+          "vatClass": "A",
+          "hsCode": "",
+          "hsName": ""
+        },
+        {
+          "description": "Bread",
+          "quantity": 1,
+          "unitPrice": 80.5,
+          "taxRate": 0.16,
+          "pluCode": "gid://shopify/ProductVariant/4",
+          "vatClass": "A",
+          "hsCode": "",
+          "hsName": ""
+        }
+      ],
+      "total": 530.5,
+      "taxAmount": 84.88,
+      "paymentMethod": "cash",
+      "amountTendered": 530.5
+    }
+  },
+  "buyer-pin": {
+    "commands": [
+      "ReadCUnumbers",
+      "ReadStatus",
+      "OpenInvoiceWithFreeCustomerData",
+      "SellPLUfromExtDB",
+      "ReadCurrentReceiptInfo",
+      "CloseReceipt",
+      "ReadDateTime"
+    ],
+    "bodies": [
+      "<Command Name=\"ReadCUnumbers\"/>",
+      "<Command Name=\"ReadStatus\"/>",
+      "<Command Name=\"OpenInvoiceWithFreeCustomerData\"><Args><Arg Name=\"CompanyName\" Value=\"Acme Ltd\"/><Arg Name=\"ClientPINnum\" Value=\"P051234567Z\"/><Arg Name=\"HeadQuarters\" Value=\"\"/><Arg Name=\"Address\" Value=\"\"/><Arg Name=\"PostalCodeAndCity\" Value=\"\"/><Arg Name=\"ExemptionNum\" Value=\"\"/><Arg Name=\"TraderSystemInvNum\" Value=\"INV-000000001\"/></Args></Command>",
+      "<Command Name=\"SellPLUfromExtDB\"><Args><Arg Name=\"NamePLU\" Value=\"Mug\"/><Arg Name=\"OptionVATClass\" Value=\"A\"/><Arg Name=\"Price\" Value=\"33.33\"/><Arg Name=\"MeasureUnit\" Value=\"pcs\"/><Arg Name=\"HSCode\" Value=\"\"/><Arg Name=\"HSName\" Value=\"\"/><Arg Name=\"VATGrRate\" Value=\"16.00\"/><Arg Name=\"Quantity\" Value=\"3\"/></Args></Command>",
+      "<Command Name=\"ReadCurrentReceiptInfo\"/>",
+      "<Command Name=\"CloseReceipt\"/>",
+      "<Command Name=\"ReadDateTime\"/>"
+    ],
+    "request": {
+      "clientOrderUuid": "uuid-golden-1",
+      "localId": 1,
+      "items": [
+        {
+          "description": "Mug",
+          "quantity": 3,
+          "unitPrice": 33.33,
+          "taxRate": 0.16,
+          "pluCode": "gid://shopify/ProductVariant/5",
+          "vatClass": "A",
+          "hsCode": "",
+          "hsName": ""
+        }
+      ],
+      "total": 99.99,
+      "taxAmount": 15.9984,
+      "paymentMethod": "cash",
+      "amountTendered": 99.99,
+      "buyerPin": "P051234567Z",
+      "companyName": "Acme Ltd"
+    }
+  }
+}

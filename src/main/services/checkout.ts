@@ -45,6 +45,8 @@ import type { ManualCodeVerification, ManualCodeVerificationResult } from './int
 import type { ServiceResult } from './shopify-types.js'
 import type { Logger } from './logger.js'
 import { routeFiscalOutcome, classifyThrownFiscalError } from './fiscal-routing.js'
+import { DEFAULT_VAT_CLASS, resolveVatClass } from '../lib/vatClass.js'
+import { findVatClassRefusal } from '../lib/vatClassGate.js'
 
 /**
  * Structural slice of {@link RubisDatabase} `runCheckout` depends on.
@@ -299,20 +301,27 @@ function buildFiscalRequest(
   return {
     clientOrderUuid,
     localId,
-    items: input.items.map((item) => ({
-      description: item.title,
-      quantity: item.quantity,
-      unitPrice: item.price,
-      taxRate,
-      pluCode: item.id,
-      // VAT class / HS classification come from the Shopify variant's
-      // `rubis` metafields (`vat_class`, `hs_code`, `hs_name`) when the
-      // cart carried them through; otherwise this defaults to the
-      // standard 16% VAT class with no HS classification.
-      vatClass: item.vatClass || 'A',
-      hsCode: item.hsCode || '',
-      hsName: item.hsName || ''
-    })),
+    items: input.items.map((item) => {
+      // A class the till does not know keeps its raw value, so the
+      // provider's validator refuses it; it is never filed as class A.
+      const vatClass = resolveVatClass(item.vatClass)
+      return {
+        description: item.title,
+        quantity: item.quantity,
+        unitPrice: item.price,
+        // Only class A carries the store's rate; the other classes are
+        // not taxed at it (docs/phase-194).
+        taxRate: vatClass === DEFAULT_VAT_CLASS ? taxRate : 0,
+        pluCode: item.id,
+        // VAT class / HS classification come from the Shopify product's
+        // `rubis` metafields (`vat_class`, `hs_code`, `hs_name`) when the
+        // cart carried them through; otherwise this defaults to the
+        // standard 16% VAT class with no HS classification.
+        vatClass: vatClass ?? String(item.vatClass),
+        hsCode: item.hsCode || '',
+        hsName: item.hsName || ''
+      }
+    }),
     total: input.total,
     taxAmount: input.total * taxRate,
     paymentMethod: input.paymentMethod,
@@ -373,6 +382,14 @@ export async function runCheckout(
 
   try {
     const { items, total } = input
+
+    // Before the staff check, the payment gates and the order write: a cart
+    // the fiscal device could only reject after payment is refused here,
+    // so nothing is saved or paid (docs/phase-194, D2 and D4).
+    const vatClassRefusal = findVatClassRefusal(items)
+    if (vatClassRefusal) {
+      return { success: false, error: vatClassRefusal }
+    }
 
     const staff = db.getStaffById(input.staffId)
     if (!staff) {
