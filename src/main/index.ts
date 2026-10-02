@@ -160,6 +160,8 @@ import {
   correctPinAndResendSchema,
   resendFiscalizationSchema,
   printFiscalDuplicateSchema,
+  saveCartDraftSchema,
+  recordCartRemovalsSchema,
   reconcileMpesaPaymentSchema,
   endOfDayReportSchema,
   approveDayReportSchema,
@@ -211,6 +213,7 @@ import {
   resendFiscalization
 } from './services/fiscal-retry.js'
 import { printFiscalDuplicate } from './services/fiscal-duplicate-print.js'
+import { recordApprovedRemovals } from './services/cart-removals.js'
 import { createNetworkMonitor } from './services/network.js'
 import { pushOrderToShopify } from './services/orders.js'
 import {
@@ -2678,6 +2681,56 @@ app.whenReady().then(async () => {
       }
     }
   )
+
+  /**
+   * IPC handlers for the cart draft (docs/phase-197): the one cart saved on
+   * this till so it survives a restart. A draft only - nothing here touches
+   * an order, stock or Shopify, and no payment state is stored.
+   */
+  ipcMain.handle('cart:save-draft', (_event, request: unknown): ServiceResult<void> => {
+    const validation = validate(saveCartDraftSchema, request)
+    if (!validation.success) {
+      return { success: false, error: validation.error }
+    }
+    try {
+      db.saveCartDraft(JSON.stringify(validation.data))
+      return { success: true }
+    } catch (err) {
+      return { success: false, error: err instanceof Error ? err.message : 'Failed to save the cart' }
+    }
+  })
+
+  ipcMain.handle('cart:load-draft', (): ServiceResult<{ payloadJson: string } | null> => {
+    try {
+      const draft = db.getCartDraft()
+      return { success: true, data: draft ? { payloadJson: draft.payload_json } : null }
+    } catch (err) {
+      return { success: false, error: err instanceof Error ? err.message : 'Failed to load the saved cart' }
+    }
+  })
+
+  ipcMain.handle('cart:clear-draft', (): ServiceResult<void> => {
+    try {
+      db.clearCartDraft()
+      return { success: true }
+    } catch (err) {
+      return { success: false, error: err instanceof Error ? err.message : 'Failed to clear the saved cart' }
+    }
+  })
+
+  /**
+   * IPC handler that records manager-approved cart removals (docs/phase-197).
+   * Re-verifies the manager's PIN in the main process like every privileged
+   * write, so a renderer cannot forge an approval. The renderer changes the
+   * cart only after this succeeds.
+   */
+  ipcMain.handle('cart:record-removals', (_event, request: unknown): ServiceResult<void> => {
+    const validation = validate(recordCartRemovalsSchema, request)
+    if (!validation.success) {
+      return { success: false, error: validation.error }
+    }
+    return recordApprovedRemovals(db, validation.data)
+  })
 
   /**
    * IPC handler for the back-office "needs attention" list (phase-88,

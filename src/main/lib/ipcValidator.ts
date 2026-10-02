@@ -54,6 +54,8 @@ export const checkoutRequestSchema = z.object({
   customerPin: z.string().optional(),
   companyName: z.string().optional(),
   cartDiscount: discountSchema.optional(),
+  /** Identifies the cart this sale came from, so its approved removals can be stamped with the order (docs/phase-197). */
+  cartToken: z.string().min(1).max(64).optional(),
   /**
    * Present only when the cashier is completing an M-Pesa sale on a
    * manually entered code that nobody has confirmed.
@@ -148,6 +150,37 @@ export const loginRequestSchema = z.object({
 const managerAuthzSchema = z.object({
   managerId: z.number().int().positive(),
   managerPin: z.string().min(1, 'Manager PIN is required')
+})
+
+/**
+ * `cart:save-draft` request payload (docs/phase-197) - the cart lines and
+ * the token that identifies this cart. Lines are validated with the same
+ * schema checkout uses; payment state is deliberately not part of it.
+ */
+export const saveCartDraftSchema = z.object({
+  cartToken: z.string().min(1).max(64),
+  items: z.array(cartItemSchema).min(1).max(500)
+})
+
+/**
+ * `cart:record-removals` request payload (docs/phase-197) - manager-approved
+ * removals or reductions, so it re-verifies the manager like every other
+ * privileged write. `staffId` is the cashier signed in; it is recorded, not
+ * trusted for anything.
+ */
+export const recordCartRemovalsSchema = managerAuthzSchema.extend({
+  cartToken: z.string().min(1).max(64),
+  staffId: z.number().int().positive(),
+  changes: z
+    .array(
+      z.object({
+        variantId: z.string().min(1),
+        qtyBefore: z.number().int().positive(),
+        qtyAfter: z.number().int().nonnegative()
+      })
+    )
+    .min(1)
+    .max(500)
 })
 
 /**

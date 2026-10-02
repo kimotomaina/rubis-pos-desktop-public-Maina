@@ -11,7 +11,7 @@
 
 import type { ServiceResult } from '../main/services/shopify-types.js'
 import type { FiscalConnectionTestResult } from '../main/services/integrations/fiscal-connection-test.js'
-import type { ProductSummary } from '../renderer/src/types/shopify.js'
+import type { CartItem, CartRemovalRequest, ProductSummary } from '../renderer/src/types/shopify.js'
 import type {
   CheckoutIpcRequest,
   CheckoutReceipt,
@@ -125,6 +125,14 @@ export interface PosApi {
   ) => Promise<ServiceResult<FiscalResendResult>>
   /** Resends a sale's fiscalization as-is (no PIN change) — the back-office list's plain "Resend" action. */
   resendFiscalization: (localId: number) => Promise<ServiceResult<FiscalResendResult>>
+  /** Saves the cart being built so it survives a restart. Lines only, never payment state. */
+  saveCartDraft: (draft: { cartToken: string; items: CartItem[] }) => Promise<ServiceResult<void>>
+  /** The saved cart, or `null` when there is none. */
+  loadCartDraft: () => Promise<ServiceResult<{ payloadJson: string } | null>>
+  /** Deletes the saved cart. */
+  clearCartDraft: () => Promise<ServiceResult<void>>
+  /** Records manager-approved cart removals; the main process re-verifies the manager PIN. */
+  recordCartRemovals: (request: CartRemovalRequest) => Promise<ServiceResult<void>>
   /** Prints an order's receipt at the fiscal device. Requires a re-verified admin Manager PIN; succeeds only when the device's last receipt is this order's. */
   printFiscalDuplicate: (
     orderId: number,

@@ -69,3 +69,17 @@ export interface CartItem {
   /** Harmonized System name, read from the product's `rubis.hs_name` metafield when present. */
   hsName?: string
 }
+
+/**
+ * `cart:record-removals` payload (docs/phase-197): manager-approved removals
+ * or reductions of cart lines. The main process re-verifies `managerPin`.
+ */
+export interface CartRemovalRequest {
+  /** Identifies the cart, so checkout can stamp only its rows with the order id. */
+  cartToken: string
+  /** The cashier signed in. */
+  staffId: number
+  managerId: number
+  managerPin: string
+  changes: { variantId: string; qtyBefore: number; qtyAfter: number }[]
+}

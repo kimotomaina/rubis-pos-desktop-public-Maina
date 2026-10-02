@@ -137,6 +137,34 @@ export interface OrderRow {
   receipt_printed_at: string | null
 }
 
+/** The one saved cart on this till (docs/phase-197) - a draft, never pushed anywhere. */
+export interface CartDraftRow {
+  payload_json: string
+  updated_at: string
+}
+
+/** One manager-approved removal or reduction of a cart line (docs/phase-197). */
+export interface CartLineRemovalInput {
+  /** Identifies the cart this happened in, so checkout can stamp only that cart's rows. */
+  cart_token: string
+  variant_id: string
+  qty_before: number
+  /** `0` when the line was removed outright. */
+  qty_after: number
+  /** The cashier signed in when it happened. */
+  staff_id: number
+  /** The manager whose PIN approved it. */
+  manager_id: number
+  at: string
+}
+
+/** One row of `cart_line_removals`. */
+export interface CartLineRemovalRow extends CartLineRemovalInput {
+  id: number
+  /** `NULL` until the cart is checked out, and for ever for a cart that never was. */
+  order_local_id: number | null
+}
+
 /** Result recorded for one request to print an order's receipt at the fiscal device. */
 export type FiscalDuplicatePrintResult = 'sent' | 'refused' | 'error'
 
@@ -243,6 +271,12 @@ export interface QueueOrderInput {
    * the INSERT.
    */
   buildFiscalRequest?: (localId: number) => FiscalInvoiceRequest
+  /**
+   * The cart this sale came from (docs/phase-197). When present, the
+   * sale's own transaction stamps that cart's removal rows with the new
+   * order id. Absent for any caller that has no cart.
+   */
+  cartToken?: string
 }
 
 /**
@@ -322,6 +356,8 @@ export interface CheckoutRequest {
   /** Customer's company/trading name, when captured for a B2B eTIMS invoice. */
   companyName?: string
   cartDiscount?: Discount
+  /** Identifies the cart this sale came from (docs/phase-197), so its approved removals are stamped with the order. */
+  cartToken?: string
   /**
    * Set **only by the `orders:checkout` IPC handler**, when this sale is
    * being completed on a manually entered M-Pesa code.
@@ -908,7 +944,37 @@ export const SCHEMA = {
     result TEXT NOT NULL CHECK (result IN ('sent', 'refused', 'error')),
     error TEXT
   )`,
-  fiscalDuplicatePrintsOrderIndex: `CREATE INDEX IF NOT EXISTS idx_fiscal_duplicate_prints_order ON fiscal_duplicate_prints (order_id)`
+  fiscalDuplicatePrintsOrderIndex: `CREATE INDEX IF NOT EXISTS idx_fiscal_duplicate_prints_order ON fiscal_duplicate_prints (order_id)`,
+  /**
+   * The cart being built on this till, saved so it survives a restart
+   * (docs/phase-197). Exactly one row (`id = 1`), overwritten on every
+   * change and deleted when the sale is created or the cart is cleared.
+   * A draft only: it holds no payment state, is never pushed to Shopify
+   * and is never read as stock.
+   */
+  cartDrafts: `CREATE TABLE IF NOT EXISTS cart_drafts (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    payload_json TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  )`,
+  /**
+   * One row per cart line a manager approved removing or reducing
+   * (docs/phase-197). Append-only audit: `order_local_id` is stamped when
+   * the cart is checked out, and nothing in the POS path reads this table
+   * (`tests/cartRemovalGuard.test.ts` enforces that).
+   */
+  cartLineRemovals: `CREATE TABLE IF NOT EXISTS cart_line_removals (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    order_local_id INTEGER,
+    cart_token TEXT NOT NULL,
+    variant_id TEXT NOT NULL,
+    qty_before INTEGER NOT NULL,
+    qty_after INTEGER NOT NULL,
+    staff_id INTEGER NOT NULL,
+    manager_id INTEGER NOT NULL,
+    at TEXT NOT NULL
+  )`,
+  cartLineRemovalsTokenIndex: `CREATE INDEX IF NOT EXISTS idx_cart_line_removals_token ON cart_line_removals (cart_token)`
 } as const
 
 /** Options accepted by {@link createDatabase}. */
@@ -1384,6 +1450,9 @@ export class RubisDatabase {
     connection.exec(SCHEMA.mpesaDayExclusionsPaymentIndex)
     connection.exec(SCHEMA.fiscalDuplicatePrints)
     connection.exec(SCHEMA.fiscalDuplicatePrintsOrderIndex)
+    connection.exec(SCHEMA.cartDrafts)
+    connection.exec(SCHEMA.cartLineRemovals)
+    connection.exec(SCHEMA.cartLineRemovalsTokenIndex)
     migrateOrdersFiscalColumns(connection)
     migrateOrdersReceiptColumns(connection)
     migrateOrdersPushColumns(connection)
@@ -1571,9 +1640,90 @@ export class RubisDatabase {
           .run(JSON.stringify(request), localId)
         queued.fiscalQueueId = this.queueFiscalInvoice(localId, request).queueId
       }
+      this.settleCartForOrder(localId, input.cartToken)
       return queued
     })
     return enqueue()
+  }
+
+  /**
+   * Inside the order's own transaction (docs/phase-197): deletes the saved
+   * cart and stamps this cart's removal rows with the new order id, so a
+   * stop between "order recorded" and "cart cleared" cannot bring the same
+   * cart back after a restart.
+   *
+   * Best effort by design: a failure here is logged and swallowed, because
+   * a sale must never be aborted over a draft or an audit stamp. A
+   * statement error does not poison the surrounding transaction.
+   *
+   * @param {number} localId
+   * @param {string} [cartToken]
+   */
+  private settleCartForOrder(localId: number, cartToken?: string): void {
+    try {
+      this.conn.prepare('DELETE FROM cart_drafts').run()
+      if (cartToken) {
+        this.conn
+          .prepare('UPDATE cart_line_removals SET order_local_id = ? WHERE cart_token = ? AND order_local_id IS NULL')
+          .run(localId, cartToken)
+      }
+    } catch (err) {
+      console.error(`[rubis-pos] Order ${localId}: could not clear the saved cart or stamp its removals:`, err)
+    }
+  }
+
+  /**
+   * Overwrites the one saved cart (docs/phase-197).
+   *
+   * @param {string} payloadJson
+   */
+  saveCartDraft(payloadJson: string): void {
+    this.conn
+      .prepare(
+        'INSERT INTO cart_drafts (id, payload_json, updated_at) VALUES (1, ?, ?) ON CONFLICT(id) DO UPDATE SET payload_json = excluded.payload_json, updated_at = excluded.updated_at'
+      )
+      .run(payloadJson, new Date().toISOString())
+  }
+
+  /**
+   * @returns {CartDraftRow | undefined} the saved cart, if there is one
+   */
+  getCartDraft(): CartDraftRow | undefined {
+    return this.conn.prepare('SELECT payload_json, updated_at FROM cart_drafts WHERE id = 1').get() as
+      | CartDraftRow
+      | undefined
+  }
+
+  /** Deletes the saved cart. */
+  clearCartDraft(): void {
+    this.conn.prepare('DELETE FROM cart_drafts').run()
+  }
+
+  /**
+   * Appends approved removals in one transaction (docs/phase-197).
+   * Insert-only: nothing updates these rows except the order-id stamp at checkout.
+   *
+   * @param {CartLineRemovalInput[]} rows
+   */
+  recordCartLineRemovals(rows: CartLineRemovalInput[]): void {
+    const insert = this.conn.prepare(
+      'INSERT INTO cart_line_removals (order_local_id, cart_token, variant_id, qty_before, qty_after, staff_id, manager_id, at) VALUES (NULL, ?, ?, ?, ?, ?, ?, ?)'
+    )
+    this.conn.transaction((batch: CartLineRemovalInput[]) => {
+      for (const row of batch) {
+        insert.run(row.cart_token, row.variant_id, row.qty_before, row.qty_after, row.staff_id, row.manager_id, row.at)
+      }
+    })(rows)
+  }
+
+  /**
+   * Every removal row, oldest first. For tests and support only: no POS
+   * code path may call this (`tests/cartRemovalGuard.test.ts`).
+   *
+   * @returns {CartLineRemovalRow[]}
+   */
+  listCartLineRemovals(): CartLineRemovalRow[] {
+    return this.conn.prepare('SELECT * FROM cart_line_removals ORDER BY id ASC').all() as CartLineRemovalRow[]
   }
 
   /**

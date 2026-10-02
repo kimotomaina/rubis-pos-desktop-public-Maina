@@ -1,7 +1,7 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import { electronAPI } from '@electron-toolkit/preload'
 import type { ServiceResult } from '../main/services/shopify-types.js'
-import type { ProductSummary } from '../renderer/src/types/shopify.js'
+import type { CartItem, CartRemovalRequest, ProductSummary } from '../renderer/src/types/shopify.js'
 import type {
   CheckoutIpcRequest,
   CheckoutReceipt,
@@ -273,6 +273,39 @@ const api = {
     managerPin: string
   ): Promise<ServiceResult<{ issuedNewReceipt: boolean }>> =>
     ipcRenderer.invoke('fiscal:print-duplicate', { orderId, managerId, managerPin }),
+
+  /**
+   * Saves the cart being built so it survives a restart (docs/phase-197).
+   * Lines only - never payment state.
+   *
+   * @param {{ cartToken: string, items: CartItem[] }} draft
+   * @returns {Promise<ServiceResult<void>>}
+   */
+  saveCartDraft: (draft: { cartToken: string; items: CartItem[] }): Promise<ServiceResult<void>> =>
+    ipcRenderer.invoke('cart:save-draft', draft),
+
+  /**
+   * @returns {Promise<ServiceResult<{ payloadJson: string } | null>>} the saved cart, or `null`
+   */
+  loadCartDraft: (): Promise<ServiceResult<{ payloadJson: string } | null>> =>
+    ipcRenderer.invoke('cart:load-draft'),
+
+  /**
+   * Deletes the saved cart (docs/phase-197).
+   *
+   * @returns {Promise<ServiceResult<void>>}
+   */
+  clearCartDraft: (): Promise<ServiceResult<void>> => ipcRenderer.invoke('cart:clear-draft'),
+
+  /**
+   * Records manager-approved cart removals; the main process re-verifies
+   * the manager PIN (docs/phase-197).
+   *
+   * @param {CartRemovalRequest} request
+   * @returns {Promise<ServiceResult<void>>}
+   */
+  recordCartRemovals: (request: CartRemovalRequest): Promise<ServiceResult<void>> =>
+    ipcRenderer.invoke('cart:record-removals', request),
 
   /**
    * The back-office "needs attention" list — every `needs_fixing` sale

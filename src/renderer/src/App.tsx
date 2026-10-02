@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useCartStore } from './stores/cartStore'
 import { useProductStore } from './stores/productStore'
 import { useNetworkStore } from './stores/networkStore'
@@ -35,7 +35,13 @@ import NeedsAttentionPage from './pages/NeedsAttentionPage'
 import SaleCompleteToast from './components/SaleCompleteToast'
 import ToastStack from './components/ToastStack'
 import { useToastStore } from './stores/toastStore'
-import { SCAN_TOAST_TIMEOUT_MS } from './lib/toastTimeouts'
+import {
+  CART_CHANGE_BLOCKED_TOAST_TIMEOUT_MS,
+  CART_RESTORED_TOAST_TIMEOUT_MS,
+  SCAN_TOAST_TIMEOUT_MS
+} from './lib/toastTimeouts'
+import { createCartDraftSaver, restoreCartDraft, restoreToastMessage } from './lib/cartDraft'
+import { createGuardedCartActions } from './lib/guardedCartActions'
 import { buildCartItem } from './lib/cartItem'
 import { WarningIcon } from './components/icons'
 import { useKeyboardStore } from './stores/keyboardStore'
@@ -292,12 +298,104 @@ export default function App() {
   const addItem = useCartStore((state) => state.addItem)
   const updateQuantity = useCartStore((state) => state.updateQuantity)
   const removeItem = useCartStore((state) => state.removeItem)
+  const clearCart = useCartStore((state) => state.clearCart)
 
   const [pinGate, setPinGate] = useState<PinGateRequest | null>(null)
   const requestManagerPin = (
     title: string,
     onAuthorized: (managerId: number, managerPin: string) => void
   ) => setPinGate({ title, onAuthorized })
+
+  /**
+   * Remove, reduce and clear need a manager (docs/phase-197); increasing a
+   * quantity does not. Cancelling the PIN prompt leaves the cart unchanged.
+   */
+  const guardedCart = createGuardedCartActions({
+    getItems: () => useCartStore.getState().items,
+    getCartToken: () => useCartStore.getState().cartToken,
+    getStaffId: () => useAuthStore.getState().currentStaff?.id ?? null,
+    requestManagerPin,
+    recordRemovals: (request) => window.api.recordCartRemovals(request),
+    apply: { setQuantity: updateQuantity, remove: removeItem, clear: clearCart },
+    notify: (message) =>
+      useToastStore.getState().show({
+        id: 'cart-change-blocked',
+        tone: 'warning',
+        message,
+        timeoutMs: CART_CHANGE_BLOCKED_TOAST_TIMEOUT_MS,
+        onDismiss: () => useToastStore.getState().dismiss('cart-change-blocked')
+      })
+  })
+
+  /**
+   * Saves the cart to SQLite as it changes, debounced, so it survives a
+   * restart (docs/phase-197). Paused while a checkout is in flight: the main
+   * process deletes the draft in the sale's own transaction, and a late
+   * save must not bring it back.
+   */
+  useEffect(() => {
+    const saver = createCartDraftSaver({
+      save: (draft) => window.api.saveCartDraft(draft),
+      clear: () => window.api.clearCartDraft()
+    })
+    const unsubscribe = useCartStore.subscribe((state, previous) => {
+      if (
+        state.items === previous.items &&
+        state.cartToken === previous.cartToken &&
+        state.checkoutStatus === previous.checkoutStatus
+      ) {
+        return
+      }
+      if (state.checkoutStatus === 'submitting') {
+        saver.cancel()
+        return
+      }
+      saver.update({ items: state.items, cartToken: state.cartToken })
+    })
+    return () => {
+      unsubscribe()
+      saver.cancel()
+    }
+  }, [])
+
+  /**
+   * Once the cashier is signed in and the catalogue is loaded, puts back the
+   * cart saved before the last restart, with today's prices (docs/phase-197).
+   * Runs once; skipped if the cart already has lines. The retired
+   * localStorage copy is deleted so it can never come back.
+   */
+  const restoredCartRef = useRef(false)
+  const catalogStatus = useProductStore((state) => state.status)
+  const signedInStaff = useAuthStore((state) => state.currentStaff)
+  useEffect(() => {
+    if (restoredCartRef.current || catalogStatus !== 'ready' || !signedInStaff) return
+    restoredCartRef.current = true
+    void (async () => {
+      try {
+        window.localStorage.removeItem('rubis-pos-cart')
+      } catch {
+        // Storage unavailable: nothing to remove.
+      }
+      const result = await window.api.loadCartDraft()
+      if (!result.success || !result.data) return
+      if (useCartStore.getState().items.length > 0) return
+      const restored = restoreCartDraft(result.data.payloadJson, useProductStore.getState().products)
+      if (!restored || restored.items.length === 0) {
+        await window.api.clearCartDraft()
+      }
+      if (!restored) return
+      if (restored.items.length > 0) {
+        useCartStore.getState().restoreCart(restored.items, restored.cartToken)
+      }
+      useToastStore.getState().show({
+        id: 'cart-restored',
+        tone: 'info',
+        message: restoreToastMessage(restored),
+        timeoutMs: CART_RESTORED_TOAST_TIMEOUT_MS,
+        onDismiss: () => useToastStore.getState().dismiss('cart-restored')
+      })
+    })()
+  }, [catalogStatus, signedInStaff])
 
   /** Variant id most recently added via search/scan — flashes its `PosCartTable` row, then self-clears. */
   const [flashId, setFlashId] = useState<string | null>(null)
@@ -654,8 +752,9 @@ export default function App() {
 
             <PosCartTable
               items={cartItems}
-              onUpdateQuantity={updateQuantity}
-              onRemove={removeItem}
+              onUpdateQuantity={guardedCart.updateQuantity}
+              onRemove={guardedCart.remove}
+              onClear={guardedCart.clear}
               flashId={flashId}
             />
           </section>

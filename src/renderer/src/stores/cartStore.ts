@@ -2,18 +2,17 @@
  * Zustand cart store with offline support.
  *
  * The in-memory cart, upgraded with:
- *   - `persist` middleware: items survive renderer restarts via
- *     localStorage (key: `rubis-pos-cart`).
  *   - `checkout()`: submits the cart through the IPC bridge.  The main
  *     process decides whether the sale synced immediately or queued
  *     offline, and the store reflects the outcome for UI banners.
  *
- * The `create<CartState>()(persist(...))` curried signature is required
- * for TypeScript inference with Zustand v5 middleware.
+ * The cart is no longer persisted by zustand: `cartDraft.ts` saves it to
+ * SQLite through the main process instead (docs/phase-197), so a force-kill
+ * cannot lose the last edits and an order recorded just before one cannot
+ * bring its cart back.
  */
 
 import { create } from 'zustand'
-import { persist } from 'zustand/middleware'
 import type { CartItem, Discount } from '../types/shopify.js'
 import type {
   CardManualEntry,
@@ -139,6 +138,12 @@ export interface CartState {
   lastReceipt: CheckoutReceipt | null
   /** Human-readable reason when checkoutStatus is `error`. */
   checkoutError: string | null
+  /**
+   * Identifies the cart being built; new whenever the cart goes from empty to
+   * non-empty. Ties approved removals and the saved draft to this cart
+   * (docs/phase-197).
+   */
+  cartToken: string | null
   /** Add one unit (or `qty`) of a variant; merges if already present. */
   addItem: (item: Omit<CartItem, 'quantity'>, qty?: number) => void
   /** Remove a line item by its variant id. */
@@ -153,6 +158,8 @@ export interface CartState {
   setCartDiscount: (discount: Discount | null) => void
   /** Drop every item from the cart. */
   clearCart: () => void
+  /** Puts a restored cart back (docs/phase-197). */
+  restoreCart: (items: CartItem[], cartToken: string) => void
   /** Sum of `price * quantity` across all items, before any discount. */
   getRawSubtotal: () => number
   /** Sum of line totals after line-level discounts, before the cart-level discount. */
@@ -174,146 +181,145 @@ export interface CartState {
 }
 
 /**
- * Persistent cart store.  Only `items` are persisted; checkout status
- * is ephemeral per session.
+ * Cart store. The saved draft of the cart is written by `cartDraft.ts`;
+ * checkout status is ephemeral per session.
  */
 export const useCartStore = create<CartState>()(
-  persist(
-    (set, get) => ({
-      items: [],
-      cartDiscount: null,
-      checkoutStatus: 'idle',
-      lastReceipt: null,
-      checkoutError: null,
+  (set, get) => ({
+    items: [],
+    cartToken: null,
+    cartDiscount: null,
+    checkoutStatus: 'idle',
+    lastReceipt: null,
+    checkoutError: null,
 
-      addItem: (item, qty = 1) => {
-        set((state) => {
-          const existing = state.items.find((i) => i.id === item.id)
-          if (existing) {
-            const updated = state.items.map((i) =>
-              i.id === item.id ? { ...i, quantity: i.quantity + qty } : i
-            )
-            return { items: updated }
-          }
-          return {
-            items: [...state.items, { ...item, quantity: qty, basePrice: item.price }]
-          }
-        })
-      },
-
-      removeItem: (id: string) => {
-        set((state) => ({ items: state.items.filter((i) => i.id !== id) }))
-      },
-
-      updateQuantity: (id: string, qty: number) => {
-        if (qty <= 0) {
-          get().removeItem(id)
-          return
-        }
-        set((state) => ({
-          items: state.items.map((i) =>
-            i.id === id ? { ...i, quantity: qty } : i
+    addItem: (item, qty = 1) => {
+      set((state) => {
+        const existing = state.items.find((i) => i.id === item.id)
+        if (existing) {
+          const updated = state.items.map((i) =>
+            i.id === item.id ? { ...i, quantity: i.quantity + qty } : i
           )
-        }))
-      },
-
-      setItemPrice: (id: string, price: number) => {
-        set((state) => {
-          const target = state.items.find((i) => i.id === id)
-          if (!target) return state
-          const validation = validatePriceOverride(price, target.basePrice ?? target.price)
-          if (!validation.valid) return state
-          return { items: state.items.map((i) => (i.id === id ? { ...i, price } : i)) }
-        })
-      },
-
-      setItemDiscount: (id: string, discount: Discount | null) => {
-        set((state) => ({
-          items: state.items.map((i) =>
-            i.id === id ? { ...i, discount: discount ?? undefined } : i
-          )
-        }))
-      },
-
-      setCartDiscount: (discount: Discount | null) => set({ cartDiscount: discount }),
-
-      clearCart: () => set({ items: [], cartDiscount: null }),
-
-      getRawSubtotal: () =>
-        get().items.reduce((sum, item) => sum + item.price * item.quantity, 0),
-
-      getSubtotal: () => calculateSubtotal(get().items),
-
-      getTotal: () => calculateCartTotal(get().items, get().cartDiscount),
-
-      getItemCount: () =>
-        get().items.reduce((sum, item) => sum + item.quantity, 0),
-
-      checkout: async (params) => {
-        const { items } = get()
-        if (items.length === 0 || get().checkoutStatus === 'submitting') {
-          return
+          return { items: updated }
         }
+        return {
+          items: [...state.items, { ...item, quantity: qty, basePrice: item.price }],
+          cartToken: state.items.length === 0 || !state.cartToken ? crypto.randomUUID() : state.cartToken
+        }
+      })
+    },
 
-        set({ checkoutStatus: 'submitting', checkoutError: null })
+    removeItem: (id: string) => {
+      set((state) => ({ items: state.items.filter((i) => i.id !== id) }))
+    },
 
-        try {
-          const total = get().getTotal()
-          const cartDiscount = params.cartDiscount ?? get().cartDiscount ?? undefined
-          const result = await window.api.checkout({ items, total, ...params, cartDiscount })
+    updateQuantity: (id: string, qty: number) => {
+      if (qty <= 0) {
+        get().removeItem(id)
+        return
+      }
+      set((state) => ({
+        items: state.items.map((i) =>
+          i.id === id ? { ...i, quantity: qty } : i
+        )
+      }))
+    },
 
-          if (result.success && result.data) {
-            const receipt = result.data
-            set({
-              checkoutStatus:
-                receipt.mode === 'synced' ? 'synced' : 'queued-offline',
-              lastReceipt: receipt
-            })
-            get().clearCart()
-            // docs/phase-165: fired after the sale is fully recorded
-            // above, not awaited — see triggerAutomaticPrint's doc
-            // comment for why.
-            triggerAutomaticPrint(receipt.localId)
-          } else {
-            set({
-              checkoutStatus: 'error',
-              checkoutError: result.error ?? 'Checkout failed'
-            })
-          }
-        } catch (error) {
+    setItemPrice: (id: string, price: number) => {
+      set((state) => {
+        const target = state.items.find((i) => i.id === id)
+        if (!target) return state
+        const validation = validatePriceOverride(price, target.basePrice ?? target.price)
+        if (!validation.valid) return state
+        return { items: state.items.map((i) => (i.id === id ? { ...i, price } : i)) }
+      })
+    },
+
+    setItemDiscount: (id: string, discount: Discount | null) => {
+      set((state) => ({
+        items: state.items.map((i) =>
+          i.id === id ? { ...i, discount: discount ?? undefined } : i
+        )
+      }))
+    },
+
+    setCartDiscount: (discount: Discount | null) => set({ cartDiscount: discount }),
+
+    clearCart: () => set({ items: [], cartToken: null, cartDiscount: null }),
+
+    restoreCart: (items, cartToken) => set({ items, cartToken, cartDiscount: null }),
+
+    getRawSubtotal: () =>
+      get().items.reduce((sum, item) => sum + item.price * item.quantity, 0),
+
+    getSubtotal: () => calculateSubtotal(get().items),
+
+    getTotal: () => calculateCartTotal(get().items, get().cartDiscount),
+
+    getItemCount: () =>
+      get().items.reduce((sum, item) => sum + item.quantity, 0),
+
+    checkout: async (params) => {
+      const { items } = get()
+      if (items.length === 0 || get().checkoutStatus === 'submitting') {
+        return
+      }
+
+      set({ checkoutStatus: 'submitting', checkoutError: null })
+
+      try {
+        const total = get().getTotal()
+        const cartDiscount = params.cartDiscount ?? get().cartDiscount ?? undefined
+        const cartToken = get().cartToken ?? undefined
+      const result = await window.api.checkout({ items, total, ...params, cartDiscount, cartToken })
+
+        if (result.success && result.data) {
+          const receipt = result.data
+          set({
+            checkoutStatus:
+              receipt.mode === 'synced' ? 'synced' : 'queued-offline',
+            lastReceipt: receipt
+          })
+          get().clearCart()
+          // docs/phase-165: fired after the sale is fully recorded
+          // above, not awaited — see triggerAutomaticPrint's doc
+          // comment for why.
+          triggerAutomaticPrint(receipt.localId)
+        } else {
           set({
             checkoutStatus: 'error',
-            checkoutError:
-              error instanceof Error ? error.message : 'Checkout failed'
+            checkoutError: result.error ?? 'Checkout failed'
           })
         }
-      },
-
-      resetCheckoutStatus: () => set({ checkoutStatus: 'idle', checkoutError: null }),
-
-      applyFiscalResendResult: (result) => {
-        set((state) => {
-          if (!state.lastReceipt || state.lastReceipt.localId !== result.localId) {
-            return state
-          }
-          return {
-            lastReceipt: {
-              ...state.lastReceipt,
-              fiscal: result.fiscal,
-              fiscalStatus: result.fiscalStatus,
-              fiscalErrorReason: result.fiscalErrorReason,
-              fiscalErrorKind: result.fiscalErrorKind,
-              fiscalDataIssue: result.fiscalDataIssue
-            }
-          }
+      } catch (error) {
+        set({
+          checkoutStatus: 'error',
+          checkoutError:
+            error instanceof Error ? error.message : 'Checkout failed'
         })
       }
-    }),
-    {
-      name: 'rubis-pos-cart',
-      partialize: (state) => ({ items: state.items }) as Partial<CartState>
+    },
+
+    resetCheckoutStatus: () => set({ checkoutStatus: 'idle', checkoutError: null }),
+
+    applyFiscalResendResult: (result) => {
+      set((state) => {
+        if (!state.lastReceipt || state.lastReceipt.localId !== result.localId) {
+          return state
+        }
+        return {
+          lastReceipt: {
+            ...state.lastReceipt,
+            fiscal: result.fiscal,
+            fiscalStatus: result.fiscalStatus,
+            fiscalErrorReason: result.fiscalErrorReason,
+            fiscalErrorKind: result.fiscalErrorKind,
+            fiscalDataIssue: result.fiscalDataIssue
+          }
+        }
+      })
     }
-  )
+  }),
 )
 
 /**

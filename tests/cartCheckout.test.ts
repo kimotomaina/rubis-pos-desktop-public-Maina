@@ -224,14 +224,11 @@ describe('cart store checkout', () => {
     expect(useCartStore.getState().checkoutStatus).toBe('synced')
   })
 
-  it('persists items to localStorage under the rubis-pos-cart key', () => {
+  it('no longer writes the cart to localStorage: the SQLite cart draft replaces it (docs/phase-197)', () => {
     useCartStore.getState().addItem(itemInput())
 
-    const stored = JSON.parse(
-      localStorage.getItem('rubis-pos-cart') ?? '{}'
-    ) as { state?: { items?: CartItem[] } }
-    expect(stored.state?.items).toHaveLength(1)
-    expect(stored.state?.items?.[0].title).toBe('RUBIS Mug')
+    expect(localStorage.getItem('rubis-pos-cart')).toBeNull()
+    expect(useCartStore.getState().items).toHaveLength(1)
   })
 })
 

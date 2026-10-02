@@ -13,6 +13,8 @@ interface PosCartTableProps {
   items: CartItem[]
   onUpdateQuantity: (id: string, qty: number) => void
   onRemove: (id: string) => void
+  /** Clears the whole cart; the caller asks for a manager first (docs/phase-197). Omitted, no button is shown. */
+  onClear?: () => void
   /** Variant id of the line most recently added via search/scan — briefly highlighted, then cleared by the caller. */
   flashId?: string | null
 }
@@ -33,7 +35,13 @@ interface PosCartTableProps {
  * @param {PosCartTableProps} props
  * @returns {JSX.Element}
  */
-export default function PosCartTable({ items, onUpdateQuantity, onRemove, flashId }: PosCartTableProps) {
+export default function PosCartTable({
+  items,
+  onUpdateQuantity,
+  onRemove,
+  onClear,
+  flashId
+}: PosCartTableProps) {
   const [page, setPage] = useState(1)
   const pageResult = paginate(items, page, CART_LINES_PER_PAGE)
 
@@ -127,7 +135,18 @@ export default function PosCartTable({ items, onUpdateQuantity, onRemove, flashI
           ))}
         </tbody>
       </table>
-      <div className="border-t border-slate-100 px-4 py-2">
+      <div className="flex items-center justify-between gap-3 border-t border-slate-100 px-4 py-2">
+        {onClear ? (
+          <button
+            type="button"
+            onClick={onClear}
+            className="h-9 rounded-lg border border-rose-200 px-3 text-sm font-medium text-rose-700 hover:bg-rose-50"
+          >
+            Clear cart
+          </button>
+        ) : (
+          <span />
+        )}
         <Pager page={pageResult.page} pageCount={pageResult.pageCount} onChange={setPage} />
       </div>
     </div>

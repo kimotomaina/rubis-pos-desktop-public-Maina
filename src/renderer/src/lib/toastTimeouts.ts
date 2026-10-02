@@ -16,6 +16,12 @@ export const SALE_COMPLETE_TOAST_TIMEOUT_MS = 5000
 /** The automatic end-of-sale print's "printer offline" notice (docs/phase-165). */
 export const AUTO_PRINT_OFFLINE_TOAST_TIMEOUT_MS = 5000
 
+/** The "cart restored after a restart" notice (docs/phase-197). */
+export const CART_RESTORED_TOAST_TIMEOUT_MS = 8000
+
+/** The notice that a manager-approved cart change was not made (docs/phase-197). */
+export const CART_CHANGE_BLOCKED_TOAST_TIMEOUT_MS = 6000
+
 /**
  * `UpdateToast`. Long on purpose (an available/downloaded update must
  * not be lost) and, per `toastStore.ts`'s `updatedAt` stamp, reset on
