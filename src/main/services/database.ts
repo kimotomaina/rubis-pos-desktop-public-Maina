@@ -492,6 +492,23 @@ function migrateOrdersReceiptColumns(connection: SqliteConnection): void {
 }
 
 /**
+ * Adds the product tax-classification columns (docs/phase-194) to a
+ * pre-existing `products` table, so the offline catalogue keeps a
+ * product's class instead of turning every exempt item into class A.
+ * Same idempotent `ALTER TABLE` pattern as the migrations around it;
+ * existing rows read back as `NULL`, which is class A.
+ */
+function migrateProductsTaxColumns(connection: SqliteConnection): void {
+  for (const column of ['vat_class', 'hs_code', 'hs_name']) {
+    try {
+      connection.exec(`ALTER TABLE products ADD COLUMN ${column} TEXT`)
+    } catch {
+      // Column already exists — table was created with the current schema.
+    }
+  }
+}
+
+/**
  * Adds the Shopify push marker (docs/phase-168 section 2.4) to a
  * pre-existing `orders` table: how many times this sale has been sent
  * to `orderCreate`, and when it was last sent. Kept in its own migration
@@ -565,7 +582,10 @@ export const SCHEMA = {
     price REAL NOT NULL,
     inventory_quantity INTEGER NOT NULL,
     image_url TEXT,
-    barcode TEXT
+    barcode TEXT,
+    vat_class TEXT,
+    hs_code TEXT,
+    hs_name TEXT
   )`,
   orders: `CREATE TABLE IF NOT EXISTS orders (
     local_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1301,6 +1321,7 @@ export class RubisDatabase {
     connection.pragma('journal_mode = WAL')
     connection.pragma('synchronous = NORMAL')
     connection.exec(SCHEMA.products)
+    migrateProductsTaxColumns(connection)
     connection.exec(SCHEMA.orders)
     connection.exec(SCHEMA.syncQueue)
     connection.exec(SCHEMA.queueIndex)
@@ -1351,7 +1372,7 @@ export class RubisDatabase {
   cacheProducts(products: ProductSummary[]): void {
     const deleteAll = this.conn.prepare('DELETE FROM products')
     const insert = this.conn.prepare(
-      'INSERT OR REPLACE INTO products (id, title, variant_id, variant_title, price, inventory_quantity, image_url, barcode) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+      'INSERT OR REPLACE INTO products (id, title, variant_id, variant_title, price, inventory_quantity, image_url, barcode, vat_class, hs_code, hs_name) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
     )
     const replace = this.conn.transaction((rows: ProductSummary[]) => {
       deleteAll.run()
@@ -1365,7 +1386,10 @@ export class RubisDatabase {
             variant.price,
             variant.inventoryQuantity,
             variant.image ?? product.featuredImage,
-            variant.barcode
+            variant.barcode,
+            variant.vatClass ?? null,
+            variant.hsCode ?? null,
+            variant.hsName ?? null
           )
         }
       }
@@ -1391,7 +1415,7 @@ export class RubisDatabase {
    */
   getCachedProducts(): ProductSummary[] {
     const rows = this.conn
-      .prepare('SELECT id, title, variant_id, variant_title, price, inventory_quantity, image_url, barcode FROM products')
+      .prepare('SELECT id, title, variant_id, variant_title, price, inventory_quantity, image_url, barcode, vat_class, hs_code, hs_name FROM products')
       .all() as Array<{
       id: string
       title: string
@@ -1401,6 +1425,9 @@ export class RubisDatabase {
       inventory_quantity: number
       image_url: string | null
       barcode: string | null
+      vat_class?: string | null
+      hs_code?: string | null
+      hs_name?: string | null
     }>
 
     const byProduct = new Map<string, ProductSummary>()
@@ -1425,7 +1452,10 @@ export class RubisDatabase {
         availableForSale: row.inventory_quantity > 0,
         inventoryQuantity: row.inventory_quantity,
         image: row.image_url,
-        barcode: row.barcode
+        barcode: row.barcode,
+        ...(row.vat_class ? { vatClass: row.vat_class } : {}),
+        ...(row.hs_code ? { hsCode: row.hs_code } : {}),
+        ...(row.hs_name ? { hsName: row.hs_name } : {})
       })
       if (!product.featuredImage && row.image_url) {
         product.featuredImage = row.image_url

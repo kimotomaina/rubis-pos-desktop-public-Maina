@@ -247,7 +247,10 @@ describe('RubisDatabase.cacheProducts', () => {
       12.5,
       8,
       'https://cdn.example/mug-small.jpg',
-      '012345678905'
+      '012345678905',
+      null,
+      null,
+      null
     ])
     // Variant without its own image falls back to the featured image;
     // a variant without a barcode stores null.

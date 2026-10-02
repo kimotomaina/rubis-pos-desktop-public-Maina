@@ -11,7 +11,7 @@ import type {
   ShopifyProduct,
   ShopifyValidateStoreResponse
 } from './shopify-types.js'
-import type { ProductSummary } from '../../renderer/src/types/shopify.js'
+import type { ProductSummary, VariantSummary } from '../../renderer/src/types/shopify.js'
 
 /**
  * Shopify GraphQL Admin API — version 2026-07 (latest stable at build time).
@@ -40,6 +40,15 @@ query GetProducts($first: Int!, $after: String) {
         id
         url
         altText
+      }
+      vatClass: metafield(namespace: "rubis", key: "vat_class") {
+        value
+      }
+      hsCode: metafield(namespace: "rubis", key: "hs_code") {
+        value
+      }
+      hsName: metafield(namespace: "rubis", key: "hs_name") {
+        value
       }
       variants(first: 250) {
         nodes {
@@ -200,6 +209,26 @@ function mapVariant(variant: {
 }
 
 /**
+ * The product's tax classification, for each of its variants (docs/phase-194,
+ * D3: the metafields are product-level). Only a non-blank value is carried, so
+ * a product without the metafields maps to exactly what it always did and is
+ * sold as class A.
+ *
+ * @param {ShopifyProduct} product
+ * @returns {Pick<VariantSummary, 'vatClass' | 'hsCode' | 'hsName'>}
+ */
+function mapTaxFields(product: ShopifyProduct): Pick<VariantSummary, 'vatClass' | 'hsCode' | 'hsName'> {
+  const fields: Pick<VariantSummary, 'vatClass' | 'hsCode' | 'hsName'> = {}
+  const vatClass = product.vatClass?.value?.trim()
+  const hsCode = product.hsCode?.value?.trim()
+  const hsName = product.hsName?.value?.trim()
+  if (vatClass) fields.vatClass = vatClass
+  if (hsCode) fields.hsCode = hsCode
+  if (hsName) fields.hsName = hsName
+  return fields
+}
+
+/**
  * Flattens Shopify's nested GraphQL response into the flat
  * {@link ProductSummary} list consumed by the renderer.
  *
@@ -216,11 +245,13 @@ export function mapShopifyToSummary(
 ): ProductSummary[] {
   return products.map((p) => {
     const firstVariant = p.variants.nodes[0]
+    const taxFields = mapTaxFields(p)
     const variants = p.variants.nodes.map((v) => {
       const mapped = mapVariant(v)
       const locationQty = inventoryMap?.get(v.id)
       return {
         ...mapped,
+        ...taxFields,
         productId: extractNumericId(p.id),
         inventoryQuantity: locationQty ?? 0
       }

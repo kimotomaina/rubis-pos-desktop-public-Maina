@@ -31,6 +31,11 @@ export interface ShopifyVariant {
   barcode: string | null
 }
 
+/** One metafield read with `metafield(namespace, key) { value }`; `null` when the product has none. */
+export interface ShopifyMetafieldValue {
+  value: string
+}
+
 /** A Shopify product with up to N variants. */
 export interface ShopifyProduct {
   id: string
@@ -38,6 +43,12 @@ export interface ShopifyProduct {
   handle: string
   status: string
   featuredImage: ShopifyImage | null
+  /** Product-level `rubis.vat_class` (docs/phase-194, D3) — absent or `null` when the product has none. */
+  vatClass?: ShopifyMetafieldValue | null
+  /** Product-level `rubis.hs_code`. */
+  hsCode?: ShopifyMetafieldValue | null
+  /** Product-level `rubis.hs_name`. */
+  hsName?: ShopifyMetafieldValue | null
   variants: {
     nodes: ShopifyVariant[]
   }

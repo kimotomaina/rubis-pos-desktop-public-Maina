@@ -19,6 +19,12 @@ export interface VariantSummary {
   inventoryQuantity: number
   image: string | null
   barcode: string | null
+  /** Device VAT class (A-E), from the product's `rubis.vat_class` metafield. Absent means class A. */
+  vatClass?: string
+  /** Harmonized System code, from the product's `rubis.hs_code` metafield. */
+  hsCode?: string
+  /** Harmonized System name, from the product's `rubis.hs_name` metafield. */
+  hsName?: string
 }
 
 /**
@@ -56,10 +62,10 @@ export interface CartItem {
    * against this, not the (possibly already-overridden) `price`.
    */
   basePrice?: number
-  /** Device VAT class (A-E), read from the variant's `rubis.vat_class` metafield when present. */
+  /** Device VAT class (A-E), read from the product's `rubis.vat_class` metafield when present. */
   vatClass?: string
-  /** Harmonized System code, read from the variant's `rubis.hs_code` metafield when present. */
+  /** Harmonized System code, read from the product's `rubis.hs_code` metafield when present. */
   hsCode?: string
-  /** Harmonized System name, read from the variant's `rubis.hs_name` metafield when present. */
+  /** Harmonized System name, read from the product's `rubis.hs_name` metafield when present. */
   hsName?: string
 }

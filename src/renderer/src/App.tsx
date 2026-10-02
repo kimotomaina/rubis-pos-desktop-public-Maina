@@ -7,7 +7,7 @@ import { useUiStore } from './stores/uiStore'
 import { useAuthStore } from './stores/authStore'
 import { useBarcodeScanner } from './hooks/useBarcodeScanner'
 import type { ScanResult } from './hooks/useBarcodeScanner'
-import type { CartItem, VariantSummary, ProductSummary } from './types/shopify'
+import type { VariantSummary, ProductSummary } from './types/shopify'
 import PosSearchBar from './components/PosSearchBar'
 import PosCartTable from './components/PosCartTable'
 import PosCheckoutPanel from './components/PosCheckoutPanel'
@@ -36,6 +36,7 @@ import SaleCompleteToast from './components/SaleCompleteToast'
 import ToastStack from './components/ToastStack'
 import { useToastStore } from './stores/toastStore'
 import { SCAN_TOAST_TIMEOUT_MS } from './lib/toastTimeouts'
+import { buildCartItem } from './lib/cartItem'
 import { WarningIcon } from './components/icons'
 import { useKeyboardStore } from './stores/keyboardStore'
 import ZReportModal from './components/ZReportModal'
@@ -136,28 +137,6 @@ function showScanToast(kind: 'success' | 'error', message: string): void {
     timeoutMs: SCAN_TOAST_TIMEOUT_MS,
     onDismiss: () => useToastStore.getState().dismiss(id)
   })
-}
-
-/**
- * Converts a product + variant pair into the cart-line shape expected
- * by `useCartStore.addItem`.
- *
- * @param {ProductSummary} product
- * @param {VariantSummary} variant
- * @returns {Omit<CartItem, 'quantity'>}
- */
-function buildCartItem(
-  product: ProductSummary,
-  variant: VariantSummary
-): Omit<CartItem, 'quantity'> {
-  return {
-    id: variant.id,
-    productId: variant.productId,
-    title: product.title,
-    variantTitle: variant.title,
-    price: variant.price,
-    image: variant.image ?? product.featuredImage
-  }
 }
 
 /**
