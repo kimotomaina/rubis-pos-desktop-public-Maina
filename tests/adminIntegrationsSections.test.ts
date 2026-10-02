@@ -155,20 +155,25 @@ describe('AdminScreen > Integrations: five sections, shown one at a time', () =>
     container.remove()
   })
 
-  it('declares exactly the five named sections, in order, as cards', async () => {
+  /**
+   * DELIBERATE TEST CHANGE (docs/phase-204): Store Details became a card
+   * of its own, second in the grid.
+   *   Old assertion: the five named cards are Shopify, Location, Fiscal
+   *     Device, M-Pesa, Printer, in that order.
+   *   New assertion: the six named cards are Shopify, Store Details,
+   *     Location, Fiscal Device, M-Pesa, Printer, in that order.
+   */
+  it('declares exactly the six named sections, in order, as cards', async () => {
     stubApi()
     await mount()
     await click('Integrations')
 
+    const names = ['Shopify', 'Store Details', 'Location', 'Fiscal Device', 'M-Pesa', 'Printer']
     const cards = Array.from(container.querySelectorAll('button')).map((b) => b.textContent)
-    expect(cards).toEqual(
-      expect.arrayContaining(['Shopify', 'Location', 'Fiscal Device', 'M-Pesa', 'Printer'])
-    )
+    expect(cards).toEqual(expect.arrayContaining(names))
     // In this exact order, in the card grid shown as soon as Integrations opens (phase-167 Part A).
-    const order = cards.filter((label) =>
-      ['Shopify', 'Location', 'Fiscal Device', 'M-Pesa', 'Printer'].includes(label ?? '')
-    )
-    expect(order).toEqual(['Shopify', 'Location', 'Fiscal Device', 'M-Pesa', 'Printer'])
+    const order = cards.filter((label) => names.includes(label ?? ''))
+    expect(order).toEqual(names)
   })
 
   /**
@@ -337,13 +342,13 @@ describe('AdminScreen > Integrations: five sections, shown one at a time', () =>
   })
 
   /**
-   * DELIBERATE TEST CHANGE (docs/phase-202): Store Details moved from the
-   * Fiscal Device section to the Shopify section, with its own save
-   * message.
+   * DELIBERATE TEST CHANGE (docs/phase-202, then docs/phase-204): Store
+   * Details moved out of the Fiscal Device section, first into Shopify and
+   * then into a section of its own, keeping its own save message.
    *   Old assertion: the Fiscal Device section contains
    *     `{storeIdentityMessage &&`.
-   *   New assertion: the Shopify section contains it and the Fiscal
-   *     Device section does not.
+   *   New assertion: the Store Details section contains it and neither the
+   *     Shopify nor the Fiscal Device section does.
    */
   it('shows each Integrations section its own save message, not a shared one', () => {
     const shopifyStart = INTEGRATIONS_BLOCK.indexOf("integrationSection === 'shopify'")
@@ -351,7 +356,9 @@ describe('AdminScreen > Integrations: five sections, shown one at a time', () =>
     const mpesaStart = INTEGRATIONS_BLOCK.indexOf("integrationSection === 'mpesa'")
     const fiscalStart = INTEGRATIONS_BLOCK.indexOf("integrationSection === 'fiscal'")
     const printerStart = INTEGRATIONS_BLOCK.indexOf("integrationSection === 'printer'")
-    const shopifySection = INTEGRATIONS_BLOCK.slice(shopifyStart, locationStart)
+    const storeStart = INTEGRATIONS_BLOCK.indexOf("integrationSection === 'storeDetails'")
+    const shopifySection = INTEGRATIONS_BLOCK.slice(shopifyStart, storeStart)
+    const storeSection = INTEGRATIONS_BLOCK.slice(storeStart, locationStart)
     const mpesaSection = INTEGRATIONS_BLOCK.slice(mpesaStart, fiscalStart)
     const fiscalSection = INTEGRATIONS_BLOCK.slice(fiscalStart, printerStart)
     expect(mpesaSection).toContain('{mpesaMessage &&')
@@ -360,30 +367,37 @@ describe('AdminScreen > Integrations: five sections, shown one at a time', () =>
     expect(fiscalSection).toContain('{fiscalMessage &&')
     expect(fiscalSection).not.toContain('{storeIdentityMessage &&')
     expect(fiscalSection).not.toContain('{mpesaMessage &&')
-    expect(shopifySection).toContain('{storeIdentityMessage &&')
-    expect(shopifySection).not.toContain('{fiscalMessage &&')
+    expect(storeSection).toContain('{storeIdentityMessage &&')
+    expect(storeSection).not.toContain('{fiscalMessage &&')
+    expect(shopifySection).not.toContain('{storeIdentityMessage &&')
   })
 
   /**
-   * DELIBERATE TEST CHANGE (docs/phase-202): was "folds Store Details into
-   * Fiscal Device"; it now lives in Shopify, still not an unlisted sixth
-   * section.
+   * DELIBERATE TEST CHANGE (docs/phase-202, then docs/phase-204): was
+   * "folds Store Details into Fiscal Device rather than inventing an
+   * unlisted sixth section"; Store Details is now deliberately a section of
+   * its own.
    *   Old assertion: the Fiscal Device section contains `Store Details</h4>`
    *     and `storeKraPin`.
-   *   New assertion: the Shopify section contains both and the Fiscal
-   *     Device section contains neither.
+   *   New assertion: the Store Details section contains `Store Details</h3>`
+   *     and `storeKraPin`; the Shopify and Fiscal Device sections contain
+   *     neither.
    */
-  it('folds Store Details into Shopify rather than inventing an unlisted sixth section', () => {
+  it('keeps Store Details in a section of its own, not inside Shopify or Fiscal Device', () => {
     const shopifyStart = INTEGRATIONS_BLOCK.indexOf("integrationSection === 'shopify'")
+    const storeStart = INTEGRATIONS_BLOCK.indexOf("integrationSection === 'storeDetails'")
     const locationStart = INTEGRATIONS_BLOCK.indexOf("integrationSection === 'location'")
     const fiscalStart = INTEGRATIONS_BLOCK.indexOf("integrationSection === 'fiscal'")
     const printerStart = INTEGRATIONS_BLOCK.indexOf("integrationSection === 'printer'", fiscalStart)
-    const shopifySection = INTEGRATIONS_BLOCK.slice(shopifyStart, locationStart)
+    const shopifySection = INTEGRATIONS_BLOCK.slice(shopifyStart, storeStart)
+    const storeSection = INTEGRATIONS_BLOCK.slice(storeStart, locationStart)
     const fiscalSection = INTEGRATIONS_BLOCK.slice(fiscalStart, printerStart)
-    expect(shopifySection).toContain('Store Details</h4>')
-    expect(shopifySection).toContain('storeKraPin')
-    expect(fiscalSection).not.toContain('Store Details</h4>')
-    expect(fiscalSection).not.toContain('storeKraPin')
+    expect(storeSection).toContain('Store Details</h3>')
+    expect(storeSection).toContain('storeKraPin')
+    for (const section of [shopifySection, fiscalSection]) {
+      expect(section).not.toContain('Store Details')
+      expect(section).not.toContain('storeKraPin')
+    }
   })
 
   it('leaves every existing settings handler and its call signature untouched', () => {

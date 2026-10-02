@@ -160,7 +160,7 @@ type AdminTabKey =
   | 'system'
 
 /** Every Integrations sub-section, in card-grid order (phase-167). */
-type IntegrationSectionKey = 'shopify' | 'location' | 'fiscal' | 'mpesa' | 'printer'
+type IntegrationSectionKey = 'shopify' | 'storeDetails' | 'location' | 'fiscal' | 'mpesa' | 'printer'
 
 /**
  * The Admin card grid's contents (phase-167 Part A) — icon and title
@@ -200,6 +200,7 @@ function adminSections(unfiledCount: number | null, shopifyActionCount: number):
 /** Integrations' own card grid contents (phase-167 Part A item 3). */
 const INTEGRATION_SECTIONS: SectionCard<IntegrationSectionKey>[] = [
   { key: 'shopify', label: 'Shopify', icon: <LinkIcon className="h-8 w-8" /> },
+  { key: 'storeDetails', label: 'Store Details', icon: <DocumentChartIcon className="h-8 w-8" /> },
   { key: 'location', label: 'Location', icon: <PackageIcon className="h-8 w-8" /> },
   { key: 'fiscal', label: 'Fiscal Device', icon: <LockIcon className="h-8 w-8" /> },
   { key: 'mpesa', label: 'M-Pesa', icon: <InboxIcon className="h-8 w-8" /> },
@@ -1455,95 +1456,97 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
                       </button>
                     </div>
                   </div>
+                </section>
+              )}
 
-                  <div className="mt-4 border-t border-slate-100 pt-4">
-                    <h4 className="mb-2 text-xl font-semibold text-slate-700">Store Details</h4>
-                    <div className="grid grid-cols-2 gap-3">
-                      <div>
-                        <label className="mb-1 block text-lg font-medium text-slate-600">
-                          Store name
-                        </label>
-                        <input
-                          type="text"
-                          readOnly
-                          value={storeName}
-                          onClick={() => openField(storeName, setStoreName, 'Store name', { mode: 'text' })}
-                          placeholder="Rubis Haile Selassie"
-                          className="w-full h-12 rounded-lg border border-slate-300 px-3 text-lg focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-100"
-                        />
-                      </div>
-                      <div>
-                        <label className="mb-1 block text-lg font-medium text-slate-600">
-                          Store KRA PIN
-                        </label>
-                        <input
-                          type="text"
-                          readOnly
-                          value={storeKraPin}
-                          onClick={() =>
-                            openField(storeKraPin, (next) => setStoreKraPin(next.toUpperCase()), 'Store KRA PIN', {
-                              mode: 'caps'
-                            })
-                          }
-                          placeholder="P051234567X"
-                          className="w-full h-12 rounded-lg border border-slate-300 px-3 text-lg focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-100"
-                        />
-                        <p className="mt-1 text-sm text-slate-500">Not the customer&apos;s PIN.</p>
-                      </div>
-                      <div>
-                        <label className="mb-1 block text-lg font-medium text-slate-600">Legal name</label>
-                        <input
-                          type="text"
-                          readOnly
-                          value={storeLegalName}
-                          onClick={() =>
-                            openField(storeLegalName, setStoreLegalName, 'Legal name', { mode: 'text' })
-                          }
-                          placeholder="Rubis Energy Kenya PLC"
-                          className="w-full h-12 rounded-lg border border-slate-300 px-3 text-lg focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-100"
-                        />
-                      </div>
-                      <div>
-                        <label className="mb-1 block text-lg font-medium text-slate-600">
-                          Shop name and address
-                        </label>
-                        <input
-                          type="text"
-                          readOnly
-                          value={storeAddress}
-                          onClick={() => openField(storeAddress, setStoreAddress, 'Shop name and address', { mode: 'text' })}
-                          placeholder="Enjoy Westlands, Waiyaki Way, Nairobi"
-                          className="w-full h-12 rounded-lg border border-slate-300 px-3 text-lg focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-100"
-                        />
-                      </div>
-                      <div>
-                        <label className="mb-1 block text-lg font-medium text-slate-600">Phone</label>
-                        <input
-                          type="text"
-                          readOnly
-                          value={storePhone}
-                          onClick={() => openField(storePhone, setStorePhone, 'Phone', { mode: 'text' })}
-                          placeholder="0700 000 000"
-                          className="w-full h-12 rounded-lg border border-slate-300 px-3 text-lg focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-100"
-                        />
-                      </div>
-                      <div>
-                        <label className="mb-1 block text-lg font-medium text-slate-600">
-                          Receipt footer message
-                        </label>
-                        <input
-                          type="text"
-                          readOnly
-                          value={storeFooterMessage}
-                          onClick={() =>
-                            openField(storeFooterMessage, setStoreFooterMessage, 'Receipt footer message', {
-                              mode: 'text'
-                            })
-                          }
-                          placeholder="Thank you for shopping at Enjoy!"
-                          className="w-full h-12 rounded-lg border border-slate-300 px-3 text-lg focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-100"
-                        />
-                      </div>
+              {integrationSection === 'storeDetails' && (
+                <section className="rounded-xl border border-slate-200 bg-white p-4">
+                  <h3 className="mb-3 text-2xl font-bold text-slate-800">Store Details</h3>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="mb-1 block text-lg font-medium text-slate-600">
+                        Store name
+                      </label>
+                      <input
+                        type="text"
+                        readOnly
+                        value={storeName}
+                        onClick={() => openField(storeName, setStoreName, 'Store name', { mode: 'text' })}
+                        placeholder="Rubis Haile Selassie"
+                        className="w-full h-12 rounded-lg border border-slate-300 px-3 text-lg focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-100"
+                      />
+                    </div>
+                    <div>
+                      <label className="mb-1 block text-lg font-medium text-slate-600">
+                        Store KRA PIN
+                      </label>
+                      <input
+                        type="text"
+                        readOnly
+                        value={storeKraPin}
+                        onClick={() =>
+                          openField(storeKraPin, (next) => setStoreKraPin(next.toUpperCase()), 'Store KRA PIN', {
+                            mode: 'caps'
+                          })
+                        }
+                        placeholder="P051234567X"
+                        className="w-full h-12 rounded-lg border border-slate-300 px-3 text-lg focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-100"
+                      />
+                      <p className="mt-1 text-sm text-slate-500">Not the customer&apos;s PIN.</p>
+                    </div>
+                    <div>
+                      <label className="mb-1 block text-lg font-medium text-slate-600">Legal name</label>
+                      <input
+                        type="text"
+                        readOnly
+                        value={storeLegalName}
+                        onClick={() =>
+                          openField(storeLegalName, setStoreLegalName, 'Legal name', { mode: 'text' })
+                        }
+                        placeholder="Rubis Energy Kenya PLC"
+                        className="w-full h-12 rounded-lg border border-slate-300 px-3 text-lg focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-100"
+                      />
+                    </div>
+                    <div>
+                      <label className="mb-1 block text-lg font-medium text-slate-600">
+                        Shop name and address
+                      </label>
+                      <input
+                        type="text"
+                        readOnly
+                        value={storeAddress}
+                        onClick={() => openField(storeAddress, setStoreAddress, 'Shop name and address', { mode: 'text' })}
+                        placeholder="Enjoy Westlands, Waiyaki Way, Nairobi"
+                        className="w-full h-12 rounded-lg border border-slate-300 px-3 text-lg focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-100"
+                      />
+                    </div>
+                    <div>
+                      <label className="mb-1 block text-lg font-medium text-slate-600">Phone</label>
+                      <input
+                        type="text"
+                        readOnly
+                        value={storePhone}
+                        onClick={() => openField(storePhone, setStorePhone, 'Phone', { mode: 'text' })}
+                        placeholder="0700 000 000"
+                        className="w-full h-12 rounded-lg border border-slate-300 px-3 text-lg focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-100"
+                      />
+                    </div>
+                    <div>
+                      <label className="mb-1 block text-lg font-medium text-slate-600">
+                        Receipt footer message
+                      </label>
+                      <input
+                        type="text"
+                        readOnly
+                        value={storeFooterMessage}
+                        onClick={() =>
+                          openField(storeFooterMessage, setStoreFooterMessage, 'Receipt footer message', {
+                            mode: 'text'
+                          })
+                        }
+                        placeholder="Thank you for shopping at Enjoy!"
+                        className="w-full h-12 rounded-lg border border-slate-300 px-3 text-lg focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-100"
+                      />
                     </div>
                   </div>
 

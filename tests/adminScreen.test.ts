@@ -311,12 +311,13 @@ describe('AdminScreen > Integrations > M-Pesa (SMS field)', () => {
 })
 
 /**
- * DELIBERATE TEST CHANGE (docs/phase-202): Store Details moved from the
- * Fiscal Device card to the Shopify card. Only the card each field is
- * reached through changed, as `card` below; every mode, secret and
- * Save assertion is as it was.
+ * DELIBERATE TEST CHANGE (docs/phase-202, then docs/phase-204): Store
+ * Details moved out of the Fiscal Device card, first to the Shopify card
+ * and then to a card of its own. Only the card each field is reached
+ * through changed, as `card` below; every mode, secret and Save assertion
+ * is as it was.
  *   Old: every field below was reached via `click('Fiscal Device')`.
- *   New: the six Store Details fields are reached via `click('Shopify')`.
+ *   New: the six Store Details fields are reached via `click('Store Details')`.
  */
 describe('AdminScreen > Integrations > Fiscal Device + Store Details', () => {
   const cases: Array<{ label: string; mode: string; secret: boolean; card: string }> = [
@@ -325,12 +326,12 @@ describe('AdminScreen > Integrations > Fiscal Device + Store Details', () => {
     { label: 'Fiscal device port', mode: 'numeric', secret: false, card: 'Fiscal Device' },
     { label: 'Fiscal device password', mode: 'text', secret: true, card: 'Fiscal Device' },
     { label: 'Default tax class', mode: 'caps', secret: false, card: 'Fiscal Device' },
-    { label: 'Store name', mode: 'text', secret: false, card: 'Shopify' },
-    { label: 'Store KRA PIN', mode: 'caps', secret: false, card: 'Shopify' },
-    { label: 'Legal name', mode: 'text', secret: false, card: 'Shopify' },
-    { label: 'Shop name and address', mode: 'text', secret: false, card: 'Shopify' },
-    { label: 'Phone', mode: 'text', secret: false, card: 'Shopify' },
-    { label: 'Receipt footer message', mode: 'text', secret: false, card: 'Shopify' }
+    { label: 'Store name', mode: 'text', secret: false, card: 'Store Details' },
+    { label: 'Store KRA PIN', mode: 'caps', secret: false, card: 'Store Details' },
+    { label: 'Legal name', mode: 'text', secret: false, card: 'Store Details' },
+    { label: 'Shop name and address', mode: 'text', secret: false, card: 'Store Details' },
+    { label: 'Phone', mode: 'text', secret: false, card: 'Store Details' },
+    { label: 'Receipt footer message', mode: 'text', secret: false, card: 'Store Details' }
   ]
 
   it.each(cases)('$label — mode $mode, secret $secret', async ({ label, mode, secret, card }) => {
@@ -351,7 +352,7 @@ describe('AdminScreen > Integrations > Fiscal Device + Store Details', () => {
     stubApi()
     await mount()
     await click('Integrations')
-    await click('Shopify')
+    await click('Store Details')
 
     const input = inputByLabel('Store KRA PIN')
     act(() => input.click())

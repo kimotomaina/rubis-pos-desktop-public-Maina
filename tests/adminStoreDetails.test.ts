@@ -1,7 +1,9 @@
 /**
- * Store Details on the Shopify card, two fields to a row (docs/phase-202).
- * It used to sit under the Fiscal Device settings; the fields, their
- * keyboard modes and the save are unchanged, only where they are reached.
+ * Store Details as a card of its own, two fields to a row (docs/phase-202,
+ * then docs/phase-204). It used to sit under the Fiscal Device settings and
+ * then under Shopify; the fields, their keyboard modes and the save are
+ * unchanged, only where they are reached. The Shopify card keeps its store
+ * URL and token side by side (docs/phase-203).
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
@@ -61,7 +63,7 @@ const labelTexts = (): string[] =>
   Array.from(container.querySelectorAll('label')).map((l) => l.textContent?.trim() ?? '')
 
 const storeGrid = (): HTMLElement => {
-  const grid = Array.from(container.querySelectorAll('h4'))
+  const grid = Array.from(container.querySelectorAll('h3'))
     .find((h) => h.textContent === 'Store Details')
     ?.parentElement?.querySelector('.grid') as HTMLElement | undefined
   if (!grid) throw new Error('No Store Details grid')
@@ -83,38 +85,38 @@ afterEach(() => {
 })
 
 describe('Store Details', () => {
-  it('is on the Shopify card, after the token, with all six fields', async () => {
+  it('is a card on the Integrations grid, with all six fields and its own save button', async () => {
     await mount()
     await click('Integrations')
-    await click('Shopify')
+    expect(Array.from(container.querySelectorAll('button')).map((b) => b.textContent)).toContain('Store Details')
 
-    const text = container.textContent ?? ''
-    expect(text).toContain('Store Details')
-    expect(text.indexOf('Store Details')).toBeGreaterThan(text.indexOf('Admin API Token'))
+    await click('Store Details')
+
+    expect(container.querySelector('h3')?.textContent).toBe('Store Details')
     for (const field of STORE_FIELDS) {
       expect(labelTexts().some((l) => l.startsWith(field))).toBe(true)
     }
     expect(Array.from(container.querySelectorAll('button')).some((b) => b.textContent === 'Save Store Details')).toBe(true)
   })
 
-  it('is no longer on the Fiscal Device card, which keeps only its own fields and save', async () => {
+  it.each(['Shopify', 'Fiscal Device'])('is not on the %s card, which keeps its own fields and saves', async (card) => {
     await mount()
     await click('Integrations')
-    await click('Fiscal Device')
+    await click(card)
 
     expect(container.textContent).not.toContain('Store Details')
     for (const field of STORE_FIELDS) {
       expect(labelTexts().some((l) => l.startsWith(field))).toBe(false)
     }
     const buttons = Array.from(container.querySelectorAll('button')).map((b) => b.textContent)
-    expect(buttons).toContain('Save Fiscal Device Settings')
     expect(buttons).not.toContain('Save Store Details')
+    expect(buttons).toContain(card === 'Shopify' ? 'Save Token' : 'Save Fiscal Device Settings')
   })
 
   it('lays the six fields out two to a row, three rows', async () => {
     await mount()
     await click('Integrations')
-    await click('Shopify')
+    await click('Store Details')
 
     const grid = storeGrid()
     expect(grid.className).toContain('grid-cols-2')
@@ -123,10 +125,10 @@ describe('Store Details', () => {
     expect(order).toEqual(STORE_FIELDS)
   })
 
-  it('loads the saved values into the fields on the Shopify card', async () => {
+  it('loads the saved values into the fields on its own card', async () => {
     await mount()
     await click('Integrations')
-    await click('Shopify')
+    await click('Store Details')
 
     const values = Array.from(storeGrid().querySelectorAll('input')).map((i) => i.value)
     expect(values.slice(0, 2)).toEqual(['Enjoy', 'P051234567X'])
@@ -166,12 +168,12 @@ describe('Shopify Connection and the Admin API token (docs/phase-203)', () => {
     expect(right.textContent).toContain('Not configured')
   })
 
-  it('keeps Store Details below the row, not inside it', async () => {
+  it('has nothing after the row but the end of the card: no Store Details', async () => {
     await mount()
     await click('Integrations')
     await click('Shopify')
 
     expect(row().textContent).not.toContain('Store Details')
-    expect(container.textContent!.indexOf('Store Details')).toBeGreaterThan(container.textContent!.indexOf('Save Token'))
+    expect(container.textContent).not.toContain('Store Details')
   })
 })
