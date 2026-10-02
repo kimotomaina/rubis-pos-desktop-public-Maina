@@ -194,10 +194,7 @@ export interface FiscalInvoiceResult {
    * The five raw per-VAT-group subtotal strings read at Step 5
    * (`ReadCurrentReceiptInfo`), for the fiscal reconciliation report
    * (docs/phase-163). Set only on a fresh `submitInvoice` success that
-   * actually performed Step 5 — `undefined` on the mock provider, and on
-   * the `verifyAlreadyFiled` "already-filed" recovery path, which never
-   * re-reads the receipt (no extra device command is sent to fetch it
-   * after the fact).
+   * actually performed Step 5 — `undefined` on the mock provider.
    */
   vatGroups?: FiscalVatGroupAmounts
 }
@@ -213,9 +210,8 @@ export interface FiscalInvoiceResult {
  *   - `'system'`    — this build's own bug, an anomalous device response
  *     shape (a malformed request the server rejected outright, a receipt
  *     that closed without an invoice number, a device that reports itself
- *     unfiscalized/unpaired), or a resend the connected device's protocol
- *     definitions cannot confirm is safe (see
- *     `real-etims-provider.ts#verifyAlreadyFiled`). Not the cashier's
+ *     unfiscalized/unpaired), or a retry the device refused as final (see
+ *     `real-etims-provider.ts#UNVERIFIABLE_RETRY_REASON`). Not the cashier's
  *     fault and not the customer's data, but also not something an
  *     automatic retry fixes — a person has to look at it.
  *   - `'technical'` — a transient/technical condition (device

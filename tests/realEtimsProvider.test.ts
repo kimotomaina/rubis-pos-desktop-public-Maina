@@ -1097,16 +1097,19 @@ describe('STE1=59 (0x3b, "missing daily closure") named at every step it can arr
   )
 })
 
-describe('OpenInvoice duplicate-filing recovery via ReadCUinvoiceNumber (phase-75, Part B — Rule 1)', () => {
-  it('on a RETRY, when the device reports the invoice as already filed, recovers as fiscalized WITHOUT resending SellPLU/CloseReceipt', async () => {
+describe('a refused OpenInvoice on a retry is never read as proof of filing (phase-208; was phase-75 Part B recovery)', () => {
+  /**
+   * REWRITTEN (docs/phase-208).
+   * OLD: on a retry, a refused OpenInvoice made the provider send ReadCUinvoiceNumber and, when
+   * the device named a number, return it as fiscalized with an empty QR and no vatGroups.
+   * NEW: ReadCUinvoiceNumber is never sent (it names no sale, so its answer can be another
+   * till's, or the zero counter that phase 206 recorded). A final refusal is flagged for a
+   * person with UNVERIFIABLE_RETRY_REASON and nothing is recorded as filed.
+   */
+  it('on a RETRY refused as final, never asks ReadCUinvoiceNumber and never reports the sale as filed', async () => {
     const post = vi.fn().mockImplementation((path: string, body: string) => {
       const command = commandNameOf([path, body])
       if (command === 'OpenInvoiceWithFreeCustomerData') {
-        // Any rejection reason works here — the recovery is gated on
-        // `request.isRetry`, deliberately NOT on recognizing a
-        // particular error code as "this means duplicate" (per this
-        // step's brief: "we don't need to know which error code means
-        // duplicate — we ask the device").
         return Promise.resolve({ data: xmlCommandError(57, 'Conflict in tax group') })
       }
       if (command === 'ReadCUinvoiceNumber') {
@@ -1118,30 +1121,29 @@ describe('OpenInvoice duplicate-filing recovery via ReadCUinvoiceNumber (phase-7
 
     const result = await provider.submitInvoice({ ...SAMPLE_REQUEST, isRetry: true })
 
-    expect(result.ok).toBe(true)
-    expect(result.ok && result.data.invoiceNumber).toBe('0000000009999999')
-    // Rule 2 groundwork: no QR was ever returned for THIS attempt (only
-    // CloseReceipt returns one, and CloseReceipt was never sent) — left
-    // empty, never a fake/guessed value.
-    expect(result.ok && result.data.qrCode).toBe('')
-    expect(commandSequence(post)).toContain('ReadCUinvoiceNumber')
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.reason).toBe(UNVERIFIABLE_RETRY_REASON)
+    expect(result.kind).toBe('system')
+    expect(result.retryable).toBe(false)
+    expect(commandSequence(post)).not.toContain('ReadCUinvoiceNumber')
     expect(commandSequence(post)).not.toContain('SellPLUfromExtDB')
     expect(commandSequence(post)).not.toContain('CloseReceipt')
-    // docs/phase-163: this recovery never runs Step 5 (ReadCurrentReceiptInfo)
-    // again, so it carries no vatGroups — the caller stores NULL, never a
-    // guessed or re-fetched figure.
-    expect(result.ok && result.data.vatGroups).toBeUndefined()
   })
 
-  it('on a RETRY, when the device does NOT know this invoice either, the rejection is a genuine failure — NOT falsely marked fiscalized', async () => {
+  /**
+   * REWRITTEN (docs/phase-208) and now the pin for the wrong-PIN route.
+   * OLD: asked ReadCUinvoiceNumber first (it found nothing) and then returned the original
+   * "Wrong client PIN" refusal as data.
+   * NEW: ReadCUinvoiceNumber is not sent. A final refusal that carries a data issue the till can
+   * fix keeps its own classification (kind 'data', its own reason), not the phase 111 message,
+   * because correct-PIN-and-resend depends on it.
+   */
+  it('on a RETRY, a wrong buyer PIN keeps its own data classification, not the flag message', async () => {
     const post = vi.fn().mockImplementation((path: string, body: string) => {
       const command = commandNameOf([path, body])
       if (command === 'OpenInvoiceWithFreeCustomerData') {
         return Promise.resolve({ data: xmlCommandError(59, 'Wrong client PIN') })
-      }
-      if (command === 'ReadCUinvoiceNumber') {
-        // Not-found shape: Code 0 but no <CU_InvoiceNumber> element.
-        return Promise.resolve({ data: '<Res Code="0"/>' })
       }
       return makeSuccessfulPostImpl()(path, body)
     })
@@ -1155,8 +1157,9 @@ describe('OpenInvoice duplicate-filing recovery via ReadCUinvoiceNumber (phase-7
 
     expect(result.ok).toBe(false)
     expect(!result.ok && result.reason).toMatch(/Wrong client PIN/)
+    expect(!result.ok && result.reason).not.toBe(UNVERIFIABLE_RETRY_REASON)
     expect(!result.ok && result.kind).toBe('data')
-    expect(commandSequence(post)).toContain('ReadCUinvoiceNumber')
+    expect(commandSequence(post)).not.toContain('ReadCUinvoiceNumber')
     expect(commandSequence(post)).not.toContain('SellPLUfromExtDB')
   })
 
@@ -1927,7 +1930,14 @@ describe('provider logging (phase-80)', () => {
     expect(logger.log).toHaveBeenCalledWith(expect.stringContaining('Sale 42'))
   })
 
-  it('routes the duplicate-filing recovery (ReadCUinvoiceNumber) through the injected logger', async () => {
+  /**
+   * REWRITTEN (docs/phase-208).
+   * OLD: the ReadCUinvoiceNumber recovery logged the sale id and the recovered number through
+   * the injected logger, and the sale was reported as filed.
+   * NEW: there is no recovery; a retry refused as final is flagged and the warning, carrying the
+   * sale id, goes through the injected logger. No invoice number is logged or recorded.
+   */
+  it('routes the flag for a retry refused as final through the injected logger, with the sale localId', async () => {
     const logger = { log: vi.fn(), warn: vi.fn(), error: vi.fn() }
     const post = vi.fn().mockImplementation((path: string, body: string) => {
       const command = commandNameOf([path, body])
@@ -1943,9 +1953,10 @@ describe('provider logging (phase-80)', () => {
 
     const result = await provider.submitInvoice({ ...SAMPLE_REQUEST, localId: 43, isRetry: true })
 
-    expect(result.ok).toBe(true)
-    expect(logger.log).toHaveBeenCalledWith(expect.stringContaining('Sale 43'))
-    expect(logger.log).toHaveBeenCalledWith(expect.stringContaining('0000000005555555'))
+    expect(result.ok).toBe(false)
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('Sale 43'))
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('NOT resent'))
+    expect(commandSequence(post)).not.toContain('ReadCUinvoiceNumber')
   })
 })
 
@@ -1981,6 +1992,12 @@ describe('TEST A: retry while the device is still blocked, then recovers when th
     })
   }
 
+  /**
+   * CHANGED (docs/phase-208). OLD: attempt 2 sent ReadCUinvoiceNumber once (it hit the same
+   * block) before falling back to the original rejection, so the final count was 1. NEW: a
+   * retry's refusal is classified directly, ReadCUinvoiceNumber is never sent, the count is 0.
+   * Every other assertion is unchanged: attempt 2 stays waiting and attempt 3 files once.
+   */
   it('under the newer definitions (defVer=2509041522): recovers automatically, exactly one CloseReceipt, one invoice number', async () => {
     const post = makeBlockedThenClearedPost()
     const provider = new RealFiscalizationProvider({
@@ -2025,7 +2042,7 @@ describe('TEST A: retry while the device is still blocked, then recovers when th
 
     expect(commandSequence(post).filter((c) => c === 'CloseReceipt')).toHaveLength(1)
     expect(commandSequence(post).filter((c) => c === 'OpenInvoiceWithFreeCustomerData')).toHaveLength(3)
-    expect(commandSequence(post).filter((c) => c === 'ReadCUinvoiceNumber')).toHaveLength(1)
+    expect(commandSequence(post).filter((c) => c === 'ReadCUinvoiceNumber')).toHaveLength(0)
   })
 
   /**
@@ -2082,14 +2099,13 @@ describe('TEST A: retry while the device is still blocked, then recovers when th
   })
 
   /**
-   * The task's third scenario: the block clears, but this time the device
-   * DOES hold a record for this TraderSystemInvNum (OpenInvoice is
-   * rejected for an unrelated reason and ReadCUinvoiceNumber names the CU
-   * invoice number) — the pre-existing `if (cuInvoiceNumber) { return {
-   * outcome: 'already-filed', cuInvoiceNumber } }` branch, entirely
-   * unaffected by the new carve-out (recovery did not fail at all here).
+   * REWRITTEN (docs/phase-208).
+   * OLD: the block clears, OpenInvoice is then refused for another reason, ReadCUinvoiceNumber
+   * names an invoice number and attempt 2 is recovered as filed with that number and an empty QR.
+   * NEW: ReadCUinvoiceNumber is never sent; attempt 2's refusal is final, so the sale is flagged
+   * with UNVERIFIABLE_RETRY_REASON, no number is recorded and no CloseReceipt is sent.
    */
-  it('blank defVer, block clears, device ALREADY HAS the sale on file: recovers as already-filed, zero new CloseReceipt calls', async () => {
+  it('blank defVer, block clears, then a final refusal: flagged, never recovered as filed, zero CloseReceipt calls', async () => {
     let openInvoiceCalls = 0
     const post = vi.fn().mockImplementation((path: string, body: string) => {
       const command = commandNameOf([path, body])
@@ -2115,24 +2131,23 @@ describe('TEST A: retry while the device is still blocked, then recovers when th
     expect(attempt1.ok).toBe(false)
 
     const attempt2 = await provider.submitInvoice({ ...request, isRetry: true })
-    expect(attempt2.ok).toBe(true)
-    if (!attempt2.ok) return
-    expect(attempt2.data.invoiceNumber).toBe('0000000009999999')
-    expect(attempt2.data.qrCode).toBe('')
+    expect(attempt2.ok).toBe(false)
+    if (attempt2.ok) return
+    expect(attempt2.reason).toBe(UNVERIFIABLE_RETRY_REASON)
+    expect(attempt2.retryable).toBe(false)
 
+    expect(commandSequence(post)).not.toContain('ReadCUinvoiceNumber')
     expect(commandSequence(post)).not.toContain('CloseReceipt')
   })
 
   /**
-   * The carve-out must not widen: OpenInvoice is blocked (STE1=59), but
-   * `ReadCUinvoiceNumber` fails with an unrelated server error (Code 63) —
-   * only ONE side carries `CODE_DAILY_CLOSURE_BLOCK`, so the carve-out
-   * does not fire and the pre-existing blank-defVer fail-safe still
-   * applies, exactly as `tests/defVersionCompatibility.test.ts`'s own
-   * `'flags when ReadCUinvoiceNumber is refused ...'` test already
-   * establishes for a different original error.
+   * REWRITTEN (docs/phase-208).
+   * OLD: OpenInvoice blocked (STE1=59) and ReadCUinvoiceNumber failing with Code 63 meant the
+   * carve-out did not fire, so the retry was flagged as unverifiable (retryable false).
+   * NEW: there is no ReadCUinvoiceNumber and no carve-out. The retry's refusal is classified like
+   * a first attempt's, and the daily-closure block is retryable, so it stays waiting.
    */
-  it('blank defVer, OpenInvoice blocked but ReadCUinvoiceNumber fails with Code 63: still unverifiable — the carve-out does not widen', async () => {
+  it('blank defVer, OpenInvoice blocked on a retry: stays waiting, ReadCUinvoiceNumber is never sent', async () => {
     const post = vi.fn().mockImplementation((path: string, body: string) => {
       const command = commandNameOf([path, body])
       if (command === 'OpenInvoiceWithFreeCustomerData') {
@@ -2149,9 +2164,10 @@ describe('TEST A: retry while the device is still blocked, then recovers when th
 
     expect(result.ok).toBe(false)
     if (result.ok) return
-    expect(result.reason).toBe(UNVERIFIABLE_RETRY_REASON)
-    expect(result.kind).toBe('system')
-    expect(result.retryable).toBe(false)
+    expect(result.reason).toBe(DAILY_CLOSURE_BLOCK_REASON)
+    expect(result.retryable).toBe(true)
+    expect(routeFiscalOutcome(result)).toEqual({ status: 'waiting', enqueue: true })
+    expect(commandSequence(post)).not.toContain('ReadCUinvoiceNumber')
   })
 
   /**
@@ -2404,7 +2420,13 @@ describe('STE2 codes and their guards (docs/phase-184, commit 2)', () => {
     expect(routeFiscalOutcome(result)).toEqual({ status: 'waiting', enqueue: true })
   })
 
-  it('on a RETRY whose OpenInvoice is refused with STE2 0x32, asks ReadCUinvoiceNumber first and never reports the sale as filed', async () => {
+  /**
+   * CHANGED (docs/phase-208). OLD: a retry refused with 0x32 first sent ReadCUinvoiceNumber
+   * (asserted present). NEW: it is never sent (asserted absent), because its answer names no
+   * sale; phase 206 recorded it answering the zero counter after exactly this refusal. Still
+   * retryable, still no SellPLU or CloseReceipt.
+   */
+  it('on a RETRY whose OpenInvoice is refused with STE2 0x32, never asks ReadCUinvoiceNumber and never reports the sale as filed', async () => {
     const post = vi.fn().mockImplementation((path: string, body: string) => {
       const command = commandNameOf([path, body])
       if (command === 'OpenInvoiceWithFreeCustomerData') {
@@ -2421,7 +2443,7 @@ describe('STE2 codes and their guards (docs/phase-184, commit 2)', () => {
 
     expect(result.ok).toBe(false)
     expect(!result.ok && result.retryable).toBe(true)
-    expect(commandSequence(post)).toContain('ReadCUinvoiceNumber')
+    expect(commandSequence(post)).not.toContain('ReadCUinvoiceNumber')
     expect(commandSequence(post)).not.toContain('SellPLUfromExtDB')
     expect(commandSequence(post)).not.toContain('CloseReceipt')
   })

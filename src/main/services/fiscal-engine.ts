@@ -64,7 +64,7 @@ export interface FiscalEngineDatabase {
     fiscalizedAt?: string,
     fiscalizedAtSource?: 'device' | 'local-fallback',
     cuSerial?: string
-  ): void
+  ): boolean | void
   recordFiscalQueueFailure(queueId: number, error: string): { exhausted: boolean }
   removeFiscalQueueItem(queueId: number): void
   setOrderFiscalFailure(
@@ -165,7 +165,7 @@ export function createFiscalEngine(options: FiscalEngineOptions): FiscalEngine {
         const result = await attemptFiscalRetry({ db, fiscalizationProvider: { submitInvoice } }, item.entity_id, item.payload)
 
         if (result.ok) {
-          db.markFiscalQueueItemSynced(
+          const stored = db.markFiscalQueueItemSynced(
             item.id,
             result.data.invoiceNumber,
             result.data.qrCode,
@@ -174,6 +174,15 @@ export function createFiscalEngine(options: FiscalEngineOptions): FiscalEngine {
             result.data.fiscalizedAtSource,
             result.data.cuSerialNumber
           )
+          if (stored === false) {
+            // docs/phase-208: another sale already holds this CU number, so it is not this
+            // sale's; the sale is needs_fixing and nothing is printed for it.
+            logger.error(
+              `[rubis-pos] Sale ${item.entity_id}: the CU invoice number ${result.data.invoiceNumber} is already held by another sale; ` +
+                'it was NOT recorded and the sale is flagged for a person'
+            )
+            continue
+          }
           logger.log(
             `[rubis-pos] Sale ${item.entity_id}: queued retry succeeded, fiscalized (invoice ${result.data.invoiceNumber})`
           )

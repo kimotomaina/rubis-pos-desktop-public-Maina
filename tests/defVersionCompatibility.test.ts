@@ -336,7 +336,13 @@ describe('OLD defs — the fail-safe: an unverifiable retry is flagged, never re
 })
 
 describe('BLANK defVer — the capability probe fails safe', () => {
-  it('flags when ReadCUinvoiceNumber is refused, since that may be an old server rejecting an undeclared command', async () => {
+  /**
+   * REWRITTEN (docs/phase-208).
+   * OLD: asked ReadCUinvoiceNumber on a blank defVer and flagged the sale when it was refused.
+   * NEW: ReadCUinvoiceNumber is never sent, so what it would answer cannot matter; the final
+   * refusal on a retry is flagged straight away.
+   */
+  it('flags a final refusal on a retry without sending ReadCUinvoiceNumber, whatever it would answer', async () => {
     const { provider, bodies } = makeProvider(undefined, (command) => {
       if (command === 'OpenInvoiceWithFreeCustomerData') return deviceRejection(57, 'Conflict in tax group')
       if (command === 'ReadCUinvoiceNumber') return '<Res Code="63"><Err Source="Server"><Message>Invalid POST</Message></Err></Res>'
@@ -345,13 +351,19 @@ describe('BLANK defVer — the capability probe fails safe', () => {
 
     const result = await provider.submitInvoice({ ...SAMPLE_REQUEST, isRetry: true })
 
-    expect(bodies.map(commandNameOf)).toContain('ReadCUinvoiceNumber')
+    expect(bodies.map(commandNameOf)).not.toContain('ReadCUinvoiceNumber')
     expect(result.ok).toBe(false)
     expect(!result.ok && result.reason).toBe(UNVERIFIABLE_RETRY_REASON)
     expect(!result.ok && result.retryable).toBe(false)
   })
 
-  it('still recovers normally when the device does name an invoice number', async () => {
+  /**
+   * REWRITTEN (docs/phase-208).
+   * OLD: when the device named an invoice number the retry was recovered as filed with that number.
+   * NEW: the number is never asked for, so nothing is recovered: the sale is flagged and no
+   * CloseReceipt is sent.
+   */
+  it('does not recover from an invoice number the device would name: the sale is flagged', async () => {
     const { provider, bodies } = makeProvider(undefined, (command) => {
       if (command === 'OpenInvoiceWithFreeCustomerData') return deviceRejection(57, 'Conflict in tax group')
       if (command === 'ReadCUinvoiceNumber')
@@ -361,9 +373,11 @@ describe('BLANK defVer — the capability probe fails safe', () => {
 
     const result = await provider.submitInvoice({ ...SAMPLE_REQUEST, isRetry: true })
 
-    expect(result.ok).toBe(true)
-    expect(result.ok && result.data.invoiceNumber).toBe('0000000009999999')
-    expect(bodies.map(commandNameOf)).not.toContain('CloseReceipt')
+    expect(result.ok).toBe(false)
+    expect(!result.ok && result.reason).toBe(UNVERIFIABLE_RETRY_REASON)
+    const sent = bodies.map(commandNameOf)
+    expect(sent).not.toContain('ReadCUinvoiceNumber')
+    expect(sent).not.toContain('CloseReceipt')
   })
 
   it('still treats an explicit not-found as a genuine failure, not a flag', async () => {
@@ -424,7 +438,14 @@ describe('NEW defs — regression: the 2509041522 path is unchanged', () => {
     ])
   })
 
-  it('still recovers an already-filed sale through ReadCUinvoiceNumber, with no second filing', async () => {
+  /**
+   * REWRITTEN (docs/phase-208).
+   * OLD: on these definitions a refused retry recovered an already-filed sale through
+   * ReadCUinvoiceNumber, with an empty QR and no second filing.
+   * NEW: the newer definitions behave like the older ones: ReadCUinvoiceNumber is never sent
+   * and a final refusal is flagged, never recorded as filed.
+   */
+  it('no longer recovers through ReadCUinvoiceNumber: a final refusal on a retry is flagged', async () => {
     const { provider, bodies } = makeProvider(EXPECTED_DEF_VERSION, (command) => {
       if (command === 'OpenInvoiceWithFreeCustomerData') return deviceRejection(57, 'Conflict in tax group')
       if (command === 'ReadCUinvoiceNumber')
@@ -434,11 +455,10 @@ describe('NEW defs — regression: the 2509041522 path is unchanged', () => {
 
     const result = await provider.submitInvoice({ ...SAMPLE_REQUEST, isRetry: true })
 
-    expect(result.ok).toBe(true)
-    expect(result.ok && result.data.invoiceNumber).toBe('0000000009999999')
-    expect(result.ok && result.data.qrCode).toBe('')
+    expect(result.ok).toBe(false)
+    expect(!result.ok && result.reason).toBe(UNVERIFIABLE_RETRY_REASON)
     const sent = bodies.map(commandNameOf)
-    expect(sent).toContain('ReadCUinvoiceNumber')
+    expect(sent).not.toContain('ReadCUinvoiceNumber')
     expect(sent).not.toContain('SellPLUfromExtDB')
     expect(sent).not.toContain('CloseReceipt')
   })

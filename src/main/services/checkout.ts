@@ -72,8 +72,8 @@ export interface CheckoutDb {
   queueOrderRecordingManualPayment(input: QueueOrderInput, payment: RecordMpesaPaymentInput): QueuedOrder | null
   queueOrder(input: QueueOrderInput): QueuedOrder
   getOrder(localId: number): OrderRow | undefined
-  /** Records the first filing and deletes the sale's fiscal row, in one transaction. */
-  settleCheckoutFiscalSuccess(localId: number, fiscalQueueId: number, invoice: FiscalInvoiceResult): void
+  /** Records the first filing and deletes the sale's fiscal row, in one transaction. Returns `false` when the CU number is refused because another sale holds it (docs/phase-208). */
+  settleCheckoutFiscalSuccess(localId: number, fiscalQueueId: number, invoice: FiscalInvoiceResult): boolean | void
   /** Records a failed first filing; `needs_fixing` also deletes the fiscal row, in the same transaction. */
   settleCheckoutFiscalFailure(
     localId: number,
@@ -639,7 +639,15 @@ export async function runCheckout(
 
       if (invoice.ok) {
         fiscal = { invoiceNumber: invoice.data.invoiceNumber, qrCode: invoice.data.qrCode }
-        db.settleCheckoutFiscalSuccess(localId, fiscalQueueId, invoice.data)
+        if (db.settleCheckoutFiscalSuccess(localId, fiscalQueueId, invoice.data) === false) {
+          // docs/phase-208: the device's number is already another sale's here, so it is not this
+          // sale's. The sale is now needs_fixing, and the receipt must not claim a number.
+          fiscal = undefined
+          logger.error(
+            `[rubis-pos] Sale ${localId}: the CU invoice number ${invoice.data.invoiceNumber} is already held by another sale; ` +
+              'it was NOT recorded and the sale is flagged for a person'
+          )
+        }
       } else {
         const { status, enqueue } = routeFiscalOutcome(invoice)
         if (enqueue) {

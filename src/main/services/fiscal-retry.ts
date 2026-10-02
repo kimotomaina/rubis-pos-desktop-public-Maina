@@ -26,6 +26,7 @@
  */
 
 import type { FiscalResendResult, FiscalStatus } from './database.js'
+import { UNVERIFIABLE_RETRY_REASON } from './integrations/real-etims-provider.js'
 import type {
   FiscalFailureKind,
   FiscalInvoiceRequest,
@@ -144,7 +145,7 @@ export interface FiscalResendDb extends FiscalRetryDb {
     fiscalizedAt?: string,
     fiscalizedAtSource?: 'device' | 'local-fallback',
     cuSerial?: string
-  ): void
+  ): boolean | void
   setOrderFiscalFailure(
     localId: number,
     status: Exclude<FiscalStatus, 'fiscalized'>,
@@ -220,7 +221,7 @@ export async function resendFiscalization(deps: FiscalResendDeps, localId: numbe
   const outcome = await attemptFiscalRetry(deps, localId, storedRequest)
 
   if (outcome.ok) {
-    deps.db.setOrderFiscalInfo(
+    const stored = deps.db.setOrderFiscalInfo(
       localId,
       outcome.data.invoiceNumber,
       outcome.data.qrCode,
@@ -229,6 +230,15 @@ export async function resendFiscalization(deps: FiscalResendDeps, localId: numbe
       outcome.data.fiscalizedAtSource,
       outcome.data.cuSerialNumber
     )
+    if (stored === false) {
+      // docs/phase-208: another sale already holds this CU number, so it is not this sale's.
+      deps.db.setOrderFiscalFailure(localId, 'needs_fixing', UNVERIFIABLE_RETRY_REASON, 'system')
+      logger.error(
+        `[rubis-pos] Sale ${localId}: the CU invoice number ${outcome.data.invoiceNumber} is already held by another sale; ` +
+          'it was NOT recorded and the sale is flagged for a person'
+      )
+      return { ok: false, reason: UNVERIFIABLE_RETRY_REASON, kind: 'system', retryable: false }
+    }
     logger.log(`[rubis-pos] Sale ${localId}: resent, fiscalized (invoice ${outcome.data.invoiceNumber})`)
     try {
       deps.onFiled?.(localId)

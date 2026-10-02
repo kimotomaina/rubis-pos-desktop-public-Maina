@@ -17,7 +17,7 @@
  * sends is identical under both except for two differences, each handled
  * where it arises — `Price` is 10 characters rather than 15
  * ({@link formatPrice}), and `ReadCUinvoiceNumber` does not exist
- * ({@link RealFiscalizationProvider.verifyAlreadyFiled}). The full
+ * (no automatic path sends it any more, docs/phase-208). The full
  * command-by-command diff is `docs/phase-110.md`.
  *
  * Per-sale flow:
@@ -66,7 +66,6 @@ import {
   getSettings,
   postXml,
   normalizeBaseUrl,
-  resolveDuplicateRecoverySupport,
   DEFAULT_ETIMS_BASE_URL,
   OLD_DEF_VERSION,
   type DefVersionStatus
@@ -263,9 +262,11 @@ const STE2_WRONG_CLIENT_PIN = '59'
  * verify — shown verbatim on the Needs Attention list, so it follows that
  * screen's copy rules: plain language, no device codes, no jargon, and it
  * names the one action a person must take. The machine-readable detail
- * (the device's rejection, the `defVer`, why verification was impossible)
- * goes to the logger instead. See
- * {@link RealFiscalizationProvider.verifyAlreadyFiled}.
+ * (the device's rejection, the `defVer`) goes to the logger instead.
+ *
+ * Used (docs/phase-208) for a retry whose `OpenInvoice` the device refused
+ * as final, and for a `CloseReceipt` number this till will not record
+ * ({@link isAcceptableCuInvoiceNumber}).
  */
 export const UNVERIFIABLE_RETRY_REASON =
   'This sale was sent to the tax device again and the device refused it. The device cannot tell ' +
@@ -273,21 +274,26 @@ export const UNVERIFIABLE_RETRY_REASON =
   'whether this sale is already filed before filing it again.'
 
 /**
- * What a duplicate-recovery check concluded about a sale whose
- * `OpenInvoice` was rejected on a retry:
+ * Whether a CU invoice number from `CloseReceipt` may be recorded as a sale's
+ * fiscal reference (docs/phase-208, guard B): non-empty, and a last nine
+ * characters that are not all zeros.
  *
- *   - `'already-filed'` — the device positively named the CU invoice
- *     number it holds. The sale is filed; report it, send nothing more.
- *   - `'genuine-failure'` — nothing was ever filed under this
- *     `TraderSystemInvNum`, so the original rejection is real and routes
- *     normally.
- *   - `'unverifiable'` — neither could be established. Flag for a person;
- *     never resend.
+ * Deliberately not "digits only": by the time this runs the device has already
+ * filed the sale, so refusing a number it really issued would record a filed sale
+ * as not filed and invite a second filing. The only wrong shape seen from the
+ * device is the zero counter.
+ *
+ * The nine-character tail is INFERRED from two samples, `…1000809` (the device's last
+ * invoice) and `…0000000` (what `ReadCUinvoiceNumber` answered when it held
+ * nothing); the definitions say only "19 symbols", `Text`.
+ * VERIFY-ON-DEVICE: confirm the structure against the first live filing.
+ *
+ * @param {string} value
+ * @returns {boolean}
  */
-type DuplicateRecoveryVerdict =
-  | { outcome: 'already-filed'; cuInvoiceNumber: string }
-  | { outcome: 'genuine-failure' }
-  | { outcome: 'unverifiable'; reason: string }
+export function isAcceptableCuInvoiceNumber(value: string): boolean {
+  return value.length > 0 && !/^0+$/.test(value.slice(-9))
+}
 
 /** Fiscal device endpoint paths, overridable per deployment. */
 export interface FiscalEndpointPaths {
@@ -304,9 +310,9 @@ export interface FiscalEndpointPaths {
   cancelReceipt: string
   openCreditNote: string
   /**
-   * Recovery command for a duplicate `TraderSystemInvNum` rejection.
-   * Declared only by `defVer=2509041522` — see
-   * {@link RealFiscalizationProvider.verifyAlreadyFiled}.
+   * `ReadCUinvoiceNumber`. Declared only by `defVer=2509041522`. No automatic
+   * path sends it (docs/phase-208): it has no argument tying it to a sale, so
+   * its answer could belong to another till's. Kept so the command stays defined.
    */
   readCUinvoiceNumber: string
   /** Reads the CU's serial/PIN numbers — static per device, read once per session. See {@link RealFiscalizationProvider.ensureCUNumbers}. */
@@ -771,14 +777,12 @@ export type ReconfigureFiscalDeviceOptions = Pick<
  * (see {@link RealFiscalizationProvider.buildTraderSystemInvNum}) so a
  * store-and-forward retry of the same request (see `fiscal-engine.ts`)
  * is recognizable by the device as a duplicate rather than fiscalizing
- * the same sale twice. When `request.isRetry` is set and `OpenInvoice`
- * is rejected, {@link RealFiscalizationProvider.verifyAlreadyFiled} runs
- * before concluding failure — if the device already has this sale's
- * invoice number on file (a reply lost on an earlier attempt), that's
- * reported as success with no second `OpenInvoice`/`CloseReceipt` sent;
- * where the connected definitions cannot answer at all, the sale is
- * flagged for a person and never resent (Rule 1 — never file twice; see
- * `docs/phase-75.md` and `docs/phase-110.md`).
+ * the same sale twice. A rejected `OpenInvoice` is never read as proof
+ * that a sale was filed (docs/phase-208): on a retry (`request.isRetry`) a
+ * rejection the device calls final flags the sale for a person with
+ * {@link UNVERIFIABLE_RETRY_REASON}, and one it calls retryable stays
+ * waiting; nothing is ever recorded as filed except a `CloseReceipt` reply
+ * with an acceptable number ({@link isAcceptableCuInvoiceNumber}).
  *
  * Every free-text field is passed through {@link sanitizeFiscalText}
  * before its documented max length is applied — the G03 manual warns
@@ -1106,51 +1110,24 @@ export class RealFiscalizationProvider implements FiscalizationProvider {
       await this.rollback()
       openResult = await this.sendCommand(openEndpoint, 'OpenInvoiceWithFreeCustomerData', openArgs)
     }
-    if (!openResult.success && request.isRetry) {
-      const verdict = await this.verifyAlreadyFiled(defVer, openResult, request.localId)
-      if (verdict.outcome === 'already-filed') {
-        this.logger.log(
-          `[rubis-pos] Sale ${request.localId}: ReadCUinvoiceNumber recovered an already-filed invoice ` +
-            `(${verdict.cuInvoiceNumber}) — filed on an earlier, unacknowledged attempt; NOT resubmitting`
-        )
-        return {
-          ok: true,
-          data: {
-            invoiceNumber: verdict.cuInvoiceNumber,
-            // QR is only ever returned by CloseReceipt at filing time —
-            // a recovered sale never went through CloseReceipt on THIS
-            // attempt, so there is no QR to store. Left empty, never a
-            // fake/guessed value (Rule 2 groundwork — receipt handling
-            // for an empty QR is a later step).
-            qrCode: '',
-            fiscalizedAt: new Date().toISOString(),
-            fiscalizedAtSource: 'local-fallback',
-            cuSerialNumber,
-            defVerStatus
-          }
-        }
-      }
-      if (verdict.outcome === 'unverifiable') {
-        this.logger.warn(
-          `[rubis-pos] Sale ${request.localId}: the fiscal device refused to reopen this invoice on a ` +
-            `retry and the connected server's definitions (defVer=${defVer || 'not reported'}) cannot ` +
-            'confirm whether it was already filed — FLAGGED for a person, NOT resent. ' +
-            `Device rejection: ${openResult.error}. Reason it could not be verified: ${verdict.reason}`
-        )
-        return {
-          ok: false,
-          reason: UNVERIFIABLE_RETRY_REASON,
-          kind: 'system',
-          retryable: false
-        }
-      }
-    }
     if (!openResult.success) {
-      return classifyDeviceFailure(
+      const refused = classifyDeviceFailure(
         openResult,
         { label: 'opening the invoice', command: 'OpenInvoiceWithFreeCustomerData' },
         'Failed to open the fiscal invoice'
       )
+      // docs/phase-208: a retry is classified like a first attempt (a retryable refusal stays
+      // waiting), except that a refusal the device calls final cannot be explained away, so a
+      // person checks the device. A sale is never recorded as filed from a rejection. A data
+      // issue the till can fix (a wrong buyer PIN) keeps its own route.
+      if (request.isRetry && !refused.retryable && !refused.dataIssue) {
+        this.logger.warn(
+          `[rubis-pos] Sale ${request.localId}: the fiscal device refused to reopen this invoice on a ` +
+            `retry and the refusal is final — FLAGGED for a person, NOT resent. Device rejection: ${openResult.error}`
+        )
+        return { ok: false, reason: UNVERIFIABLE_RETRY_REASON, kind: 'system', retryable: false }
+      }
+      return refused
     }
 
     // Step 4/7: SellPLUfromExtDB (class A) or SellPLUfromExtDB_HS (any other class) per line item.
@@ -1252,6 +1229,29 @@ export class RealFiscalizationProvider implements FiscalizationProvider {
       }
     }
 
+    // Guard B (docs/phase-208): a number that is not a plausible CU invoice number is never
+    // recorded as a fiscal reference. The receipt is already closed, so nothing here is
+    // retryable: a person checks the device.
+    if (!isAcceptableCuInvoiceNumber(invoiceNumber)) {
+      this.logger.error(
+        `[rubis-pos] Sale ${request.localId}: CloseReceipt returned a CU invoice number this till will not ` +
+          `record ("${invoiceNumber}"): FLAGGED for a person.`
+      )
+      await this.rollback()
+      return { ok: false, reason: UNVERIFIABLE_RETRY_REASON, kind: 'system', retryable: false }
+    }
+
+    // A valid number with no QR is still fiscalized: the device has filed the sale, and a retry would
+    // be a second filing. VERIFY-ON-DEVICE: no real CloseReceipt reply is on file; confirm it carries
+    // a QR on the first live filing (docs/phase-208).
+    const qrCode = extractQrCodeFromXml(closeResult.data ?? {}) ?? ''
+    if (!qrCode) {
+      this.logger.warn(
+        `[rubis-pos] Sale ${request.localId}: the device filed this sale (CU invoice ${invoiceNumber}) but CloseReceipt ` +
+          'returned no QR code; it is recorded without one. VERIFY-ON-DEVICE on the first live filing.'
+      )
+    }
+
     // Step 7/7: ReadDateTime — best-effort; a failure here doesn't undo an already-closed receipt.
     logStep(7, 'ReadDateTime')
     const dateTimeResult = await this.sendCommand(this.endpoints.readDateTime, 'ReadDateTime', {})
@@ -1269,7 +1269,7 @@ export class RealFiscalizationProvider implements FiscalizationProvider {
       ok: true,
       data: {
         invoiceNumber,
-        qrCode: extractQrCodeFromXml(closeResult.data ?? {}) ?? '',
+        qrCode,
         fiscalizedAt: deviceDateTime ?? new Date().toISOString(),
         fiscalizedAtSource: deviceDateTime ? 'device' : 'local-fallback',
         cuSerialNumber,
@@ -1346,14 +1346,12 @@ export class RealFiscalizationProvider implements FiscalizationProvider {
   }
 
   /**
-   * `ReadCUinvoiceNumber` — the documented recovery path when
-   * `OpenInvoiceWithFreeCustomerData` is rejected for a duplicate
-   * `TraderSystemInvNum`: it returns the CU invoice number the device
-   * already assigned on the earlier, unacknowledged attempt.
+   * `ReadCUinvoiceNumber` — the vendor's command for the CU invoice number the device
+   * assigned when an open was rejected for a duplicate `TraderSystemInvNum`.
    *
-   * Declared only by `defVer=2509041522`. Callers that must stay correct
-   * on either definitions version go through
-   * {@link verifyAlreadyFiled} rather than calling this directly.
+   * **Nothing automatic calls this** (docs/phase-208): the command has no argument that
+   * ties it to a sale, so its answer cannot be trusted to be this till's. It remains as a
+   * manual read. Declared only by `defVer=2509041522`.
    *
    * The command takes no caller-supplied arguments (`Option='I'` is
    * `OptionHardcoded` — server-filled, per the same convention as
@@ -1478,134 +1476,6 @@ export class RealFiscalizationProvider implements FiscalizationProvider {
       )
     }
     return { status: 'sent', deviceLastBefore, deviceLastAfter }
-  }
-
-  /**
-   * Answers "was this sale already filed?" after an `OpenInvoice`
-   * rejection on a retry/resend — the guard behind Rule 1, never file an
-   * invoice twice (phase-75; both definition versions, phase-110).
-   *
-   * Only ever reached on a retry (`request.isRetry`). A first attempt
-   * cannot collide with itself, so it falls straight through to normal
-   * failure routing and no branch here can mark a never-filed sale as
-   * filed. Duplicates are never recognized by error code — the device is
-   * asked what it actually holds.
-   *
-   * **Why the older definitions must flag rather than resend.**
-   * `defVer=2204120945` declares no `ReadCUinvoiceNumber`, and no other
-   * read-back keyed by `TraderSystemInvNum` either — `ReadLastAndTotal`
-   * `ReceiptNum` names only the *last* receipt filed, whichever sale that
-   * was, so it can report a sale filed that never was, or unfiled when it
-   * was. Nor do those definitions document any device-side duplicate
-   * refusal (the newer ones state it explicitly, in
-   * `ReadCUinvoiceNumber`'s own operation text), so a resend cannot be
-   * assumed safe. With no way to establish either answer, the only sound
-   * outcome is `'unverifiable'`: a person checks the device. Flagging a
-   * sale that was in fact fine costs seconds; filing one twice is a KRA
-   * compliance problem — the risk is asymmetric, so uncertainty always
-   * resolves to the flag.
-   *
-   * A **transport** failure is deliberately not treated as uncertainty. A
-   * server-level `serverFailure` (Codes 19/30/31/53) means no session
-   * opened and the device never saw this attempt at all, so nothing was
-   * filed by it and what we know about the sale is exactly what we knew
-   * before — a non-event, not an unverified filing. Those keep normal
-   * retry routing, without which every network blip on a queued sale
-   * would become a support ticket.
-   *
-   * VERIFY-ON-DEVICE: no live duplicate-`TraderSystemInvNum` rejection
-   * has ever been captured, on either definitions version — this is built
-   * from the protocol definitions alone.
-   * VERIFY-AGAINST-REAL-OLD-DEVICE: the `'absent'` path has never run
-   * against a real `2204120945` device (see `docs/phase-109.md`).
-   *
-   * **One narrow carve-out ahead of the `support`/`deviceNeverSawIt`
-   * fail-safe** (docs/phase-162-2): when BOTH the original `OpenInvoice`
-   * rejection and this function's own `ReadCUinvoiceNumber` read were
-   * refused by the same named `STE1=59` "missing daily closure" condition
-   * (docs/phase-162), the outcome is `'genuine-failure'` regardless of
-   * `defVer`. See the comment at that check for why this is safe and
-   * does not widen the fail-safe for any other kind of failure.
-   *
-   * @param {string | undefined} defVer the connected server's echoed `<defVer>`
-   * @param {DeviceResult} openResult the rejected `OpenInvoice` result
-   * @param {number | undefined} localId sale id, for the debug trace only
-   * @returns {Promise<DuplicateRecoveryVerdict>}
-   */
-  private async verifyAlreadyFiled(
-    defVer: string | undefined,
-    openResult: DeviceResult,
-    localId: number | undefined
-  ): Promise<DuplicateRecoveryVerdict> {
-    const support = resolveDuplicateRecoverySupport(defVer)
-    const deviceNeverSawIt = Boolean(openResult.serverFailure)
-
-    if (support === 'absent') {
-      return deviceNeverSawIt
-        ? { outcome: 'genuine-failure' }
-        : {
-            outcome: 'unverifiable',
-            reason: `defVer=${OLD_DEF_VERSION} declares no ReadCUinvoiceNumber — not sent`
-          }
-    }
-
-    if (this.debugLogging) {
-      console.log(
-        `[ETIMS] Sale ${localId}: OpenInvoice rejected on a retry/resend — checking ` +
-          `ReadCUinvoiceNumber before concluding this sale was never filed: ${openResult.error}`
-      )
-    }
-    const recovery = await this.sendReadCUinvoiceNumber()
-    const cuInvoiceNumber = recovery.success ? recovery.data?.CU_InvoiceNumber : undefined
-    if (cuInvoiceNumber) {
-      return { outcome: 'already-filed', cuInvoiceNumber }
-    }
-
-    // The device answered and named no invoice: it holds no record of
-    // this TraderSystemInvNum, so the original rejection is genuine.
-    if (recovery.success) {
-      if (this.debugLogging) {
-        console.log(
-          `[ETIMS] Sale ${localId}: ReadCUinvoiceNumber found no record of this sale — the ` +
-            'OpenInvoice rejection is genuine: no cuInvoiceNumber in response'
-        )
-      }
-      return { outcome: 'genuine-failure' }
-    }
-
-    // Both the original OpenInvoice rejection and this recovery read were
-    // refused by the SAME named condition (STE1=59, "missing daily
-    // closure" — docs/phase-162), regardless of `defVer`/`support`. This
-    // files nothing; it only lets the sale keep waiting. The duplicate
-    // check still runs on the next attempt, at OpenInvoice, once the
-    // device answers again — nothing here resends SellPLU/CloseReceipt,
-    // and a device refusing every command outright cannot have filed
-    // anything in the same breath (docs/phase-162-1's Step 0b). Checked
-    // ahead of the `support`/`deviceNeverSawIt` fail-safe below so an
-    // unrecognized `defVer` no longer turns this specific, unambiguous
-    // condition into a false `'unverifiable'` flag (docs/phase-162-1,
-    // Test A, Case B) — every other combination (a different original
-    // error, a different recovery failure, or only one side blocked)
-    // falls through to that fail-safe exactly as before.
-    if (openResult.code === CODE_DAILY_CLOSURE_BLOCK && recovery.code === CODE_DAILY_CLOSURE_BLOCK) {
-      return { outcome: 'genuine-failure' }
-    }
-
-    // The command itself failed. On `'available'` that is a known-new
-    // server having a bad moment, routed exactly as it has always been.
-    // On `'unknown'` it may equally be an old-defs server rejecting a
-    // command it does not declare — indistinguishable from here, so it
-    // fails safe.
-    if (support === 'available' || deviceNeverSawIt) {
-      if (this.debugLogging) {
-        console.log(
-          `[ETIMS] Sale ${localId}: ReadCUinvoiceNumber failed — routing the original ` +
-            `OpenInvoice rejection normally: ${recovery.error}`
-        )
-      }
-      return { outcome: 'genuine-failure' }
-    }
-    return { outcome: 'unverifiable', reason: recovery.error ?? 'ReadCUinvoiceNumber failed' }
   }
 
   /** Sends the argument-free `ReadCUinvoiceNumber` command. */

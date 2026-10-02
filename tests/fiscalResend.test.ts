@@ -14,7 +14,7 @@ import type { AxiosInstance } from 'axios'
 import { RubisDatabase } from '../src/main/services/database.js'
 import { hashPin } from '../src/main/services/auth.js'
 import { resendFiscalization, correctPinAndResend, buildFiscalResendResult } from '../src/main/services/fiscal-retry.js'
-import { RealFiscalizationProvider } from '../src/main/services/integrations/real-etims-provider.js'
+import { RealFiscalizationProvider, UNVERIFIABLE_RETRY_REASON } from '../src/main/services/integrations/real-etims-provider.js'
 import type { FiscalInvoiceRequest } from '../src/main/services/integrations/etims.js'
 import type { CartItem } from '../src/renderer/src/types/shopify.js'
 
@@ -219,7 +219,15 @@ describe('resendFiscalization', () => {
     expect(outcome.ok && outcome.data.invoiceNumber).toBe('KRA-ALREADY')
   })
 
-  it('resend goes through Part B recovery: OpenInvoice rejected, device reports already filed → fiscalized without a second filing', async () => {
+  /**
+   * REWRITTEN (docs/phase-208).
+   * OLD: a resent sale whose OpenInvoice was refused asked ReadCUinvoiceNumber and, when the
+   * device named a number, was recorded as fiscalized with that number and no second filing.
+   * NEW: ReadCUinvoiceNumber is never sent (it names no sale, so its answer can be another
+   * till's, or the zero counter); the refusal is final, so the sale is flagged for a person,
+   * nothing is recorded as filed, and no SellPLU or CloseReceipt is sent.
+   */
+  it('resend never recovers from ReadCUinvoiceNumber: a final OpenInvoice refusal is flagged, not recorded as filed', async () => {
     const db = freshDb()
     const staffId = seedStaff(db)
     const { localId } = seedOrderWithStoredRequest(db, staffId, { clientOrderUuid: 'uuid-resend-recovery' })
@@ -251,12 +259,15 @@ describe('resendFiscalization', () => {
 
     const outcome = await resendFiscalization({ db, fiscalizationProvider: provider }, localId)
 
-    expect(outcome.ok).toBe(true)
-    expect(outcome.ok && outcome.data.invoiceNumber).toBe('0000000005555555')
+    expect(outcome.ok).toBe(false)
+    expect(!outcome.ok && outcome.reason).toBe(UNVERIFIABLE_RETRY_REASON)
     const commandsSent = post.mock.calls.map((c) => /<Command Name="([^"]+)"/.exec(String(c[1]))?.[1])
+    expect(commandsSent).not.toContain('ReadCUinvoiceNumber')
     expect(commandsSent).not.toContain('SellPLUfromExtDB')
     expect(commandsSent).not.toContain('CloseReceipt')
-    expect(db.getOrder(localId)?.fiscal_status).toBe('fiscalized')
+    const order = db.getOrder(localId)
+    expect(order?.fiscal_status).toBe('needs_fixing')
+    expect(order?.fiscal_invoice_number).toBeNull()
   })
 
   it('resend of a still-failing (retryable/technical) order re-queues it rather than losing it (Rule 3)', async () => {

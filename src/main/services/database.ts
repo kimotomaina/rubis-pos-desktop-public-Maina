@@ -15,6 +15,7 @@
 
 import type { VatReconcileOrderRow } from './vat-reconcile.js'
 import { SHIFT_TYPES, type ShiftType } from '../lib/shiftWindows.js'
+import { UNVERIFIABLE_RETRY_REASON } from './integrations/real-etims-provider.js'
 import BetterSqlite3 from 'better-sqlite3'
 import type { Database as SqliteConnection } from 'better-sqlite3'
 import type { Discount, OfflineOrderPayload } from './shopify-types.js'
@@ -1883,6 +1884,7 @@ export class RubisDatabase {
    * @param {string} [fiscalizedAt] see {@link setOrderFiscalInfo}
    * @param {'device' | 'local-fallback'} [fiscalizedAtSource] see {@link setOrderFiscalInfo}
    * @param {string} [cuSerial] see {@link setOrderFiscalInfo}
+   * @returns {boolean} `false` when the number was refused because another order holds it (docs/phase-208): the sale is then `needs_fixing` and its fiscal row is deleted.
    */
   markFiscalQueueItemSynced(
     queueId: number,
@@ -1892,14 +1894,14 @@ export class RubisDatabase {
     fiscalizedAt?: string,
     fiscalizedAtSource?: 'device' | 'local-fallback',
     cuSerial?: string
-  ): void {
+  ): boolean {
     const row = this.conn
       .prepare('SELECT entity_id FROM sync_queue WHERE id = ?')
       .get(queueId) as { entity_id: number } | undefined
-    if (!row) return
+    if (!row) return true
 
-    const settle = this.conn.transaction(() => {
-      this.setOrderFiscalInfo(
+    const settle = this.conn.transaction((): boolean => {
+      const stored = this.setOrderFiscalInfo(
         row.entity_id,
         invoiceNumber,
         qrCode,
@@ -1908,9 +1910,13 @@ export class RubisDatabase {
         fiscalizedAtSource,
         cuSerial
       )
+      if (!stored) {
+        this.setOrderFiscalFailure(row.entity_id, 'needs_fixing', UNVERIFIABLE_RETRY_REASON, 'system')
+      }
       this.conn.prepare('DELETE FROM sync_queue WHERE id = ?').run(queueId)
+      return stored
     })
-    settle()
+    return settle()
   }
 
   /**
@@ -1973,10 +1979,11 @@ export class RubisDatabase {
    * @param {number} localId
    * @param {number} fiscalQueueId
    * @param {FiscalInvoiceResult} invoice
+   * @returns {boolean} `false` when the number was refused because another order holds it (docs/phase-208): the sale is then `needs_fixing` and its fiscal row is deleted.
    */
-  settleCheckoutFiscalSuccess(localId: number, fiscalQueueId: number, invoice: FiscalInvoiceResult): void {
-    const settle = this.conn.transaction(() => {
-      this.setOrderFiscalInfo(
+  settleCheckoutFiscalSuccess(localId: number, fiscalQueueId: number, invoice: FiscalInvoiceResult): boolean {
+    const settle = this.conn.transaction((): boolean => {
+      const stored = this.setOrderFiscalInfo(
         localId,
         invoice.invoiceNumber,
         invoice.qrCode,
@@ -1985,9 +1992,13 @@ export class RubisDatabase {
         invoice.fiscalizedAtSource,
         invoice.cuSerialNumber
       )
+      if (!stored) {
+        this.setOrderFiscalFailure(localId, 'needs_fixing', UNVERIFIABLE_RETRY_REASON, 'system')
+      }
       this.removeFiscalQueueItem(fiscalQueueId)
+      return stored
     })
-    settle()
+    return settle()
   }
 
   /**
@@ -2313,6 +2324,7 @@ export class RubisDatabase {
    * @param {string} [fiscalizedAt] the control unit's own date/time stamp, verbatim — falls back to `new Date().toISOString()` when absent
    * @param {'device' | 'local-fallback'} [fiscalizedAtSource]
    * @param {string} [cuSerial] the control unit's serial number
+   * @returns {boolean} `false`, with nothing written, when another order already holds `invoiceNumber` (docs/phase-208): a CU number belongs to one sale, so a repeat means the number is not this sale's. The caller routes the sale to `needs_fixing`.
    */
   setOrderFiscalInfo(
     localId: number,
@@ -2322,7 +2334,13 @@ export class RubisDatabase {
     fiscalizedAt?: string,
     fiscalizedAtSource?: 'device' | 'local-fallback',
     cuSerial?: string
-  ): void {
+  ): boolean {
+    if (invoiceNumber) {
+      const holder = this.conn
+        .prepare('SELECT local_id FROM orders WHERE fiscal_invoice_number = ? AND local_id <> ? LIMIT 1')
+        .get(invoiceNumber, localId) as { local_id: number } | undefined
+      if (holder) return false
+    }
     this.conn
       .prepare(
         `UPDATE orders SET fiscal_invoice_number = COALESCE(fiscal_invoice_number, ?),
@@ -2343,6 +2361,7 @@ export class RubisDatabase {
         cuSerial ?? null,
         localId
       )
+    return true
   }
 
   /**

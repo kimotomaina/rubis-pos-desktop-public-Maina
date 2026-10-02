@@ -425,3 +425,7 @@ described, just not closed by this server-side check specifically. A
 correctly-behaving renderer (the actual, non-adversarial case this app
 runs today) cannot reach this at all, since `fiscalModeStore.ts` already
 hides the control.
+
+## Duplicate-recovery support helpers are unused (phase 208)
+
+`resolveDuplicateRecoverySupport` and `DuplicateRecoverySupport` in `http-client.ts` have no caller in `src/` since phase 208 removed the `ReadCUinvoiceNumber` recovery, and no test references them either. They are left in place for a later cleanup; phase 208 did not need to touch them.
