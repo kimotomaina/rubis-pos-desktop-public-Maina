@@ -88,6 +88,7 @@ export default function ZReportModal({ report, onClose }: ZReportModalProps) {
         <div className="p-4 text-base">
           <div className="mb-3 space-y-1 text-slate-600">
             <p>Shift #{report.shiftId}</p>
+            {report.shiftWindowLabel && <p>{report.shiftWindowLabel}</p>}
             <p>Opened: {new Date(report.openedAt).toLocaleString()}</p>
             <p>
               Closed:{' '}

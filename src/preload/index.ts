@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import type { VatMismatchRow } from '../main/services/vat-reconcile.js'
+import type { ShiftType } from '../main/lib/shiftWindows.js'
 import { electronAPI } from '@electron-toolkit/preload'
 import type { ServiceResult } from '../main/services/shopify-types.js'
 import type { CartItem, CartRemovalRequest, ProductSummary } from '../renderer/src/types/shopify.js'
@@ -496,13 +497,15 @@ const api = {
    *
    * @param {number} staffId
    * @param {number} startingCash
+   * @param {ShiftType} [shiftType] — day or night, as chosen at the till (docs/phase-199)
    * @returns {Promise<ServiceResult<{ shiftId: number }>>}
    */
   openShift: (
     staffId: number,
-    startingCash: number
+    startingCash: number,
+    shiftType?: ShiftType
   ): Promise<ServiceResult<{ shiftId: number }>> =>
-    ipcRenderer.invoke('shifts:open', { staffId, startingCash }),
+    ipcRenderer.invoke('shifts:open', { staffId, startingCash, shiftType }),
 
   /**
    * Closes the open till shift, reconciling counted cash.

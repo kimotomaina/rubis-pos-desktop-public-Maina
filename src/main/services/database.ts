@@ -14,6 +14,7 @@
  */
 
 import type { VatReconcileOrderRow } from './vat-reconcile.js'
+import { SHIFT_TYPES, type ShiftType } from '../lib/shiftWindows.js'
 import BetterSqlite3 from 'better-sqlite3'
 import type { Database as SqliteConnection } from 'better-sqlite3'
 import type { Discount, OfflineOrderPayload } from './shopify-types.js'
@@ -260,6 +261,8 @@ export interface ShiftRow {
   ending_cash: number | null
   discrepancy: number | null
   status: ShiftStatus
+  /** Day or night, as chosen when the shift was opened (docs/phase-199); `NULL` on a shift opened before then. */
+  shift_type?: ShiftType | null
 }
 
 /** Row shape of the `sync_queue` table. */
@@ -589,6 +592,19 @@ function migrateOrdersReceiptColumns(connection: SqliteConnection): void {
 }
 
 /**
+ * Adds `shift_type` (docs/phase-199) to a pre-existing `shifts` table. Nullable
+ * with no default and no backfill, so an older shift keeps `NULL` and displays
+ * as it did; same idempotent `ALTER TABLE` pattern as the migrations around it.
+ */
+function migrateShiftsColumns(connection: SqliteConnection): void {
+  try {
+    connection.exec("ALTER TABLE shifts ADD COLUMN shift_type TEXT CHECK (shift_type IN ('day', 'night'))")
+  } catch {
+    // Column already exists — table was created with the current schema.
+  }
+}
+
+/**
  * Adds the product tax-classification columns (docs/phase-194) to a
  * pre-existing `products` table, so the offline catalogue keeps a
  * product's class instead of turning every exempt item into class A.
@@ -756,7 +772,8 @@ export const SCHEMA = {
     expected_cash REAL,
     ending_cash REAL,
     discrepancy REAL,
-    status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'closed'))
+    status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'closed')),
+    shift_type TEXT CHECK (shift_type IN ('day', 'night'))
   )`,
   integrations: `CREATE TABLE IF NOT EXISTS integrations (
     provider TEXT PRIMARY KEY,
@@ -1489,6 +1506,7 @@ export class RubisDatabase {
     connection.exec(SCHEMA.settings)
     connection.exec(SCHEMA.staff)
     connection.exec(SCHEMA.shifts)
+    migrateShiftsColumns(connection)
     connection.exec(SCHEMA.integrations)
     connection.exec(SCHEMA.printers)
     migratePrintersColumns(connection)
@@ -3064,18 +3082,35 @@ export class RubisDatabase {
    *
    * @param {number} staffId — the staff member opening the shift
    * @param {number} startingCash
+   * @param {ShiftType | null} [shiftType] — day or night as chosen at the till (docs/phase-199); omitted stores `NULL`
    * @returns {{ shiftId: number }}
-   * @throws if a shift is already open
+   * @throws if a shift is already open, or `shiftType` is not a known shift
    */
-  openShift(staffId: number, startingCash: number): { shiftId: number } {
+  openShift(
+    staffId: number,
+    startingCash: number,
+    shiftType: ShiftType | null = null
+  ): { shiftId: number } {
+    if (shiftType !== null && !SHIFT_TYPES.includes(shiftType)) {
+      throw new Error(`Unknown shift type: ${String(shiftType)}`)
+    }
     if (this.getOpenShift()) {
       throw new Error('A shift is already open')
     }
-    const info = this.conn
-      .prepare(
-        "INSERT INTO shifts (staff_id, clock_in, starting_cash, status) VALUES (?, ?, ?, 'open')"
-      )
-      .run(staffId, new Date().toISOString(), startingCash)
+    const opened = new Date().toISOString()
+    // A call that names no shift keeps the original statement as it was, so it behaves exactly as before.
+    const info =
+      shiftType === null
+        ? this.conn
+            .prepare(
+              "INSERT INTO shifts (staff_id, clock_in, starting_cash, status) VALUES (?, ?, ?, 'open')"
+            )
+            .run(staffId, opened, startingCash)
+        : this.conn
+            .prepare(
+              "INSERT INTO shifts (staff_id, clock_in, starting_cash, status, shift_type) VALUES (?, ?, ?, 'open', ?)"
+            )
+            .run(staffId, opened, startingCash, shiftType)
     return { shiftId: Number(info.lastInsertRowid) }
   }
 

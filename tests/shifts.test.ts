@@ -277,3 +277,59 @@ describe('recording orders against an open shift', () => {
     expect(insert.params[insert.params.length - 1]).toBe(7)
   })
 })
+
+describe('RubisDatabase shift type (docs/phase-199)', () => {
+  it.each(['day', 'night'] as const)('openShift persists shift_type %s', (shiftType) => {
+    const { fake, db } = freshDb()
+    fake.queueRunResult('INSERT INTO shifts', { lastInsertRowid: 8 })
+
+    const result = db.openShift(1, 100, shiftType)
+
+    expect(result).toEqual({ shiftId: 8 })
+    const [insert] = fake.callsFor('run', 'INSERT INTO shifts')
+    expect(insert.sql).toContain('shift_type')
+    expect(insert.params).toEqual([1, expect.any(String), 100, shiftType])
+  })
+
+  it('a call that names no shift keeps the original INSERT, with no shift_type in it', () => {
+    const { fake, db } = freshDb()
+
+    db.openShift(1, 100)
+
+    const [insert] = fake.callsFor('run', 'INSERT INTO shifts')
+    expect(insert.sql).not.toContain('shift_type')
+    expect(insert.params).toEqual([1, expect.any(String), 100])
+  })
+
+  it('rejects a shift type that is not day or night, and writes nothing', () => {
+    const { fake, db } = freshDb()
+
+    expect(() => db.openShift(1, 100, 'evening' as never)).toThrow(/unknown shift type/i)
+    expect(() => db.openShift(1, 100, '' as never)).toThrow(/unknown shift type/i)
+
+    expect(fake.callsFor('run', 'INSERT INTO shifts')).toHaveLength(0)
+  })
+
+  it('reads back a shift row whose shift_type is NULL, and one that has a value', () => {
+    const { fake, db } = freshDb()
+    fake.queueGetResult('FROM shifts WHERE id', { ...openShiftRow, shift_type: null })
+    fake.queueGetResult('FROM shifts WHERE id', { ...openShiftRow, shift_type: 'night' })
+    fake.queueGetResult('FROM shifts WHERE id', openShiftRow)
+
+    expect(db.getShiftById(1)?.shift_type).toBeNull()
+    expect(db.getShiftById(1)?.shift_type).toBe('night')
+    expect(db.getShiftById(1)).toEqual(openShiftRow)
+  })
+
+  it('adds the column to a table made before it, and to a new one, as nullable with a day/night check', () => {
+    const { fake } = freshDb()
+
+    const statements = fake.connection.exec.mock.calls.map((call) => String(call[0]))
+    const created = statements.find((sql) => sql.includes('CREATE TABLE IF NOT EXISTS shifts'))
+    const altered = statements.find((sql) => sql.includes('ALTER TABLE shifts ADD COLUMN shift_type'))
+
+    expect(created).toContain("shift_type TEXT CHECK (shift_type IN ('day', 'night'))")
+    expect(altered).toContain("shift_type TEXT CHECK (shift_type IN ('day', 'night'))")
+    expect(altered).not.toMatch(/NOT NULL|DEFAULT/i)
+  })
+})

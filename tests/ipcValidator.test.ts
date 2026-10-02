@@ -8,6 +8,8 @@
  */
 
 import { describe, it, expect } from 'vitest'
+import { shiftOpenSchema, shiftCloseSchema } from '../src/main/lib/ipcValidator.js'
+import { SHIFT_TYPES } from '../src/main/lib/shiftWindows.js'
 import {
   validate,
   checkoutRequestSchema,
@@ -1043,5 +1045,84 @@ describe('approveDayReportSchema', () => {
   it('accepts an optional note, capped at 500 characters', () => {
     expect(validate(approveDayReportSchema, { ...review, note: 'checked' }).success).toBe(true)
     expect(validate(approveDayReportSchema, { ...review, note: 'x'.repeat(501) }).success).toBe(false)
+  })
+})
+
+describe('shifts:open and shifts:close schemas (docs/phase-199)', () => {
+  /**
+   * Every call the renderer's preload can make today, plus the shape older
+   * builds sent. Each was accepted before the schemas existed and must be
+   * accepted still, with the figures passed through unchanged.
+   */
+  const acceptedOpen = [
+    { staffId: 1, startingCash: 100 },
+    { staffId: 1, startingCash: 100, shiftType: 'day' },
+    { staffId: 2, startingCash: 100.5, shiftType: 'night' },
+    { staffId: 1, startingCash: 0 },
+    { staffId: 1, startingCash: 0.01 },
+    { staffId: 1, startingCash: 1234567.89 },
+    { staffId: 1, startingCash: 100, shiftType: undefined },
+    { staffId: 1, startingCash: 100, shiftType: null }
+  ]
+
+  const acceptedClose = [
+    { shiftId: 1, endingCash: 950 },
+    { shiftId: 12, endingCash: 0 },
+    { shiftId: 3, endingCash: 1234.56 },
+    { shiftId: 3, endingCash: 0.01 }
+  ]
+
+  it.each(acceptedOpen)('still accepts the open payload %j, unchanged', (payload) => {
+    const result = validate(shiftOpenSchema, payload)
+
+    expect(result.success).toBe(true)
+    if (result.success) {
+      expect(result.data.staffId).toBe(payload.staffId)
+      expect(result.data.startingCash).toBe(payload.startingCash)
+    }
+  })
+
+  it.each(acceptedClose)('still accepts the close payload %j, unchanged', (payload) => {
+    const result = validate(shiftCloseSchema, payload)
+
+    expect(result.success).toBe(true)
+    if (result.success) {
+      expect(result.data).toEqual(payload)
+    }
+  })
+
+  it('still accepts a negative cash figure, which the handlers accepted before', () => {
+    expect(validate(shiftOpenSchema, { staffId: 1, startingCash: -5 }).success).toBe(true)
+    expect(validate(shiftCloseSchema, { shiftId: 1, endingCash: -5 }).success).toBe(true)
+  })
+
+  it('accepts exactly the shift types the database accepts, and no others', () => {
+    for (const shiftType of SHIFT_TYPES) {
+      expect(validate(shiftOpenSchema, { staffId: 1, startingCash: 0, shiftType }).success).toBe(true)
+    }
+    for (const shiftType of ['evening', 'Day', 'NIGHT', '', 1, true]) {
+      expect(validate(shiftOpenSchema, { staffId: 1, startingCash: 0, shiftType }).success).toBe(false)
+    }
+  })
+
+  it('refuses the cash figures that used to become a silent 0 or pass through as text', () => {
+    for (const endingCash of ['950', 'abc', '', NaN, Infinity, -Infinity, null, undefined, {}, []]) {
+      expect(validate(shiftCloseSchema, { shiftId: 1, endingCash }).success).toBe(false)
+    }
+    for (const startingCash of ['100', 'abc', '', NaN, Infinity, null, undefined, {}]) {
+      expect(validate(shiftOpenSchema, { staffId: 1, startingCash }).success).toBe(false)
+    }
+  })
+
+  it('refuses a missing or malformed id, and a missing or non-object request', () => {
+    expect(validate(shiftOpenSchema, { startingCash: 100 }).success).toBe(false)
+    expect(validate(shiftOpenSchema, { staffId: '1', startingCash: 100 }).success).toBe(false)
+    expect(validate(shiftOpenSchema, { staffId: 1.5, startingCash: 100 }).success).toBe(false)
+    expect(validate(shiftCloseSchema, { endingCash: 100 }).success).toBe(false)
+    expect(validate(shiftCloseSchema, { shiftId: 1.5, endingCash: 100 }).success).toBe(false)
+    for (const request of [undefined, null, 5, 'x', []]) {
+      expect(validate(shiftOpenSchema, request).success).toBe(false)
+      expect(validate(shiftCloseSchema, request).success).toBe(false)
+    }
   })
 })

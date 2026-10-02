@@ -10,6 +10,7 @@
  */
 
 import type { VatMismatchRow } from '../main/services/vat-reconcile.js'
+import type { ShiftType } from '../main/lib/shiftWindows.js'
 import type { ServiceResult } from '../main/services/shopify-types.js'
 import type { FiscalConnectionTestResult } from '../main/services/integrations/fiscal-connection-test.js'
 import type { CartItem, CartRemovalRequest, ProductSummary } from '../renderer/src/types/shopify.js'
@@ -188,8 +189,12 @@ export interface PosApi {
   ) => Promise<ServiceResult<void>>
   /** Reads the currently open till shift, if any. */
   getCurrentShift: () => Promise<ServiceResult<ShiftRow | null>>
-  /** Opens a new store-wide till shift with a starting cash float. */
-  openShift: (staffId: number, startingCash: number) => Promise<ServiceResult<{ shiftId: number }>>
+  /** Opens a new store-wide till shift with a starting cash float, day or night (docs/phase-199). */
+  openShift: (
+    staffId: number,
+    startingCash: number,
+    shiftType?: ShiftType
+  ) => Promise<ServiceResult<{ shiftId: number }>>
   /** Closes the open till shift, reconciling counted cash. */
   closeShift: (
     shiftId: number,

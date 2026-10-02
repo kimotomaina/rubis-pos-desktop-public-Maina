@@ -470,6 +470,9 @@ export function renderZReport(
   client.println('Z-REPORT')
   client.bold(false)
   client.println(`Shift #${report.shiftId}`)
+  if (report.shiftWindowLabel) {
+    client.println(report.shiftWindowLabel)
+  }
   client.println(`Opened: ${new Date(report.openedAt).toLocaleString()}`)
   client.println(
     `Closed: ${report.closedAt ? new Date(report.closedAt).toLocaleString() : 'In progress'}`

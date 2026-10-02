@@ -5,6 +5,15 @@ import { useShopifyReconciliationStore } from '../stores/shopifyReconciliationSt
 import { countActionableFindings } from '../lib/shopifyReconciliation.js'
 import { formatCurrency } from '../lib/currency.js'
 import { titleCaseName } from '../lib/text.js'
+import {
+  SHIFT_TYPES,
+  isPastShiftEnd,
+  shiftEndClock,
+  shiftName,
+  shiftTypeForTime,
+  shiftWindowLabel,
+  type ShiftType
+} from '../lib/shiftWindows.js'
 import EmptyState from './EmptyState.js'
 import ZReportModal from './ZReportModal.js'
 import LocationPicker, { type ShopifyLocationOption } from './LocationPicker.js'
@@ -50,6 +59,26 @@ import { MPESA_SMS_PARSER_READY } from '../lib/mpesaConfig.js'
 import type { FiscalConnectionTestResult } from '../../../main/services/integrations/fiscal-connection-test.js'
 import type { UpdateStatus } from '../../../main/services/updater.js'
 import type { LastUpdateResult } from '../../../main/services/updateBackup.js'
+
+/**
+ * The open shift's nominal window, with a plain note once it has run past the
+ * window's end (docs/phase-199). A note only: it never blocks the close, warns,
+ * or closes anything. Read once per render, so it appears the next time the
+ * screen refreshes after the window ends.
+ */
+function ShiftWindowNote({ shiftType, openedAt }: { shiftType: ShiftType; openedAt: string }) {
+  const pastEnd = isPastShiftEnd(shiftType, openedAt, new Date().toISOString())
+  return (
+    <p className="mb-3 text-base text-slate-600">
+      {shiftWindowLabel(shiftType)}
+      {pastEnd && (
+        <span className="ml-2 font-medium text-amber-700">
+          {shiftName(shiftType)}, due to close at {shiftEndClock(shiftType)}
+        </span>
+      )}
+    </p>
+  )
+}
 
 /**
  * Phase 178: the App & Updates panel's status-derived result text — null
@@ -231,6 +260,7 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
   const [startingCashInput, setStartingCashInput] = useState('')
   const [endingCashInput, setEndingCashInput] = useState('')
   const [showOpenForm, setShowOpenForm] = useState(false)
+  const [selectedShiftType, setSelectedShiftType] = useState<ShiftType>('day')
   const [showCloseForm, setShowCloseForm] = useState(false)
   const [shiftActionError, setShiftActionError] = useState<string | null>(null)
   const [zReport, setZReport] = useState<ZReport | null>(null)
@@ -1053,7 +1083,7 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
       setShiftActionError('Enter a valid starting cash amount')
       return
     }
-    const result = await window.api.openShift(currentStaff.id, startingCash)
+    const result = await window.api.openShift(currentStaff.id, startingCash, selectedShiftType)
     if (!result.success) {
       setShiftActionError(result.error ?? 'Failed to open shift')
       return
@@ -1061,6 +1091,12 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
     setStartingCashInput('')
     setShowOpenForm(false)
     await refresh()
+  }
+
+  /** Opens the form with the shift that matches the time now preselected; the operator can still change it (docs/phase-199). */
+  const handleShowOpenForm = () => {
+    setSelectedShiftType(shiftTypeForTime(new Date().toISOString()))
+    setShowOpenForm(true)
   }
 
   const handleCloseShift = async () => {
@@ -2210,6 +2246,10 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
           </p>
         )}
 
+        {currentShift?.shift_type && (
+          <ShiftWindowNote shiftType={currentShift.shift_type} openedAt={currentShift.clock_in} />
+        )}
+
         {shiftActionError && (
           <p className="mb-3 rounded-lg bg-rose-50 px-3 py-2 text-base font-medium text-rose-700">
             {shiftActionError}
@@ -2219,11 +2259,32 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
         {!currentShift && !showOpenForm && (
           <button
             type="button"
-            onClick={() => setShowOpenForm(true)}
+            onClick={handleShowOpenForm}
             className="rounded-lg bg-rose-600 px-4 py-2 text-base font-semibold text-white hover:bg-rose-700"
           >
             Open Shift
           </button>
+        )}
+
+        {!currentShift && showOpenForm && (
+          <div role="radiogroup" aria-label="Shift" className="mb-3 flex flex-wrap gap-2">
+            {SHIFT_TYPES.map((type) => (
+              <button
+                key={type}
+                type="button"
+                role="radio"
+                aria-checked={selectedShiftType === type}
+                onClick={() => setSelectedShiftType(type)}
+                className={`rounded-lg border px-4 py-2 text-base font-medium ${
+                  selectedShiftType === type
+                    ? 'border-rose-500 bg-rose-50 text-rose-700'
+                    : 'border-slate-300 text-slate-600 hover:bg-slate-50'
+                }`}
+              >
+                {shiftWindowLabel(type)}
+              </button>
+            ))}
+          </div>
         )}
 
         {!currentShift && showOpenForm && (

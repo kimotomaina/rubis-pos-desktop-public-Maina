@@ -175,6 +175,8 @@ import {
   zReportRequestSchema,
   receiptPrintRequestSchema,
   shiftsListSchema,
+  shiftOpenSchema,
+  shiftCloseSchema,
   salesSummarySchema,
   fiscalByDaySchema,
   invoiceListSchema,
@@ -3271,12 +3273,14 @@ app.whenReady().then(async () => {
    */
   ipcMain.handle(
     'shifts:open',
-    (
-      _event,
-      request: { staffId: number; startingCash: number }
-    ): ServiceResult<{ shiftId: number }> => {
+    (_event, request: unknown): ServiceResult<{ shiftId: number }> => {
+      const validation = validate(shiftOpenSchema, request)
+      if (!validation.success) {
+        return { success: false, error: validation.error }
+      }
       try {
-        const data = db.openShift(request?.staffId, Number(request?.startingCash) || 0)
+        const { staffId, startingCash, shiftType } = validation.data
+        const data = db.openShift(staffId, startingCash, shiftType ?? null)
         return { success: true, data }
       } catch (err) {
         return {
@@ -3293,12 +3297,13 @@ app.whenReady().then(async () => {
    */
   ipcMain.handle(
     'shifts:close',
-    (
-      _event,
-      request: { shiftId: number; endingCash: number }
-    ): ServiceResult<{ expectedCash: number; discrepancy: number }> => {
+    (_event, request: unknown): ServiceResult<{ expectedCash: number; discrepancy: number }> => {
+      const validation = validate(shiftCloseSchema, request)
+      if (!validation.success) {
+        return { success: false, error: validation.error }
+      }
       try {
-        const data = db.closeShift(request?.shiftId, Number(request?.endingCash) || 0)
+        const data = db.closeShift(validation.data.shiftId, validation.data.endingCash)
         return { success: true, data }
       } catch (err) {
         return {

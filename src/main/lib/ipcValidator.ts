@@ -453,6 +453,29 @@ export const zReportRequestSchema = z.object({
 })
 
 /**
+ * `shifts:open` request payload (docs/phase-199). The handler used to read
+ * `request?.staffId` and `request?.startingCash` straight off the request
+ * (docs/phase-157 Part 3). `shiftType` is optional so a caller that names no
+ * shift still opens one, stored as `NULL`.
+ */
+export const shiftOpenSchema = z.object({
+  staffId: z.number().int(),
+  startingCash: z.number().finite(),
+  shiftType: z.enum(['day', 'night']).nullish()
+})
+
+/**
+ * `shifts:close` request payload (docs/phase-199). `endingCash` feeds the
+ * expected-cash and discrepancy figures on a signed Z report, so a string or
+ * `NaN` must fail here rather than become a silent `0` through
+ * `Number(...) || 0`, which is what the handler did before.
+ */
+export const shiftCloseSchema = z.object({
+  shiftId: z.number().int(),
+  endingCash: z.number().finite()
+})
+
+/**
  * One of the fixed Nairobi-local date-range presets a Reports screen
  * offers as a button (docs/phase-158) — never free text, so there is no
  * date string to parse or validate at this boundary.

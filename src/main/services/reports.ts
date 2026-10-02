@@ -11,6 +11,7 @@ import type { RubisDatabase, PaymentMethod, OrderRow, MpesaPaymentRow, OrderStat
 import type { FiscalVatGroupAmounts } from './integrations/etims.js'
 import type { Logger } from './logger.js'
 import { buildTraderSystemInvNum } from '../lib/traderSystemInvoiceNumber.js'
+import { shiftWindowLabel, type ShiftType } from '../lib/shiftWindows.js'
 import {
   compareVatGroups,
   expectedGroupTotals,
@@ -61,6 +62,10 @@ export interface ZReport {
   expectedCash: number
   endingCash: number | null
   discrepancy: number | null
+  /** Which shift was opened, when it was recorded (docs/phase-199); absent on a shift opened before then. */
+  shiftType?: ShiftType | null
+  /** The nominal window of {@link shiftType}, e.g. `Day shift (09:00 to 17:30)`; absent with it. */
+  shiftWindowLabel?: string | null
 }
 
 /** Aggregate sales for a calendar day, independent of shift boundaries. */
@@ -277,7 +282,9 @@ export function generateZReport(
     vatRate: taxRate,
     expectedCash,
     endingCash: shift.ending_cash,
-    discrepancy: shift.discrepancy
+    discrepancy: shift.discrepancy,
+    shiftType: shift.shift_type ?? null,
+    shiftWindowLabel: shift.shift_type ? shiftWindowLabel(shift.shift_type) : null
   }
 }
 
@@ -349,7 +356,7 @@ export function getLocalDayRange(localDay: string): { startIso: string; endIso: 
  * @param {string} iso
  * @returns {Date}
  */
-function toNairobiWallClock(iso: string): Date {
+export function toNairobiWallClock(iso: string): Date {
   return new Date(new Date(iso).getTime() + NAIROBI_UTC_OFFSET_MINUTES * 60 * 1000)
 }
 
