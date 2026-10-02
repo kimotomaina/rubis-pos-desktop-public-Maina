@@ -6,13 +6,14 @@
 - **Branch / commits:** staging, not pushed by me.
 
 ```
+b913076 Phase 198-2: fiscal slip start and end markers; staff names in title case
 19cefba chore: bump version to 2.1.6
 7ae9207 Phase 198-1: net fallback VAT table, device VAT reconcile, resend print, customer slip stamp
 4d47669 feat(pos): print the Enjoy customer slip after the KRA fiscal slip; store the trader invoice number (phase 198)
 28dfe67 feat(pos): flush the cart draft on a clean quit; delete the unrendered CartLineItem; restore toast wording (phase 197-1)
 ```
 
-2.1.6 therefore carries phases 197-1, 198 and 198-1 on top of 2.1.5. (2.1.5 was built but never published, so this is the first release with phases 197 to 198-1.)
+2.1.6 therefore carries phases 197-1, 198, 198-1 and 198-2 on top of 2.1.5 (198-2 was added after the first build; see section 9). (2.1.5 was built but never published, so this is the first release with phases 197 to 198-1.)
 
 ## 1. Phase 198-1 close-out
 
@@ -24,7 +25,7 @@
 
 - `npm run dist` (typecheck, build with the no-mock check, electron-builder): exit 0, and `verify-dist` confirmed the bundled `.env`.
 - Files in `release/`: `RUBIS POS Setup 2.1.6.exe` (121,544,219 bytes), its `.blockmap`, `RUBIS POS 2.1.6.exe` (portable, 121,321,461 bytes), `latest.yml` (version 2.1.6, path `RUBIS-POS-Setup-2.1.6.exe`).
-- Setup SHA-256: `74AEFE9626445DBC465415C8DF8B7760FA3284E3E468E74DEC0FCD0617375C22`.
+- Setup SHA-256 of the first build: `74AEFE9626445DBC465415C8DF8B7760FA3284E3E468E74DEC0FCD0617375C22`. **Superseded by the rebuild in section 9**, which is the build to publish.
 - Contents check on the installed `app.asar`: the Enjoy slip heading, `fiscal:vat-mismatches`, the "Device figures. Till VAT" line, `customer_slip_printed_at` and the customer-slip toast are present; `KRA-MOCK-`, `MockFiscalizationProvider` and the test banner text are absent.
 
 ## 3. Install over the top on the dev PC
@@ -83,3 +84,13 @@ The same flow was run against the built app with the mock printer (phases 198 an
 
 - To go back on the dev PC, install `RUBIS POS Setup 2.1.4.exe` (or 2.1.5) over the top; never uninstall. The 2.1.6 database changes are additive columns and one table, which older builds ignore.
 - Nothing has been published, so there is nothing to withdraw on GitHub. `git revert` the three phase commits and the bump to take the code back.
+
+## 9. Rebuild after phase 198-2 (the build to publish)
+
+Phase 198-2 (the fiscal slip start and end markers, title-case staff names; `docs/phase-198-2.md`) was committed after the first 2.1.6 build and install, so I rebuilt 2.1.6 from `b913076` (same version number, still unpublished) and reinstalled it.
+
+- **Build:** `npm run dist` exit 0, `verify-dist` confirmed the bundled `.env`. `RUBIS POS Setup 2.1.6.exe` is 121,544,395 bytes, SHA-256 `5DABA922A467F9DD8EA08789525DCFC39A08FCA955C5C712203D98FEC37311D5`; `latest.yml` sha512 `2xvpW0FclM4oURyAcFQKNOewB/ZAk/lbSDt/5maKVHjaT+DtFNW3oEnzz//StLI4f9UKdSOJmbF7B7Lrx9IEOg==`. The first build's files in `release/` were overwritten.
+- **Install over the top, again:** closed the running app gracefully (0 processes within six seconds), ran the installer with `/S` (exit 0, 14 seconds), relaunched with the shell's `ELECTRON_RUN_AS_NODE` cleared. The app is running (4 processes). No uninstall.
+- **Installed contents:** `- START OF FISCAL RECEIPT -` and `- END OF FISCAL RECEIPT -` are in the installed `app.asar`; `KRA-MOCK-` and the test banner text are not.
+- **Data:** the same fingerprint as in section 4, taken before and after this second install: orders (0), staff, shifts, products (714), settings, integrations, printers, the vault hash and the phase 198 columns and table all identical.
+- **Still open, unchanged from sections 6 and 7:** the GitHub draft (no `GH_TOKEN`, no `gh`; checked again, still unset) and the real-printer test (still no POS printer on this PC). Publish the draft from this rebuilt installer, i.e. run `npm run dist:publish` from commit `b913076` or later, and on the till check the new START and END lines: on a filed sale they sit under the header and above "Thank you...", and on the sale record and the Enjoy slip there are none.
