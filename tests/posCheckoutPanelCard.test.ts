@@ -78,6 +78,13 @@ describe('PosCheckoutPanel > three toggles', () => {
     expect(() => button('CARD')).not.toThrow()
   })
 
+  it('shows the M-Pesa and Visa/Mastercard logos on their buttons, and no logo on CASH', () => {
+    mount()
+    expect(button('M-PESA').querySelector('img')?.getAttribute('src')).toMatch(/logo-mpesa/)
+    expect(button('CARD').querySelector('img')?.getAttribute('src')).toMatch(/logo-visa-mastercard/)
+    expect(button('CASH').querySelector('img')).toBeNull()
+  })
+
   /**
    * `grid-cols-2` still renders all three buttons (it just wraps the
    * third onto its own row — check:fit's overflow census does not

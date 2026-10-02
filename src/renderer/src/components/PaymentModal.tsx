@@ -47,7 +47,9 @@ type StkPhase =
   | { kind: 'failed'; reason: string }
 
 /**
- * A manually entered code plus the cashier's attestation.
+ * A manually entered code. `confirmUnverified` is always `true`: pressing
+ * Complete Sale on a full code is the cashier's confirmation, and the
+ * checkout contract still requires the field.
  *
  * No manager credentials here (docs/phase-150.md step 3 — per-sale
  * manager approval was removed). Passed straight through to
@@ -166,8 +168,7 @@ export default function PaymentModal({
   const [stkPhase, setStkPhase] = useState<StkPhase>({ kind: 'form' })
 
   const [unverifiedCode, setUnverifiedCode] = useState('')
-  const [acknowledged, setAcknowledged] = useState(false)
-  const [unverifiedError, setUnverifiedError] = useState<string | null>(null)
+  const isManualCodeComplete = MANUAL_CODE_PATTERN.test(unverifiedCode)
 
   useEffect(() => {
     if (forcedCapabilities) return
@@ -319,36 +320,26 @@ export default function PaymentModal({
   }
 
   /**
-   * Validates the typed code and the cashier's attestation, then
-   * completes the sale directly — no manager PIN (docs/phase-150.md step
-   * 3). Both checks are repeated in the main process; these exist to
-   * tell the cashier what is wrong before they tap Complete, not to
-   * decide anything.
+   * Completes the sale directly on a full code — no manager PIN
+   * (docs/phase-150.md step 3). The button is disabled until the code is
+   * complete; the guard here and the main process's own check are the
+   * controls, this is not.
    */
   const handleUnverifiedContinue = () => {
-    setUnverifiedError(null)
-    if (!MANUAL_CODE_PATTERN.test(unverifiedCode)) {
-      setUnverifiedError(
-        'Enter the 10-character M-Pesa code from the customer’s message.'
-      )
-      return
-    }
-    if (!acknowledged) {
-      setUnverifiedError('Confirm that you have seen the M-Pesa confirmation message on the customer’s phone.')
-      return
-    }
+    if (!isManualCodeComplete) return
     onPaid(unverifiedCode, { code: unverifiedCode, confirmUnverified: true })
   }
 
   /**
-   * The code-entry + attestation form, shared between `'manual'` mode's
+   * The code-entry form, shared between `'manual'` mode's
    * sole screen and `'daraja'` mode's optional "Unverified" tab — the two
    * contexts differ only in framing (manual mode is this till's normal
    * way of taking every M-Pesa payment; Daraja's Unverified tab is an
    * exception for a payment Daraja itself never confirmed), never in
-   * mechanics. Neither asks for a manager's PIN — the control is the
-   * cashier's own attestation and attribution, with a manager's approval
-   * deferred to the end-of-day report (docs/phase-150.md step 3/4).
+   * mechanics. Neither asks for a manager's PIN or a tick box — Complete
+   * Sale only becomes active once the whole code is typed, and a manager's
+   * approval is deferred to the end-of-day report (docs/phase-150.md step
+   * 3/4).
    */
   const renderManualEntryPanel = (heading: string, description: string) => (
     <div className="rounded-xl border-2 border-amber-400 bg-amber-50/60 p-3">
@@ -368,26 +359,11 @@ export default function PaymentModal({
         className="w-full rounded-lg border border-amber-400 bg-white px-3 py-3 text-xl uppercase tracking-wide focus:border-amber-500 focus:outline-none"
       />
 
-      <label className="mt-3 flex items-start gap-2 text-base text-amber-900">
-        <input
-          type="checkbox"
-          checked={acknowledged}
-          onChange={(e) => setAcknowledged(e.target.checked)}
-          className="mt-1 h-5 w-5"
-        />
-        I have seen the M-Pesa confirmation message on the customer&rsquo;s phone.
-      </label>
-
-      {unverifiedError && (
-        <p className="mt-3 rounded-lg bg-rose-50 px-3 py-2 text-base font-medium text-rose-700">
-          {unverifiedError}
-        </p>
-      )}
-
       <button
         type="button"
+        disabled={!isManualCodeComplete}
         onClick={handleUnverifiedContinue}
-        className="mt-4 w-full rounded-xl border-2 border-amber-600 bg-white py-4 text-xl font-semibold text-amber-900 transition active:scale-95"
+        className="mt-4 w-full rounded-xl border-2 border-amber-600 bg-white py-4 text-xl font-semibold text-amber-900 transition active:scale-95 disabled:cursor-not-allowed disabled:opacity-50"
       >
         Complete Sale
       </button>

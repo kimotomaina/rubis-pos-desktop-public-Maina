@@ -15,6 +15,8 @@ import PaymentModal from './PaymentModal.js'
 import type { ManualMpesaEntryInput, MpesaCapabilitiesState } from './PaymentModal.js'
 import CardEntryPanel from './CardEntryPanel.js'
 import VirtualNumpad from './VirtualNumpad.js'
+import mpesaLogo from '../assets/logo-mpesa.png'
+import cardLogo from '../assets/logo-visa-mastercard.png'
 import type { CardManualEntry, PaymentMethod } from '../../../main/services/database.js'
 import type { Discount } from '../types/shopify.js'
 
@@ -405,27 +407,39 @@ export default function PosCheckoutPanel({
               >
                 CASH
               </button>
+              {/**
+               * The two electronic methods show their logo on a white chip,
+               * so it reads the same on the selected (rose) and unselected
+               * button. The name stays in the DOM, hidden, for screen
+               * readers and for anything that finds the button by its text.
+               */}
               <button
                 type="button"
                 onClick={() => setMethod('mpesa')}
-                className={`h-12 rounded-xl text-lg font-bold transition active:scale-95 ${
+                className={`flex h-12 items-center justify-center rounded-xl px-1.5 transition active:scale-95 ${
                   method === 'mpesa'
-                    ? 'bg-rose-600 text-white shadow'
-                    : 'border border-slate-200 text-slate-700 hover:bg-slate-50'
+                    ? 'bg-rose-600 shadow'
+                    : 'border border-slate-200 hover:bg-slate-50'
                 }`}
               >
-                M-PESA
+                <span className="flex items-center rounded-md bg-white px-1.5 py-0.5">
+                  <img src={mpesaLogo} alt="" className="h-7 w-auto max-w-full object-contain" />
+                </span>
+                <span className="sr-only">M-PESA</span>
               </button>
               <button
                 type="button"
                 onClick={() => setMethod('card')}
-                className={`h-12 rounded-xl text-lg font-bold transition active:scale-95 ${
+                className={`flex h-12 items-center justify-center rounded-xl px-1.5 transition active:scale-95 ${
                   method === 'card'
-                    ? 'bg-rose-600 text-white shadow'
-                    : 'border border-slate-200 text-slate-700 hover:bg-slate-50'
+                    ? 'bg-rose-600 shadow'
+                    : 'border border-slate-200 hover:bg-slate-50'
                 }`}
               >
-                CARD
+                <span className="flex items-center rounded-md bg-white px-1.5 py-0.5">
+                  <img src={cardLogo} alt="" className="h-9 w-auto max-w-full object-contain" />
+                </span>
+                <span className="sr-only">CARD</span>
               </button>
             </div>
 

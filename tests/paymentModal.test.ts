@@ -260,9 +260,6 @@ describe('manual mode completes with no manager PIN (docs/phase-150.md step 3)',
 
     act(() => useKeyboardStore.getState().request?.onChange('QDF73HK9LM'))
 
-    const checkbox = container.querySelector('input[type="checkbox"]') as HTMLInputElement
-    act(() => checkbox.click())
-
     act(() => button('Complete Sale').click())
 
     expect(onPaid).toHaveBeenCalledWith('QDF73HK9LM', {
@@ -273,7 +270,20 @@ describe('manual mode completes with no manager PIN (docs/phase-150.md step 3)',
     expect(container.textContent).not.toContain('PIN')
   })
 
-  it('refuses to complete without the attestation checked', async () => {
+  it.each(['manual', 'daraja'] as const)('has no confirmation checkbox or attestation text in %s mode', async (mode) => {
+    stubApi({ manualCodeSupported: false, manualEntryEnabled: true, mode })
+    await act(async () => {
+      root.render(createElement(PaymentModal, { total: 100, onPaid: vi.fn(), onCancel: vi.fn() }))
+      await Promise.resolve()
+    })
+    if (mode === 'daraja') act(() => button('Unverified').click())
+
+    expect(container.querySelector('input[type="checkbox"]')).toBeNull()
+    expect(container.textContent).not.toContain('I have seen the M-Pesa confirmation message')
+    expect(container.querySelector('input[aria-label="M-Pesa code from the customer’s message"]')).toBeTruthy()
+  })
+
+  it('Complete Sale is inactive until the whole code is entered, then becomes active', async () => {
     stubApi({ manualCodeSupported: false, manualEntryEnabled: true, mode: 'manual' })
     const onPaid = vi.fn()
     await act(async () => {
@@ -285,13 +295,33 @@ describe('manual mode completes with no manager PIN (docs/phase-150.md step 3)',
       'input[aria-label="M-Pesa code from the customer’s message"]'
     ) as HTMLInputElement
     act(() => codeInput.click())
-    act(() => useKeyboardStore.getState().request?.onChange('QDF73HK9LM'))
 
+    expect(button('Complete Sale').disabled).toBe(true)
+
+    act(() => useKeyboardStore.getState().request?.onChange('QDF73HK9L'))
+    expect(button('Complete Sale').disabled).toBe(true)
     act(() => button('Complete Sale').click())
-
     expect(onPaid).not.toHaveBeenCalled()
-    expect(container.textContent).toContain(
-      'Confirm that you have seen the M-Pesa confirmation message'
-    )
+
+    act(() => useKeyboardStore.getState().request?.onChange('QDF73HK9LM'))
+    expect(button('Complete Sale').disabled).toBe(false)
+
+    act(() => useKeyboardStore.getState().request?.onChange('QDF73HK9L'))
+    expect(button('Complete Sale').disabled).toBe(true)
+  })
+
+  it('shows no error text for a partial code: the button simply is not active yet', async () => {
+    stubApi({ manualCodeSupported: false, manualEntryEnabled: true, mode: 'manual' })
+    await act(async () => {
+      root.render(createElement(PaymentModal, { total: 100, onPaid: vi.fn(), onCancel: vi.fn() }))
+      await Promise.resolve()
+    })
+    const codeInput = container.querySelector(
+      'input[aria-label="M-Pesa code from the customer’s message"]'
+    ) as HTMLInputElement
+    act(() => codeInput.click())
+    act(() => useKeyboardStore.getState().request?.onChange('QDF'))
+
+    expect(container.textContent).not.toMatch(/Enter the 10-character|Confirm that you have seen/)
   })
 })
