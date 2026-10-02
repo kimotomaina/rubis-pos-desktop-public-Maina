@@ -379,7 +379,15 @@ describe('AdminScreen > Integrations > Fiscal Device + Store Details', () => {
   })
 })
 
-describe('AdminScreen > Integrations > Printer', () => {
+/**
+ * DELIBERATE TEST CHANGE (docs/phase-205): printer registration moved from
+ * Integrations > Printer to Peripherals > Printers. Only how the section is
+ * reached changed; every assertion about the fields, the Windows route and
+ * the save payload is as it was.
+ *   Old: `click('Integrations')` then `click('Printer')`.
+ *   New: `click('Peripherals')` then `click('Printers')`.
+ */
+describe('AdminScreen > Peripherals > Printers', () => {
   const cases: Array<{ label: string; mode: string }> = [
     { label: 'Printer id', mode: 'text' },
     { label: 'Printer interface', mode: 'text' }
@@ -388,8 +396,8 @@ describe('AdminScreen > Integrations > Printer', () => {
   it.each(cases)('$label — mode $mode, opened via aria-label since it has no <label>', async ({ label, mode }) => {
     stubApi()
     await mount()
-    await click('Integrations')
-    await click('Printer')
+    await click('Peripherals')
+    await click('Printers')
 
     const input =
       label === 'Printer id'
@@ -401,12 +409,12 @@ describe('AdminScreen > Integrations > Printer', () => {
   })
 })
 
-describe('AdminScreen > Integrations > Printer > Windows printer (docs/phase-174)', () => {
+describe('AdminScreen > Peripherals > Printers > Windows printer (docs/phase-174)', () => {
   it('hides the Windows connection option entirely on a non-Windows platform', async () => {
     stubApi(undefined, { platform: 'linux' })
     await mount()
-    await click('Integrations')
-    await click('Printer')
+    await click('Peripherals')
+    await click('Printers')
 
     expect(container.textContent).not.toContain('Connection:')
     expect(window.api.findWindowsPrinters).not.toHaveBeenCalled()
@@ -421,8 +429,8 @@ describe('AdminScreen > Integrations > Printer > Windows printer (docs/phase-174
       ])
     )
     await mount()
-    await click('Integrations')
-    await click('Printer')
+    await click('Peripherals')
+    await click('Printers')
 
     // Switch the connection type to Windows — the tcp:// field disappears.
     const connectionSelect = Array.from(container.querySelectorAll('select')).find((s) =>
@@ -481,19 +489,26 @@ describe('AdminScreen > Integrations > Printer > Windows printer (docs/phase-174
       ])
     )
     await mount()
-    await click('Integrations')
-    await click('Printer')
+    await click('Peripherals')
+    await click('Printers')
 
     expect(container.textContent).toContain('Missing')
     expect(container.textContent).toContain('Windows printer: EPSON-TM-T88')
   })
 })
 
-describe('AdminScreen > Overview > App & Updates', () => {
+/**
+ * DELIBERATE TEST CHANGE (docs/phase-205): the App & Updates panel moved
+ * from the Overview tab to the main Admin page (the card grid). It is on
+ * screen as soon as the screen mounts, so the tests no longer open Overview
+ * first; every assertion about the panel is as it was.
+ *   Old: `click('Overview')` before each check.
+ *   New: no navigation; the panel is on the main page.
+ */
+describe('AdminScreen > Admin page > App & Updates', () => {
   it('shows the installed version from window.api.getAppVersion on mount', async () => {
     stubApi()
     await mount()
-    await click('Overview')
 
     expect(container.textContent).toContain('Installed version: 2.0.4')
   })
@@ -502,7 +517,6 @@ describe('AdminScreen > Overview > App & Updates', () => {
     it('is disabled with no update status at all', async () => {
       stubApi()
       await mount()
-      await click('Overview')
 
       expect(button('Install update and restart').disabled).toBe(true)
     })
@@ -510,7 +524,6 @@ describe('AdminScreen > Overview > App & Updates', () => {
     it('stays disabled while downloading', async () => {
       stubApi()
       await mount()
-      await click('Overview')
       await emitUpdateStatus({ kind: 'downloading', percent: 42 })
 
       expect(button('Install update and restart').disabled).toBe(true)
@@ -520,7 +533,6 @@ describe('AdminScreen > Overview > App & Updates', () => {
     it('becomes enabled once the status is downloaded, and shows the ready-to-install text', async () => {
       stubApi()
       await mount()
-      await click('Overview')
       await emitUpdateStatus({ kind: 'downloaded', version: '2.0.6' })
 
       expect(button('Install update and restart').disabled).toBe(false)
@@ -530,7 +542,6 @@ describe('AdminScreen > Overview > App & Updates', () => {
     it('shows "Up to date" when the status is not-available', async () => {
       stubApi()
       await mount()
-      await click('Overview')
       await emitUpdateStatus({ kind: 'not-available' })
 
       expect(container.textContent).toContain('Up to date')
@@ -543,7 +554,6 @@ describe('AdminScreen > Overview > App & Updates', () => {
         error: 'Backup failed: disk full'
       })
       await mount()
-      await click('Overview')
       await emitUpdateStatus({ kind: 'downloaded', version: '2.0.6' })
 
       await click('Install update and restart')
@@ -566,7 +576,6 @@ describe('AdminScreen > Overview > App & Updates', () => {
         }
       })
       await mount()
-      await click('Overview')
 
       expect(container.textContent).toContain('Updated 2.0.5 to 2.0.6')
       expect(container.textContent).toContain('Sales carried over: 1,234 of 1,234')
@@ -586,7 +595,6 @@ describe('AdminScreen > Overview > App & Updates', () => {
         }
       })
       await mount()
-      await click('Overview')
 
       const line = Array.from(container.querySelectorAll('p')).find((p) =>
         p.textContent?.startsWith('Updated 2.0.5 to 2.0.6')
@@ -599,7 +607,6 @@ describe('AdminScreen > Overview > App & Updates', () => {
     it('renders nothing when there is no last update result', async () => {
       stubApi()
       await mount()
-      await click('Overview')
 
       expect(container.textContent).not.toContain('Sales carried over')
     })

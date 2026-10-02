@@ -162,18 +162,24 @@ describe('AdminScreen > Integrations: five sections, shown one at a time', () =>
    *     Device, M-Pesa, Printer, in that order.
    *   New assertion: the six named cards are Shopify, Store Details,
    *     Location, Fiscal Device, M-Pesa, Printer, in that order.
+   *
+   * DELIBERATE TEST CHANGE (docs/phase-205): Printer moved to Peripherals.
+   *   Old assertion: the six cards above, Printer last.
+   *   New assertion: the five cards Shopify, Store Details, Location,
+   *     Fiscal Device, M-Pesa, in that order, and no Printer card.
    */
-  it('declares exactly the six named sections, in order, as cards', async () => {
+  it('declares exactly the five named sections, in order, as cards', async () => {
     stubApi()
     await mount()
     await click('Integrations')
 
-    const names = ['Shopify', 'Store Details', 'Location', 'Fiscal Device', 'M-Pesa', 'Printer']
+    const names = ['Shopify', 'Store Details', 'Location', 'Fiscal Device', 'M-Pesa']
     const cards = Array.from(container.querySelectorAll('button')).map((b) => b.textContent)
     expect(cards).toEqual(expect.arrayContaining(names))
     // In this exact order, in the card grid shown as soon as Integrations opens (phase-167 Part A).
     const order = cards.filter((label) => names.includes(label ?? ''))
     expect(order).toEqual(names)
+    expect(cards).not.toContain('Printer')
   })
 
   /**
@@ -204,8 +210,7 @@ describe('AdminScreen > Integrations: five sections, shown one at a time', () =>
       ['Shopify', 'Shopify Connection</h3>'],
       ['Location', 'Location</h3>'],
       ['Fiscal Device', 'Fiscal Device</h3>'],
-      ['M-Pesa', '>M-Pesa</h3>'],
-      ['Printer', 'Printers</h3>']
+      ['M-Pesa', '>M-Pesa</h3>']
     ] as const) {
       await click(card)
       expect(container.innerHTML).toContain(heading)
@@ -245,10 +250,6 @@ describe('AdminScreen > Integrations: five sections, shown one at a time', () =>
 
     await click('M-Pesa')
     expect(container.innerHTML).toContain('>M-Pesa</h3>')
-    await click('Back to Integrations')
-
-    await click('Printer')
-    expect(container.innerHTML).toContain('>Printers</h3>')
   })
 
   /**
@@ -259,7 +260,17 @@ describe('AdminScreen > Integrations: five sections, shown one at a time', () =>
    *   New assertion: `click('M-Pesa')`, `click('Back to Integrations')`,
    *     then `click('Printer')`.
    */
-  it('loads printers only once the Printer section is the one showing, not just the Integrations tab', async () => {
+  /**
+   * DELIBERATE TEST CHANGE (docs/phase-205): printers are registered under
+   * Peripherals > Printers now, and still load only once that section is
+   * the one showing.
+   *   Old assertion: not loaded on Integrations or M-Pesa; loaded once
+   *     after `click('Printer')` under Integrations.
+   *   New assertion: not loaded on Integrations or M-Pesa, nor on the
+   *     Peripherals grid or its Scanner section; loaded once after
+   *     `click('Peripherals')` then `click('Printers')`.
+   */
+  it('loads printers only once the Printers section is the one showing, not just the Peripherals tab', async () => {
     stubApi()
     await mount()
     await click('Integrations')
@@ -267,9 +278,15 @@ describe('AdminScreen > Integrations: five sections, shown one at a time', () =>
 
     await click('M-Pesa')
     expect(window.api.getPrinters).not.toHaveBeenCalled()
-    await click('Back to Integrations')
+    await click('Back to Admin')
 
-    await click('Printer')
+    await click('Peripherals')
+    expect(window.api.getPrinters).not.toHaveBeenCalled()
+    await click('Scanner')
+    expect(window.api.getPrinters).not.toHaveBeenCalled()
+    await click('Back to Peripherals')
+
+    await click('Printers')
     expect(window.api.getPrinters).toHaveBeenCalledTimes(1)
   })
 
@@ -355,7 +372,7 @@ describe('AdminScreen > Integrations: five sections, shown one at a time', () =>
     const locationStart = INTEGRATIONS_BLOCK.indexOf("integrationSection === 'location'")
     const mpesaStart = INTEGRATIONS_BLOCK.indexOf("integrationSection === 'mpesa'")
     const fiscalStart = INTEGRATIONS_BLOCK.indexOf("integrationSection === 'fiscal'")
-    const printerStart = INTEGRATIONS_BLOCK.indexOf("integrationSection === 'printer'")
+    const printerStart = INTEGRATIONS_BLOCK.length
     const storeStart = INTEGRATIONS_BLOCK.indexOf("integrationSection === 'storeDetails'")
     const shopifySection = INTEGRATIONS_BLOCK.slice(shopifyStart, storeStart)
     const storeSection = INTEGRATIONS_BLOCK.slice(storeStart, locationStart)
@@ -388,7 +405,7 @@ describe('AdminScreen > Integrations: five sections, shown one at a time', () =>
     const storeStart = INTEGRATIONS_BLOCK.indexOf("integrationSection === 'storeDetails'")
     const locationStart = INTEGRATIONS_BLOCK.indexOf("integrationSection === 'location'")
     const fiscalStart = INTEGRATIONS_BLOCK.indexOf("integrationSection === 'fiscal'")
-    const printerStart = INTEGRATIONS_BLOCK.indexOf("integrationSection === 'printer'", fiscalStart)
+    const printerStart = INTEGRATIONS_BLOCK.length
     const shopifySection = INTEGRATIONS_BLOCK.slice(shopifyStart, storeStart)
     const storeSection = INTEGRATIONS_BLOCK.slice(storeStart, locationStart)
     const fiscalSection = INTEGRATIONS_BLOCK.slice(fiscalStart, printerStart)
@@ -407,21 +424,51 @@ describe('AdminScreen > Integrations: five sections, shown one at a time', () =>
       'handleOpenChangeLocation',
       'handleConfirmChangeLocation',
       'handleTestMpesaConnection()',
-      'handleTestEtimsConnection()',
-      'handleAddPrinter()',
-      'handleDeletePrinter(printer.id)',
-      'handleTestPrinter(printer.id, printer.interfaceName)'
+      'handleTestEtimsConnection()'
     ]
     for (const handler of untouchedHandlers) {
       expect(INTEGRATIONS_BLOCK).toContain(handler)
     }
   })
+
+  /**
+   * DELIBERATE TEST CHANGE (docs/phase-205): the three printer handlers are
+   * now called from the Peripherals tab, with the same call signatures.
+   *   Old assertion: the Integrations block contains `handleAddPrinter()`,
+   *     `handleDeletePrinter(printer.id)` and
+   *     `handleTestPrinter(printer.id, printer.interfaceName)`.
+   *   New assertion: the Peripherals block contains them, and the
+   *     Integrations block contains none.
+   */
+  it('keeps the printer handlers and their call signatures, now under Peripherals', () => {
+    const printerHandlers = [
+      'handleAddPrinter()',
+      'handleDeletePrinter(printer.id)',
+      'handleTestPrinter(printer.id, printer.interfaceName)'
+    ]
+    for (const handler of printerHandlers) {
+      expect(PERIPHERALS_BLOCK).toContain(handler)
+      expect(INTEGRATIONS_BLOCK).not.toContain(handler)
+    }
+  })
 })
 
-describe('AdminScreen > Peripherals: Printer moved out, Barcode Scanner Stations stays', () => {
-  it('no longer registers printers from the Peripherals tab', () => {
-    expect(PERIPHERALS_BLOCK).not.toContain('Printers</h3>')
-    expect(PERIPHERALS_BLOCK).not.toContain('handleAddPrinter')
+/**
+ * DELIBERATE TEST CHANGE (docs/phase-205): Printer came back to Peripherals
+ * (it had moved to Integrations in Phase E2(e)), beside Barcode Scanner
+ * Stations, as two cards.
+ *   Old assertions: the Peripherals block does not contain `Printers</h3>`
+ *     or `handleAddPrinter`.
+ *   New assertions: it contains both, and still contains
+ *     `Barcode Scanner Stations</h3>`; the Integrations block has no
+ *     printer section.
+ */
+describe('AdminScreen > Peripherals: Printers and Scanner, one card each', () => {
+  it('registers printers from the Peripherals tab', () => {
+    expect(PERIPHERALS_BLOCK).toContain('Printers</h3>')
+    expect(PERIPHERALS_BLOCK).toContain('handleAddPrinter')
+    expect(INTEGRATIONS_BLOCK).not.toContain('Printers</h3>')
+    expect(INTEGRATIONS_BLOCK).not.toContain("integrationSection === 'printer'")
   })
 
   it('still has the Barcode Scanner Stations instructions', () => {

@@ -23,6 +23,7 @@ import {
   ChartBarIcon,
   LinkIcon,
   PrinterIcon,
+  SearchIcon,
   CalendarIcon,
   DocumentChartIcon,
   WarningIcon,
@@ -160,7 +161,10 @@ type AdminTabKey =
   | 'system'
 
 /** Every Integrations sub-section, in card-grid order (phase-167). */
-type IntegrationSectionKey = 'shopify' | 'storeDetails' | 'location' | 'fiscal' | 'mpesa' | 'printer'
+type IntegrationSectionKey = 'shopify' | 'storeDetails' | 'location' | 'fiscal' | 'mpesa'
+
+/** Every Peripherals sub-section, in card-grid order (docs/phase-205). */
+type PeripheralSectionKey = 'scanner' | 'printers'
 
 /**
  * The Admin card grid's contents (phase-167 Part A) — icon and title
@@ -203,8 +207,13 @@ const INTEGRATION_SECTIONS: SectionCard<IntegrationSectionKey>[] = [
   { key: 'storeDetails', label: 'Store Details', icon: <DocumentChartIcon className="h-8 w-8" /> },
   { key: 'location', label: 'Location', icon: <PackageIcon className="h-8 w-8" /> },
   { key: 'fiscal', label: 'Fiscal Device', icon: <LockIcon className="h-8 w-8" /> },
-  { key: 'mpesa', label: 'M-Pesa', icon: <InboxIcon className="h-8 w-8" /> },
-  { key: 'printer', label: 'Printer', icon: <PrinterIcon className="h-8 w-8" /> }
+  { key: 'mpesa', label: 'M-Pesa', icon: <InboxIcon className="h-8 w-8" /> }
+]
+
+/** Peripherals' own card grid contents (docs/phase-205). */
+const PERIPHERAL_SECTIONS: SectionCard<PeripheralSectionKey>[] = [
+  { key: 'scanner', label: 'Scanner', icon: <SearchIcon className="h-8 w-8" /> },
+  { key: 'printers', label: 'Printers', icon: <PrinterIcon className="h-8 w-8" /> }
 ]
 
 interface AdminScreenProps {
@@ -304,6 +313,8 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
    * as `activeTab` above.
    */
   const [integrationSection, setIntegrationSection] = useState<IntegrationSectionKey | null>(null)
+  /** `null` shows Peripherals' own card grid (docs/phase-205), same reasoning as `integrationSection`. */
+  const [peripheralSection, setPeripheralSection] = useState<PeripheralSectionKey | null>(null)
   const [mpesaConsumerKey, setMpesaConsumerKey] = useState('')
   const [mpesaShortcode, setMpesaShortcode] = useState('')
   const [mpesaEnvironment, setMpesaEnvironment] = useState<'sandbox' | 'production'>('sandbox')
@@ -642,13 +653,13 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
 
   useEffect(() => {
     if (activeTab === 'integrations') void loadIntegrationsConfig()
-    // Printer registration moved from Peripherals into Integrations >
-    // Printer (Phase E2(e)); loaded once that section is actually on
-    // screen, same as every other section's data.
-    if (activeTab === 'integrations' && integrationSection === 'printer') void loadPrinters()
+    // Printer registration lives under Peripherals > Printers (docs/phase-205);
+    // loaded once that section is actually on screen, same as every other
+    // section's data.
+    if (activeTab === 'peripherals' && peripheralSection === 'printers') void loadPrinters()
     if (activeTab === 'system') void loadStartupConfigs()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeTab, integrationSection])
+  }, [activeTab, integrationSection, peripheralSection])
 
   /**
    * Saves the M-Pesa/eTIMS mock-vs-real toggles to `app_configurations`
@@ -1238,7 +1249,7 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
     })
   }
 
-  /** One row of crumbs for wherever the card grids have been drilled to; the Admin crumb also clears the Integrations section so the next visit starts at its grid. */
+  /** One row of crumbs for wherever the card grids have been drilled to; the Admin crumb also clears the Integrations and Peripherals sections so the next visit starts at their grids. */
   const breadcrumbs: BreadcrumbItem[] = []
   if (activeTab !== null) {
     const tabLabel = adminSections(unfiledCount, shopifyActionCount).find((card) => card.key === activeTab)?.label ?? ''
@@ -1247,11 +1258,15 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
       onClick: () => {
         setActiveTab(null)
         setIntegrationSection(null)
+        setPeripheralSection(null)
       }
     })
     if (activeTab === 'integrations' && integrationSection !== null) {
       breadcrumbs.push({ label: tabLabel, onClick: () => setIntegrationSection(null) })
       breadcrumbs.push({ label: INTEGRATION_SECTIONS.find((card) => card.key === integrationSection)?.label ?? '' })
+    } else if (activeTab === 'peripherals' && peripheralSection !== null) {
+      breadcrumbs.push({ label: tabLabel, onClick: () => setPeripheralSection(null) })
+      breadcrumbs.push({ label: PERIPHERAL_SECTIONS.find((card) => card.key === peripheralSection)?.label ?? '' })
     } else {
       breadcrumbs.push({ label: tabLabel })
     }
@@ -1263,6 +1278,62 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
         <SectionCardGrid sections={adminSections(unfiledCount, shopifyActionCount)} onSelect={setActiveTab} />
       ) : (
         <Breadcrumbs items={breadcrumbs} />
+      )}
+
+      {activeTab === null && (
+        <section className="rounded-xl border border-slate-200 bg-white p-4">
+          <h3 className="mb-3 text-base font-semibold text-slate-800">App &amp; Updates</h3>
+
+          {/* Line 1: installed version */}
+          {installedVersion && (
+            <p className="mb-3 text-base text-slate-500">Installed version: {installedVersion}</p>
+          )}
+
+          {/* Line 2: Check for Updates button + result text */}
+          <div className="flex flex-wrap items-center gap-3">
+            <button
+              type="button"
+              disabled={checkingForUpdates}
+              onClick={() => void handleCheckForUpdates()}
+              className="rounded-lg border border-slate-300 px-4 py-2 text-base font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {checkingForUpdates ? 'Checking…' : 'Check for Updates'}
+            </button>
+            {(updateCheckMessage ?? updateResultText(updateStatus)) && (
+              <p className="text-base text-slate-500">
+                {updateCheckMessage ?? updateResultText(updateStatus)}
+              </p>
+            )}
+          </div>
+
+          {/* Line 3: download progress */}
+          {updateStatus?.kind === 'downloading' && (
+            <p className="mt-2 text-base text-slate-500">
+              Downloading update… {Math.round(updateStatus.percent)}%
+            </p>
+          )}
+
+          {/* Line 4: install, enabled only once a download has finished */}
+          <button
+            type="button"
+            disabled={updateStatus?.kind !== 'downloaded' || installingUpdate}
+            onClick={() => void handleInstallUpdate()}
+            className="mt-3 rounded-lg bg-rose-600 px-4 py-2 text-base font-semibold text-white hover:bg-rose-700 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {installingUpdate ? 'Restarting…' : 'Install update and restart'}
+          </button>
+          {installError && <p className="mt-2 text-base font-medium text-rose-600">{installError}</p>}
+
+          {lastUpdateResult && (
+            <p
+              className={`mt-3 text-base ${
+                lastUpdateResult.ok ? 'text-slate-500' : 'font-medium text-rose-600'
+              }`}
+            >
+              {formatUpdateResultLine(lastUpdateResult)}
+            </p>
+          )}
+        </section>
       )}
 
       {activeTab === 'mpesaLogs' && <MpesaLogsPage />}
@@ -1351,18 +1422,205 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
       )}
 
       {activeTab === 'peripherals' && (
-        <section className="rounded-xl border border-slate-200 bg-white p-4">
-          <h3 className="mb-1 text-2xl font-bold text-slate-800">Barcode Scanner Stations</h3>
+        <div className="space-y-4">
+          {peripheralSection === null && (
+            <SectionCardGrid sections={PERIPHERAL_SECTIONS} onSelect={setPeripheralSection} />
+          )}
 
-          <ol className="list-inside list-decimal space-y-1 text-base text-slate-600">
-            <li>
-              Scan Add Prefix, then{' '}
-              <code className="rounded bg-slate-100 px-1">SC1:</code> (till 1),{' '}
-              <code className="rounded bg-slate-100 px-1">SC2:</code> (till 2) or{' '}
-              <code className="rounded bg-slate-100 px-1">KITCHEN:</code>, then Save.
-            </li>
-          </ol>
-        </section>
+          {peripheralSection === 'scanner' && (
+            <section className="rounded-xl border border-slate-200 bg-white p-4">
+              <h3 className="mb-1 text-2xl font-bold text-slate-800">Barcode Scanner Stations</h3>
+
+              <ol className="list-inside list-decimal space-y-1 text-base text-slate-600">
+                <li>
+                  Scan Add Prefix, then{' '}
+                  <code className="rounded bg-slate-100 px-1">SC1:</code> (till 1),{' '}
+                  <code className="rounded bg-slate-100 px-1">SC2:</code> (till 2) or{' '}
+                  <code className="rounded bg-slate-100 px-1">KITCHEN:</code>, then Save.
+                </li>
+              </ol>
+            </section>
+          )}
+
+          {peripheralSection === 'printers' && (
+            <section className="rounded-xl border border-slate-200 bg-white p-4">
+              <h3 className="mb-1 text-2xl font-bold text-slate-800">Printers</h3>
+
+              {printerActionError && (
+                <p className="mb-3 rounded-lg bg-rose-50 px-3 py-2 text-base font-medium text-rose-700">
+                  {printerActionError}
+                </p>
+              )}
+
+              {printersLoading ? (
+                <p className="text-base text-slate-400">Loading…</p>
+              ) : (
+                <div className="space-y-2">
+                  {printers.length === 0 && (
+                    <p className="text-base text-slate-400">No printers registered yet.</p>
+                  )}
+                  {printers.map((printer) => (
+                    <div
+                      key={printer.id}
+                      className="rounded-lg border border-slate-100 px-3 py-2"
+                    >
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <span className="font-medium text-slate-800">{printer.id}</span>
+                          <span className="rounded-full bg-slate-100 px-2 py-0.5 text-sm font-medium capitalize text-slate-500">
+                            {printer.type}
+                          </span>
+                          {!printer.enabled && (
+                            <span className="rounded-full bg-amber-100 px-2 py-0.5 text-sm font-medium text-amber-700">
+                              Disabled
+                            </span>
+                          )}
+                          {printer.missing && (
+                            <span className="rounded-full bg-rose-100 px-2 py-0.5 text-sm font-medium text-rose-700">
+                              Missing
+                            </span>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            disabled={testingPrinterId === printer.id}
+                            onClick={() => handleTestPrinter(printer.id, printer.interfaceName)}
+                            className="rounded-md border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                          >
+                            {testingPrinterId === printer.id ? 'Testing…' : 'Test'}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleDeletePrinter(printer.id)}
+                            className="rounded-md border border-rose-300 px-3 py-1.5 text-sm font-medium text-rose-700 hover:bg-rose-50"
+                          >
+                            Remove
+                          </button>
+                        </div>
+                      </div>
+                      <p className="mt-1 text-sm text-slate-500">
+                        {printer.connectionType === 'windows'
+                          ? `Windows printer: ${printer.interfaceName}`
+                          : printer.interfaceName}
+                      </p>
+                      {printerTestMessages[printer.id] && (
+                        <p className="mt-1 text-sm text-slate-600">{printerTestMessages[printer.id]}</p>
+                      )}
+                    </div>
+                  ))}
+
+                  {/* Windows-only connection type (docs/phase-174) — hidden on every other platform, per its own row so the 4-column grid below never has to reflow to fit a 5th control. */}
+                  {window.api.platform === 'win32' && (
+                    <div className="flex items-center gap-2 rounded-lg bg-slate-50 p-3 text-base">
+                      <span className="font-medium text-slate-600">Connection:</span>
+                      <select
+                        value={newPrinterConnectionType}
+                        onChange={(e) => {
+                          setNewPrinterConnectionType(e.target.value as PrinterConnectionType)
+                          setNewPrinterInterface('')
+                        }}
+                        className="h-10 rounded-lg border border-slate-300 px-3 text-base focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-100"
+                      >
+                        <option value="network">Network (IP)</option>
+                        <option value="windows">Windows printer (USB or COM)</option>
+                      </select>
+                    </div>
+                  )}
+
+                  {newPrinterConnectionType === 'windows' && (
+                    <div className="space-y-2 rounded-lg bg-slate-50 p-3">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-base text-slate-600">
+                          {newPrinterInterface ? `Selected: ${newPrinterInterface}` : 'No printer selected yet'}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => handleFindWindowsPrinters()}
+                          disabled={windowsPrintersLoading}
+                          className="rounded-md border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          {windowsPrintersLoading ? 'Finding…' : 'Find printers'}
+                        </button>
+                      </div>
+                      {windowsPrintersError && (
+                        <p className="text-sm font-medium text-rose-700">{windowsPrintersError}</p>
+                      )}
+                      {windowsPrinterOptions.length > 0 && (
+                        <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+                          {windowsPrinterOptions.map((option) => (
+                            <button
+                              key={option.name}
+                              type="button"
+                              onClick={() => setNewPrinterInterface(option.name)}
+                              className={`rounded-lg border px-3 py-2 text-left text-sm ${
+                                newPrinterInterface === option.name
+                                  ? 'border-rose-400 bg-rose-50'
+                                  : 'border-slate-200 bg-white hover:bg-slate-50'
+                              }`}
+                            >
+                              <div className="font-medium text-slate-800">{option.displayName}</div>
+                              {option.port && (
+                                <div className="text-xs text-slate-500">{option.port}</div>
+                              )}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  <div className="grid grid-cols-2 gap-2 rounded-lg bg-slate-50 p-3 sm:grid-cols-4">
+                    <input
+                      type="text"
+                      readOnly
+                      placeholder="Printer id (e.g. kitchen-1)"
+                      value={newPrinterId}
+                      onClick={() =>
+                        openField(newPrinterId, setNewPrinterId, 'Printer id', { mode: 'text' })
+                      }
+                      className="h-12 rounded-lg border border-slate-300 px-3 text-lg focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-100"
+                    />
+                    <select
+                      value={newPrinterType}
+                      onChange={(e) => setNewPrinterType(e.target.value as PrinterType)}
+                      className="h-12 rounded-lg border border-slate-300 px-3 text-lg focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-100"
+                    >
+                      <option value="receipt">Receipt</option>
+                      <option value="kitchen">Kitchen</option>
+                      <option value="label">Label</option>
+                    </select>
+                    {newPrinterConnectionType === 'windows' ? (
+                      <div className="flex h-12 items-center truncate rounded-lg border border-slate-300 bg-white px-3 text-lg text-slate-500">
+                        {newPrinterInterface || 'Use "Find printers" above'}
+                      </div>
+                    ) : (
+                      <input
+                        type="text"
+                        readOnly
+                        placeholder="tcp://192.168.0.101:9100"
+                        value={newPrinterInterface}
+                        onClick={() =>
+                          openField(newPrinterInterface, setNewPrinterInterface, 'Printer interface', {
+                            mode: 'text'
+                          })
+                        }
+                        className="h-12 rounded-lg border border-slate-300 px-3 text-lg focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-100"
+                      />
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => handleAddPrinter()}
+                      className="rounded-lg bg-rose-600 px-4 py-2 text-base font-semibold text-white hover:bg-rose-700"
+                    >
+                      Add Printer
+                    </button>
+                  </div>
+                </div>
+              )}
+            </section>
+          )}
+        </div>
       )}
 
       {activeTab === 'integrations' && (
@@ -2030,185 +2288,6 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
               </button>
                 </section>
               )}
-
-              {integrationSection === 'printer' && (
-                <section className="rounded-xl border border-slate-200 bg-white p-4">
-                  <h3 className="mb-1 text-2xl font-bold text-slate-800">Printers</h3>
-
-                  {printerActionError && (
-                    <p className="mb-3 rounded-lg bg-rose-50 px-3 py-2 text-base font-medium text-rose-700">
-                      {printerActionError}
-                    </p>
-                  )}
-
-                  {printersLoading ? (
-                    <p className="text-base text-slate-400">Loading…</p>
-                  ) : (
-                    <div className="space-y-2">
-                      {printers.length === 0 && (
-                        <p className="text-base text-slate-400">No printers registered yet.</p>
-                      )}
-                      {printers.map((printer) => (
-                        <div
-                          key={printer.id}
-                          className="rounded-lg border border-slate-100 px-3 py-2"
-                        >
-                          <div className="flex items-center justify-between">
-                            <div className="flex items-center gap-2">
-                              <span className="font-medium text-slate-800">{printer.id}</span>
-                              <span className="rounded-full bg-slate-100 px-2 py-0.5 text-sm font-medium capitalize text-slate-500">
-                                {printer.type}
-                              </span>
-                              {!printer.enabled && (
-                                <span className="rounded-full bg-amber-100 px-2 py-0.5 text-sm font-medium text-amber-700">
-                                  Disabled
-                                </span>
-                              )}
-                              {printer.missing && (
-                                <span className="rounded-full bg-rose-100 px-2 py-0.5 text-sm font-medium text-rose-700">
-                                  Missing
-                                </span>
-                              )}
-                            </div>
-                            <div className="flex items-center gap-2">
-                              <button
-                                type="button"
-                                disabled={testingPrinterId === printer.id}
-                                onClick={() => handleTestPrinter(printer.id, printer.interfaceName)}
-                                className="rounded-md border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
-                              >
-                                {testingPrinterId === printer.id ? 'Testing…' : 'Test'}
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => handleDeletePrinter(printer.id)}
-                                className="rounded-md border border-rose-300 px-3 py-1.5 text-sm font-medium text-rose-700 hover:bg-rose-50"
-                              >
-                                Remove
-                              </button>
-                            </div>
-                          </div>
-                          <p className="mt-1 text-sm text-slate-500">
-                            {printer.connectionType === 'windows'
-                              ? `Windows printer: ${printer.interfaceName}`
-                              : printer.interfaceName}
-                          </p>
-                          {printerTestMessages[printer.id] && (
-                            <p className="mt-1 text-sm text-slate-600">{printerTestMessages[printer.id]}</p>
-                          )}
-                        </div>
-                      ))}
-
-                      {/* Windows-only connection type (docs/phase-174) — hidden on every other platform, per its own row so the 4-column grid below never has to reflow to fit a 5th control. */}
-                      {window.api.platform === 'win32' && (
-                        <div className="flex items-center gap-2 rounded-lg bg-slate-50 p-3 text-base">
-                          <span className="font-medium text-slate-600">Connection:</span>
-                          <select
-                            value={newPrinterConnectionType}
-                            onChange={(e) => {
-                              setNewPrinterConnectionType(e.target.value as PrinterConnectionType)
-                              setNewPrinterInterface('')
-                            }}
-                            className="h-10 rounded-lg border border-slate-300 px-3 text-base focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-100"
-                          >
-                            <option value="network">Network (IP)</option>
-                            <option value="windows">Windows printer (USB or COM)</option>
-                          </select>
-                        </div>
-                      )}
-
-                      {newPrinterConnectionType === 'windows' && (
-                        <div className="space-y-2 rounded-lg bg-slate-50 p-3">
-                          <div className="flex items-center justify-between gap-2">
-                            <span className="text-base text-slate-600">
-                              {newPrinterInterface ? `Selected: ${newPrinterInterface}` : 'No printer selected yet'}
-                            </span>
-                            <button
-                              type="button"
-                              onClick={() => handleFindWindowsPrinters()}
-                              disabled={windowsPrintersLoading}
-                              className="rounded-md border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
-                            >
-                              {windowsPrintersLoading ? 'Finding…' : 'Find printers'}
-                            </button>
-                          </div>
-                          {windowsPrintersError && (
-                            <p className="text-sm font-medium text-rose-700">{windowsPrintersError}</p>
-                          )}
-                          {windowsPrinterOptions.length > 0 && (
-                            <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
-                              {windowsPrinterOptions.map((option) => (
-                                <button
-                                  key={option.name}
-                                  type="button"
-                                  onClick={() => setNewPrinterInterface(option.name)}
-                                  className={`rounded-lg border px-3 py-2 text-left text-sm ${
-                                    newPrinterInterface === option.name
-                                      ? 'border-rose-400 bg-rose-50'
-                                      : 'border-slate-200 bg-white hover:bg-slate-50'
-                                  }`}
-                                >
-                                  <div className="font-medium text-slate-800">{option.displayName}</div>
-                                  {option.port && (
-                                    <div className="text-xs text-slate-500">{option.port}</div>
-                                  )}
-                                </button>
-                              ))}
-                            </div>
-                          )}
-                        </div>
-                      )}
-
-                      <div className="grid grid-cols-2 gap-2 rounded-lg bg-slate-50 p-3 sm:grid-cols-4">
-                        <input
-                          type="text"
-                          readOnly
-                          placeholder="Printer id (e.g. kitchen-1)"
-                          value={newPrinterId}
-                          onClick={() =>
-                            openField(newPrinterId, setNewPrinterId, 'Printer id', { mode: 'text' })
-                          }
-                          className="h-12 rounded-lg border border-slate-300 px-3 text-lg focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-100"
-                        />
-                        <select
-                          value={newPrinterType}
-                          onChange={(e) => setNewPrinterType(e.target.value as PrinterType)}
-                          className="h-12 rounded-lg border border-slate-300 px-3 text-lg focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-100"
-                        >
-                          <option value="receipt">Receipt</option>
-                          <option value="kitchen">Kitchen</option>
-                          <option value="label">Label</option>
-                        </select>
-                        {newPrinterConnectionType === 'windows' ? (
-                          <div className="flex h-12 items-center truncate rounded-lg border border-slate-300 bg-white px-3 text-lg text-slate-500">
-                            {newPrinterInterface || 'Use "Find printers" above'}
-                          </div>
-                        ) : (
-                          <input
-                            type="text"
-                            readOnly
-                            placeholder="tcp://192.168.0.101:9100"
-                            value={newPrinterInterface}
-                            onClick={() =>
-                              openField(newPrinterInterface, setNewPrinterInterface, 'Printer interface', {
-                                mode: 'text'
-                              })
-                            }
-                            className="h-12 rounded-lg border border-slate-300 px-3 text-lg focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-100"
-                          />
-                        )}
-                        <button
-                          type="button"
-                          onClick={() => handleAddPrinter()}
-                          className="rounded-lg bg-rose-600 px-4 py-2 text-base font-semibold text-white hover:bg-rose-700"
-                        >
-                          Add Printer
-                        </button>
-                      </div>
-                    </div>
-                  )}
-                </section>
-              )}
             </>
           )}
         </div>
@@ -2511,60 +2590,6 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
         </div>
       </section>
 
-      {/* App & Updates */}
-      <section className="rounded-xl border border-slate-200 bg-white p-4">
-        <h3 className="mb-3 text-base font-semibold text-slate-800">App &amp; Updates</h3>
-
-        {/* Line 1: installed version */}
-        {installedVersion && (
-          <p className="mb-3 text-base text-slate-500">Installed version: {installedVersion}</p>
-        )}
-
-        {/* Line 2: Check for Updates button + result text */}
-        <div className="flex flex-wrap items-center gap-3">
-          <button
-            type="button"
-            disabled={checkingForUpdates}
-            onClick={() => void handleCheckForUpdates()}
-            className="rounded-lg border border-slate-300 px-4 py-2 text-base font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            {checkingForUpdates ? 'Checking…' : 'Check for Updates'}
-          </button>
-          {(updateCheckMessage ?? updateResultText(updateStatus)) && (
-            <p className="text-base text-slate-500">
-              {updateCheckMessage ?? updateResultText(updateStatus)}
-            </p>
-          )}
-        </div>
-
-        {/* Line 3: download progress */}
-        {updateStatus?.kind === 'downloading' && (
-          <p className="mt-2 text-base text-slate-500">
-            Downloading update… {Math.round(updateStatus.percent)}%
-          </p>
-        )}
-
-        {/* Line 4: install, enabled only once a download has finished */}
-        <button
-          type="button"
-          disabled={updateStatus?.kind !== 'downloaded' || installingUpdate}
-          onClick={() => void handleInstallUpdate()}
-          className="mt-3 rounded-lg bg-rose-600 px-4 py-2 text-base font-semibold text-white hover:bg-rose-700 disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          {installingUpdate ? 'Restarting…' : 'Install update and restart'}
-        </button>
-        {installError && <p className="mt-2 text-base font-medium text-rose-600">{installError}</p>}
-
-        {lastUpdateResult && (
-          <p
-            className={`mt-3 text-base ${
-              lastUpdateResult.ok ? 'text-slate-500' : 'font-medium text-rose-600'
-            }`}
-          >
-            {formatUpdateResultLine(lastUpdateResult)}
-          </p>
-        )}
-      </section>
         </>
       )}
 
