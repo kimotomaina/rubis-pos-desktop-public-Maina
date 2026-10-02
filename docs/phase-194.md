@@ -222,3 +222,113 @@ The pilot till stays class A until all of that is recorded.
 - **Run:** the proof script (§5), `npx vitest run` (§header), `git status --short` empty before and after. Everything read: `checkout.ts`, `shopify.ts` (lines 1-400 and 596-682), `real-etims-provider.ts` (lines 930-1300 and 1660-1974), `fiscal-validate.ts`, `etims.ts`, `reports.ts` (lines 100-270, 395-470, 640-1040), `receiptLayout.ts` and `receiptTotals.ts`, the relevant parts of `database.ts`, `index.ts`, `orders.ts`, `printer.ts`, `reportsExport.ts`, the VIL manual p. 14 and phases 55, 159, 163, 171, 183, 188 and 193.
 - **Not run:** anything against the device, ZFPLabServer or Shopify; the typecheck.
 - **Rollback:** nothing changed in code. Delete this file.
+
+
+---
+
+# Part 2: built as agreed (2026-10-02)
+
+- **Outcome:** Built in three local commits on staging, on top of 4757dc8. Not pushed, not installed, nothing sent to a device, ZFPLabServer or Shopify. The spare-till proof (the `ReadHScode` reads and the two 1 KSh sales) was **not** run: this brief stops after the three commits.
+- **Commits:**
+
+| # | Commit | Steps | Tests added |
+| --- | --- | --- | --- |
+| 1 | `c1aa92e` resolver, validator, provider routing, group gate, request builder, checkout gate | 1 to 4 | `vatClass.test.ts` (41), `vatClassFiscal.test.ts` (30) |
+| 2 | `4d53fa7` receipt, receipt totals, receipt class source, reports, CSV, reconciliation | 5 and 6 | `vatClassReceiptReports.test.ts` (30) |
+| 3 | `a214b7f` sync, types, three `products` columns, cache round-trip, cart line | 7 | `vatClassSync.test.ts` (15) |
+
+- **Report placement:** you asked for Part 2 to be appended to this file, so it is. That departs from the one-new-phase-doc-per-task habit, on your instruction.
+
+## P2.1 The decisions, as built
+
+| Decision | Built as |
+| --- | --- |
+| **D1** keep B and D | `VAT_CLASSES = A B C D E` ([vatClass.ts](../src/main/lib/vatClass.ts)); B, C, D, E all route to `SellPLUfromExtDB_HS`. Footer keys: `A = VAT 16%`, `B = VAT 8%`, `C = Zero rated`, `D = Other rate`, `E = Exempt` (the VIL rate table, phase 65), printed only for classes on the receipt. |
+| **D2** absent or blank → A, other unknown → refused | `resolveVatClass` returns `A` for `undefined`, `null`, `''` and whitespace, the class for A to E (trimmed and upper-cased, so `e` and ` E` mean E), and **`null` for anything else**. `null` is never turned into A: the gate refuses it before anything is written, `buildFiscalRequest` keeps the raw value so the provider's validator refuses it if the gate were ever bypassed, and the provider cannot reach `_HS` with it (the routing function throws on `null`, unreachable after validation). |
+| **D3** product-level metafields | `PRODUCT_LIST_QUERY` reads `metafield(namespace: "rubis", key: …)` for `vat_class`, `hs_code`, `hs_name` on the product, aliased, none under `variants`. A test asserts that. |
+| **D4** refuse non-A with blank or malformed HS code | [vatClassGate.ts](../src/main/lib/vatClassGate.ts), `findVatClassRefusal`, with the form `^\d{4}\.\d{2}\.\d{2}$`. Names the item (`"Maize flour (2kg)"`). |
+| **D5** letter plus key | Item line still ends in the class letter; footer key as above. For an all-A receipt the footer is the old string, character for character. |
+| **D6** reports in scope | `orderVatBase` and `sumVatBase` in [reports.ts](../src/main/services/reports.ts), used by the Z report, daily summary, sales summary and the orders CSV. |
+| **D7** no code-to-class table | None. The metafields carry class and HS code; the group gate and reconciliation compare the device's groups with the lines. |
+
+## P2.2 What changed, by commit
+
+**Commit 1.**
+- `vatClass.ts` (new): the resolver, `hasNonAClass`, `expectedGroupTotals`, `compareVatGroups`, `HS_CODE_PATTERN`. Pure.
+- `vatClassGate.ts` (new): the D2/D4 gate.
+- `fiscal-validate.ts`: uses the resolver; a non-A line still needs an HS code and name.
+- `real-etims-provider.ts`: `resolveSellCommand` uses the resolver and no longer reads `defaultVatClass`; after `ReadCurrentReceiptInfo` and **before `CloseReceipt`**, a sale with any non-A line has its B, C, D and E group amounts compared with its lines. A mismatch means `CancelReceipt` and `{ ok:false, kind:'system', retryable:false }`, naming every group that disagrees. A sale with only class-A lines skips the comparison.
+- `checkout.ts` `buildFiscalRequest`: resolved class per line, `taxRate` 0 on non-A lines. `runCheckout` runs the gate first, before the staff check, the payment gates and `queueOrder`. The M-Pesa gate block is untouched.
+
+**Commit 2.**
+- `receiptTotals.ts`: VAT from the class-A lines alone when another class is on the receipt; the legacy whole-total extraction otherwise.
+- `receiptLayout.ts`: item class through the resolver; the fallback VAT table (no stored device groups) built from the lines per class instead of the whole sale as A; the footer key.
+- `index.ts`: the receipt's per-item class read from the stored request through the resolver.
+- `reports.ts`, `reportsExport.ts`: `orderVatBase`; the aggregate is `computeVatIncluded(Σ orderVatBase)`, so an all-A set gives exactly `computeVatIncluded(Σ total)`.
+- `database.ts`: `getOrdersForShift` now also selects `fiscal_request_json` (the Z report needs it).
+- Reconciliation: a row gains `expectedByGroup` and `groupMismatch`; a non-A group that disagrees with the lines makes it a `mismatch` even when the totals agree.
+
+**Commit 3.**
+- `shopify.ts`, `shopify-types.ts`: the query and the mapper. Only a non-blank trimmed value is carried, so a product without metafields maps to the same variant object as before.
+- `types/shopify.ts`: optional `vatClass`, `hsCode`, `hsName` on `VariantSummary`.
+- `database.ts`: three nullable `TEXT` columns on `products` (in `SCHEMA.products` and by the idempotent `ALTER TABLE`); `cacheProducts` and `getCachedProducts` round-trip them.
+- `buildCartItem` moved from `App.tsx` to `lib/cartItem.ts` so a test can drive it; it adds the three fields only when present.
+
+## P2.3 Verification
+
+| Check | Result |
+| --- | --- |
+| `npm run typecheck` | clean after each commit |
+| Full suite after commit 3 | **158 files, 2485 tests, all passing** (baseline 154 files, 2369 tests, one cold-import timeout that passed on re-run). 116 tests added |
+| Class-A golden, wire | `tests/fixtures/vat-class-a-golden.json`, captured on the **pre-change** build: three sales (1 KSh; two lines with a special character and quantity 3; buyer PIN and company). Every command **and every request body** is compared with it byte for byte, through `runCheckout` and again through Shopify node → cache → cart → checkout. The §5 `WIRE SELL` line is also asserted as a literal |
+| Class-A golden, receipt | `tests/fixtures/receipt-class-a-golden.json`, 6 all-A scenarios at widths 48 and 32, captured pre-change by stashing the source |
+| `electron-vite build` | built; `verify-no-mock-provider.cjs`: neither mock provider is in `out/main` |
+| `check:fit` | **Not completed, and not needed for this change (your call).** Baseline on 4757dc8: 283 measured and fit, 9 failed, every failure being `Admin > Needs Attention: card not found` (one per window size). After the changes, one run reached 264 fit cases with the same 9 `Needs Attention: card not found` failures and nothing else failing, then the harness died with `Timed out waiting for: CDP endpoint up` (Electron did not start in time, a launch flake, not a fit result). A second run was abandoned on your instruction. **Needs Attention count: 9, equal to baseline.** No screen layout was touched; the only renderer changes are `buildCartItem` moving files and two optional type fields |
+
+**Tripwires, `git diff --stat 4757dc8`:** `fiscal-engine.ts`, `fiscal-routing.ts`, `fiscal-retry.ts`, `build/installer.nsh`, `electron-builder.yml`, `updater.ts`: **all empty**. In `checkout.ts` the three changed hunks are the imports, `buildFiscalRequest` and the gate at the top of `runCheckout`, all before the M-Pesa gate block. No diff line mentions `COALESCE` or `verifyAlreadyFiled`. `mpesaPaymentGate.test.ts`, `fiscalEngine`, `fiscalRouting` pass unmodified.
+
+### Mutation checks, each applied by hand, run red, then reverted
+
+| Mutation | Result |
+| --- | --- |
+| **M1a** unknown class resolves to A (the old default) | 11 failed |
+| **M1b** unknown class passes through unchanged (reaches `_HS`) | 12 failed |
+| **M2** swap C and E in the expected-group mapping | 6 failed (commit 1 tests), 6 failed (commit 2 tests) |
+| **M2r** swap C and E in the receipt's fallback table | 1 failed |
+| **M3** remove the per-group comparison before `CloseReceipt` | 3 failed (a `CloseReceipt` is sent and the sale files) |
+| **M4** provider reads `defaultVatClass` again | 1 failed |
+| **M5** global `taxRate` on non-A lines | 1 failed |
+| **M6** receipt VAT from the whole total | 3 failed |
+| **M7** the gate never refuses | 4 failed |
+| **M8** report VAT from the whole total | 5 failed |
+| **M9** remove the reconciliation per-group comparison | 1 failed |
+| **M10** footer key always the legacy `A` string | 1 failed |
+| **M12** shift query without the stored request | 1 failed |
+| **M13** fallback VAT table the whole sale as A | 1 failed |
+| **M14** a product without the metafield gets a class | 9 failed |
+| **M15** to **M20** mapper, cache insert, rehydrate, cart line, query and migration each broken | 1 to 5 failed each |
+
+After every mutation the file was restored and the file's tests re-run green.
+
+### Tests you asked for, and where
+
+1 resolver: `vatClass.test.ts`. 2 wire per class, golden, `defaultVatClass` ignored: `vatClassFiscal.test.ts`. 3 request per class: same file. 4 mixed receipt (A + C + E, from a real checkout, device strings stored verbatim, rows equal the returned amounts, VAT from the A line only, footer): `vatClassReceiptReports.test.ts`. 5 group gate (E amount in group C refused before `CloseReceipt`, one `OpenInvoice`, ends `ReadCurrentReceiptInfo, CancelReceipt`): `vatClassFiscal.test.ts`. 6 discount refusal with a C line: same file. 7 reports and CSV: `vatClassReceiptReports.test.ts`, including a real shift and a real database. 8 reconciliation: same file. 9 sync, cache, old-database migration: `vatClassSync.test.ts`. 10 tripwires: above. Also asked for: the gate names the item, a blank class files as A, and the D4 refusal writes no order row and no payment row (a manual M-Pesa sale, `hasRecordedMpesaPayment` false, no order 1).
+
+## P2.4 Things I did that you did not list, or that differ
+
+1. **The gate is in `runCheckout`, not in the `orders:checkout` handler in `index.ts`.** The handler calls `runCheckout`, so every checkout passes through it; and it is the only place a test can prove "before `queueOrder`" against a real database. It also runs in mock-provider mode, where an unknown class is equally wrong.
+2. **The gate also refuses a non-A line with a blank HS name**, which D4 does not say. The validator already refuses that after the sale is paid (the VIL manual asks for an HS description on every non-16% item), so the gate mirrors the validator exactly. Without it, a product with a class and a code but no name would be sold and then stuck.
+3. **`defaultVatClass`** stays in the provider's options type so the Admin setting still saves, but the private field is gone (the repo's `noUnusedLocals` rejects an unread one). §9.3 (removing the Admin field) stays for its own phase.
+4. **The provider on its own now treats a blank class as A**; before, it refused it and only `runCheckout` shielded that.
+5. **I broke two tests in commit 2 and my first run missed it.** My test selection used `tests/reports…`, which does not match `reportRanges.test.ts`, whose two reconciliation tests assert the exact shape of a group entry. The full suite caught it. I moved the per-group figure out of the group entry into a separate row field (`expectedByGroup`) so the existing shape is unchanged, and folded the fix into commit 2 with a fixup and autosquash, before any push. The fixed commit 2 passed the full suite.
+6. **One existing test fixture changed:** `tremolConformance.test.ts` fed a sale with a 150 KSh class C line a device answer holding only group A, which the new gate rightly refuses. Its answer now holds `A 120.00` and `C 150.00`. `database.test.ts` gained three `null`s in its expected insert parameters.
+7. **Line endings:** the working tree is CRLF with `core.autocrlf=true`; my new files are LF and git warns that it will convert them. Content is unaffected.
+
+## P2.5 What is still unverified, and what has not been done
+
+- **Not tested through the IPC layer:** the `index.ts` line that reads each item's class for the receipt (no test mounts that handler, as in phase 158-1). It is a one-line map through the same resolver the tests cover.
+- **Group A basis (§2b) is still open.** The gate does not compare group A; the receipt table and reconciliation still read it in opposite ways. That is §9.5, its own phase after the proof.
+- **The group each HS code lands in** is still an assumption (class letter = group letter), enforced by the gate and reconciliation, and only the spare-till proof can confirm it.
+- **Not in this phase, as you said:** §9.1 (`VITE_TAX_RATE` unset sends 0.00), §9.3 (remove the Admin default tax class field), §9.5 (gross versus net).
+- **The pilot till stays class A.** The sync change ships dark: a product with no `rubis.vat_class` metafield is class A and its traffic is pinned to the pre-change golden. Do not set the metafield on any pilot-store product until the proof passes.
+- **Next, after your review:** the spare-till proof as in Part 1 §6: `ReadHScode` for the five codes, then one 1 KSh class C and one class E sale, each attempted once, receipt and reconciliation checked against the device's group totals.
