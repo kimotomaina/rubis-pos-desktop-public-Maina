@@ -310,26 +310,34 @@ describe('AdminScreen > Integrations > M-Pesa (SMS field)', () => {
   })
 })
 
+/**
+ * DELIBERATE TEST CHANGE (docs/phase-202): Store Details moved from the
+ * Fiscal Device card to the Shopify card. Only the card each field is
+ * reached through changed, as `card` below; every mode, secret and
+ * Save assertion is as it was.
+ *   Old: every field below was reached via `click('Fiscal Device')`.
+ *   New: the six Store Details fields are reached via `click('Shopify')`.
+ */
 describe('AdminScreen > Integrations > Fiscal Device + Store Details', () => {
-  const cases: Array<{ label: string; mode: string; secret: boolean }> = [
-    { label: 'Fiscal server address', mode: 'text', secret: false },
-    { label: 'Fiscal device IP address', mode: 'ip', secret: false },
-    { label: 'Fiscal device port', mode: 'numeric', secret: false },
-    { label: 'Fiscal device password', mode: 'text', secret: true },
-    { label: 'Default tax class', mode: 'caps', secret: false },
-    { label: 'Store name', mode: 'text', secret: false },
-    { label: 'Store KRA PIN', mode: 'caps', secret: false },
-    { label: 'Legal name', mode: 'text', secret: false },
-    { label: 'Shop name and address', mode: 'text', secret: false },
-    { label: 'Phone', mode: 'text', secret: false },
-    { label: 'Receipt footer message', mode: 'text', secret: false }
+  const cases: Array<{ label: string; mode: string; secret: boolean; card: string }> = [
+    { label: 'Fiscal server address', mode: 'text', secret: false, card: 'Fiscal Device' },
+    { label: 'Fiscal device IP address', mode: 'ip', secret: false, card: 'Fiscal Device' },
+    { label: 'Fiscal device port', mode: 'numeric', secret: false, card: 'Fiscal Device' },
+    { label: 'Fiscal device password', mode: 'text', secret: true, card: 'Fiscal Device' },
+    { label: 'Default tax class', mode: 'caps', secret: false, card: 'Fiscal Device' },
+    { label: 'Store name', mode: 'text', secret: false, card: 'Shopify' },
+    { label: 'Store KRA PIN', mode: 'caps', secret: false, card: 'Shopify' },
+    { label: 'Legal name', mode: 'text', secret: false, card: 'Shopify' },
+    { label: 'Shop name and address', mode: 'text', secret: false, card: 'Shopify' },
+    { label: 'Phone', mode: 'text', secret: false, card: 'Shopify' },
+    { label: 'Receipt footer message', mode: 'text', secret: false, card: 'Shopify' }
   ]
 
-  it.each(cases)('$label — mode $mode, secret $secret', async ({ label, mode, secret }) => {
+  it.each(cases)('$label — mode $mode, secret $secret', async ({ label, mode, secret, card }) => {
     stubApi()
     await mount()
     await click('Integrations')
-    await click('Fiscal Device')
+    await click(card)
 
     const input = inputByLabel(label)
     expect(input.readOnly).toBe(true)
@@ -343,7 +351,7 @@ describe('AdminScreen > Integrations > Fiscal Device + Store Details', () => {
     stubApi()
     await mount()
     await click('Integrations')
-    await click('Fiscal Device')
+    await click('Shopify')
 
     const input = inputByLabel('Store KRA PIN')
     act(() => input.click())

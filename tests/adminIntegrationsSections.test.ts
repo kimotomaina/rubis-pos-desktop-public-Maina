@@ -336,29 +336,54 @@ describe('AdminScreen > Integrations: five sections, shown one at a time', () =>
     expect(storeIdentityHandlerBody).toContain('setStoreIdentityMessage')
   })
 
+  /**
+   * DELIBERATE TEST CHANGE (docs/phase-202): Store Details moved from the
+   * Fiscal Device section to the Shopify section, with its own save
+   * message.
+   *   Old assertion: the Fiscal Device section contains
+   *     `{storeIdentityMessage &&`.
+   *   New assertion: the Shopify section contains it and the Fiscal
+   *     Device section does not.
+   */
   it('shows each Integrations section its own save message, not a shared one', () => {
+    const shopifyStart = INTEGRATIONS_BLOCK.indexOf("integrationSection === 'shopify'")
+    const locationStart = INTEGRATIONS_BLOCK.indexOf("integrationSection === 'location'")
     const mpesaStart = INTEGRATIONS_BLOCK.indexOf("integrationSection === 'mpesa'")
     const fiscalStart = INTEGRATIONS_BLOCK.indexOf("integrationSection === 'fiscal'")
     const printerStart = INTEGRATIONS_BLOCK.indexOf("integrationSection === 'printer'")
+    const shopifySection = INTEGRATIONS_BLOCK.slice(shopifyStart, locationStart)
     const mpesaSection = INTEGRATIONS_BLOCK.slice(mpesaStart, fiscalStart)
     const fiscalSection = INTEGRATIONS_BLOCK.slice(fiscalStart, printerStart)
     expect(mpesaSection).toContain('{mpesaMessage &&')
     expect(mpesaSection).not.toContain('{fiscalMessage &&')
     expect(mpesaSection).not.toContain('{storeIdentityMessage &&')
     expect(fiscalSection).toContain('{fiscalMessage &&')
-    expect(fiscalSection).toContain('{storeIdentityMessage &&')
+    expect(fiscalSection).not.toContain('{storeIdentityMessage &&')
     expect(fiscalSection).not.toContain('{mpesaMessage &&')
+    expect(shopifySection).toContain('{storeIdentityMessage &&')
+    expect(shopifySection).not.toContain('{fiscalMessage &&')
   })
 
-  it('folds Store Details into Fiscal Device rather than inventing an unlisted sixth section', () => {
+  /**
+   * DELIBERATE TEST CHANGE (docs/phase-202): was "folds Store Details into
+   * Fiscal Device"; it now lives in Shopify, still not an unlisted sixth
+   * section.
+   *   Old assertion: the Fiscal Device section contains `Store Details</h4>`
+   *     and `storeKraPin`.
+   *   New assertion: the Shopify section contains both and the Fiscal
+   *     Device section contains neither.
+   */
+  it('folds Store Details into Shopify rather than inventing an unlisted sixth section', () => {
+    const shopifyStart = INTEGRATIONS_BLOCK.indexOf("integrationSection === 'shopify'")
+    const locationStart = INTEGRATIONS_BLOCK.indexOf("integrationSection === 'location'")
     const fiscalStart = INTEGRATIONS_BLOCK.indexOf("integrationSection === 'fiscal'")
-    const mpesaOrPrinterAfterFiscal = INTEGRATIONS_BLOCK.indexOf(
-      "integrationSection === 'printer'",
-      fiscalStart
-    )
-    const fiscalSection = INTEGRATIONS_BLOCK.slice(fiscalStart, mpesaOrPrinterAfterFiscal)
-    expect(fiscalSection).toContain('Store Details</h4>')
-    expect(fiscalSection).toContain('storeKraPin')
+    const printerStart = INTEGRATIONS_BLOCK.indexOf("integrationSection === 'printer'", fiscalStart)
+    const shopifySection = INTEGRATIONS_BLOCK.slice(shopifyStart, locationStart)
+    const fiscalSection = INTEGRATIONS_BLOCK.slice(fiscalStart, printerStart)
+    expect(shopifySection).toContain('Store Details</h4>')
+    expect(shopifySection).toContain('storeKraPin')
+    expect(fiscalSection).not.toContain('Store Details</h4>')
+    expect(fiscalSection).not.toContain('storeKraPin')
   })
 
   it('leaves every existing settings handler and its call signature untouched', () => {
