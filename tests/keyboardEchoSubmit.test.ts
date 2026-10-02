@@ -288,7 +288,7 @@ describe('which setup fields mask their echo', () => {
  * point allowed, unlike `'numeric'` (no decimal point) and distinct from
  * `'ip'` (many decimal points). Covers the mode itself, in isolation from
  * any one field that requests it (`AdminScreen`'s cash fields,
- * `CartLineItem`/`PosCheckoutPanel`'s price/discount fields,
+ * `PosCheckoutPanel`'s discount field,
  * `StockTakePage`'s threshold field all request it — see their own
  * component tests for that wiring).
  */

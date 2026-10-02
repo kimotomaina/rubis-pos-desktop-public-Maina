@@ -166,10 +166,10 @@ describe('restoreToastMessage', () => {
     ...overrides
   })
 
-  it('says how many items came back', () => {
-    expect(restoreToastMessage(restored())).toBe('Restored the cart from before the restart. 3 items.')
+  it('says how many units came back, and in how many lines', () => {
+    expect(restoreToastMessage(restored())).toBe('Restored the cart from before the restart. 3 units in 2 lines.')
     expect(restoreToastMessage(restored({ items: [line({ quantity: 1 })] }))).toBe(
-      'Restored the cart from before the restart. 1 item.'
+      'Restored the cart from before the restart. 1 unit in 1 line.'
     )
   })
 

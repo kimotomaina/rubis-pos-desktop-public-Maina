@@ -125,6 +125,8 @@ export interface PosApi {
   ) => Promise<ServiceResult<FiscalResendResult>>
   /** Resends a sale's fiscalization as-is (no PIN change) — the back-office list's plain "Resend" action. */
   resendFiscalization: (localId: number) => Promise<ServiceResult<FiscalResendResult>>
+  /** Registers the renderer's answer to "save the cart draft now, the app is quitting". Returns an unsubscribe function. */
+  onCartFlushRequest: (handler: () => Promise<void> | void) => () => void
   /** Saves the cart being built so it survives a restart. Lines only, never payment state. */
   saveCartDraft: (draft: { cartToken: string; items: CartItem[] }) => Promise<ServiceResult<void>>
   /** The saved cart, or `null` when there is none. */

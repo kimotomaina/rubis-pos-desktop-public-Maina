@@ -275,6 +275,26 @@ const api = {
     ipcRenderer.invoke('fiscal:print-duplicate', { orderId, managerId, managerPin }),
 
   /**
+   * Registers the renderer's answer to the main process asking it to save its
+   * cart draft before the app quits (docs/phase-197-1). `handler` writes the
+   * draft; the main process is told when it has finished, whether it
+   * succeeded or threw. Returns a function that removes the listener.
+   *
+   * @param {() => Promise<void> | void} handler
+   * @returns {() => void} unsubscribe
+   */
+  onCartFlushRequest: (handler: () => Promise<void> | void): (() => void) => {
+    const listener = (): void => {
+      void Promise.resolve()
+        .then(handler)
+        .catch(() => undefined)
+        .finally(() => ipcRenderer.send('cart:flush-done'))
+    }
+    ipcRenderer.on('cart:flush-request', listener)
+    return () => ipcRenderer.removeListener('cart:flush-request', listener)
+  },
+
+  /**
    * Saves the cart being built so it survives a restart (docs/phase-197).
    * Lines only - never payment state.
    *

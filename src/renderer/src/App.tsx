@@ -352,8 +352,10 @@ export default function App() {
       }
       saver.update({ items: state.items, cartToken: state.cartToken })
     })
+    const stopFlushListener = window.api.onCartFlushRequest(() => saver.flush())
     return () => {
       unsubscribe()
+      stopFlushListener()
       saver.cancel()
     }
   }, [])

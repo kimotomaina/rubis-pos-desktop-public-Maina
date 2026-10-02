@@ -214,6 +214,7 @@ import {
 } from './services/fiscal-retry.js'
 import { printFiscalDuplicate } from './services/fiscal-duplicate-print.js'
 import { recordApprovedRemovals } from './services/cart-removals.js'
+import { createCartFlushCoordinator } from './services/cart-flush.js'
 import { createNetworkMonitor } from './services/network.js'
 import { pushOrderToShopify } from './services/orders.js'
 import {
@@ -1141,6 +1142,50 @@ app.whenReady().then(async () => {
   connectivityMonitor.start()
 
   /**
+   * Saves the cart draft before the app quits (docs/phase-197-1): the renderer
+   * debounces its writes by 300 ms, so on a clean quit it is asked to write
+   * now, and the quit waits up to 500 ms for its answer. A kill still loses
+   * the last 300 ms.
+   *
+   * Two hooks, one request. `before-quit` covers `app.quit()` (restart, the
+   * updater). Clicking the window's close button closes the window first and
+   * only then quits, by which time the renderer is gone, so the window's own
+   * `close` event is hooked too. `cartFlushed` makes whichever comes first the
+   * only one that waits.
+   */
+  let cartFlushed = false
+  const cartFlush = createCartFlushCoordinator({
+    send: () => {
+      const window = BrowserWindow.getAllWindows()[0]
+      if (!window || window.isDestroyed()) throw new Error('no window to flush')
+      window.webContents.send('cart:flush-request')
+    }
+  })
+  ipcMain.on('cart:flush-done', () => cartFlush.acknowledge())
+  const flushCartBeforeQuit = async (): Promise<void> => {
+    const startedAt = Date.now()
+    const result = await cartFlush.request()
+    console.log(`[rubis-pos] Cart draft flush on quit: ${result} after ${Date.now() - startedAt} ms`)
+    cartFlushed = true
+  }
+  app.on('before-quit', (event) => {
+    if (cartFlushed) return
+    event.preventDefault()
+    void flushCartBeforeQuit().then(() => app.quit())
+  })
+  /** Hooks a window's `close` so the cart draft is saved before it closes. */
+  const flushCartOnWindowClose = (window: BrowserWindow): BrowserWindow => {
+    window.on('close', (event) => {
+      if (cartFlushed) return
+      event.preventDefault()
+      void flushCartBeforeQuit().then(() => {
+        if (!window.isDestroyed()) window.close()
+      })
+    })
+    return window
+  }
+
+  /**
    * Release the ZFPLabServer device session on shutdown — the vendor
    * demo does the same from its form-closing handler. Deliberately not
    * done per sale: the session is what `settings()` establishes, and
@@ -1148,7 +1193,10 @@ app.whenReady().then(async () => {
    * on every one. Best-effort and time-boxed by the HTTP client's own
    * timeout; a failure here must never delay or block quitting.
    */
-  app.on('before-quit', () => {
+  app.on('before-quit', (event) => {
+    // The cart-flush hook above prevents the first pass and quits again; the
+    // session is released on that final pass, not twice.
+    if (event.defaultPrevented) return
     if (fiscalizationProvider instanceof RealFiscalizationProvider) {
       void fiscalizationProvider
         .closeServerConnection()
@@ -3852,11 +3900,11 @@ app.whenReady().then(async () => {
     }
   )
 
-  createWindow()
+  flushCartOnWindowClose(createWindow())
 
   /** Re-create a window when the dock icon is clicked on macOS. */
   app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow()
+    if (BrowserWindow.getAllWindows().length === 0) flushCartOnWindowClose(createWindow())
   })
 })
 

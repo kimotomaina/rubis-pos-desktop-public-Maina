@@ -31,6 +31,12 @@ export interface CartDraftSaver {
   update: (snapshot: { items: CartItem[]; cartToken: string | null }) => void
   /** Drops the pending write without making it. */
   cancel: () => void
+  /**
+   * Makes the pending write now, if there is one, and resolves once it has
+   * completed. Resolves at once when nothing is pending. Used on a clean quit
+   * so the last change is not lost to the debounce (docs/phase-197-1).
+   */
+  flush: () => Promise<void>
 }
 
 /**
@@ -44,24 +50,42 @@ export interface CartDraftSaver {
 export function createCartDraftSaver(deps: CartDraftSaverDeps): CartDraftSaver {
   const delayMs = deps.delayMs ?? CART_DRAFT_DEBOUNCE_MS
   let timer: ReturnType<typeof setTimeout> | null = null
+  let pending: { items: CartItem[]; cartToken: string | null } | null = null
 
   const cancel = (): void => {
     if (timer !== null) clearTimeout(timer)
     timer = null
+    pending = null
+  }
+
+  /** Writes `snapshot` now; a failed write is swallowed. */
+  const write = (snapshot: { items: CartItem[]; cartToken: string | null }): Promise<void> => {
+    const result =
+      snapshot.items.length === 0 || !snapshot.cartToken
+        ? deps.clear()
+        : deps.save({ items: snapshot.items, cartToken: snapshot.cartToken })
+    return Promise.resolve(result).then(
+      () => undefined,
+      () => undefined
+    )
   }
 
   return {
     cancel,
     update: (snapshot) => {
       cancel()
+      pending = snapshot
       timer = setTimeout(() => {
+        const due = pending
         timer = null
-        const write =
-          snapshot.items.length === 0 || !snapshot.cartToken
-            ? deps.clear()
-            : deps.save({ items: snapshot.items, cartToken: snapshot.cartToken })
-        void Promise.resolve(write).catch(() => undefined)
+        pending = null
+        if (due) void write(due)
       }, delayMs)
+    },
+    flush: () => {
+      const due = pending
+      cancel()
+      return due ? write(due) : Promise.resolve()
     }
   }
 }
@@ -126,7 +150,8 @@ export function restoreToastMessage(restored: RestoredCart): string {
     return `The cart from before the restart was not restored: ${restored.droppedLines} line${restored.droppedLines === 1 ? '' : 's'} no longer in the catalogue.`
   }
   const units = restored.items.reduce((sum, item) => sum + item.quantity, 0)
-  let message = `Restored the cart from before the restart. ${units} item${units === 1 ? '' : 's'}.`
+  const lines = restored.items.length
+  let message = `Restored the cart from before the restart. ${units} unit${units === 1 ? '' : 's'} in ${lines} line${lines === 1 ? '' : 's'}.`
   if (restored.droppedLines > 0) {
     message += ` ${restored.droppedLines} line${restored.droppedLines === 1 ? '' : 's'} no longer in the catalogue ${restored.droppedLines === 1 ? 'was' : 'were'} dropped.`
   }

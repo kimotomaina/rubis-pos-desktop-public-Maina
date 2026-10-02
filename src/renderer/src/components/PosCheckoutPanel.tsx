@@ -112,7 +112,7 @@ export default function PosCheckoutPanel({
   const [discountType, setDiscountType] = useState<Discount['type']>('percent')
   const [discountValue, setDiscountValue] = useState('')
 
-  /** Routes a cart-level discount edit through the Manager PIN gate above the 10% threshold, matching `CartLineItem`'s per-line rule. */
+  /** Routes a cart-level discount edit through the Manager PIN gate above the 10% threshold. */
   const applyCartDiscount = () => {
     const value = parseFloat(discountValue)
     if (!Number.isFinite(value) || value <= 0) {
