@@ -29,7 +29,7 @@ import {
   InboxIcon,
   PackageIcon
 } from './icons.js'
-import BackButton from './BackButton.js'
+import Breadcrumbs, { type BreadcrumbItem } from './Breadcrumbs.js'
 import SectionCardGrid, { type SectionCard } from './SectionCardGrid.js'
 import MpesaLogsPage from '../pages/MpesaLogsPage.js'
 import NeedsAttentionPage from '../pages/NeedsAttentionPage.js'
@@ -1237,12 +1237,31 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
     })
   }
 
+  /** One row of crumbs for wherever the card grids have been drilled to; the Admin crumb also clears the Integrations section so the next visit starts at its grid. */
+  const breadcrumbs: BreadcrumbItem[] = []
+  if (activeTab !== null) {
+    const tabLabel = adminSections(unfiledCount, shopifyActionCount).find((card) => card.key === activeTab)?.label ?? ''
+    breadcrumbs.push({
+      label: 'Admin',
+      onClick: () => {
+        setActiveTab(null)
+        setIntegrationSection(null)
+      }
+    })
+    if (activeTab === 'integrations' && integrationSection !== null) {
+      breadcrumbs.push({ label: tabLabel, onClick: () => setIntegrationSection(null) })
+      breadcrumbs.push({ label: INTEGRATION_SECTIONS.find((card) => card.key === integrationSection)?.label ?? '' })
+    } else {
+      breadcrumbs.push({ label: tabLabel })
+    }
+  }
+
   return (
     <div className="h-full min-h-full w-full space-y-6">
       {activeTab === null ? (
         <SectionCardGrid sections={adminSections(unfiledCount, shopifyActionCount)} onSelect={setActiveTab} />
       ) : (
-        <BackButton label="Back to Admin" onClick={() => setActiveTab(null)} />
+        <Breadcrumbs items={breadcrumbs} />
       )}
 
       {activeTab === 'mpesaLogs' && <MpesaLogsPage />}
@@ -1358,10 +1377,8 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
          * blank, and vice versa (phase-147 Part 6 #5 fixed).
          */
         <div className="space-y-4">
-          {integrationSection === null ? (
+          {integrationSection === null && (
             <SectionCardGrid sections={INTEGRATION_SECTIONS} onSelect={setIntegrationSection} />
-          ) : (
-            <BackButton label="Back to Integrations" onClick={() => setIntegrationSection(null)} />
           )}
 
           {integrationsLoading ? (
