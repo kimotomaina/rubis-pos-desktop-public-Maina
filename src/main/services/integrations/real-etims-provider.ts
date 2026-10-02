@@ -57,7 +57,8 @@ import type {
   FiscalInvoiceResult,
   FiscalSubmitOutcome,
   FiscalVatGroupAmounts,
-  FiscalizationProvider
+  FiscalizationProvider,
+  TraderInvNumRecorder
 } from './etims.js'
 import {
   closeDeviceConnection,
@@ -733,6 +734,8 @@ export interface RealFiscalizationProviderOptions {
    * compared to the POS's own order history.
    */
   lookupInvoice?: FiscalInvoiceLookupFn
+  /** Stores the trader invoice number before it is sent (docs/phase-198). Omitted in tests that do not care. */
+  recordTraderInvNum?: TraderInvNumRecorder
   /** Defaults to `console` (phase-80). Notable per-sale/session events log through this. */
   logger?: Logger
   /**
@@ -786,6 +789,7 @@ export class RealFiscalizationProvider implements FiscalizationProvider {
   private readonly http: AxiosInstance
   private readonly endpoints: FiscalEndpointPaths
   private readonly lookupInvoice?: FiscalInvoiceLookupFn
+  private readonly recordTraderInvNum?: TraderInvNumRecorder
   private readonly logger: Logger
   /**
    * The three values the Admin screen owns. Mutable, and replaced
@@ -819,6 +823,7 @@ export class RealFiscalizationProvider implements FiscalizationProvider {
     this.http = options.httpClient ?? createFiscalHttpClient({ baseUrl: options.baseUrl })
     this.endpoints = { ...DEFAULT_FISCAL_ENDPOINTS, ...options.endpoints }
     this.lookupInvoice = options.lookupInvoice
+    this.recordTraderInvNum = options.recordTraderInvNum
     this.logger = options.logger ?? console
     this.debugLogging = options.debugLogging ?? false
   }
@@ -1088,21 +1093,18 @@ export class RealFiscalizationProvider implements FiscalizationProvider {
     // NOT STE2=52, which is an unrelated "Syntax error"; see
     // CODE_OPENED_FISCAL_RECEIPT).
     logStep(3, 'OpenInvoiceWithFreeCustomerData')
-    let openResult = await this.sendCommand(
-      this.resolveOpenInvoiceEndpoint(request),
-      'OpenInvoiceWithFreeCustomerData',
-      this.buildOpenInvoiceArgs(request)
-    )
+    // Built once: the send and the retry below post this same body, and the
+    // receipt prints the TraderSystemInvNum recorded from it (docs/phase-198).
+    const openEndpoint = this.resolveOpenInvoiceEndpoint(request)
+    const openArgs = this.buildOpenInvoiceArgs(request)
+    this.recordTraderNumber(request.localId, openArgs.TraderSystemInvNum)
+    let openResult = await this.sendCommand(openEndpoint, 'OpenInvoiceWithFreeCustomerData', openArgs)
     if (!openResult.success && openResult.code === CODE_OPENED_FISCAL_RECEIPT) {
       this.logger.log(
         `[rubis-pos] Sale ${request.localId}: device reports an already-opened receipt — cancelling and retrying once`
       )
       await this.rollback()
-      openResult = await this.sendCommand(
-        this.resolveOpenInvoiceEndpoint(request),
-        'OpenInvoiceWithFreeCustomerData',
-        this.buildOpenInvoiceArgs(request)
-      )
+      openResult = await this.sendCommand(openEndpoint, 'OpenInvoiceWithFreeCustomerData', openArgs)
     }
     if (!openResult.success && request.isRetry) {
       const verdict = await this.verifyAlreadyFiled(defVer, openResult, request.localId)
@@ -1811,6 +1813,26 @@ export class RealFiscalizationProvider implements FiscalizationProvider {
         ? `INV-${String(request.localId).padStart(9, '0')}`
         : request.clientOrderUuid.replace(/-/g, '')
     return raw.slice(0, MAX_TRADER_SYSTEM_INV_NUM_LENGTH)
+  }
+
+  /**
+   * Hands the trader invoice number to the recorder before the send
+   * (docs/phase-198). The number is a pure function of the local id, so
+   * recording it before a send that then fails stores the right value, and
+   * a retry of the same sale writes nothing new (the column is write-once).
+   * Never throws: a failed record is logged and the device call proceeds
+   * unchanged. Skipped for a request with no local id, which has no order
+   * row to hold it.
+   */
+  private recordTraderNumber(localId: number | undefined, traderInvNum: string): void {
+    if (typeof localId !== 'number' || !this.recordTraderInvNum) return
+    try {
+      this.recordTraderInvNum(localId, traderInvNum)
+    } catch (err) {
+      this.logger.warn(
+        `[rubis-pos] Sale ${localId}: could not store the trader invoice number — ${err instanceof Error ? err.message : String(err)}`
+      )
+    }
   }
 
   /**

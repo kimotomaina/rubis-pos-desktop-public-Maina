@@ -75,7 +75,7 @@ function round2(value: number): number {
  * @param {Discount} [discount]
  * @returns {number}
  */
-function discountAmount(base: number, discount?: Discount): number {
+export function discountAmount(base: number, discount?: Discount): number {
   if (!discount || !(discount.value > 0)) return 0
   const reduction = discount.type === 'percent' ? base * (discount.value / 100) : discount.value
   return Math.min(reduction, base)

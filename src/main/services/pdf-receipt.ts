@@ -112,7 +112,8 @@ export async function generatePdfReceipt(
       address: settings.address,
       phone: settings.phone,
       sellerPin: settings.storeKraPin,
-      footerMessage: settings.footerMessage
+      footerMessage: settings.footerMessage,
+      decorate: settings.decorateFiscalSlip
     },
     { width }
   )

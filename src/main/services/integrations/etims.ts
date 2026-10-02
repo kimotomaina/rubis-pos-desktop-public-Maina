@@ -17,6 +17,7 @@
 
 import type { ServiceResult } from '../shopify-types.js'
 import type { DefVersionStatus } from './http-client.js'
+import type { ReceiptLayoutEntry } from '../../lib/receiptLayout.js'
 
 /** One taxable line item on the invoice submitted for fiscalization. */
 export interface FiscalInvoiceLine {
@@ -302,10 +303,25 @@ export type DuplicatePrintOutcome =
   | { status: 'error'; reason: string; deviceLastBefore: string | null; sent: boolean }
 
 /**
+ * Stores the trader invoice number a provider is about to send for a sale
+ * (docs/phase-198), so the receipt prints the value the device was given
+ * instead of rebuilding it. Backed by a write-once column; a provider calls
+ * it before the send and must not let a failure here reach the device call.
+ */
+export type TraderInvNumRecorder = (localId: number, traderInvNum: string) => void
+
+/**
  * Narrow surface every fiscalization backend (mock or real eTIMS
  * middleware) must implement.
  */
 export interface FiscalizationProvider {
+  /**
+   * Lets a development stand-in mark the fiscal slip it prints as a test
+   * (docs/phase-198). Absent on the real provider, so a real slip is never
+   * altered. `width` is the printer's character width.
+   */
+  decorateFiscalSlip?(entries: ReceiptLayoutEntry[], options: { width: number }): ReceiptLayoutEntry[]
+
   /** Submits a completed sale for fiscalization. */
   submitInvoice(request: FiscalInvoiceRequest): Promise<FiscalSubmitOutcome>
 

@@ -75,6 +75,11 @@ export interface ReceiptLayoutSettings {
   sellerPin?: string
   /** Printed centred above the VAT key at the very bottom. */
   footerMessage?: string
+  /**
+   * Rewrites the finished layout (docs/phase-198). Set only by a development
+   * stand-in that marks its slips as tests; the real path never sets it.
+   */
+  decorate?: (entries: ReceiptLayoutEntry[], options: { width: number }) => ReceiptLayoutEntry[]
 }
 
 /** One printed line item. */
@@ -115,6 +120,12 @@ export interface ReceiptLayoutOrder {
   /** Buyer's company/trading name, from `fiscal_request_json` — only ever known once a fiscal request was sent. */
   buyerName?: string
   fiscalInvoiceNumber?: string
+  /**
+   * The trader invoice number sent to the device, as stored when it was sent
+   * (docs/phase-198). Printed as "Invoice No" on a fiscal slip and as "Receipt" on
+   * the Enjoy slip; never recomputed, so an order with none stored prints neither.
+   */
+  traderInvNum?: string
   /** The device's own QR verification text (a URL, up to 128 characters) — never an image. */
   fiscalQrCode?: string
   fiscalizedAt?: string
@@ -191,11 +202,11 @@ function round2(value: number): number {
   return Math.round(value * 100) / 100
 }
 
-function ln(text: string, align: ReceiptLineAlign = 'left', style: ReceiptLineStyle = 'normal'): ReceiptLayoutLine {
+export function ln(text: string, align: ReceiptLineAlign = 'left', style: ReceiptLineStyle = 'normal'): ReceiptLayoutLine {
   return { text: toAscii(text), align, style }
 }
 
-function rule(width: number): ReceiptLayoutLine {
+export function rule(width: number): ReceiptLayoutLine {
   return ln('-'.repeat(width))
 }
 
@@ -251,7 +262,7 @@ export function wrapText(text: string, width: number, maxLines = Infinity): stri
  * @param {ReceiptLineStyle} [style]
  * @returns {ReceiptLayoutLine[]}
  */
-function keyValueLines(
+export function keyValueLines(
   label: string,
   value: string,
   width: number,
@@ -275,7 +286,7 @@ function splitLabelValue(text: string): { label: string; value: string } {
 }
 
 /** Wraps free text (a setting or a fixed label) to `width`, applying one align/style to every resulting line. */
-function wrappedLines(
+export function wrappedLines(
   text: string,
   width: number,
   align: ReceiptLineAlign = 'centre',
@@ -402,13 +413,13 @@ export function buildReceiptLayout(
 
   // --- (c) Details ---
   const dateTime = formatReceiptDateTime(order.createdAt)
-  push(
-    ...keyValueLines(
-      isFiscalised ? 'Invoice No:' : 'Sale No:',
-      isFiscalised ? order.fiscalInvoiceNumber! : String(order.localId),
-      width
-    )
-  )
+  if (!isFiscalised) {
+    push(...keyValueLines('Sale No:', String(order.localId), width))
+  } else if (order.traderInvNum) {
+    // The number the till sent to the device, stored at send time; an older
+    // order with none stored omits the row rather than rebuild it.
+    push(...keyValueLines('Invoice No:', order.traderInvNum, width))
+  }
   push(...keyValueLines('Date:', dateTime, width))
   push(...keyValueLines('Cashier:', order.cashierName, width))
   if (order.customerPin) push(...keyValueLines('Buyer PIN:', order.customerPin, width))
@@ -500,5 +511,5 @@ export function buildReceiptLayout(
     push(...wrappedLines('*** DUPLICATE ***', width, 'centre', 'bold'))
   }
 
-  return entries
+  return settings.decorate ? settings.decorate(entries, { width }) : entries
 }

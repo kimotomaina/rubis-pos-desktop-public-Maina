@@ -11,6 +11,8 @@
  */
 
 import type { ServiceResult } from '../shopify-types.js'
+import { ln } from '../../lib/receiptLayout.js'
+import type { ReceiptLayoutEntry } from '../../lib/receiptLayout.js'
 import type {
   CreditNoteDetails,
   DuplicatePrintGate,
@@ -18,11 +20,29 @@ import type {
   FiscalInvoiceRequest,
   FiscalInvoiceResult,
   FiscalizationProvider,
-  FiscalSubmitOutcome
+  FiscalSubmitOutcome,
+  TraderInvNumRecorder
 } from './etims.js'
 
 /** Simulated processing delay for the mock provider, in milliseconds. */
 export const MOCK_ETIMS_DELAY_MS = 1000
+
+/**
+ * Printed in double width at the top and bottom of every fiscal slip a mock
+ * sale produces (docs/phase-198), so a test slip can never pass for a tax
+ * invoice. This is the only place the wording lives; the real path never
+ * prints it, and the build check fails if it reaches `out/main`.
+ */
+export const MOCK_SLIP_BANNER = 'TEST. NOT A TAX INVOICE.'
+
+/** A made-up control unit serial, so the dev slip shows the line a real one carries. */
+export const MOCK_CU_SERIAL = 'MOCK-CU-0000001'
+
+/** Options for {@link MockFiscalizationProvider}. */
+export interface MockFiscalizationProviderOptions {
+  /** Stores the trader invoice number a sale would have been sent with (docs/phase-198). */
+  recordTraderInvNum?: TraderInvNumRecorder
+}
 
 /**
  * Simulates the eTIMS middleware without any network access: a fixed
@@ -36,13 +56,32 @@ export class MockFiscalizationProvider implements FiscalizationProvider {
   private readonly delayMs: number
   private readonly invoices = new Map<string, FiscalInvoiceResult>()
   private lastInvoiceNumber = ''
+  private readonly recordTraderInvNum?: TraderInvNumRecorder
 
   /**
    * @param {number} [delayMs] — simulated round-trip time. Defaults to
    *   {@link MOCK_ETIMS_DELAY_MS}.
+   * @param {MockFiscalizationProviderOptions} [options]
    */
-  constructor(delayMs: number = MOCK_ETIMS_DELAY_MS) {
+  constructor(delayMs: number = MOCK_ETIMS_DELAY_MS, options: MockFiscalizationProviderOptions = {}) {
     this.delayMs = delayMs
+    this.recordTraderInvNum = options.recordTraderInvNum
+  }
+
+  /**
+   * Frames the whole fiscal slip with the test banner, a row of asterisks above
+   * and below it, top and bottom (docs/phase-198). On a narrow printer, where the
+   * banner will not fit on one line at double width, it prints bold instead.
+   *
+   * @param {ReceiptLayoutEntry[]} entries
+   * @param {{ width: number }} options
+   * @returns {ReceiptLayoutEntry[]}
+   */
+  decorateFiscalSlip(entries: ReceiptLayoutEntry[], options: { width: number }): ReceiptLayoutEntry[] {
+    const stars = ln('*'.repeat(options.width))
+    const style = MOCK_SLIP_BANNER.length * 2 <= options.width ? 'double' : 'bold'
+    const banner = [stars, ln(MOCK_SLIP_BANNER, 'centre', style), stars]
+    return [...banner, ...entries, ...banner]
   }
 
   /**
@@ -70,10 +109,15 @@ export class MockFiscalizationProvider implements FiscalizationProvider {
     }
 
     const invoiceNumber = `KRA-MOCK-${request.clientOrderUuid.slice(0, 8).toUpperCase()}`
+    if (typeof request.localId === 'number' && this.recordTraderInvNum) {
+      // Same shape the real provider sends, so a dev slip shows the "Receipt" line.
+      this.recordTraderInvNum(request.localId, `INV-${String(request.localId).padStart(9, '0')}`)
+    }
     const result: FiscalInvoiceResult = {
       invoiceNumber,
       qrCode: Buffer.from(`[QR CODE]:${invoiceNumber}`).toString('base64'),
-      fiscalizedAt: new Date().toISOString()
+      fiscalizedAt: new Date().toISOString(),
+      cuSerialNumber: MOCK_CU_SERIAL
     }
     this.invoices.set(invoiceNumber, result)
     this.lastInvoiceNumber = invoiceNumber

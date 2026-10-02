@@ -27,7 +27,10 @@ import type { PrinterConfig, PrinterType, PrinterConnectionType, FiscalStatus } 
 import { formatCurrency } from './currency.js'
 import { generatePdfReceipt } from './pdf-receipt.js'
 import { buildReceiptLayout, isReceiptLayoutQr, asReceiptWidth } from '../lib/receiptLayout.js'
+import { buildEnjoySlip } from '../lib/enjoySlip.js'
+import type { EnjoySlipKraNote } from '../lib/enjoySlip.js'
 import type {
+  ReceiptLayoutEntry,
   ReceiptLayoutOrder,
   ReceiptLayoutLineItem,
   ReceiptLayoutVatGroups,
@@ -74,6 +77,13 @@ export interface PrinterSettings {
    * `'windows'`.
    */
   connectionType?: PrinterConnectionType
+  /** The shop's location name, printed under the heading of the Enjoy customer slip (docs/phase-198) — omitted when unset. */
+  locationName?: string
+  /**
+   * Set only when a development stand-in provider is running: marks the fiscal
+   * slip as a test (docs/phase-198). Never set with the real provider.
+   */
+  decorateFiscalSlip?: (entries: ReceiptLayoutEntry[], options: { width: number }) => ReceiptLayoutEntry[]
 }
 
 /** The per-transaction fields a receipt needs — real data captured at checkout. */
@@ -91,6 +101,8 @@ export interface ReceiptOrder {
   buyerName?: string
   /** KRA/eTIMS invoice number, when the sale was fiscalized. */
   fiscalInvoiceNumber?: string
+  /** The trader invoice number stored when the sale was sent to the device (docs/phase-198) — omitted for an older sale. */
+  traderInvNum?: string
   /** The device's own QR verification text (a URL, up to 128 characters, per docs/phase-110) — never an image (docs/phase-171's audit). */
   fiscalQrCode?: string
   /** The device's five per-VAT-group taxable (ex-VAT) subtotals (docs/phase-171) — printed in the VAT table when present. */
@@ -119,6 +131,13 @@ export interface ReceiptOrder {
    * never guessed here.
    */
   isDuplicate?: boolean
+  /**
+   * Whether the Enjoy customer slip is stamped "DUPLICATE" (docs/phase-198).
+   * Decided by the caller: there is no record of the customer slip having been
+   * printed, so a manual Order History print is the reprint. Falls back to
+   * {@link isDuplicate} when absent.
+   */
+  customerSlipIsDuplicate?: boolean
   /** The amount actually charged (docs/phase-161) - printed verbatim, never recomputed. See {@link computeReceiptTotals}. */
   total: number
   /** Cart-level discount applied at checkout, when any (docs/phase-161). */
@@ -145,6 +164,13 @@ export interface ReceiptPrintResult {
   mode?: 'pdf'
   /** Absolute path of the fallback PDF, present when `mode` is `'pdf'`. */
   filePath?: string
+  /**
+   * How the separate Enjoy customer slip went (docs/phase-198): absent when it
+   * was not asked for. It fails or succeeds independently of the fiscal slip.
+   */
+  customerSlip?: 'printed' | 'failed'
+  /** Why the customer slip failed, when it did. */
+  customerSlipError?: string
 }
 
 /**
@@ -371,11 +397,23 @@ export async function renderReceipt(
       address: settings.address,
       phone: settings.phone,
       sellerPin: settings.storeKraPin,
-      footerMessage: settings.footerMessage
+      footerMessage: settings.footerMessage,
+      decorate: settings.decorateFiscalSlip
     },
     { width: settings.width }
   )
+  renderEntries(client, entries)
+}
 
+/**
+ * Walks a layout's entries onto the printer and cuts — shared by the fiscal
+ * slip and the Enjoy customer slip (docs/phase-198), so each is its own job
+ * with its own cut.
+ *
+ * @param {ThermalPrinterLike} client
+ * @param {ReceiptLayoutEntry[]} entries
+ */
+function renderEntries(client: ThermalPrinterLike, entries: ReceiptLayoutEntry[]): void {
   for (const entry of entries) {
     if (isReceiptLayoutQr(entry)) {
       if (client.printQR) {
@@ -770,6 +808,118 @@ export async function printReceiptToType(
 }
 
 /**
+ * Renders the Enjoy customer slip (docs/phase-198) onto a printer client, as
+ * its own job ending in its own cut.
+ *
+ * @param {ThermalPrinterLike} client
+ * @param {ReceiptOrder} order
+ * @param {ReceiptLineItem[]} items
+ * @param {PrinterSettings} settings
+ * @param {EnjoySlipKraNote} kraNote
+ */
+export function renderEnjoySlip(
+  client: ThermalPrinterLike,
+  order: ReceiptOrder,
+  items: ReceiptLineItem[],
+  settings: PrinterSettings,
+  kraNote: EnjoySlipKraNote
+): void {
+  const layoutOrder: ReceiptLayoutOrder = {
+    ...order,
+    isDuplicate: order.customerSlipIsDuplicate ?? order.isDuplicate,
+    items: items.map((item) => ({
+      title: item.title,
+      variantTitle: item.variantTitle,
+      quantity: item.quantity,
+      unitPrice: item.unitPrice,
+      discount: item.discount,
+      vatClass: item.vatClass
+    }))
+  }
+  const entries = buildEnjoySlip(
+    layoutOrder,
+    { locationName: settings.locationName, address: settings.address },
+    { width: settings.width ?? 48, kraNote }
+  )
+  renderEntries(client, entries)
+}
+
+/** Which slips of a sale one {@link printOrderSlips} call prints. */
+export interface OrderSlipSelection {
+  fiscal: boolean
+  customer: boolean
+}
+
+/** What {@link printOrderSlips} did with each slip; `null` for one not asked for. */
+export interface OrderSlipsResult {
+  fiscal: ServiceResult<ReceiptPrintResult> | null
+  customer: ServiceResult<ReceiptPrintResult> | null
+}
+
+/**
+ * Decides the KRA line the customer slip carries from what actually
+ * happened at the printer, never from what was intended (docs/phase-198): it
+ * says the tax invoice is "printed separately" only when the fiscal slip
+ * physically printed, and "will follow" only for a sale not yet filed.
+ *
+ * @param {ReceiptOrder} order
+ * @param {ServiceResult<ReceiptPrintResult> | null} fiscal the fiscal slip's result in this call, or `null` when it was not printed
+ * @returns {EnjoySlipKraNote}
+ */
+export function kraNoteFor(order: ReceiptOrder, fiscal: ServiceResult<ReceiptPrintResult> | null): EnjoySlipKraNote {
+  if (order.fiscalInvoiceNumber) {
+    return fiscal?.success && fiscal.data?.mode !== 'pdf' ? 'printed' : 'none'
+  }
+  return order.fiscalPending ? 'pending' : 'none'
+}
+
+/**
+ * Prints a sale's slips as separate jobs, in order: the fiscal-side slip
+ * (cut), then the Enjoy customer slip (cut) (docs/phase-198). Each succeeds
+ * or fails on its own: a failed fiscal slip never stops the customer slip,
+ * and neither is retried here. The customer slip has no PDF fallback; when
+ * the printer is out it simply fails and the caller says so.
+ *
+ * @param {ReceiptOrder} order
+ * @param {ReceiptLineItem[]} items
+ * @param {PrinterRegistry} registry
+ * @param {PrinterSettings} defaultSettings
+ * @param {OrderSlipSelection} slips
+ * @param {PrinterType} [printerType]
+ * @param {PrinterFactory} [factory]
+ * @param {PdfReceiptGenerator} [pdfGenerator]
+ * @param {WindowsPrintSender} [windowsSender]
+ * @returns {Promise<OrderSlipsResult>}
+ */
+export async function printOrderSlips(
+  order: ReceiptOrder,
+  items: ReceiptLineItem[],
+  registry: PrinterRegistry,
+  defaultSettings: PrinterSettings,
+  slips: OrderSlipSelection,
+  printerType: PrinterType = 'receipt',
+  factory: PrinterFactory = defaultPrinterFactory,
+  pdfGenerator: PdfReceiptGenerator = generatePdfReceipt,
+  windowsSender: WindowsPrintSender = sendRawToWindowsPrinter
+): Promise<OrderSlipsResult> {
+  const settings = resolvePrinterSettings(registry, printerType, defaultSettings)
+  const fiscal = slips.fiscal
+    ? await printReceipt(order, items, settings, factory, pdfGenerator, windowsSender)
+    : null
+  const customer = slips.customer
+    ? await sendToPrinter(
+        (client) => renderEnjoySlip(client, order, items, settings, kraNoteFor(order, fiscal)),
+        settings,
+        factory,
+        `Enjoy slip, order #${order.localId}`,
+        undefined,
+        windowsSender
+      )
+    : null
+  return { fiscal, customer }
+}
+
+/**
  * Sends a short, self-describing test page to `interfaceName` —
  * bypasses the registry entirely so the Admin screen's Peripherals
  * tab can verify connectivity for a printer before (or instead of)
@@ -835,4 +985,45 @@ export async function printWindowsTestPage(
     printerName,
     windowsSender
   )
+}
+
+/**
+ * Folds the customer slip's outcome into the fiscal slip's result, the shape the
+ * renderer already understands (docs/phase-198). A failed fiscal slip is
+ * returned as it is: its own message already tells the cashier to reprint.
+ *
+ * @param {ServiceResult<ReceiptPrintResult>} fiscal
+ * @param {ServiceResult<ReceiptPrintResult> | null} customer `null` when no customer slip was asked for
+ * @returns {ServiceResult<ReceiptPrintResult>}
+ */
+export function attachCustomerSlipResult(
+  fiscal: ServiceResult<ReceiptPrintResult>,
+  customer: ServiceResult<ReceiptPrintResult> | null
+): ServiceResult<ReceiptPrintResult> {
+  if (!fiscal.success || !customer) return fiscal
+  return {
+    ...fiscal,
+    data: {
+      printed: fiscal.data?.printed ?? false,
+      mock: fiscal.data?.mock ?? false,
+      ...fiscal.data,
+      customerSlip: customer.success ? 'printed' : 'failed',
+      customerSlipError: customer.success ? undefined : customer.error
+    }
+  }
+}
+
+/**
+ * The slips that physically reached paper in one {@link printOrderSlips} call
+ * (docs/phase-198): a PDF fallback is not paper, and a failure is not a print.
+ * What an Order History reprint logs.
+ *
+ * @param {OrderSlipsResult} result
+ * @returns {Array<'fiscal' | 'enjoy'>}
+ */
+export function physicallyPrintedSlips(result: OrderSlipsResult): Array<'fiscal' | 'enjoy'> {
+  const slips: Array<'fiscal' | 'enjoy'> = []
+  if (result.fiscal?.success && result.fiscal.data?.mode !== 'pdf') slips.push('fiscal')
+  if (result.customer?.success) slips.push('enjoy')
+  return slips
 }

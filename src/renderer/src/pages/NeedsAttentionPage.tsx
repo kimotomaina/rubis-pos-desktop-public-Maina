@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import type { NeedsAttentionRow } from '../../../main/services/database.js'
+import type { NeedsAttentionRow, UnprintedFiscalSlipRow } from '../../../main/services/database.js'
 import { formatCurrency } from '../lib/currency.js'
 import { isValidKraPinFormat, KRA_PIN_MAX_LENGTH } from '../lib/kraPin.js'
 import { describeNeedsAttentionStatus, applyResendResult } from '../lib/needsAttention.js'
@@ -47,6 +47,9 @@ export default function NeedsAttentionPage({
   shopifyCheckOverride
 }: { shopifyCheckOverride?: ReconciliationResult } = {}) {
   const [rows, setRows] = useState<NeedsAttentionRow[]>([])
+  const [unprinted, setUnprinted] = useState<UnprintedFiscalSlipRow[]>([])
+  const [printingId, setPrintingId] = useState<number | null>(null)
+  const [printError, setPrintError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [resendingId, setResendingId] = useState<number | null>(null)
@@ -65,6 +68,9 @@ export default function NeedsAttentionPage({
       } else {
         setError(result.error ?? 'Failed to load sales needing attention')
       }
+      // docs/phase-198: filed sales whose tax invoice never reached paper.
+      const slips = await window.api.getUnprintedFiscalSlips()
+      if (slips.success && slips.data) setUnprinted(slips.data)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load sales needing attention')
     } finally {
@@ -118,6 +124,28 @@ export default function NeedsAttentionPage({
     })()
   }
 
+  /** Prints only the fiscal slip of a late-filed sale (docs/phase-198); the row leaves the list once it is on paper. */
+  const handlePrintSlip = (localId: number): void => {
+    setPrintError(null)
+    setPrintingId(localId)
+    void (async () => {
+      try {
+        const result = await window.api.printReceipt(localId, { fiscalOnly: true })
+        if (result.success && result.data?.mode !== 'pdf') {
+          setUnprinted((current) => current.filter((row) => row.local_id !== localId))
+        } else {
+          setPrintError(
+            result.success ? 'The printer is offline. Try again when it is back.' : (result.error ?? `Failed to print sale #${localId}`)
+          )
+        }
+      } catch (err) {
+        setPrintError(err instanceof Error ? err.message : `Failed to print sale #${localId}`)
+      } finally {
+        setPrintingId(null)
+      }
+    })()
+  }
+
   const openPinKeyboard = (): void => {
     useKeyboardStore.getState().open({
       value: pinInput,
@@ -159,8 +187,44 @@ export default function NeedsAttentionPage({
         <p className="rounded-lg bg-rose-50 px-3 py-2 text-base font-medium text-rose-700">{resendError}</p>
       )}
 
+      {unprinted.length > 0 && (
+        <div className="space-y-3" data-testid="unprinted-slips">
+          <h4 className="text-xl font-bold text-slate-800">Tax invoices not printed</h4>
+          <p className="text-base text-slate-600">
+            These sales were filed with KRA after the customer left, and the tax invoice did not print.
+          </p>
+          {printError && (
+            <p className="rounded-lg bg-rose-50 px-3 py-2 text-base font-medium text-rose-700">{printError}</p>
+          )}
+          {unprinted.map((row) => (
+            <div
+              key={row.local_id}
+              className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-200 bg-white p-4"
+            >
+              <div>
+                <span className="text-lg font-semibold text-slate-800">Order #{row.local_id}</span>
+                <p className="mt-1 text-sm text-slate-500">
+                  {new Date(row.created_at).toLocaleString()} · {row.staff_name ?? 'Unknown staff'} ·{' '}
+                  {formatCurrency(row.total)}
+                </p>
+              </div>
+              <button
+                type="button"
+                disabled={printingId === row.local_id}
+                onClick={() => handlePrintSlip(row.local_id)}
+                className="h-11 rounded-md bg-rose-600 px-4 text-base font-semibold text-white transition active:scale-95 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {printingId === row.local_id ? 'Printing…' : 'Print tax invoice'}
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+
       {rows.length === 0 ? (
-        <p className="py-8 text-center text-base text-slate-500">No sales need attention.</p>
+        unprinted.length === 0 && (
+          <p className="py-8 text-center text-base text-slate-500">No sales need attention.</p>
+        )
       ) : (
         <div className="space-y-3">
           {pageResult.items.map((row) => {

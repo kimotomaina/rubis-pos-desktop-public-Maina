@@ -17,6 +17,7 @@ import type {
   MpesaTransactionRow,
   AppConfigCategory,
   NeedsAttentionRow,
+  UnprintedFiscalSlipRow,
   ApproveMpesaEntriesResult
 } from '../main/services/database.js'
 import type {
@@ -366,17 +367,30 @@ const api = {
    *   print (docs/phase-165): on a printer-offline PDF fallback, the file
    *   is still saved but never force-opened in a viewer, unlike a manual
    *   print. Never set by a manual Order History print.
+   * @param {number} [options.staffId] — the cashier signed in; recorded against an Order History reprint (docs/phase-198).
+   * @param {boolean} [options.fiscalOnly] — print only the fiscal slip (docs/phase-198).
    * @returns {Promise<ServiceResult<ReceiptPrintResult>>}
    */
   printReceipt: (
     localId: number,
-    options?: { printerType?: PrinterType; auto?: boolean }
+    options?: { printerType?: PrinterType; auto?: boolean; staffId?: number; fiscalOnly?: boolean }
   ): Promise<ServiceResult<ReceiptPrintResult>> =>
     ipcRenderer.invoke('receipt:print', {
       localId,
       printerType: options?.printerType,
-      auto: options?.auto
+      auto: options?.auto,
+      staffId: options?.staffId,
+      fiscalOnly: options?.fiscalOnly
     }),
+
+  /**
+   * Filed sales whose fiscal slip never reached paper (docs/phase-198), for
+   * the Needs Attention list.
+   *
+   * @returns {Promise<ServiceResult<UnprintedFiscalSlipRow[]>>}
+   */
+  getUnprintedFiscalSlips: (): Promise<ServiceResult<UnprintedFiscalSlipRow[]>> =>
+    ipcRenderer.invoke('fiscal:unprinted-slips'),
 
   /**
    * Prints (or, in mock mode, logs) a shift's Z-report.

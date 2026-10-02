@@ -52,6 +52,7 @@ const BASE_ORDER: ReceiptLayoutOrder = {
   customerPin: 'P000123456Z',
   buyerName: 'ACME TRADERS LTD',
   fiscalInvoiceNumber: 'INV-000000042',
+  traderInvNum: 'INV-000000042',
   fiscalQrCode: 'https://itax.kra.go.ke/verify/abc123',
   fiscalizedAt: '27-09-2026 18:58:41',
   fiscalizedAtSource: 'device',

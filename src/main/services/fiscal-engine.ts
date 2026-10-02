@@ -90,6 +90,12 @@ export interface FiscalEngineOptions {
   now?: () => number
   /** Defaults to `console` (phase-80) — every notable retry outcome logs through this, none of it silent. */
   logger?: Logger
+  /**
+   * Called with the local id after a queued retry files a sale (docs/phase-198),
+   * so the shop can print its fiscal slip. Never awaited, and a throw is logged
+   * and ignored: printing must not hold up or fail the queue.
+   */
+  onFiled?: (localId: number) => void
 }
 
 /** Handle returned by {@link createFiscalEngine}. */
@@ -171,6 +177,11 @@ export function createFiscalEngine(options: FiscalEngineOptions): FiscalEngine {
           logger.log(
             `[rubis-pos] Sale ${item.entity_id}: queued retry succeeded, fiscalized (invoice ${result.data.invoiceNumber})`
           )
+          try {
+            options.onFiled?.(item.entity_id)
+          } catch (err) {
+            logger.warn(`[rubis-pos] Sale ${item.entity_id}: filed-sale callback failed — ${err instanceof Error ? err.message : String(err)}`)
+          }
         } else if (result.unreachable) {
           // The device was not reached (docs/phase-186.md §5): no attempt
           // is counted and the row keeps its due time, so an outage of any

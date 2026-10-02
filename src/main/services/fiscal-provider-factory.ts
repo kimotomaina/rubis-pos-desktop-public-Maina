@@ -64,7 +64,7 @@ export async function resolveFiscalizationProvider(
       '[rubis-pos] Using MockFiscalizationProvider — invoice numbers are synthetic ' +
         'and nothing is filed with KRA. Development only.'
     )
-    return new MockFiscalizationProvider()
+    return new MockFiscalizationProvider(undefined, { recordTraderInvNum: options.realOptions.recordTraderInvNum })
   }
 
   return new RealFiscalizationProvider(options.realOptions)

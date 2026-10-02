@@ -42,6 +42,7 @@ import {
 } from './lib/toastTimeouts'
 import { createCartDraftSaver, restoreCartDraft, restoreToastMessage } from './lib/cartDraft'
 import { createGuardedCartActions } from './lib/guardedCartActions'
+import { CUSTOMER_SLIP_FAILURE_MESSAGE } from './lib/autoPrintToast'
 import { buildCartItem } from './lib/cartItem'
 import { WarningIcon } from './components/icons'
 import { useKeyboardStore } from './stores/keyboardStore'
@@ -490,8 +491,10 @@ export default function App() {
 
   const handlePrintReceipt = async (localId: number) => {
     try {
-      const result = await window.api.printReceipt(localId)
-      if (result.success) {
+      const result = await window.api.printReceipt(localId, { staffId: currentStaff?.id })
+      if (result.success && result.data?.mode !== 'pdf' && result.data?.customerSlip === 'failed') {
+        showScanToast('error', CUSTOMER_SLIP_FAILURE_MESSAGE)
+      } else if (result.success) {
         showScanToast(
           'success',
           result.data?.mode === 'pdf'

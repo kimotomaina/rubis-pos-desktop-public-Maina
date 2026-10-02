@@ -135,6 +135,39 @@ export interface OrderRow {
    * {@link RubisDatabase.hasReceiptPrinted}.
    */
   receipt_printed_at: string | null
+  /**
+   * The trader invoice number the till sent to the device for this sale, stored
+   * when it was sent (docs/phase-198). Write-once, never recomputed; `null` for a
+   * sale that was never sent and for every sale filed before this column existed.
+   */
+  fiscal_trader_inv_num?: string | null
+  /**
+   * Set when a sale was filed later by the fiscal queue and its fiscal slip could not
+   * be printed (docs/phase-198). Cleared when that slip is printed. Never retried.
+   */
+  fiscal_slip_unprinted_at?: string | null
+}
+
+/** Which slip of a sale a reprint was (docs/phase-198). */
+export type ReceiptReprintSlip = 'fiscal' | 'enjoy'
+
+/** One row of `receipt_reprints` (docs/phase-198). */
+export interface ReceiptReprintRow {
+  id: number
+  order_id: number
+  slip: ReceiptReprintSlip
+  /** The cashier signed in when the slip was reprinted, or `null` when the request carried none. */
+  staff_id: number | null
+  at: string
+}
+
+/** A filed sale whose fiscal slip never reached paper, for the Needs Attention list (docs/phase-198). */
+export interface UnprintedFiscalSlipRow {
+  local_id: number
+  created_at: string
+  total: number
+  staff_name: string | null
+  fiscal_slip_unprinted_at: string
 }
 
 /** The one saved cart on this till (docs/phase-197) - a draft, never pushed anywhere. */
@@ -538,10 +571,13 @@ function migrateOrdersFiscalColumns(connection: SqliteConnection): void {
  * same idempotent `ALTER TABLE` pattern.
  */
 function migrateOrdersReceiptColumns(connection: SqliteConnection): void {
-  try {
-    connection.exec('ALTER TABLE orders ADD COLUMN receipt_printed_at TEXT')
-  } catch {
-    // Column already exists — table was created with the current schema.
+  // `fiscal_trader_inv_num` and `fiscal_slip_unprinted_at` (docs/phase-198) join here for the same reason.
+  for (const column of ['receipt_printed_at', 'fiscal_trader_inv_num', 'fiscal_slip_unprinted_at']) {
+    try {
+      connection.exec(`ALTER TABLE orders ADD COLUMN ${column} TEXT`)
+    } catch {
+      // Column already exists — table was created with the current schema.
+    }
   }
 }
 
@@ -666,6 +702,8 @@ export const SCHEMA = {
     fiscal_fiscalized_at_source TEXT CHECK (fiscal_fiscalized_at_source IN ('device', 'local-fallback')),
     fiscal_cu_serial TEXT,
     receipt_printed_at TEXT,
+    fiscal_trader_inv_num TEXT,
+    fiscal_slip_unprinted_at TEXT,
     shopify_push_count INTEGER NOT NULL DEFAULT 0,
     shopify_last_push_at TEXT
   )`,
@@ -945,6 +983,19 @@ export const SCHEMA = {
     error TEXT
   )`,
   fiscalDuplicatePrintsOrderIndex: `CREATE INDEX IF NOT EXISTS idx_fiscal_duplicate_prints_order ON fiscal_duplicate_prints (order_id)`,
+  /**
+   * One row per slip reprinted from Order History (docs/phase-198).
+   * Append-only: the only writer is {@link RubisDatabase.recordReceiptReprint}.
+   * `staff_id` carries no foreign key so a removed account never blocks the log.
+   */
+  receiptReprints: `CREATE TABLE IF NOT EXISTS receipt_reprints (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    order_id INTEGER NOT NULL,
+    slip TEXT NOT NULL CHECK (slip IN ('fiscal', 'enjoy')),
+    staff_id INTEGER,
+    at TEXT NOT NULL
+  )`,
+  receiptReprintsOrderIndex: `CREATE INDEX IF NOT EXISTS idx_receipt_reprints_order ON receipt_reprints (order_id)`,
   /**
    * The cart being built on this till, saved so it survives a restart
    * (docs/phase-197). Exactly one row (`id = 1`), overwritten on every
@@ -1450,6 +1501,8 @@ export class RubisDatabase {
     connection.exec(SCHEMA.mpesaDayExclusionsPaymentIndex)
     connection.exec(SCHEMA.fiscalDuplicatePrints)
     connection.exec(SCHEMA.fiscalDuplicatePrintsOrderIndex)
+    connection.exec(SCHEMA.receiptReprints)
+    connection.exec(SCHEMA.receiptReprintsOrderIndex)
     connection.exec(SCHEMA.cartDrafts)
     connection.exec(SCHEMA.cartLineRemovals)
     connection.exec(SCHEMA.cartLineRemovalsTokenIndex)
@@ -1988,7 +2041,7 @@ export class RubisDatabase {
   getOrder(localId: number): OrderRow | undefined {
     return this.conn
       .prepare(
-        'SELECT local_id, shopify_order_id, total, status, created_at, payload_json, staff_id, payment_method, tendered_amount, change_due, reference_number, shift_id, fiscal_invoice_number, fiscal_qr_code, fiscal_fiscalized_at, fiscal_status, fiscal_error_reason, fiscal_error_kind, fiscal_request_json, fiscal_data_issue, fiscal_vat_groups_json, fiscal_fiscalized_at_source, fiscal_cu_serial, receipt_printed_at FROM orders WHERE local_id = ?'
+        'SELECT local_id, shopify_order_id, total, status, created_at, payload_json, staff_id, payment_method, tendered_amount, change_due, reference_number, shift_id, fiscal_invoice_number, fiscal_qr_code, fiscal_fiscalized_at, fiscal_status, fiscal_error_reason, fiscal_error_kind, fiscal_request_json, fiscal_data_issue, fiscal_vat_groups_json, fiscal_fiscalized_at_source, fiscal_cu_serial, receipt_printed_at, fiscal_trader_inv_num, fiscal_slip_unprinted_at FROM orders WHERE local_id = ?'
       )
       .get(localId) as OrderRow | undefined
   }
@@ -2034,8 +2087,81 @@ export class RubisDatabase {
    */
   markReceiptPrinted(localId: number): void {
     this.conn
-      .prepare('UPDATE orders SET receipt_printed_at = COALESCE(receipt_printed_at, ?) WHERE local_id = ?')
+      .prepare(
+        'UPDATE orders SET receipt_printed_at = COALESCE(receipt_printed_at, ?), fiscal_slip_unprinted_at = NULL WHERE local_id = ?'
+      )
       .run(new Date().toISOString(), localId)
+  }
+
+  /**
+   * Stores the trader invoice number sent to the device for a sale
+   * (docs/phase-198). Write-once via `COALESCE`, so the value stored at the first
+   * send stands however many times the sale is sent again.
+   *
+   * @param {number} localId
+   * @param {string} traderInvNum
+   */
+  recordTraderInvNum(localId: number, traderInvNum: string): void {
+    this.conn
+      .prepare('UPDATE orders SET fiscal_trader_inv_num = COALESCE(fiscal_trader_inv_num, ?) WHERE local_id = ?')
+      .run(traderInvNum, localId)
+  }
+
+  /**
+   * Flags a sale filed later whose fiscal slip did not reach paper
+   * (docs/phase-198). Keeps the first time it was flagged; a sale whose slip
+   * was already printed is never flagged.
+   *
+   * @param {number} localId
+   */
+  markFiscalSlipUnprinted(localId: number): void {
+    this.conn
+      .prepare(
+        'UPDATE orders SET fiscal_slip_unprinted_at = COALESCE(fiscal_slip_unprinted_at, ?) WHERE local_id = ? AND receipt_printed_at IS NULL'
+      )
+      .run(new Date().toISOString(), localId)
+  }
+
+  /**
+   * Filed sales whose fiscal slip is still unprinted, oldest first, for the
+   * Needs Attention list (docs/phase-198). Voided sales are left out.
+   *
+   * @returns {UnprintedFiscalSlipRow[]}
+   */
+  getUnprintedFiscalSlips(): UnprintedFiscalSlipRow[] {
+    return this.conn
+      .prepare(
+        `SELECT o.local_id, o.created_at, o.total, s.name AS staff_name, o.fiscal_slip_unprinted_at
+         FROM orders o
+         LEFT JOIN staff s ON s.id = o.staff_id
+         WHERE o.fiscal_slip_unprinted_at IS NOT NULL
+           AND o.receipt_printed_at IS NULL
+           AND o.fiscal_status = 'fiscalized'
+           AND o.status != 'voided'
+         ORDER BY o.created_at ASC, o.local_id ASC`
+      )
+      .all() as UnprintedFiscalSlipRow[]
+  }
+
+  /**
+   * Appends one row to `receipt_reprints` (docs/phase-198). Insert-only by
+   * design: nothing updates or deletes these rows.
+   *
+   * @param {Omit<ReceiptReprintRow, 'id' | 'at'> & { at?: string }} row
+   */
+  recordReceiptReprint(row: Omit<ReceiptReprintRow, 'id' | 'at'> & { at?: string }): void {
+    this.conn
+      .prepare('INSERT INTO receipt_reprints (order_id, slip, staff_id, at) VALUES (?, ?, ?, ?)')
+      .run(row.order_id, row.slip, row.staff_id, row.at ?? new Date().toISOString())
+  }
+
+  /**
+   * Every slip reprint, oldest first — for support and tests.
+   *
+   * @returns {ReceiptReprintRow[]}
+   */
+  listReceiptReprints(): ReceiptReprintRow[] {
+    return this.conn.prepare('SELECT * FROM receipt_reprints ORDER BY id ASC').all() as ReceiptReprintRow[]
   }
 
   /**
@@ -2227,7 +2353,7 @@ export class RubisDatabase {
   getOrderByFiscalInvoiceNumber(invoiceNumber: string): OrderRow | undefined {
     return this.conn
       .prepare(
-        'SELECT local_id, shopify_order_id, total, status, created_at, payload_json, staff_id, payment_method, tendered_amount, change_due, reference_number, shift_id, fiscal_invoice_number, fiscal_qr_code, fiscal_fiscalized_at, fiscal_status, fiscal_error_reason, fiscal_error_kind, fiscal_request_json, fiscal_data_issue, fiscal_vat_groups_json, fiscal_fiscalized_at_source, fiscal_cu_serial, receipt_printed_at FROM orders WHERE fiscal_invoice_number = ?'
+        'SELECT local_id, shopify_order_id, total, status, created_at, payload_json, staff_id, payment_method, tendered_amount, change_due, reference_number, shift_id, fiscal_invoice_number, fiscal_qr_code, fiscal_fiscalized_at, fiscal_status, fiscal_error_reason, fiscal_error_kind, fiscal_request_json, fiscal_data_issue, fiscal_vat_groups_json, fiscal_fiscalized_at_source, fiscal_cu_serial, receipt_printed_at, fiscal_trader_inv_num, fiscal_slip_unprinted_at FROM orders WHERE fiscal_invoice_number = ?'
       )
       .get(invoiceNumber) as OrderRow | undefined
   }

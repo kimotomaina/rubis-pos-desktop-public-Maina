@@ -24,6 +24,9 @@ export const AUTO_PRINT_FAILURE_MESSAGE = 'Receipt did not print. Print it from 
 export const AUTO_PRINT_OFFLINE_MESSAGE =
   'Printer offline. Receipt saved; print it from Order History when the printer is back.'
 
+/** Shown when the fiscal slip printed but the separate Enjoy customer slip did not (docs/phase-198). */
+export const CUSTOMER_SLIP_FAILURE_MESSAGE = 'Customer slip did not print. Reprint it from Order History.'
+
 /**
  * Returns the toast message for an automatic print's result, or `null`
  * when no toast is needed — a genuine print (physical or mock) needs no
@@ -36,6 +39,7 @@ export const AUTO_PRINT_OFFLINE_MESSAGE =
  */
 export function getAutoPrintOfflineMessage(result: ServiceResult<ReceiptPrintResult>): string | null {
   if (!result.success) return AUTO_PRINT_FAILURE_MESSAGE
-  if (result.data?.mode !== 'pdf') return null
-  return AUTO_PRINT_OFFLINE_MESSAGE
+  if (result.data?.mode === 'pdf') return AUTO_PRINT_OFFLINE_MESSAGE
+  if (result.data?.customerSlip === 'failed') return CUSTOMER_SLIP_FAILURE_MESSAGE
+  return null
 }

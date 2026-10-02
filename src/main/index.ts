@@ -200,6 +200,8 @@ import type {
   MpesaTransactionRow,
   AppConfigCategory,
   NeedsAttentionRow,
+  PrinterType,
+  UnprintedFiscalSlipRow,
   ApproveMpesaEntriesResult
 } from './services/database.js'
 import { createSyncEngine } from './services/sync-engine.js'
@@ -215,10 +217,13 @@ import {
 import { printFiscalDuplicate } from './services/fiscal-duplicate-print.js'
 import { recordApprovedRemovals } from './services/cart-removals.js'
 import { createCartFlushCoordinator } from './services/cart-flush.js'
+import { printLateFiledSlip as printLateFiledSlipFor } from './services/late-filed-slip.js'
 import { createNetworkMonitor } from './services/network.js'
 import { pushOrderToShopify } from './services/orders.js'
 import {
-  printReceiptToType,
+  printOrderSlips,
+  attachCustomerSlipResult,
+  physicallyPrintedSlips,
   printZReport,
   printTestPage,
   printWindowsTestPage,
@@ -231,6 +236,8 @@ import type {
   PrinterSettings,
   ReceiptPrintResult,
   PrinterRegistry,
+  OrderSlipSelection,
+  OrderSlipsResult,
   ReceiptLayoutVatGroups
 } from './services/printer.js'
 import { toWindowsPrinterInfo, markMissingWindowsPrinters } from './services/windowsPrinter.js'
@@ -879,6 +886,7 @@ app.whenReady().then(async () => {
       devicePort: etimsConfig.devicePort,
       debugLogging: fiscalDebugLogging,
       logger: console,
+      recordTraderInvNum: (localId, traderInvNum) => db.recordTraderInvNum(localId, traderInvNum),
       lookupInvoice: (invoiceNumber) => {
         const order = db.getOrderByFiscalInvoiceNumber(invoiceNumber)
         if (!order?.fiscal_invoice_number) return undefined
@@ -890,6 +898,8 @@ app.whenReady().then(async () => {
       }
     }
   })
+  // A development stand-in marks its fiscal slips as tests (docs/phase-198); the real provider has no such method.
+  printerSettings.decorateFiscalSlip = fiscalizationProvider.decorateFiscalSlip?.bind(fiscalizationProvider)
   /**
    * Re-reads the saved device details and pushes them into the live
    * provider, so a save from the Admin screen applies to the next sale
@@ -1016,7 +1026,8 @@ app.whenReady().then(async () => {
     db,
     submitInvoice: (request) => fiscalizationProvider.submitInvoice(request),
     intervalMs: 30_000,
-    logger: console
+    logger: console,
+    onFiled: (localId) => void printLateFiledSlip(localId)
   })
 
   /** Broadcasts a JSON payload to every open window. */
@@ -2801,6 +2812,24 @@ app.whenReady().then(async () => {
   )
 
   /**
+   * IPC handler for the filed sales whose fiscal slip never reached paper
+   * (docs/phase-198). Read-only; the action is the existing `receipt:print`.
+   */
+  ipcMain.handle(
+    'fiscal:unprinted-slips',
+    (): ServiceResult<UnprintedFiscalSlipRow[]> => {
+      try {
+        return { success: true, data: db.getUnprintedFiscalSlips() }
+      } catch (err) {
+        return {
+          success: false,
+          error: err instanceof Error ? err.message : 'Failed to load unprinted tax invoices'
+        }
+      }
+    }
+  )
+
+  /**
    * IPC handler for the Rule-3 safety-net count (phase-88, Step 4) —
    * every completed-but-unfiled sale, `waiting` or `needs_fixing`,
    * regardless of the stuck threshold above.
@@ -2861,6 +2890,139 @@ app.whenReady().then(async () => {
   }
 
   /**
+   * Prints the slips of one sale (docs/phase-198): rebuilds the receipt's
+   * line items from the order's stored offline-order payload and sends the
+   * fiscal-side slip, then the Enjoy customer slip, as separate jobs. Shared
+   * by the `receipt:print` handler and the print after a late filing.
+   *
+   * @param {OrderRow} order
+   * @param {object} options
+   * @param {OrderSlipSelection} options.slips which slips to print
+   * @param {boolean} options.isDuplicate stamps the fiscal-side slip "DUPLICATE"
+   * @param {boolean} options.customerSlipIsDuplicate stamps the Enjoy slip "DUPLICATE"
+   * @param {PrinterType} options.printerType
+   * @returns {Promise<OrderSlipsResult>}
+   */
+  async function printSlipsForOrder(
+    order: OrderRow,
+    options: {
+      slips: OrderSlipSelection
+      isDuplicate: boolean
+      customerSlipIsDuplicate: boolean
+      printerType: PrinterType
+    }
+  ): Promise<OrderSlipsResult> {
+    const payload = JSON.parse(order.payload_json) as OfflineOrderPayload
+    // docs/phase-165: a not-yet-filed sale on the real provider gets
+    // a plain "sale record" slip instead of a tax invoice — never on
+    // the mock/non-eTIMS provider, which has no filing to promise.
+    const fiscalPending = shouldShowFiscalPendingSlip(
+      fiscalizationProvider instanceof RealFiscalizationProvider,
+      order.fiscal_status
+    )
+    /**
+     * `fiscal_request_json` (docs/phase-171's audit) is the ORIGINAL
+     * request sent to the device — read-only here, never resubmitted.
+     * It is the only place a buyer's company name is stored
+     * (docs/phase-157), and the only place a per-item VAT class is
+     * stored before a sale has fiscalised. Absent (an unfiled sale
+     * that has never reached the device, or an older order predating
+     * this field) means no buyer name and every item defaults to
+     * class A, same as `checkout.ts`'s own default.
+     */
+    let buyerName: string | undefined
+    let itemVatClasses: string[] = []
+    if (order.fiscal_request_json) {
+      try {
+        const fiscalRequest = JSON.parse(order.fiscal_request_json) as {
+          companyName?: string
+          items?: Array<{ vatClass?: string }>
+        }
+        buyerName = fiscalRequest.companyName || undefined
+        itemVatClasses = (fiscalRequest.items ?? []).map(
+          (line) => resolveVatClass(line.vatClass) ?? String(line.vatClass)
+        )
+      } catch {
+        // Malformed/legacy JSON — print without a buyer name or per-item VAT classes rather than failing the whole receipt.
+      }
+    }
+    let vatGroups: ReceiptLayoutVatGroups | undefined
+    if (order.fiscal_vat_groups_json) {
+      try {
+        vatGroups = JSON.parse(order.fiscal_vat_groups_json) as ReceiptLayoutVatGroups
+      } catch {
+        // Malformed JSON — the layout builder's own class-A fallback covers this.
+      }
+    }
+    return printOrderSlips(
+      {
+        localId: order.local_id,
+        createdAt: order.created_at,
+        cashierName: payload.staffName,
+        paymentMethod: payload.paymentMethod,
+        tenderedAmount: payload.tenderedAmount,
+        changeDue: payload.changeDue,
+        referenceNumber: payload.referenceNumber,
+        customerPin: payload.customerPin,
+        buyerName,
+        fiscalInvoiceNumber: order.fiscal_invoice_number ?? undefined,
+        traderInvNum: order.fiscal_trader_inv_num ?? undefined,
+        fiscalQrCode: order.fiscal_qr_code ?? undefined,
+        fiscalizedAt: order.fiscal_fiscalized_at ?? undefined,
+        fiscalizedAtSource: order.fiscal_fiscalized_at_source ?? undefined,
+        cuSerial: order.fiscal_cu_serial ?? undefined,
+        vatGroups,
+        fiscalPending,
+        isDuplicate: options.isDuplicate,
+        customerSlipIsDuplicate: options.customerSlipIsDuplicate,
+        // docs/phase-161: the stored total/discounts, no longer
+        // stripped before reaching the printer.
+        total: order.total,
+        cartDiscount: payload.cartDiscount
+      },
+      payload.lineItems.map((line, index) => ({
+        title: line.title,
+        variantTitle: line.variantTitle ?? '',
+        quantity: line.quantity,
+        unitPrice: line.unitPrice,
+        discount: line.discount,
+        vatClass: itemVatClasses[index]
+      })),
+      printerRegistry,
+      { ...printerSettings, locationName: db.getSetting('location_name') || undefined },
+      options.slips,
+      options.printerType
+    )
+  }
+
+  /**
+   * Prints the fiscal slip of a sale the fiscal queue has just filed
+   * (docs/phase-198); see `late-filed-slip.ts`. A function declaration, so the
+   * fiscal engine created earlier can call it.
+   *
+   * @param {number} localId
+   * @returns {Promise<void>}
+   */
+  function printLateFiledSlip(localId: number): Promise<void> {
+    return printLateFiledSlipFor(
+      {
+        db,
+        printFiscalSlip: async (order) => {
+          const printed = await printSlipsForOrder(order, {
+            slips: { fiscal: true, customer: false },
+            isDuplicate: false,
+            customerSlipIsDuplicate: false,
+            printerType: 'receipt'
+          })
+          return printed.fiscal as ServiceResult<ReceiptPrintResult>
+        },
+        logger: console
+      },
+      localId
+    )
+  }
+
+  /**
    * IPC handler that prints (or, in mock mode, logs) either a local
    * order's receipt or — when `isZReport` is set — a shift's Z-report.
    * Reconstructs receipt line items from the order's stored
@@ -2882,7 +3044,7 @@ app.whenReady().then(async () => {
       if (!validation.success) {
         return { success: false, error: validation.error }
       }
-      const { localId, shiftId, isZReport, printerType, auto } = validation.data
+      const { localId, shiftId, isZReport, printerType, auto, staffId, fiscalOnly } = validation.data
 
       if (isZReport) {
         if (!shiftId) {
@@ -2909,95 +3071,37 @@ app.whenReady().then(async () => {
       }
 
       try {
-        const payload = JSON.parse(order.payload_json) as OfflineOrderPayload
         // docs/phase-164: decided from whether THIS order's receipt was
         // already printed once before — never from which button was
         // pressed, since `receipt:print` is the single call site for
         // both the first print and any later reprint (see docs/phase-164's
         // audit of every receipt:print/printReceipt call site).
         const isDuplicate = db.hasReceiptPrinted(localId)
-        // docs/phase-165: a not-yet-filed sale on the real provider gets
-        // a plain "sale record" slip instead of a tax invoice — never on
-        // the mock/non-eTIMS provider, which has no filing to promise.
-        const fiscalPending = shouldShowFiscalPendingSlip(
-          fiscalizationProvider instanceof RealFiscalizationProvider,
-          order.fiscal_status
-        )
-        /**
-         * `fiscal_request_json` (docs/phase-171's audit) is the ORIGINAL
-         * request sent to the device — read-only here, never resubmitted.
-         * It is the only place a buyer's company name is stored
-         * (docs/phase-157), and the only place a per-item VAT class is
-         * stored before a sale has fiscalised. Absent (an unfiled sale
-         * that has never reached the device, or an older order predating
-         * this field) means no buyer name and every item defaults to
-         * class A, same as `checkout.ts`'s own default.
-         */
-        let buyerName: string | undefined
-        let itemVatClasses: string[] = []
-        if (order.fiscal_request_json) {
-          try {
-            const fiscalRequest = JSON.parse(order.fiscal_request_json) as {
-              companyName?: string
-              items?: Array<{ vatClass?: string }>
-            }
-            buyerName = fiscalRequest.companyName || undefined
-            itemVatClasses = (fiscalRequest.items ?? []).map(
-              (line) => resolveVatClass(line.vatClass) ?? String(line.vatClass)
-            )
-          } catch {
-            // Malformed/legacy JSON — print without a buyer name or per-item VAT classes rather than failing the whole receipt.
-          }
-        }
-        let vatGroups: ReceiptLayoutVatGroups | undefined
-        if (order.fiscal_vat_groups_json) {
-          try {
-            vatGroups = JSON.parse(order.fiscal_vat_groups_json) as ReceiptLayoutVatGroups
-          } catch {
-            // Malformed JSON — the layout builder's own class-A fallback covers this.
-          }
-        }
-        const result = await printReceiptToType(
-          {
-            localId: order.local_id,
-            createdAt: order.created_at,
-            cashierName: payload.staffName,
-            paymentMethod: payload.paymentMethod,
-            tenderedAmount: payload.tenderedAmount,
-            changeDue: payload.changeDue,
-            referenceNumber: payload.referenceNumber,
-            customerPin: payload.customerPin,
-            buyerName,
-            fiscalInvoiceNumber: order.fiscal_invoice_number ?? undefined,
-            fiscalQrCode: order.fiscal_qr_code ?? undefined,
-            fiscalizedAt: order.fiscal_fiscalized_at ?? undefined,
-            fiscalizedAtSource: order.fiscal_fiscalized_at_source ?? undefined,
-            cuSerial: order.fiscal_cu_serial ?? undefined,
-            vatGroups,
-            fiscalPending,
-            isDuplicate,
-            // docs/phase-161: the stored total/discounts, no longer
-            // stripped before reaching the printer.
-            total: order.total,
-            cartDiscount: payload.cartDiscount
-          },
-          payload.lineItems.map((line, index) => ({
-            title: line.title,
-            variantTitle: line.variantTitle ?? '',
-            quantity: line.quantity,
-            unitPrice: line.unitPrice,
-            discount: line.discount,
-            vatClass: itemVatClasses[index]
-          })),
-          printerRegistry,
-          printerSettings,
-          printerType ?? 'receipt'
-        )
+        // docs/phase-198: the fiscal slip, then the Enjoy customer slip, as
+        // separate jobs that succeed or fail on their own. There is no record
+        // of the customer slip having been printed, so a manual Order History
+        // print is its reprint.
+        const printed = await printSlipsForOrder(order, {
+          slips: { fiscal: true, customer: !fiscalOnly },
+          isDuplicate,
+          customerSlipIsDuplicate: !auto,
+          printerType: printerType ?? 'receipt'
+        })
+        const fiscalResult = printed.fiscal as ServiceResult<ReceiptPrintResult>
         // docs/phase-164-1: marked only when the CU block actually went
         // out on paper — see shouldMarkReceiptPrinted.
-        if (shouldMarkReceiptPrinted(result, order.fiscal_invoice_number)) {
+        if (shouldMarkReceiptPrinted(fiscalResult, order.fiscal_invoice_number)) {
           db.markReceiptPrinted(localId)
         }
+        // docs/phase-198: an Order History reprint is logged per slip that
+        // reached paper. The Needs Attention print of a late-filed sale
+        // (`fiscalOnly`) is that slip's first print, not a reprint.
+        if (!auto && !fiscalOnly) {
+          for (const slip of physicallyPrintedSlips(printed)) {
+            db.recordReceiptReprint({ order_id: localId, slip, staff_id: staffId ?? null })
+          }
+        }
+        const result = attachCustomerSlipResult(fiscalResult, printed.customer)
         // docs/phase-165: the automatic end-of-sale print never
         // force-opens a PDF viewer window when the printer was offline —
         // the PDF is still saved, and the renderer shows one toast

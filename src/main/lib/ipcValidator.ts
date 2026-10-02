@@ -326,7 +326,11 @@ export const receiptPrintRequestSchema = z.object({
   isZReport: z.boolean().optional(),
   printerType: z.enum(['receipt', 'kitchen', 'label']).optional(),
   /** Set for the automatic end-of-sale print (docs/phase-165) — never sent by a manual Order History print. */
-  auto: z.boolean().optional()
+  auto: z.boolean().optional(),
+  /** The cashier signed in, recorded against an Order History reprint (docs/phase-198). */
+  staffId: z.number().int().positive().optional(),
+  /** Print only the fiscal slip (docs/phase-198) - the Needs Attention list's print of a late-filed sale. */
+  fiscalOnly: z.boolean().optional()
 })
 
 /**

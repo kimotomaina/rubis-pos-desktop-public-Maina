@@ -27,6 +27,7 @@ import type {
   MpesaTransactionRow,
   AppConfigCategory,
   NeedsAttentionRow,
+  UnprintedFiscalSlipRow,
   ApproveMpesaEntriesResult
 } from '../main/services/database.js'
 import type {
@@ -155,8 +156,10 @@ export interface PosApi {
    */
   printReceipt: (
     localId: number,
-    options?: { printerType?: PrinterType; auto?: boolean }
+    options?: { printerType?: PrinterType; auto?: boolean; staffId?: number; fiscalOnly?: boolean }
   ) => Promise<ServiceResult<ReceiptPrintResult>>
+  /** Filed sales whose fiscal slip never reached paper, for the Needs Attention list (docs/phase-198). */
+  getUnprintedFiscalSlips: () => Promise<ServiceResult<UnprintedFiscalSlipRow[]>>
   /** Fetches every active staff account for the login picker. */
   getStaffList: () => Promise<ServiceResult<StaffSummary[]>>
   /** Verifies a staff PIN. */

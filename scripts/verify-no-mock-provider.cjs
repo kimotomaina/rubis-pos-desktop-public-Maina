@@ -21,7 +21,7 @@ const fs = require('fs')
 const path = require('path')
 
 /** Strings that only exist in a mock provider's compiled output. */
-const FORBIDDEN = ['KRA-MOCK-', 'MockFiscalizationProvider', 'MockMpesaProvider']
+const FORBIDDEN = ['KRA-MOCK-', 'MockFiscalizationProvider', 'MockMpesaProvider', 'TEST. NOT A TAX INVOICE']
 
 const BUNDLE_DIR = path.join(__dirname, '..', 'out', 'main')
 
