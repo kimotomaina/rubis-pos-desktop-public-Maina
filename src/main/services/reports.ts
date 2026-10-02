@@ -11,6 +11,12 @@ import type { RubisDatabase, PaymentMethod, OrderRow, MpesaPaymentRow, OrderStat
 import type { FiscalVatGroupAmounts } from './integrations/etims.js'
 import type { Logger } from './logger.js'
 import { buildTraderSystemInvNum } from '../lib/traderSystemInvoiceNumber.js'
+import {
+  compareVatGroups,
+  expectedGroupTotals,
+  hasNonAClass,
+  type VatClassLine
+} from '../lib/vatClass.js'
 
 /** Revenue total per payment method. */
 export interface PaymentTotals {
@@ -142,6 +148,54 @@ export function computeVatIncluded(total: number, rate: number): number {
 }
 
 /**
+ * The sale's lines as the stored fiscal request recorded them — the only
+ * place a sale's per-line VAT class is kept before and after filing.
+ *
+ * @param {Pick<OrderRow, 'fiscal_request_json'>} order
+ * @returns {VatClassLine[] | null} `null` for an order with no stored request (older, or never sent), or an unreadable one
+ */
+function requestLines(order: Pick<OrderRow, 'fiscal_request_json'>): VatClassLine[] | null {
+  if (!order.fiscal_request_json) return null
+  try {
+    const items = (JSON.parse(order.fiscal_request_json) as { items?: unknown }).items
+    if (!Array.isArray(items)) return null
+    return items.map((item: Partial<VatClassLine>) => ({
+      unitPrice: Number(item.unitPrice),
+      quantity: Number(item.quantity),
+      vatClass: item.vatClass
+    }))
+  } catch {
+    return null
+  }
+}
+
+/**
+ * The part of an order's total that carries VAT at the store's rate
+ * (docs/phase-194): the whole total for an order with only class-A lines
+ * or no stored request, and the class-A lines' amount alone for an order
+ * that also sold zero-rated, exempt or other-rate items.
+ *
+ * @param {Pick<OrderRow, 'total' | 'fiscal_request_json'>} order
+ * @returns {number}
+ */
+export function orderVatBase(order: Pick<OrderRow, 'total' | 'fiscal_request_json'>): number {
+  const lines = requestLines(order)
+  if (!lines || !hasNonAClass(lines)) return order.total
+  return expectedGroupTotals(lines).A
+}
+
+/**
+ * Sums {@link orderVatBase} over a set of orders, in order, so an
+ * all-class-A set gives exactly the sum of the totals.
+ *
+ * @param {Array<Pick<OrderRow, 'total' | 'fiscal_request_json'>>} orders
+ * @returns {number}
+ */
+function sumVatBase(orders: Array<Pick<OrderRow, 'total' | 'fiscal_request_json'>>): number {
+  return orders.reduce((sum, order) => sum + orderVatBase(order), 0)
+}
+
+/**
  * Renders the VAT rate as the label shown next to {@link computeVatIncluded}'s
  * result (docs/phase-158-1, correcting a rate hardcoded as "16%" in three
  * places — `ZReportModal.tsx`, `renderZReport`, and the Sales Summary
@@ -219,7 +273,7 @@ export function generateZReport(
     mpesaByMode,
     orderCount: orders.length,
     totalRevenue,
-    vatIncluded: computeVatIncluded(totalRevenue, taxRate),
+    vatIncluded: computeVatIncluded(sumVatBase(orders), taxRate),
     vatRate: taxRate,
     expectedCash,
     endingCash: shift.ending_cash,
@@ -251,7 +305,7 @@ export function generateDailySummary(
     endIso: range.endIso,
     orderCount: orders.length,
     totalRevenue,
-    vatIncluded: computeVatIncluded(totalRevenue, taxRate),
+    vatIncluded: computeVatIncluded(sumVatBase(orders), taxRate),
     totalsByMethod
   }
 }
@@ -717,7 +771,7 @@ export function generateSalesSummary(
     label: range.label,
     orderCount: orders.length,
     totalRevenue,
-    vatIncluded: computeVatIncluded(totalRevenue, taxRate),
+    vatIncluded: computeVatIncluded(sumVatBase(orders), taxRate),
     vatRate: taxRate,
     totalsByMethod,
     mpesaByMode: sumMpesaByMode(payments),
@@ -902,6 +956,17 @@ export interface FiscalReconciliationRow {
   status: FiscalReconciliationStatus
   /** Present groups only — a group absent from the device's response is absent here too. */
   vatByGroup: Partial<Record<VatGroupLetter, FiscalReconciliationGroupVat>>
+  /**
+   * What the sale's own lines put in each group, from the stored fiscal
+   * request (docs/phase-194); `null` when no request is stored.
+   */
+  expectedByGroup: Record<VatGroupLetter, number> | null
+  /**
+   * Which non-A groups disagree with the sale's own lines, or `null` when
+   * they agree or the sale has no non-A line. Any disagreement makes the
+   * row a `'mismatch'` even when the totals agree.
+   */
+  groupMismatch: string | null
 }
 
 /** Aggregate counts and sums across every row in a {@link FiscalReconciliationReport}. */
@@ -959,7 +1024,15 @@ export function buildReconciliationRow(order: OrderRow, logger: Logger): FiscalR
   }
 
   if (!order.fiscal_vat_groups_json) {
-    return { ...base, deviceTotal: null, difference: null, status: 'no-device-figure', vatByGroup: {} }
+    return {
+      ...base,
+      deviceTotal: null,
+      difference: null,
+      status: 'no-device-figure',
+      vatByGroup: {},
+      expectedByGroup: null,
+      groupMismatch: null
+    }
   }
 
   const rawGroups = JSON.parse(order.fiscal_vat_groups_json) as FiscalVatGroupAmounts
@@ -973,7 +1046,15 @@ export function buildReconciliationRow(order: OrderRow, logger: Logger): FiscalR
         `[rubis-pos] Fiscal reconciliation: order ${order.local_id} has a non-numeric VAT-group ${letter} ` +
           `amount ("${raw}") — reported as no device figure, not a mismatch`
       )
-      return { ...base, deviceTotal: null, difference: null, status: 'no-device-figure', vatByGroup: {} }
+      return {
+        ...base,
+        deviceTotal: null,
+        difference: null,
+        status: 'no-device-figure',
+        vatByGroup: {},
+        expectedByGroup: null,
+        groupMismatch: null
+      }
     }
     parsedAmounts[letter] = value
   }
@@ -981,14 +1062,18 @@ export function buildReconciliationRow(order: OrderRow, logger: Logger): FiscalR
   const deviceTotal =
     Math.round(Object.values(parsedAmounts).reduce((sum: number, value) => sum + (value ?? 0), 0) * 100) / 100
   const difference = Math.round((deviceTotal - charged) * 100) / 100
-  const status: FiscalReconciliationStatus = Math.abs(difference) <= 0.01 ? 'matched' : 'mismatch'
+  const lines = requestLines(order)
+  const expected = lines ? expectedGroupTotals(lines) : null
+  const groupMismatch = lines && expected && hasNonAClass(lines) ? compareVatGroups(expected, rawGroups) : null
+  const status: FiscalReconciliationStatus =
+    Math.abs(difference) <= 0.01 && groupMismatch === null ? 'matched' : 'mismatch'
   const vatByGroup: Partial<Record<VatGroupLetter, FiscalReconciliationGroupVat>> = {}
   for (const letter of Object.keys(parsedAmounts) as VatGroupLetter[]) {
     const amount = parsedAmounts[letter] as number
     vatByGroup[letter] = { amount, vat: deriveGroupVat(letter, amount) }
   }
 
-  return { ...base, deviceTotal, difference, status, vatByGroup }
+  return { ...base, deviceTotal, difference, status, vatByGroup, expectedByGroup: expected, groupMismatch }
 }
 
 /**

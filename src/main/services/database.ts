@@ -1992,7 +1992,7 @@ export class RubisDatabase {
   getOrdersForShift(shiftId: number): OrderRow[] {
     return this.conn
       .prepare(
-        'SELECT local_id, shopify_order_id, total, status, created_at, payload_json, staff_id, payment_method, tendered_amount, change_due, reference_number, shift_id FROM orders WHERE shift_id = ? ORDER BY created_at ASC'
+        'SELECT local_id, shopify_order_id, total, status, created_at, payload_json, staff_id, payment_method, tendered_amount, change_due, reference_number, shift_id, fiscal_request_json FROM orders WHERE shift_id = ? ORDER BY created_at ASC'
       )
       .all(shiftId) as OrderRow[]
   }

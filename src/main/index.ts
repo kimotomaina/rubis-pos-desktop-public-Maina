@@ -251,6 +251,7 @@ import type {
 import { buildOrdersCsv, buildLinesCsv } from './services/reportsExport.js'
 import { buildTraderSystemInvNum } from './lib/traderSystemInvoiceNumber.js'
 import { shouldRefuseCheckoutForDiscount } from './lib/requestHasDiscount.js'
+import { resolveVatClass } from './lib/vatClass.js'
 
 /** One invoice-list row (docs/phase-158): an order plus its pre-computed trader invoice number. */
 interface InvoiceListRow {
@@ -2802,7 +2803,9 @@ app.whenReady().then(async () => {
               items?: Array<{ vatClass?: string }>
             }
             buyerName = fiscalRequest.companyName || undefined
-            itemVatClasses = (fiscalRequest.items ?? []).map((line) => line.vatClass || 'A')
+            itemVatClasses = (fiscalRequest.items ?? []).map(
+              (line) => resolveVatClass(line.vatClass) ?? String(line.vatClass)
+            )
           } catch {
             // Malformed/legacy JSON — print without a buyer name or per-item VAT classes rather than failing the whole receipt.
           }

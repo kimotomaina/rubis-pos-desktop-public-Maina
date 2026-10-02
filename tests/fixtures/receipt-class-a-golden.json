@@ -1,0 +1,2566 @@
+{
+  "settings": {
+    "taxRate": 0.16,
+    "tradingName": "ENJOY",
+    "legalName": "Rubis Energy Kenya PLC",
+    "address": "Enjoy Westlands, Waiyaki Way, Nairobi",
+    "phone": "0700 000 000",
+    "sellerPin": "P051XXXXXXXX",
+    "footerMessage": "Thank you for shopping at Enjoy!"
+  },
+  "createdAt": "2026-09-27T15:58:00.000Z",
+  "scenarios": [
+    "filedWithGroups",
+    "filedNoGroups",
+    "filedNoClassOnItems",
+    "duplicate",
+    "slip",
+    "discounted"
+  ],
+  "layouts": {
+    "filedWithGroups@48": [
+      {
+        "text": "ENJOY",
+        "align": "centre",
+        "style": "double"
+      },
+      {
+        "text": "Rubis Energy Kenya PLC",
+        "align": "centre",
+        "style": "normal"
+      },
+      {
+        "text": "Enjoy Westlands, Waiyaki Way, Nairobi",
+        "align": "centre",
+        "style": "normal"
+      },
+      {
+        "text": "Tel 0700 000 000",
+        "align": "centre",
+        "style": "normal"
+      },
+      {
+        "text": "PIN: P051XXXXXXXX",
+        "align": "centre",
+        "style": "bold"
+      },
+      {
+        "text": "------------------------------------------------",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "FISCAL RECEIPT",
+        "align": "centre",
+        "style": "double"
+      },
+      {
+        "text": "ORIGINAL",
+        "align": "centre",
+        "style": "normal"
+      },
+      {
+        "text": "------------------------------------------------",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "Invoice No:                        INV-000000042",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "Date:                           27/09/2026 18:58",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "Cashier:                                 Mary W.",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "Buyer PIN:                           P000123456Z",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "Buyer:                          ACME TRADERS LTD",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "------------------------------------------------",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "ITEM                        QTY   PRICE   AMOUNT",
+        "align": "left",
+        "style": "bold"
+      },
+      {
+        "text": "------------------------------------------------",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "Coca-Cola 500ml",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "2 x 100.00 200.00 A",
+        "align": "right",
+        "style": "normal"
+      },
+      {
+        "text": "Bosch AeroTwin Wipers (Pair)",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "1 x 1,450.00 1,450.00 A",
+        "align": "right",
+        "style": "normal"
+      },
+      {
+        "text": "------------------------------------------------",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "TOTAL EXCL. VAT                         1,422.41",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "VAT                                       227.59",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "TOTAL KSH                               1,650.00",
+        "align": "left",
+        "style": "double"
+      },
+      {
+        "text": "------------------------------------------------",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "PAID BY M-PESA                          1,650.00",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "M-Pesa ref:                           SJK4XYZ123",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "------------------------------------------------",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "VAT RATE TAXABLE VAT GROSS",
+        "align": "left",
+        "style": "bold"
+      },
+      {
+        "text": "------------------------------------------------",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "A 16% 1,422.41 227.59 1,650.00",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "------------------------------------------------",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "CONTROL UNIT INFO",
+        "align": "centre",
+        "style": "normal"
+      },
+      {
+        "text": "CU Date/Time:                27-09-2026 18:58:41",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "CU Serial No:                   KRAMW0XXXXXXXXXX",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "CU Invoice No:                     INV-000000042",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "qr": "https://itax.kra.go.ke/verify/abc123"
+      },
+      {
+        "text": "Scan to verify this receipt with KRA",
+        "align": "centre",
+        "style": "normal"
+      },
+      {
+        "text": "------------------------------------------------",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "Thank you for shopping at Enjoy!",
+        "align": "centre",
+        "style": "bold"
+      },
+      {
+        "text": "A = VAT 16%. Prices include VAT.",
+        "align": "centre",
+        "style": "normal"
+      }
+    ],
+    "filedWithGroups@32": [
+      {
+        "text": "ENJOY",
+        "align": "centre",
+        "style": "double"
+      },
+      {
+        "text": "Rubis Energy Kenya PLC",
+        "align": "centre",
+        "style": "normal"
+      },
+      {
+        "text": "Enjoy Westlands, Waiyaki Way,",
+        "align": "centre",
+        "style": "normal"
+      },
+      {
+        "text": "Nairobi",
+        "align": "centre",
+        "style": "normal"
+      },
+      {
+        "text": "Tel 0700 000 000",
+        "align": "centre",
+        "style": "normal"
+      },
+      {
+        "text": "PIN: P051XXXXXXXX",
+        "align": "centre",
+        "style": "bold"
+      },
+      {
+        "text": "--------------------------------",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "FISCAL RECEIPT",
+        "align": "centre",
+        "style": "double"
+      },
+      {
+        "text": "ORIGINAL",
+        "align": "centre",
+        "style": "normal"
+      },
+      {
+        "text": "--------------------------------",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "Invoice No:        INV-000000042",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "Date:           27/09/2026 18:58",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "Cashier:                 Mary W.",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "Buyer PIN:           P000123456Z",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "Buyer:          ACME TRADERS LTD",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "--------------------------------",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "ITEM        QTY   PRICE   AMOUNT",
+        "align": "left",
+        "style": "bold"
+      },
+      {
+        "text": "--------------------------------",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "Coca-Cola 500ml",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "2 x 100.00 200.00 A",
+        "align": "right",
+        "style": "normal"
+      },
+      {
+        "text": "Bosch AeroTwin Wipers (Pair)",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "1 x 1,450.00 1,450.00 A",
+        "align": "right",
+        "style": "normal"
+      },
+      {
+        "text": "--------------------------------",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "TOTAL EXCL. VAT         1,422.41",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "VAT                       227.59",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "TOTAL KSH               1,650.00",
+        "align": "left",
+        "style": "double"
+      },
+      {
+        "text": "--------------------------------",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "PAID BY M-PESA          1,650.00",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "M-Pesa ref:           SJK4XYZ123",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "--------------------------------",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "VAT RATE TAXABLE VAT GROSS",
+        "align": "left",
+        "style": "bold"
+      },
+      {
+        "text": "--------------------------------",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "A 16% 1,422.41 227.59 1,650.00",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "--------------------------------",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "CONTROL UNIT INFO",
+        "align": "centre",
+        "style": "normal"
+      },
+      {
+        "text": "CU Date/Time:",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "             27-09-2026 18:58:41",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "CU Serial No:   KRAMW0XXXXXXXXXX",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "CU Invoice No:     INV-000000042",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "qr": "https://itax.kra.go.ke/verify/abc123"
+      },
+      {
+        "text": "Scan to verify this receipt with",
+        "align": "centre",
+        "style": "normal"
+      },
+      {
+        "text": "KRA",
+        "align": "centre",
+        "style": "normal"
+      },
+      {
+        "text": "--------------------------------",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "Thank you for shopping at Enjoy!",
+        "align": "centre",
+        "style": "bold"
+      },
+      {
+        "text": "A = VAT 16%. Prices include VAT.",
+        "align": "centre",
+        "style": "normal"
+      }
+    ],
+    "filedNoGroups@48": [
+      {
+        "text": "ENJOY",
+        "align": "centre",
+        "style": "double"
+      },
+      {
+        "text": "Rubis Energy Kenya PLC",
+        "align": "centre",
+        "style": "normal"
+      },
+      {
+        "text": "Enjoy Westlands, Waiyaki Way, Nairobi",
+        "align": "centre",
+        "style": "normal"
+      },
+      {
+        "text": "Tel 0700 000 000",
+        "align": "centre",
+        "style": "normal"
+      },
+      {
+        "text": "PIN: P051XXXXXXXX",
+        "align": "centre",
+        "style": "bold"
+      },
+      {
+        "text": "------------------------------------------------",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "FISCAL RECEIPT",
+        "align": "centre",
+        "style": "double"
+      },
+      {
+        "text": "ORIGINAL",
+        "align": "centre",
+        "style": "normal"
+      },
+      {
+        "text": "------------------------------------------------",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "Invoice No:                        INV-000000042",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "Date:                           27/09/2026 18:58",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "Cashier:                                 Mary W.",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "Buyer PIN:                           P000123456Z",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "Buyer:                          ACME TRADERS LTD",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "------------------------------------------------",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "ITEM                        QTY   PRICE   AMOUNT",
+        "align": "left",
+        "style": "bold"
+      },
+      {
+        "text": "------------------------------------------------",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "Coca-Cola 500ml",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "2 x 100.00 200.00 A",
+        "align": "right",
+        "style": "normal"
+      },
+      {
+        "text": "Bosch AeroTwin Wipers (Pair)",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "1 x 1,450.00 1,450.00 A",
+        "align": "right",
+        "style": "normal"
+      },
+      {
+        "text": "------------------------------------------------",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "TOTAL EXCL. VAT                         1,422.41",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "VAT                                       227.59",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "TOTAL KSH                               1,650.00",
+        "align": "left",
+        "style": "double"
+      },
+      {
+        "text": "------------------------------------------------",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "PAID BY M-PESA                          1,650.00",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "M-Pesa ref:                           SJK4XYZ123",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "------------------------------------------------",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "VAT RATE TAXABLE VAT GROSS",
+        "align": "left",
+        "style": "bold"
+      },
+      {
+        "text": "------------------------------------------------",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "A 16% 1,650.00 264.00 1,914.00",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "------------------------------------------------",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "CONTROL UNIT INFO",
+        "align": "centre",
+        "style": "normal"
+      },
+      {
+        "text": "CU Date/Time:                27-09-2026 18:58:41",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "CU Serial No:                   KRAMW0XXXXXXXXXX",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "CU Invoice No:                     INV-000000042",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "qr": "https://itax.kra.go.ke/verify/abc123"
+      },
+      {
+        "text": "Scan to verify this receipt with KRA",
+        "align": "centre",
+        "style": "normal"
+      },
+      {
+        "text": "------------------------------------------------",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "Thank you for shopping at Enjoy!",
+        "align": "centre",
+        "style": "bold"
+      },
+      {
+        "text": "A = VAT 16%. Prices include VAT.",
+        "align": "centre",
+        "style": "normal"
+      }
+    ],
+    "filedNoGroups@32": [
+      {
+        "text": "ENJOY",
+        "align": "centre",
+        "style": "double"
+      },
+      {
+        "text": "Rubis Energy Kenya PLC",
+        "align": "centre",
+        "style": "normal"
+      },
+      {
+        "text": "Enjoy Westlands, Waiyaki Way,",
+        "align": "centre",
+        "style": "normal"
+      },
+      {
+        "text": "Nairobi",
+        "align": "centre",
+        "style": "normal"
+      },
+      {
+        "text": "Tel 0700 000 000",
+        "align": "centre",
+        "style": "normal"
+      },
+      {
+        "text": "PIN: P051XXXXXXXX",
+        "align": "centre",
+        "style": "bold"
+      },
+      {
+        "text": "--------------------------------",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "FISCAL RECEIPT",
+        "align": "centre",
+        "style": "double"
+      },
+      {
+        "text": "ORIGINAL",
+        "align": "centre",
+        "style": "normal"
+      },
+      {
+        "text": "--------------------------------",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "Invoice No:        INV-000000042",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "Date:           27/09/2026 18:58",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "Cashier:                 Mary W.",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "Buyer PIN:           P000123456Z",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "Buyer:          ACME TRADERS LTD",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "--------------------------------",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "ITEM        QTY   PRICE   AMOUNT",
+        "align": "left",
+        "style": "bold"
+      },
+      {
+        "text": "--------------------------------",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "Coca-Cola 500ml",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "2 x 100.00 200.00 A",
+        "align": "right",
+        "style": "normal"
+      },
+      {
+        "text": "Bosch AeroTwin Wipers (Pair)",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "1 x 1,450.00 1,450.00 A",
+        "align": "right",
+        "style": "normal"
+      },
+      {
+        "text": "--------------------------------",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "TOTAL EXCL. VAT         1,422.41",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "VAT                       227.59",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "TOTAL KSH               1,650.00",
+        "align": "left",
+        "style": "double"
+      },
+      {
+        "text": "--------------------------------",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "PAID BY M-PESA          1,650.00",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "M-Pesa ref:           SJK4XYZ123",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "--------------------------------",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "VAT RATE TAXABLE VAT GROSS",
+        "align": "left",
+        "style": "bold"
+      },
+      {
+        "text": "--------------------------------",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "A 16% 1,650.00 264.00 1,914.00",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "--------------------------------",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "CONTROL UNIT INFO",
+        "align": "centre",
+        "style": "normal"
+      },
+      {
+        "text": "CU Date/Time:",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "             27-09-2026 18:58:41",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "CU Serial No:   KRAMW0XXXXXXXXXX",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "CU Invoice No:     INV-000000042",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "qr": "https://itax.kra.go.ke/verify/abc123"
+      },
+      {
+        "text": "Scan to verify this receipt with",
+        "align": "centre",
+        "style": "normal"
+      },
+      {
+        "text": "KRA",
+        "align": "centre",
+        "style": "normal"
+      },
+      {
+        "text": "--------------------------------",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "Thank you for shopping at Enjoy!",
+        "align": "centre",
+        "style": "bold"
+      },
+      {
+        "text": "A = VAT 16%. Prices include VAT.",
+        "align": "centre",
+        "style": "normal"
+      }
+    ],
+    "filedNoClassOnItems@48": [
+      {
+        "text": "ENJOY",
+        "align": "centre",
+        "style": "double"
+      },
+      {
+        "text": "Rubis Energy Kenya PLC",
+        "align": "centre",
+        "style": "normal"
+      },
+      {
+        "text": "Enjoy Westlands, Waiyaki Way, Nairobi",
+        "align": "centre",
+        "style": "normal"
+      },
+      {
+        "text": "Tel 0700 000 000",
+        "align": "centre",
+        "style": "normal"
+      },
+      {
+        "text": "PIN: P051XXXXXXXX",
+        "align": "centre",
+        "style": "bold"
+      },
+      {
+        "text": "------------------------------------------------",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "FISCAL RECEIPT",
+        "align": "centre",
+        "style": "double"
+      },
+      {
+        "text": "ORIGINAL",
+        "align": "centre",
+        "style": "normal"
+      },
+      {
+        "text": "------------------------------------------------",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "Invoice No:                        INV-000000042",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "Date:                           27/09/2026 18:58",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "Cashier:                                 Mary W.",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "Buyer PIN:                           P000123456Z",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "Buyer:                          ACME TRADERS LTD",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "------------------------------------------------",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "ITEM                        QTY   PRICE   AMOUNT",
+        "align": "left",
+        "style": "bold"
+      },
+      {
+        "text": "------------------------------------------------",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "Coca-Cola 500ml",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "2 x 100.00 200.00 A",
+        "align": "right",
+        "style": "normal"
+      },
+      {
+        "text": "Bosch AeroTwin Wipers (Pair)",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "1 x 1,450.00 1,450.00 A",
+        "align": "right",
+        "style": "normal"
+      },
+      {
+        "text": "------------------------------------------------",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "TOTAL EXCL. VAT                         1,422.41",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "VAT                                       227.59",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "TOTAL KSH                               1,650.00",
+        "align": "left",
+        "style": "double"
+      },
+      {
+        "text": "------------------------------------------------",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "PAID BY M-PESA                          1,650.00",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "M-Pesa ref:                           SJK4XYZ123",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "------------------------------------------------",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "VAT RATE TAXABLE VAT GROSS",
+        "align": "left",
+        "style": "bold"
+      },
+      {
+        "text": "------------------------------------------------",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "A 16% 1,422.41 227.59 1,650.00",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "------------------------------------------------",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "CONTROL UNIT INFO",
+        "align": "centre",
+        "style": "normal"
+      },
+      {
+        "text": "CU Date/Time:                27-09-2026 18:58:41",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "CU Serial No:                   KRAMW0XXXXXXXXXX",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "CU Invoice No:                     INV-000000042",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "qr": "https://itax.kra.go.ke/verify/abc123"
+      },
+      {
+        "text": "Scan to verify this receipt with KRA",
+        "align": "centre",
+        "style": "normal"
+      },
+      {
+        "text": "------------------------------------------------",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "Thank you for shopping at Enjoy!",
+        "align": "centre",
+        "style": "bold"
+      },
+      {
+        "text": "A = VAT 16%. Prices include VAT.",
+        "align": "centre",
+        "style": "normal"
+      }
+    ],
+    "filedNoClassOnItems@32": [
+      {
+        "text": "ENJOY",
+        "align": "centre",
+        "style": "double"
+      },
+      {
+        "text": "Rubis Energy Kenya PLC",
+        "align": "centre",
+        "style": "normal"
+      },
+      {
+        "text": "Enjoy Westlands, Waiyaki Way,",
+        "align": "centre",
+        "style": "normal"
+      },
+      {
+        "text": "Nairobi",
+        "align": "centre",
+        "style": "normal"
+      },
+      {
+        "text": "Tel 0700 000 000",
+        "align": "centre",
+        "style": "normal"
+      },
+      {
+        "text": "PIN: P051XXXXXXXX",
+        "align": "centre",
+        "style": "bold"
+      },
+      {
+        "text": "--------------------------------",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "FISCAL RECEIPT",
+        "align": "centre",
+        "style": "double"
+      },
+      {
+        "text": "ORIGINAL",
+        "align": "centre",
+        "style": "normal"
+      },
+      {
+        "text": "--------------------------------",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "Invoice No:        INV-000000042",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "Date:           27/09/2026 18:58",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "Cashier:                 Mary W.",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "Buyer PIN:           P000123456Z",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "Buyer:          ACME TRADERS LTD",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "--------------------------------",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "ITEM        QTY   PRICE   AMOUNT",
+        "align": "left",
+        "style": "bold"
+      },
+      {
+        "text": "--------------------------------",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "Coca-Cola 500ml",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "2 x 100.00 200.00 A",
+        "align": "right",
+        "style": "normal"
+      },
+      {
+        "text": "Bosch AeroTwin Wipers (Pair)",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "1 x 1,450.00 1,450.00 A",
+        "align": "right",
+        "style": "normal"
+      },
+      {
+        "text": "--------------------------------",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "TOTAL EXCL. VAT         1,422.41",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "VAT                       227.59",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "TOTAL KSH               1,650.00",
+        "align": "left",
+        "style": "double"
+      },
+      {
+        "text": "--------------------------------",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "PAID BY M-PESA          1,650.00",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "M-Pesa ref:           SJK4XYZ123",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "--------------------------------",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "VAT RATE TAXABLE VAT GROSS",
+        "align": "left",
+        "style": "bold"
+      },
+      {
+        "text": "--------------------------------",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "A 16% 1,422.41 227.59 1,650.00",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "--------------------------------",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "CONTROL UNIT INFO",
+        "align": "centre",
+        "style": "normal"
+      },
+      {
+        "text": "CU Date/Time:",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "             27-09-2026 18:58:41",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "CU Serial No:   KRAMW0XXXXXXXXXX",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "CU Invoice No:     INV-000000042",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "qr": "https://itax.kra.go.ke/verify/abc123"
+      },
+      {
+        "text": "Scan to verify this receipt with",
+        "align": "centre",
+        "style": "normal"
+      },
+      {
+        "text": "KRA",
+        "align": "centre",
+        "style": "normal"
+      },
+      {
+        "text": "--------------------------------",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "Thank you for shopping at Enjoy!",
+        "align": "centre",
+        "style": "bold"
+      },
+      {
+        "text": "A = VAT 16%. Prices include VAT.",
+        "align": "centre",
+        "style": "normal"
+      }
+    ],
+    "duplicate@48": [
+      {
+        "text": "*** DUPLICATE ***",
+        "align": "centre",
+        "style": "bold"
+      },
+      {
+        "text": "ENJOY",
+        "align": "centre",
+        "style": "double"
+      },
+      {
+        "text": "Rubis Energy Kenya PLC",
+        "align": "centre",
+        "style": "normal"
+      },
+      {
+        "text": "Enjoy Westlands, Waiyaki Way, Nairobi",
+        "align": "centre",
+        "style": "normal"
+      },
+      {
+        "text": "Tel 0700 000 000",
+        "align": "centre",
+        "style": "normal"
+      },
+      {
+        "text": "PIN: P051XXXXXXXX",
+        "align": "centre",
+        "style": "bold"
+      },
+      {
+        "text": "------------------------------------------------",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "FISCAL RECEIPT",
+        "align": "centre",
+        "style": "double"
+      },
+      {
+        "text": "*** DUPLICATE ***",
+        "align": "centre",
+        "style": "bold"
+      },
+      {
+        "text": "------------------------------------------------",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "Invoice No:                        INV-000000042",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "Date:                           27/09/2026 18:58",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "Cashier:                                 Mary W.",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "Buyer PIN:                           P000123456Z",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "Buyer:                          ACME TRADERS LTD",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "------------------------------------------------",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "ITEM                        QTY   PRICE   AMOUNT",
+        "align": "left",
+        "style": "bold"
+      },
+      {
+        "text": "------------------------------------------------",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "Coca-Cola 500ml",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "2 x 100.00 200.00 A",
+        "align": "right",
+        "style": "normal"
+      },
+      {
+        "text": "Bosch AeroTwin Wipers (Pair)",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "1 x 1,450.00 1,450.00 A",
+        "align": "right",
+        "style": "normal"
+      },
+      {
+        "text": "------------------------------------------------",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "TOTAL EXCL. VAT                         1,422.41",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "VAT                                       227.59",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "TOTAL KSH                               1,650.00",
+        "align": "left",
+        "style": "double"
+      },
+      {
+        "text": "------------------------------------------------",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "PAID BY M-PESA                          1,650.00",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "M-Pesa ref:                           SJK4XYZ123",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "------------------------------------------------",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "VAT RATE TAXABLE VAT GROSS",
+        "align": "left",
+        "style": "bold"
+      },
+      {
+        "text": "------------------------------------------------",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "A 16% 1,422.41 227.59 1,650.00",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "------------------------------------------------",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "CONTROL UNIT INFO",
+        "align": "centre",
+        "style": "normal"
+      },
+      {
+        "text": "CU Date/Time:                27-09-2026 18:58:41",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "CU Serial No:                   KRAMW0XXXXXXXXXX",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "CU Invoice No:                     INV-000000042",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "qr": "https://itax.kra.go.ke/verify/abc123"
+      },
+      {
+        "text": "Scan to verify this receipt with KRA",
+        "align": "centre",
+        "style": "normal"
+      },
+      {
+        "text": "------------------------------------------------",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "Thank you for shopping at Enjoy!",
+        "align": "centre",
+        "style": "bold"
+      },
+      {
+        "text": "A = VAT 16%. Prices include VAT.",
+        "align": "centre",
+        "style": "normal"
+      },
+      {
+        "text": "*** DUPLICATE ***",
+        "align": "centre",
+        "style": "bold"
+      }
+    ],
+    "duplicate@32": [
+      {
+        "text": "*** DUPLICATE ***",
+        "align": "centre",
+        "style": "bold"
+      },
+      {
+        "text": "ENJOY",
+        "align": "centre",
+        "style": "double"
+      },
+      {
+        "text": "Rubis Energy Kenya PLC",
+        "align": "centre",
+        "style": "normal"
+      },
+      {
+        "text": "Enjoy Westlands, Waiyaki Way,",
+        "align": "centre",
+        "style": "normal"
+      },
+      {
+        "text": "Nairobi",
+        "align": "centre",
+        "style": "normal"
+      },
+      {
+        "text": "Tel 0700 000 000",
+        "align": "centre",
+        "style": "normal"
+      },
+      {
+        "text": "PIN: P051XXXXXXXX",
+        "align": "centre",
+        "style": "bold"
+      },
+      {
+        "text": "--------------------------------",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "FISCAL RECEIPT",
+        "align": "centre",
+        "style": "double"
+      },
+      {
+        "text": "*** DUPLICATE ***",
+        "align": "centre",
+        "style": "bold"
+      },
+      {
+        "text": "--------------------------------",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "Invoice No:        INV-000000042",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "Date:           27/09/2026 18:58",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "Cashier:                 Mary W.",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "Buyer PIN:           P000123456Z",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "Buyer:          ACME TRADERS LTD",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "--------------------------------",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "ITEM        QTY   PRICE   AMOUNT",
+        "align": "left",
+        "style": "bold"
+      },
+      {
+        "text": "--------------------------------",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "Coca-Cola 500ml",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "2 x 100.00 200.00 A",
+        "align": "right",
+        "style": "normal"
+      },
+      {
+        "text": "Bosch AeroTwin Wipers (Pair)",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "1 x 1,450.00 1,450.00 A",
+        "align": "right",
+        "style": "normal"
+      },
+      {
+        "text": "--------------------------------",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "TOTAL EXCL. VAT         1,422.41",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "VAT                       227.59",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "TOTAL KSH               1,650.00",
+        "align": "left",
+        "style": "double"
+      },
+      {
+        "text": "--------------------------------",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "PAID BY M-PESA          1,650.00",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "M-Pesa ref:           SJK4XYZ123",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "--------------------------------",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "VAT RATE TAXABLE VAT GROSS",
+        "align": "left",
+        "style": "bold"
+      },
+      {
+        "text": "--------------------------------",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "A 16% 1,422.41 227.59 1,650.00",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "--------------------------------",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "CONTROL UNIT INFO",
+        "align": "centre",
+        "style": "normal"
+      },
+      {
+        "text": "CU Date/Time:",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "             27-09-2026 18:58:41",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "CU Serial No:   KRAMW0XXXXXXXXXX",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "CU Invoice No:     INV-000000042",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "qr": "https://itax.kra.go.ke/verify/abc123"
+      },
+      {
+        "text": "Scan to verify this receipt with",
+        "align": "centre",
+        "style": "normal"
+      },
+      {
+        "text": "KRA",
+        "align": "centre",
+        "style": "normal"
+      },
+      {
+        "text": "--------------------------------",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "Thank you for shopping at Enjoy!",
+        "align": "centre",
+        "style": "bold"
+      },
+      {
+        "text": "A = VAT 16%. Prices include VAT.",
+        "align": "centre",
+        "style": "normal"
+      },
+      {
+        "text": "*** DUPLICATE ***",
+        "align": "centre",
+        "style": "bold"
+      }
+    ],
+    "slip@48": [
+      {
+        "text": "ENJOY",
+        "align": "centre",
+        "style": "double"
+      },
+      {
+        "text": "Rubis Energy Kenya PLC",
+        "align": "centre",
+        "style": "normal"
+      },
+      {
+        "text": "Enjoy Westlands, Waiyaki Way, Nairobi",
+        "align": "centre",
+        "style": "normal"
+      },
+      {
+        "text": "Tel 0700 000 000",
+        "align": "centre",
+        "style": "normal"
+      },
+      {
+        "text": "PIN: P051XXXXXXXX",
+        "align": "centre",
+        "style": "bold"
+      },
+      {
+        "text": "------------------------------------------------",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "SALE RECORD",
+        "align": "centre",
+        "style": "double"
+      },
+      {
+        "text": "NOT A TAX INVOICE",
+        "align": "centre",
+        "style": "bold"
+      },
+      {
+        "text": "Tax invoice to follow",
+        "align": "centre",
+        "style": "normal"
+      },
+      {
+        "text": "------------------------------------------------",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "Sale No:                                      42",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "Date:                           27/09/2026 18:58",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "Cashier:                                 Mary W.",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "Buyer PIN:                           P000123456Z",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "Buyer:                          ACME TRADERS LTD",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "------------------------------------------------",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "ITEM                        QTY   PRICE   AMOUNT",
+        "align": "left",
+        "style": "bold"
+      },
+      {
+        "text": "------------------------------------------------",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "Coca-Cola 500ml",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "2 x 100.00 200.00 A",
+        "align": "right",
+        "style": "normal"
+      },
+      {
+        "text": "Bosch AeroTwin Wipers (Pair)",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "1 x 1,450.00 1,450.00 A",
+        "align": "right",
+        "style": "normal"
+      },
+      {
+        "text": "------------------------------------------------",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "TOTAL EXCL. VAT                         1,422.41",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "VAT                                       227.59",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "TOTAL KSH                               1,650.00",
+        "align": "left",
+        "style": "double"
+      },
+      {
+        "text": "------------------------------------------------",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "PAID BY CASH                            1,650.00",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "Tendered:                               2,000.00",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "Change:                                   350.00",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "------------------------------------------------",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "Thank you for shopping at Enjoy!",
+        "align": "centre",
+        "style": "bold"
+      },
+      {
+        "text": "A = VAT 16%. Prices include VAT.",
+        "align": "centre",
+        "style": "normal"
+      }
+    ],
+    "slip@32": [
+      {
+        "text": "ENJOY",
+        "align": "centre",
+        "style": "double"
+      },
+      {
+        "text": "Rubis Energy Kenya PLC",
+        "align": "centre",
+        "style": "normal"
+      },
+      {
+        "text": "Enjoy Westlands, Waiyaki Way,",
+        "align": "centre",
+        "style": "normal"
+      },
+      {
+        "text": "Nairobi",
+        "align": "centre",
+        "style": "normal"
+      },
+      {
+        "text": "Tel 0700 000 000",
+        "align": "centre",
+        "style": "normal"
+      },
+      {
+        "text": "PIN: P051XXXXXXXX",
+        "align": "centre",
+        "style": "bold"
+      },
+      {
+        "text": "--------------------------------",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "SALE RECORD",
+        "align": "centre",
+        "style": "double"
+      },
+      {
+        "text": "NOT A TAX INVOICE",
+        "align": "centre",
+        "style": "bold"
+      },
+      {
+        "text": "Tax invoice to follow",
+        "align": "centre",
+        "style": "normal"
+      },
+      {
+        "text": "--------------------------------",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "Sale No:                      42",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "Date:           27/09/2026 18:58",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "Cashier:                 Mary W.",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "Buyer PIN:           P000123456Z",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "Buyer:          ACME TRADERS LTD",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "--------------------------------",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "ITEM        QTY   PRICE   AMOUNT",
+        "align": "left",
+        "style": "bold"
+      },
+      {
+        "text": "--------------------------------",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "Coca-Cola 500ml",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "2 x 100.00 200.00 A",
+        "align": "right",
+        "style": "normal"
+      },
+      {
+        "text": "Bosch AeroTwin Wipers (Pair)",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "1 x 1,450.00 1,450.00 A",
+        "align": "right",
+        "style": "normal"
+      },
+      {
+        "text": "--------------------------------",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "TOTAL EXCL. VAT         1,422.41",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "VAT                       227.59",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "TOTAL KSH               1,650.00",
+        "align": "left",
+        "style": "double"
+      },
+      {
+        "text": "--------------------------------",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "PAID BY CASH            1,650.00",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "Tendered:               2,000.00",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "Change:                   350.00",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "--------------------------------",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "Thank you for shopping at Enjoy!",
+        "align": "centre",
+        "style": "bold"
+      },
+      {
+        "text": "A = VAT 16%. Prices include VAT.",
+        "align": "centre",
+        "style": "normal"
+      }
+    ],
+    "discounted@48": [
+      {
+        "text": "ENJOY",
+        "align": "centre",
+        "style": "double"
+      },
+      {
+        "text": "Rubis Energy Kenya PLC",
+        "align": "centre",
+        "style": "normal"
+      },
+      {
+        "text": "Enjoy Westlands, Waiyaki Way, Nairobi",
+        "align": "centre",
+        "style": "normal"
+      },
+      {
+        "text": "Tel 0700 000 000",
+        "align": "centre",
+        "style": "normal"
+      },
+      {
+        "text": "PIN: P051XXXXXXXX",
+        "align": "centre",
+        "style": "bold"
+      },
+      {
+        "text": "------------------------------------------------",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "FISCAL RECEIPT",
+        "align": "centre",
+        "style": "double"
+      },
+      {
+        "text": "ORIGINAL",
+        "align": "centre",
+        "style": "normal"
+      },
+      {
+        "text": "------------------------------------------------",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "Invoice No:                        INV-000000042",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "Date:                           27/09/2026 18:58",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "Cashier:                                 Mary W.",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "Buyer PIN:                           P000123456Z",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "Buyer:                          ACME TRADERS LTD",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "------------------------------------------------",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "ITEM                        QTY   PRICE   AMOUNT",
+        "align": "left",
+        "style": "bold"
+      },
+      {
+        "text": "------------------------------------------------",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "Coca-Cola 500ml",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "2 x 100.00 200.00 A",
+        "align": "right",
+        "style": "normal"
+      },
+      {
+        "text": "Discount: -20.00",
+        "align": "right",
+        "style": "normal"
+      },
+      {
+        "text": "Bosch AeroTwin Wipers (Pair)",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "1 x 1,450.00 1,450.00 A",
+        "align": "right",
+        "style": "normal"
+      },
+      {
+        "text": "------------------------------------------------",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "TOTAL EXCL. VAT                         1,280.17",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "VAT                                       204.83",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "TOTAL KSH                               1,485.00",
+        "align": "left",
+        "style": "double"
+      },
+      {
+        "text": "------------------------------------------------",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "PAID BY M-PESA                          1,485.00",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "M-Pesa ref:                           SJK4XYZ123",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "------------------------------------------------",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "VAT RATE TAXABLE VAT GROSS",
+        "align": "left",
+        "style": "bold"
+      },
+      {
+        "text": "------------------------------------------------",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "A 16% 1,422.41 227.59 1,650.00",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "------------------------------------------------",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "CONTROL UNIT INFO",
+        "align": "centre",
+        "style": "normal"
+      },
+      {
+        "text": "CU Date/Time:                27-09-2026 18:58:41",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "CU Serial No:                   KRAMW0XXXXXXXXXX",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "CU Invoice No:                     INV-000000042",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "qr": "https://itax.kra.go.ke/verify/abc123"
+      },
+      {
+        "text": "Scan to verify this receipt with KRA",
+        "align": "centre",
+        "style": "normal"
+      },
+      {
+        "text": "------------------------------------------------",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "Thank you for shopping at Enjoy!",
+        "align": "centre",
+        "style": "bold"
+      },
+      {
+        "text": "A = VAT 16%. Prices include VAT.",
+        "align": "centre",
+        "style": "normal"
+      }
+    ],
+    "discounted@32": [
+      {
+        "text": "ENJOY",
+        "align": "centre",
+        "style": "double"
+      },
+      {
+        "text": "Rubis Energy Kenya PLC",
+        "align": "centre",
+        "style": "normal"
+      },
+      {
+        "text": "Enjoy Westlands, Waiyaki Way,",
+        "align": "centre",
+        "style": "normal"
+      },
+      {
+        "text": "Nairobi",
+        "align": "centre",
+        "style": "normal"
+      },
+      {
+        "text": "Tel 0700 000 000",
+        "align": "centre",
+        "style": "normal"
+      },
+      {
+        "text": "PIN: P051XXXXXXXX",
+        "align": "centre",
+        "style": "bold"
+      },
+      {
+        "text": "--------------------------------",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "FISCAL RECEIPT",
+        "align": "centre",
+        "style": "double"
+      },
+      {
+        "text": "ORIGINAL",
+        "align": "centre",
+        "style": "normal"
+      },
+      {
+        "text": "--------------------------------",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "Invoice No:        INV-000000042",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "Date:           27/09/2026 18:58",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "Cashier:                 Mary W.",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "Buyer PIN:           P000123456Z",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "Buyer:          ACME TRADERS LTD",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "--------------------------------",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "ITEM        QTY   PRICE   AMOUNT",
+        "align": "left",
+        "style": "bold"
+      },
+      {
+        "text": "--------------------------------",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "Coca-Cola 500ml",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "2 x 100.00 200.00 A",
+        "align": "right",
+        "style": "normal"
+      },
+      {
+        "text": "Discount: -20.00",
+        "align": "right",
+        "style": "normal"
+      },
+      {
+        "text": "Bosch AeroTwin Wipers (Pair)",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "1 x 1,450.00 1,450.00 A",
+        "align": "right",
+        "style": "normal"
+      },
+      {
+        "text": "--------------------------------",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "TOTAL EXCL. VAT         1,280.17",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "VAT                       204.83",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "TOTAL KSH               1,485.00",
+        "align": "left",
+        "style": "double"
+      },
+      {
+        "text": "--------------------------------",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "PAID BY M-PESA          1,485.00",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "M-Pesa ref:           SJK4XYZ123",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "--------------------------------",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "VAT RATE TAXABLE VAT GROSS",
+        "align": "left",
+        "style": "bold"
+      },
+      {
+        "text": "--------------------------------",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "A 16% 1,422.41 227.59 1,650.00",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "--------------------------------",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "CONTROL UNIT INFO",
+        "align": "centre",
+        "style": "normal"
+      },
+      {
+        "text": "CU Date/Time:",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "             27-09-2026 18:58:41",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "CU Serial No:   KRAMW0XXXXXXXXXX",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "CU Invoice No:     INV-000000042",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "qr": "https://itax.kra.go.ke/verify/abc123"
+      },
+      {
+        "text": "Scan to verify this receipt with",
+        "align": "centre",
+        "style": "normal"
+      },
+      {
+        "text": "KRA",
+        "align": "centre",
+        "style": "normal"
+      },
+      {
+        "text": "--------------------------------",
+        "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "Thank you for shopping at Enjoy!",
+        "align": "centre",
+        "style": "bold"
+      },
+      {
+        "text": "A = VAT 16%. Prices include VAT.",
+        "align": "centre",
+        "style": "normal"
+      }
+    ]
+  }
+}

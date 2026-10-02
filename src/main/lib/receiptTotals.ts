@@ -15,12 +15,15 @@
 
 import type { Discount } from '../services/shopify-types.js'
 import { computeVatIncluded } from '../services/reports.js'
+import { hasNonAClass, resolveVatClass } from './vatClass.js'
 
 /** One line item's contribution to the receipt totals. */
 export interface ReceiptTotalsLineItem {
   unitPrice: number
   quantity: number
   discount?: Discount
+  /** VAT class letter; absent or blank is class A (docs/phase-194). */
+  vatClass?: string
 }
 
 /** The stored order data {@link computeReceiptTotals} needs. */
@@ -41,7 +44,10 @@ export interface ReceiptTotals {
   discountTotal: number
   /** The order's own stored total — never recomputed from the lines. */
   total: number
-  /** VAT already included in `total` (docs/phase-158's extraction, not added on top). */
+  /**
+   * VAT already included in `total` (docs/phase-158's extraction, not added on top). Taken from
+   * the class-A lines alone when the receipt also holds another class (docs/phase-194).
+   */
   vatIncluded: number
 }
 
@@ -73,6 +79,24 @@ function discountAmount(base: number, discount?: Discount): number {
   if (!discount || !(discount.value > 0)) return 0
   const reduction = discount.type === 'percent' ? base * (discount.value / 100) : discount.value
   return Math.min(reduction, base)
+}
+
+/**
+ * The part of the stored total that carries VAT at the store's rate: all
+ * of it for an all-class-A receipt, and only the class-A lines (after
+ * their own discounts) when the receipt also holds another class.
+ *
+ * @param {ReceiptTotalsOrder} order
+ * @returns {number}
+ */
+function vatBearingAmount(order: ReceiptTotalsOrder): number {
+  if (!hasNonAClass(order.lineItems)) return order.total
+  return order.lineItems
+    .filter((line) => resolveVatClass(line.vatClass) === 'A')
+    .reduce((sum, line) => {
+      const lineRaw = line.unitPrice * line.quantity
+      return sum + lineRaw - discountAmount(lineRaw, line.discount)
+    }, 0)
 }
 
 /**
@@ -125,6 +149,6 @@ export function computeReceiptTotals(
     rawSubtotal,
     discountTotal,
     total: order.total,
-    vatIncluded: computeVatIncluded(order.total, vatRate)
+    vatIncluded: computeVatIncluded(vatBearingAmount(order), vatRate)
   }
 }

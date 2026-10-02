@@ -29,6 +29,7 @@
 
 import type { Discount } from '../services/shopify-types.js'
 import { computeReceiptTotals } from './receiptTotals.js'
+import { VAT_CLASSES, expectedGroupTotals, resolveVatClass, type VatClass } from './vatClass.js'
 import type { ReceiptTotalsLineItem } from './receiptTotals.js'
 import { buildFiscalBlockLines, NOT_A_TAX_INVOICE_LINE } from './receiptFiscalBlock.js'
 
@@ -136,6 +137,15 @@ const DEFAULT_WIDTH: ReceiptWidth = 48
 /** Narrows a stored/plain number to a {@link ReceiptWidth}, or `undefined` for anything else (including absent). */
 export function asReceiptWidth(value: number | null | undefined): ReceiptWidth | undefined {
   return value === 48 || value === 42 || value === 32 ? value : undefined
+}
+
+/** The footer key entry for each class, printed only for the classes a receipt holds (docs/phase-194, D5). */
+const VAT_CLASS_KEYS: Record<VatClass, string> = {
+  A: 'A = VAT 16%',
+  B: 'B = VAT 8%',
+  C: 'C = Zero rated',
+  D: 'D = Other rate',
+  E: 'E = Exempt'
 }
 
 /** Statutory rate per KRA VAT class; `null` means the class has no printable rate ("n/a"). */
@@ -284,7 +294,7 @@ function itemNameLines(item: ReceiptLayoutLineItem, width: number): ReceiptLayou
 /** One item's qty/price/amount/class line, right-aligned as a whole. */
 function itemAmountLine(item: ReceiptLayoutLineItem, width: number): ReceiptLayoutLine {
   const amount = item.unitPrice * item.quantity
-  const vatClass = item.vatClass || 'A'
+  const vatClass = resolveVatClass(item.vatClass) ?? String(item.vatClass).trim()
   const text = `${item.quantity} x ${formatAmount(item.unitPrice)} ${formatAmount(amount)} ${vatClass}`
   return ln(text.length <= width ? text : text.slice(text.length - width), 'right')
 }
@@ -297,6 +307,30 @@ function vatClassFigures(letter: string, taxable: number): { rateLabel: string; 
   }
   const vat = round2(taxable * rate)
   return { rateLabel: `${Math.round(rate * 100)}%`, vatLabel: formatAmount(vat), gross: round2(taxable + vat) }
+}
+
+/** The key entries for the classes the receipt's lines hold, in class order; class A alone for a receipt with none. */
+function vatClassKeys(items: ReceiptLayoutLineItem[]): string[] {
+  const present = VAT_CLASSES.filter((letter) => items.some((item) => resolveVatClass(item.vatClass) === letter))
+  return (present.length > 0 ? present : (['A'] as VatClass[])).map((letter) => VAT_CLASS_KEYS[letter])
+}
+
+/**
+ * The VAT-table amounts for a filed sale that has no stored device groups
+ * (the already-filed recovery never re-reads the receipt): the lines'
+ * own amounts per class, not the whole sale as class A.
+ *
+ * @param {ReceiptLayoutLineItem[]} items
+ * @param {string} fallbackA the whole-receipt amount, used when no line resolves to a class
+ * @returns {ReceiptLayoutVatGroups}
+ */
+function groupsFromItems(items: ReceiptLayoutLineItem[], fallbackA: string): ReceiptLayoutVatGroups {
+  const totals = expectedGroupTotals(items)
+  const groups: ReceiptLayoutVatGroups = {}
+  for (const letter of VAT_CLASSES) {
+    if (items.some((item) => resolveVatClass(item.vatClass) === letter)) groups[letter] = String(totals[letter])
+  }
+  return Object.keys(groups).length > 0 ? groups : { A: fallbackA }
 }
 
 /**
@@ -321,7 +355,8 @@ export function buildReceiptLayout(
   const lineItems: ReceiptTotalsLineItem[] = order.items.map((item) => ({
     unitPrice: item.unitPrice,
     quantity: item.quantity,
-    discount: item.discount
+    discount: item.discount,
+    vatClass: item.vatClass
   }))
   const totals = computeReceiptTotals(
     { localId: order.localId, lineItems, cartDiscount: order.cartDiscount, total: order.total },
@@ -423,7 +458,7 @@ export function buildReceiptLayout(
     const groups: ReceiptLayoutVatGroups =
       order.vatGroups && Object.keys(order.vatGroups).length > 0
         ? order.vatGroups
-        : { A: String(totals.rawSubtotal) }
+        : groupsFromItems(order.items, String(totals.rawSubtotal))
     wrapText('VAT RATE TAXABLE VAT GROSS', width).forEach((text) => push(ln(text, 'left', 'bold')))
     push(rule(width))
     for (const letter of ['A', 'B', 'C', 'D', 'E'] as const) {
@@ -458,7 +493,7 @@ export function buildReceiptLayout(
 
   // --- (i) Footer ---
   push(...wrappedLines(settings.footerMessage || 'Thank you for shopping at Enjoy!', width, 'centre', 'bold'))
-  push(...wrappedLines('A = VAT 16%. Prices include VAT.', width))
+  push(...wrappedLines(`${vatClassKeys(order.items).join('. ')}. Prices include VAT.`, width))
 
   // --- bottom duplicate stamp ---
   if (order.isDuplicate) {

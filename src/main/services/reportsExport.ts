@@ -12,7 +12,7 @@ import type { OfflineOrderPayload } from './shopify-types.js'
 import type { FiscalVatGroupAmounts } from './integrations/etims.js'
 import { buildCsv, csvMoney } from '../lib/csv.js'
 import { buildTraderSystemInvNum } from '../lib/traderSystemInvoiceNumber.js'
-import { computeVatIncluded, formatNairobiDateTime, buildReconciliationRow, type ReportRange } from './reports.js'
+import { computeVatIncluded, formatNairobiDateTime, buildReconciliationRow, orderVatBase, type ReportRange } from './reports.js'
 
 /** `'A'`..`'E'`, in column order, for the raw per-VAT-group `orders.csv` columns. */
 const VAT_GROUP_COLUMN_LETTERS = ['A', 'B', 'C', 'D', 'E'] as const
@@ -120,7 +120,7 @@ export function buildOrdersCsv(db: RubisDatabase, range: ReportRange, taxRate: n
       payment?.reference ?? '',
       payment?.mode ?? '',
       csvMoney(order.total),
-      csvMoney(computeVatIncluded(order.total, taxRate)),
+      csvMoney(computeVatIncluded(orderVatBase(order), taxRate)),
       order.shift_id ?? '',
       order.status === 'voided' ? 'voided' : 'completed',
       order.shopify_order_id ?? '',
