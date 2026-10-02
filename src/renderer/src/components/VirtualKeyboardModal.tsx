@@ -21,6 +21,14 @@ const LABEL_ID = 'virtual-keyboard-label'
  * components' own defaults (`Done`, `Enter`) are what the inline numpads
  * still show.
  *
+ * A labelled `Close keyboard` control sits in the header beside the label
+ * (docs/phase-200), and so does the Escape key, in both shells: the docked
+ * sheet has no backdrop, so Submit was its only way out, and Submit does not
+ * read as "put this away". The control is in the header, not the key grid,
+ * so each key set still has exactly one Submit key and no Done or Enter. It
+ * calls `keyboardStore.close()` and nothing else, so it closes exactly what
+ * Submit closes and leaves the host screen alone.
+ *
  * Submit only closes the overlay. It deliberately does not reach the
  * screen's own Save/Continue button: the relay in `keyboardStore.open()`
  * has already written every keystroke into the field, so there is nothing
@@ -110,7 +118,33 @@ export default function VirtualKeyboardModal() {
     return () => document.removeEventListener('paste', onPaste)
   }, [isOpen, applyPaste])
 
+  /** Escape does what the Close keyboard control does; only while the keyboard is open, and it stops there so no other Escape handler also acts. */
+  useEffect(() => {
+    if (!isOpen) return undefined
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (event.key !== 'Escape') return
+      event.preventDefault()
+      event.stopPropagation()
+      close()
+    }
+    document.addEventListener('keydown', onKeyDown)
+    return () => document.removeEventListener('keydown', onKeyDown)
+  }, [isOpen, close])
+
   if (!request) return null
+
+  /**
+   * Closes the keyboard and nothing else: no argument (the click event is not passed on),
+   * no reach into the host screen. The typed value is already in the field through the relay,
+   * so closing is not cancelling.
+   *
+   * Focus is deliberately not moved back to the field. The Admin and setup fields open the
+   * keyboard from `onFocus` as well as `onClick` (phase-139), so refocusing the field here
+   * would reopen the keyboard at once. The field stays unfocused until it is tapped again.
+   */
+  const closeKeyboard = (): void => {
+    close()
+  }
 
   const mode = request.mode ?? 'caps'
   const numeric = mode === 'numeric' || mode === 'decimal' || mode === 'ip'
@@ -141,13 +175,23 @@ export default function VirtualKeyboardModal() {
    */
   const header = (
     <>
-      <div className="mb-2 flex items-baseline justify-between gap-2">
+      <div className="mb-2 flex items-center justify-between gap-2">
         <p id={LABEL_ID} className="text-base font-semibold text-slate-700">
           {request.label}
         </p>
-        <p role="status" className="text-sm font-medium text-rose-600">
-          {pasteNote}
-        </p>
+        <div className="flex items-center gap-2">
+          <p role="status" className="text-sm font-medium text-rose-600">
+            {pasteNote}
+          </p>
+          {/* h-10 with -my-1 keeps a 40px target but takes 32px of the row, so the docked sheet's fixed height still fits the text keyboard. */}
+          <button
+            type="button"
+            onClick={closeKeyboard}
+            className="-my-1 h-10 shrink-0 rounded-lg border border-slate-300 bg-white px-4 text-base font-semibold text-slate-700 active:bg-slate-200"
+          >
+            Close keyboard
+          </button>
+        </div>
       </div>
       <div className="mb-2 flex h-12 items-center gap-2">
         <div
