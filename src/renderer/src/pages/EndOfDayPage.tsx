@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import type { EndOfDayReport, ManualMpesaEntrySummary } from '../../../main/services/reports.js'
 import { formatCurrency } from '../lib/currency.js'
+import { titleCaseName } from '../lib/text.js'
 import { paginate } from '../lib/paginate.js'
 import { useAuthStore } from '../stores/authStore.js'
 import { useKeyboardStore } from '../stores/keyboardStore.js'
@@ -79,7 +80,7 @@ function EntryRow({
         {showDay && <td className="py-2 pr-2 text-slate-500">{entry.localDay}</td>}
         <td className="py-2 pr-2 text-slate-500">{new Date(entry.createdAt).toLocaleTimeString()}</td>
         <td className="py-2 pr-2 text-slate-500">#{entry.orderLocalId}</td>
-        <td className="py-2 pr-2 text-slate-800">{entry.staffName}</td>
+        <td className="py-2 pr-2 text-slate-800">{titleCaseName(entry.staffName)}</td>
         <td className="py-2 pr-2 font-medium tracking-wide text-slate-800">{entry.reference}</td>
         <td className="py-2 pr-2 text-right text-slate-800">{formatCurrency(entry.amount)}</td>
         <td className="py-2 text-right">
@@ -104,7 +105,7 @@ function EntryRow({
       {entry.lastExclusion && (
         <tr>
           <td colSpan={columns} className="pb-2 pl-9 text-sm italic text-slate-500">
-            Left out on {entry.lastExclusion.localDay} by {entry.lastExclusion.staffName}
+            Left out on {entry.lastExclusion.localDay} by {titleCaseName(entry.lastExclusion.staffName)}
             {entry.lastExclusion.reason ? `: ${entry.lastExclusion.reason}` : ''}
           </td>
         </tr>
@@ -234,7 +235,7 @@ export default function EndOfDayPage() {
   }
 
   const staffName = (staffId: number): string =>
-    staffList.find((staff) => staff.id === staffId)?.name ?? `Staff #${staffId}`
+    titleCaseName(staffList.find((staff) => staff.id === staffId)?.name ?? `Staff #${staffId}`)
 
   const handleApproved = (managerId: number, managerPin: string): void => {
     setCollectingPin(false)
@@ -356,7 +357,7 @@ export default function EndOfDayPage() {
             <tbody>
               {report.cashiers.map((cashier) => (
                 <tr key={cashier.staffId} className="border-t border-slate-200/60">
-                  <td className="py-2 pr-2 text-slate-800">{cashier.staffName}</td>
+                  <td className="py-2 pr-2 text-slate-800">{titleCaseName(cashier.staffName)}</td>
                   <td className="py-2 pr-2 text-right text-slate-800">{cashier.orderCount}</td>
                   <td className="py-2 pr-2 text-right text-slate-800">
                     {formatCurrency(cashier.totalsByMethod.cash)}

@@ -50,6 +50,11 @@
         "style": "normal"
       },
       {
+        "text": "- START OF FISCAL RECEIPT -",
+        "align": "centre",
+        "style": "normal"
+      },
+      {
         "text": "FISCAL RECEIPT",
         "align": "centre",
         "style": "double"
@@ -215,6 +220,11 @@
       {
         "text": "------------------------------------------------",
         "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "- END OF FISCAL RECEIPT -",
+        "align": "centre",
         "style": "normal"
       },
       {
@@ -265,6 +275,11 @@
         "style": "normal"
       },
       {
+        "text": "- START OF FISCAL RECEIPT -",
+        "align": "centre",
+        "style": "normal"
+      },
+      {
         "text": "FISCAL RECEIPT",
         "align": "centre",
         "style": "double"
@@ -443,6 +458,11 @@
         "style": "normal"
       },
       {
+        "text": "- END OF FISCAL RECEIPT -",
+        "align": "centre",
+        "style": "normal"
+      },
+      {
         "text": "Thank you for shopping at Enjoy!",
         "align": "centre",
         "style": "bold"
@@ -482,6 +502,11 @@
       {
         "text": "------------------------------------------------",
         "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "- START OF FISCAL RECEIPT -",
+        "align": "centre",
         "style": "normal"
       },
       {
@@ -650,6 +675,11 @@
       {
         "text": "------------------------------------------------",
         "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "- END OF FISCAL RECEIPT -",
+        "align": "centre",
         "style": "normal"
       },
       {
@@ -700,6 +730,11 @@
         "style": "normal"
       },
       {
+        "text": "- START OF FISCAL RECEIPT -",
+        "align": "centre",
+        "style": "normal"
+      },
+      {
         "text": "FISCAL RECEIPT",
         "align": "centre",
         "style": "double"
@@ -878,6 +913,11 @@
         "style": "normal"
       },
       {
+        "text": "- END OF FISCAL RECEIPT -",
+        "align": "centre",
+        "style": "normal"
+      },
+      {
         "text": "Thank you for shopping at Enjoy!",
         "align": "centre",
         "style": "bold"
@@ -917,6 +957,11 @@
       {
         "text": "------------------------------------------------",
         "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "- START OF FISCAL RECEIPT -",
+        "align": "centre",
         "style": "normal"
       },
       {
@@ -1085,6 +1130,11 @@
       {
         "text": "------------------------------------------------",
         "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "- END OF FISCAL RECEIPT -",
+        "align": "centre",
         "style": "normal"
       },
       {
@@ -1135,6 +1185,11 @@
         "style": "normal"
       },
       {
+        "text": "- START OF FISCAL RECEIPT -",
+        "align": "centre",
+        "style": "normal"
+      },
+      {
         "text": "FISCAL RECEIPT",
         "align": "centre",
         "style": "double"
@@ -1313,6 +1368,11 @@
         "style": "normal"
       },
       {
+        "text": "- END OF FISCAL RECEIPT -",
+        "align": "centre",
+        "style": "normal"
+      },
+      {
         "text": "Thank you for shopping at Enjoy!",
         "align": "centre",
         "style": "bold"
@@ -1357,6 +1417,11 @@
       {
         "text": "------------------------------------------------",
         "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "- START OF FISCAL RECEIPT -",
+        "align": "centre",
         "style": "normal"
       },
       {
@@ -1525,6 +1590,11 @@
       {
         "text": "------------------------------------------------",
         "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "- END OF FISCAL RECEIPT -",
+        "align": "centre",
         "style": "normal"
       },
       {
@@ -1585,6 +1655,11 @@
         "style": "normal"
       },
       {
+        "text": "- START OF FISCAL RECEIPT -",
+        "align": "centre",
+        "style": "normal"
+      },
+      {
         "text": "FISCAL RECEIPT",
         "align": "centre",
         "style": "double"
@@ -1760,6 +1835,11 @@
       {
         "text": "--------------------------------",
         "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "- END OF FISCAL RECEIPT -",
+        "align": "centre",
         "style": "normal"
       },
       {
@@ -2149,6 +2229,11 @@
         "style": "normal"
       },
       {
+        "text": "- START OF FISCAL RECEIPT -",
+        "align": "centre",
+        "style": "normal"
+      },
+      {
         "text": "FISCAL RECEIPT",
         "align": "centre",
         "style": "double"
@@ -2322,6 +2407,11 @@
         "style": "normal"
       },
       {
+        "text": "- END OF FISCAL RECEIPT -",
+        "align": "centre",
+        "style": "normal"
+      },
+      {
         "text": "Thank you for shopping at Enjoy!",
         "align": "centre",
         "style": "bold"
@@ -2366,6 +2456,11 @@
       {
         "text": "--------------------------------",
         "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "- START OF FISCAL RECEIPT -",
+        "align": "centre",
         "style": "normal"
       },
       {
@@ -2549,6 +2644,11 @@
       {
         "text": "--------------------------------",
         "align": "left",
+        "style": "normal"
+      },
+      {
+        "text": "- END OF FISCAL RECEIPT -",
+        "align": "centre",
         "style": "normal"
       },
       {

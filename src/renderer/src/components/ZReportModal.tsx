@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import type { ZReport } from '../../../main/services/reports.js'
 import { formatCurrency } from '../lib/currency.js'
+import { titleCaseName } from '../lib/text.js'
 import { formatVatRateLabel } from '../lib/vatLabel.js'
 import { CloseIcon } from './icons.js'
 
@@ -92,7 +93,7 @@ export default function ZReportModal({ report, onClose }: ZReportModalProps) {
               Closed:{' '}
               {report.closedAt ? new Date(report.closedAt).toLocaleString() : 'In progress'}
             </p>
-            <p>Cashier: {report.staffName}</p>
+            <p>Cashier: {titleCaseName(report.staffName)}</p>
           </div>
 
           <div className="mb-3 space-y-1.5 rounded-lg bg-slate-50 p-3">

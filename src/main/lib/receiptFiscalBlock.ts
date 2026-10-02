@@ -24,6 +24,12 @@
 /** Printed at the top of a not-yet-filed slip (docs/phase-165), above the store name. */
 export const FISCAL_PENDING_HEADER = 'SALE RECORD - TAX INVOICE TO FOLLOW'
 
+/** Centred on a filed fiscal slip, after the header block and before the "FISCAL RECEIPT" label (docs/phase-198-2). */
+export const FISCAL_RECEIPT_START_MARKER = '- START OF FISCAL RECEIPT -'
+
+/** Centred on a filed fiscal slip, after the control unit block and before the footer (docs/phase-198-2). */
+export const FISCAL_RECEIPT_END_MARKER = '- END OF FISCAL RECEIPT -'
+
 /** Printed where the CU block would be, on a not-yet-filed slip (docs/phase-165). */
 export const NOT_A_TAX_INVOICE_LINE = 'Not a tax invoice'
 

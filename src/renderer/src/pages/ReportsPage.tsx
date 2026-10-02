@@ -8,6 +8,7 @@ import type {
   ReportRangePreset
 } from '../../../main/services/reports.js'
 import { formatCurrency } from '../lib/currency.js'
+import { titleCaseName } from '../lib/text.js'
 import { formatVatRateLabel } from '../lib/vatLabel.js'
 import { paginate } from '../lib/paginate.js'
 import ZReportModal from '../components/ZReportModal.js'
@@ -666,7 +667,7 @@ export default function ReportsPage() {
   }, [])
 
   const staffName = (staffId: number | null): string =>
-    staffId === null ? '' : (staffById.get(staffId) ?? `Staff #${staffId}`)
+    staffId === null ? '' : titleCaseName(staffById.get(staffId) ?? `Staff #${staffId}`)
 
   return (
     <div className="space-y-4">

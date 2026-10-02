@@ -12,6 +12,7 @@
 import type { ReceiptLayoutEntry, ReceiptLayoutOrder, ReceiptWidth } from './receiptLayout.js'
 import { formatAmount, keyValueLines, ln, rule, wrappedLines } from './receiptLayout.js'
 import { discountAmount } from './receiptTotals.js'
+import { titleCaseName } from './text.js'
 
 /**
  * Every string the slip prints, in one place so the shop can change the
@@ -61,9 +62,9 @@ function money(value: number): string {
   return `${ENJOY_SLIP_TEXT.currency} ${formatAmount(value)}`
 }
 
-/** The cashier's first name; the whole text when it has no space. */
+/** The cashier's first name, title-cased; the whole text when it has no space. */
 function firstName(name: string): string {
-  return name.trim().split(/\s+/)[0] ?? ''
+  return titleCaseName(name.trim().split(/\s+/)[0] ?? '')
 }
 
 /**

@@ -4,6 +4,7 @@ import { useUnfiledCountStore } from '../stores/unfiledCountStore.js'
 import { useShopifyReconciliationStore } from '../stores/shopifyReconciliationStore.js'
 import { countActionableFindings } from '../lib/shopifyReconciliation.js'
 import { formatCurrency } from '../lib/currency.js'
+import { titleCaseName } from '../lib/text.js'
 import EmptyState from './EmptyState.js'
 import ZReportModal from './ZReportModal.js'
 import LocationPicker, { type ShopifyLocationOption } from './LocationPicker.js'
@@ -2370,7 +2371,7 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
               className="flex items-center justify-between rounded-lg border border-slate-100 px-3 py-2"
             >
               <div className="flex items-center gap-2">
-                <span className="font-medium text-slate-800">{staff.name}</span>
+                <span className="font-medium text-slate-800">{titleCaseName(staff.name)}</span>
                 <span className="rounded-full bg-slate-100 px-2 py-0.5 text-sm font-medium capitalize text-slate-500">
                   {staff.role}
                 </span>

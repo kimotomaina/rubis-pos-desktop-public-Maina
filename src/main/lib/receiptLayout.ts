@@ -32,7 +32,13 @@ import { computeReceiptTotals } from './receiptTotals.js'
 import { VAT_CLASSES, VAT_CLASS_RATES, grossToNet, netGroupTotals, resolveVatClass, type VatClass } from './vatClass.js'
 import { reconcileVatGroups } from './vatReconcile.js'
 import type { ReceiptTotalsLineItem } from './receiptTotals.js'
-import { buildFiscalBlockLines, NOT_A_TAX_INVOICE_LINE } from './receiptFiscalBlock.js'
+import {
+  buildFiscalBlockLines,
+  FISCAL_RECEIPT_END_MARKER,
+  FISCAL_RECEIPT_START_MARKER,
+  NOT_A_TAX_INVOICE_LINE
+} from './receiptFiscalBlock.js'
+import { titleCaseName } from './text.js'
 
 /** Where a printed line sits within the receipt's width. */
 export type ReceiptLineAlign = 'left' | 'centre' | 'right'
@@ -395,6 +401,9 @@ export function buildReceiptLayout(
 
   // --- (b) Label ---
   if (isFiscalised) {
+    // Marks where the fiscal document begins; the mock's test banner and a duplicate's
+    // top stamp sit outside it. The sale record and the Enjoy slip never carry it.
+    push(...wrappedLines(FISCAL_RECEIPT_START_MARKER, width))
     push(...wrappedLines('FISCAL RECEIPT', width, 'centre', 'double'))
     push(
       ...wrappedLines(
@@ -422,7 +431,7 @@ export function buildReceiptLayout(
     push(...keyValueLines('Invoice No:', order.traderInvNum, width))
   }
   push(...keyValueLines('Date:', dateTime, width))
-  push(...keyValueLines('Cashier:', order.cashierName, width))
+  push(...keyValueLines('Cashier:', titleCaseName(order.cashierName), width))
   if (order.customerPin) push(...keyValueLines('Buyer PIN:', order.customerPin, width))
   if (order.buyerName) {
     const buyerLines = wrapText(order.buyerName, width - 'Buyer: '.length, 2)
@@ -513,6 +522,7 @@ export function buildReceiptLayout(
       push(...wrappedLines('Scan to verify this receipt with KRA', width))
     }
     push(rule(width))
+    push(...wrappedLines(FISCAL_RECEIPT_END_MARKER, width))
   }
 
   // --- (i) Footer ---

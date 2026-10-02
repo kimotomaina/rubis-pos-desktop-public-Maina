@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import type { NeedsAttentionRow, UnprintedFiscalSlipRow } from '../../../main/services/database.js'
 import type { VatMismatchRow } from '../../../main/services/vat-reconcile.js'
 import { formatCurrency } from '../lib/currency.js'
+import { titleCaseName } from '../lib/text.js'
 import { isValidKraPinFormat, KRA_PIN_MAX_LENGTH } from '../lib/kraPin.js'
 import { describeNeedsAttentionStatus, applyResendResult } from '../lib/needsAttention.js'
 import { paginate } from '../lib/paginate.js'
@@ -209,7 +210,7 @@ export default function NeedsAttentionPage({
               <div>
                 <span className="text-lg font-semibold text-slate-800">Order #{row.local_id}</span>
                 <p className="mt-1 text-sm text-slate-500">
-                  {new Date(row.created_at).toLocaleString()} · {row.staff_name ?? 'Unknown staff'} ·{' '}
+                  {new Date(row.created_at).toLocaleString()} · {row.staff_name ? titleCaseName(row.staff_name) : 'Unknown staff'} ·{' '}
                   {formatCurrency(row.total)}
                 </p>
               </div>
@@ -237,7 +238,7 @@ export default function NeedsAttentionPage({
             <div key={row.local_id} className="rounded-xl border border-slate-200 bg-white p-4">
               <span className="text-lg font-semibold text-slate-800">Order #{row.local_id}</span>
               <p className="mt-1 text-sm text-slate-500">
-                {new Date(row.created_at).toLocaleString()} · {row.staff_name ?? 'Unknown staff'} ·{' '}
+                {new Date(row.created_at).toLocaleString()} · {row.staff_name ? titleCaseName(row.staff_name) : 'Unknown staff'} ·{' '}
                 {formatCurrency(row.total)}
               </p>
               <p className="mt-2 text-base text-slate-700">
@@ -277,7 +278,7 @@ export default function NeedsAttentionPage({
                       </span>
                     </div>
                     <p className="mt-1 text-sm text-slate-500">
-                      {new Date(row.created_at).toLocaleString()} · {row.staff_name ?? 'Unknown staff'} ·{' '}
+                      {new Date(row.created_at).toLocaleString()} · {row.staff_name ? titleCaseName(row.staff_name) : 'Unknown staff'} ·{' '}
                       {formatCurrency(row.total)}
                     </p>
                     <p className="mt-2 text-base text-slate-700">
