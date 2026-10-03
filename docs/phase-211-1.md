@@ -46,7 +46,7 @@ Examples for a sale at 2026-10-03T00:00:00Z (seconds 23,760,000, `0E59C0`): Rubi
 
 | Mutation | Result |
 | --- | --- |
-| Sequence not padded | 8 tests fail (examples, lengths, padding, ceiling, and the four database allocation tests) |
+| Sequence not padded | at least 8 tests fail (my output was cut at 8: the examples, lengths, padding, ceiling and database allocation tests) |
 | Monotonic guard not applied | 5 tests fail (consecutive, clock set back, pre-2026, and the two database equivalents) |
 | Ceiling not enforced | 1 test fails (the throw rather than truncate) |
 | Checkout files without the stored number (the defect above) | 1 test fails (the `runCheckout` request test) |
