@@ -22,7 +22,10 @@ export interface AuthState {
   fetchStaffList: () => Promise<void>
   /** Verifies a PIN for the given staff id; sets `currentStaff` on success. */
   login: (staffId: number, pin: string) => Promise<boolean>
-  /** Clears the session and closes the staff member's shift. */
+  /**
+   * Clears the session. It does not close the shift: `auth:logout` in the main process
+   * does nothing, and a shift closes only from the Admin screen's Close Shift.
+   */
   logout: () => Promise<void>
 }
 

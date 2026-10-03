@@ -71,6 +71,32 @@ export interface CartItem {
 }
 
 /**
+ * `held:hold` payload (docs/phase-217): the cart being parked. No payment state: a
+ * held sale never carries a payment method, a tendered amount or a typed code.
+ */
+export interface HoldSaleRequest {
+  cartToken: string
+  /** The cashier signed in. */
+  staffId: number
+  /** Display only; the real total is recomputed when the sale is checked out. */
+  total: number
+  items: CartItem[]
+  cartDiscount?: Discount
+  customerPin?: string
+  companyName?: string
+}
+
+/** `held:discard` payload (docs/phase-217): the main process re-verifies `managerPin`. */
+export interface DiscardHeldSaleRequest {
+  id: number
+  /** The cashier signed in. */
+  staffId: number
+  managerId: number
+  managerPin: string
+  reason: string
+}
+
+/**
  * `cart:record-removals` payload (docs/phase-197): manager-approved removals
  * or reductions of cart lines. The main process re-verifies `managerPin`.
  */

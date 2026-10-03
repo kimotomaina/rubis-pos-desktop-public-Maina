@@ -124,6 +124,20 @@ export interface CheckoutParams {
   cardManual?: CardManualEntry
 }
 
+/** The held sale whose cart is on screen (docs/phase-217). */
+export interface ResumedHeldSale {
+  id: number
+  label: string
+}
+
+/** What a held sale gives back to the cart: the lines and who the sale is for, exactly as held. */
+export interface HeldCartContents {
+  items: CartItem[]
+  cartDiscount: Discount | null
+  customerPin: string
+  companyName: string
+}
+
 /**
  * The public contract of the cart store.
  */
@@ -144,6 +158,12 @@ export interface CartState {
    * (docs/phase-197).
    */
   cartToken: string | null
+  /** Customer's KRA PIN as typed, for a B2B invoice; part of the cart so a held sale keeps it (docs/phase-217). */
+  customerPin: string
+  /** Customer's company name as typed; part of the cart so a held sale keeps it (docs/phase-217). */
+  companyName: string
+  /** The held sale this cart came from, while it is on screen; its label and total head the payment panel (docs/phase-217). */
+  resumedHeld: ResumedHeldSale | null
   /** Add one unit (or `qty`) of a variant; merges if already present. */
   addItem: (item: Omit<CartItem, 'quantity'>, qty?: number) => void
   /** Remove a line item by its variant id. */
@@ -160,6 +180,14 @@ export interface CartState {
   clearCart: () => void
   /** Puts a restored cart back (docs/phase-197). */
   restoreCart: (items: CartItem[], cartToken: string) => void
+  /** Sets the customer's KRA PIN and company name. */
+  setCustomer: (customerPin: string, companyName: string) => void
+  /**
+   * Puts a held sale's cart on screen exactly as it was held (docs/phase-217): the same
+   * lines at the same prices, discounts, customer and `cartToken`. Never reprices from
+   * the catalogue, and not `restoreCart`, which drops discounts.
+   */
+  resumeHeldSale: (held: HeldCartContents, cartToken: string, from: ResumedHeldSale) => void
   /** Sum of `price * quantity` across all items, before any discount. */
   getRawSubtotal: () => number
   /** Sum of line totals after line-level discounts, before the cart-level discount. */
@@ -188,6 +216,9 @@ export const useCartStore = create<CartState>()(
   (set, get) => ({
     items: [],
     cartToken: null,
+    customerPin: '',
+    companyName: '',
+    resumedHeld: null,
     cartDiscount: null,
     checkoutStatus: 'idle',
     lastReceipt: null,
@@ -245,9 +276,22 @@ export const useCartStore = create<CartState>()(
 
     setCartDiscount: (discount: Discount | null) => set({ cartDiscount: discount }),
 
-    clearCart: () => set({ items: [], cartToken: null, cartDiscount: null }),
+    clearCart: () =>
+      set({ items: [], cartToken: null, cartDiscount: null, customerPin: '', companyName: '', resumedHeld: null }),
 
     restoreCart: (items, cartToken) => set({ items, cartToken, cartDiscount: null }),
+
+    setCustomer: (customerPin, companyName) => set({ customerPin, companyName }),
+
+    resumeHeldSale: (held, cartToken, from) =>
+      set({
+        items: held.items,
+        cartToken,
+        cartDiscount: held.cartDiscount,
+        customerPin: held.customerPin,
+        companyName: held.companyName,
+        resumedHeld: from
+      }),
 
     getRawSubtotal: () =>
       get().items.reduce((sum, item) => sum + item.price * item.quantity, 0),

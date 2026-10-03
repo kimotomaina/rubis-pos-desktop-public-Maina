@@ -86,7 +86,9 @@ import { DEMO_PRODUCTS } from './services/demoData.js'
 import type {
   CardApproval,
   CheckoutReceipt,
+  DiscardedHeldSale,
   FiscalResendResult,
+  HeldSaleSummary,
   ManualMpesaApproval,
   MpesaPaymentRow,
   StaffSummary,
@@ -161,6 +163,11 @@ import {
   resendFiscalizationSchema,
   printFiscalDuplicateSchema,
   saveCartDraftSchema,
+  holdSaleSchema,
+  heldSaleIdSchema,
+  renameHeldSaleSchema,
+  discardHeldSaleSchema,
+  discardedHeldSalesSchema,
   recordCartRemovalsSchema,
   reconcileMpesaPaymentSchema,
   endOfDayReportSchema,
@@ -211,6 +218,7 @@ import { createReconciliationRunner } from './services/reconciliation.js'
 import type { ReconciliationResult } from './services/reconciliation.js'
 import { createFiscalEngine } from './services/fiscal-engine.js'
 import { runCheckout } from './services/checkout.js'
+import { closeShiftUnlessHeld, discardHeldSaleApproved, holdCart } from './services/held-sales.js'
 import {
   correctPinAndResend,
   buildFiscalResendResult,
@@ -254,7 +262,9 @@ import {
   generateFiscalStatusByDay,
   generateFiscalReconciliation,
   getReportRange,
-  localDayOf
+  getLocalDayRange,
+  localDayOf,
+  todayLocalDay
 } from './services/reports.js'
 import type {
   ZReport,
@@ -2827,6 +2837,75 @@ app.whenReady().then(async () => {
   })
 
   /**
+   * IPC handlers for held sales (docs/phase-217): a cart parked while the cashier
+   * serves the next customer. A held sale is not a sale - nothing here files with
+   * the tax device, queues for Shopify, moves stock or uses a trader number.
+   */
+  ipcMain.handle('held:list', (): ServiceResult<HeldSaleSummary[]> => {
+    try {
+      return { success: true, data: db.listOpenHeldSales() }
+    } catch (err) {
+      return { success: false, error: err instanceof Error ? err.message : 'Failed to load the held sales' }
+    }
+  })
+
+  ipcMain.handle('held:hold', (_event, request: unknown): ServiceResult<HeldSaleSummary> => {
+    const validation = validate(holdSaleSchema, request)
+    if (!validation.success) {
+      return { success: false, error: validation.error }
+    }
+    return holdCart(db, validation.data)
+  })
+
+  ipcMain.handle(
+    'held:resume',
+    (_event, request: unknown): ServiceResult<{ summary: HeldSaleSummary; payloadJson: string }> => {
+      const validation = validate(heldSaleIdSchema, request)
+      if (!validation.success) {
+        return { success: false, error: validation.error }
+      }
+      try {
+        return { success: true, data: db.resumeHeldSale(validation.data.id) }
+      } catch (err) {
+        return { success: false, error: err instanceof Error ? err.message : 'Could not resume the sale' }
+      }
+    }
+  )
+
+  ipcMain.handle('held:rename', (_event, request: unknown): ServiceResult<HeldSaleSummary> => {
+    const validation = validate(renameHeldSaleSchema, request)
+    if (!validation.success) {
+      return { success: false, error: validation.error }
+    }
+    try {
+      return { success: true, data: db.renameHeldSale(validation.data.id, validation.data.label) }
+    } catch (err) {
+      return { success: false, error: err instanceof Error ? err.message : 'Could not rename the sale' }
+    }
+  })
+
+  ipcMain.handle('held:discard', (_event, request: unknown): ServiceResult<HeldSaleSummary> => {
+    const validation = validate(discardHeldSaleSchema, request)
+    if (!validation.success) {
+      return { success: false, error: validation.error }
+    }
+    return discardHeldSaleApproved(db, validation.data)
+  })
+
+  ipcMain.handle('held:discarded-for-day', (_event, request: unknown): ServiceResult<DiscardedHeldSale[]> => {
+    const validation = validate(discardedHeldSalesSchema, request ?? {})
+    if (!validation.success) {
+      return { success: false, error: validation.error }
+    }
+    try {
+      const { startIso, endIso } = getLocalDayRange(validation.data.localDay ?? todayLocalDay())
+      return { success: true, data: db.getDiscardedHeldSales(startIso, endIso) }
+    } catch (err) {
+      return { success: false, error: err instanceof Error ? err.message : 'Failed to load the discarded held sales' }
+    }
+  })
+
+  /**
    * IPC handler that records manager-approved cart removals (docs/phase-197).
    * Re-verifies the manager's PIN in the main process like every privileged
    * write, so a renderer cannot forge an approval. The renderer changes the
@@ -3336,15 +3415,7 @@ app.whenReady().then(async () => {
       if (!validation.success) {
         return { success: false, error: validation.error }
       }
-      try {
-        const data = db.closeShift(validation.data.shiftId, validation.data.endingCash)
-        return { success: true, data }
-      } catch (err) {
-        return {
-          success: false,
-          error: err instanceof Error ? err.message : 'Failed to close shift'
-        }
-      }
+      return closeShiftUnlessHeld(db, validation.data.shiftId, validation.data.endingCash)
     }
   )
 

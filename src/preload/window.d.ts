@@ -13,10 +13,18 @@ import type { VatMismatchRow } from '../main/services/vat-reconcile.js'
 import type { ShiftType } from '../main/lib/shiftWindows.js'
 import type { ServiceResult } from '../main/services/shopify-types.js'
 import type { FiscalConnectionTestResult } from '../main/services/integrations/fiscal-connection-test.js'
-import type { CartItem, CartRemovalRequest, ProductSummary } from '../renderer/src/types/shopify.js'
+import type {
+  CartItem,
+  CartRemovalRequest,
+  DiscardHeldSaleRequest,
+  HoldSaleRequest,
+  ProductSummary
+} from '../renderer/src/types/shopify.js'
 import type {
   CheckoutIpcRequest,
   CheckoutReceipt,
+  DiscardedHeldSale,
+  HeldSaleSummary,
   MpesaPaymentRow,
   FiscalResendResult,
   OrderRow,
@@ -138,6 +146,18 @@ export interface PosApi {
   clearCartDraft: () => Promise<ServiceResult<void>>
   /** Records manager-approved cart removals; the main process re-verifies the manager PIN. */
   recordCartRemovals: (request: CartRemovalRequest) => Promise<ServiceResult<void>>
+  /** Every sale on hold or resumed on this till. */
+  listHeldSales: () => Promise<ServiceResult<HeldSaleSummary[]>>
+  /** Parks the cart. Not a sale: nothing is filed, queued or counted. */
+  holdSale: (request: HoldSaleRequest) => Promise<ServiceResult<HeldSaleSummary>>
+  /** Takes a held sale back; its lines come back exactly as held. */
+  resumeHeldSale: (id: number) => Promise<ServiceResult<{ summary: HeldSaleSummary; payloadJson: string }>>
+  /** Renames a held sale. */
+  renameHeldSale: (id: number, label: string) => Promise<ServiceResult<HeldSaleSummary>>
+  /** Discards a held sale; the main process re-verifies the manager PIN. */
+  discardHeldSale: (request: DiscardHeldSaleRequest) => Promise<ServiceResult<HeldSaleSummary>>
+  /** Held sales discarded on one Africa/Nairobi day (today when omitted), for End of Day. */
+  getDiscardedHeldSales: (localDay?: string) => Promise<ServiceResult<DiscardedHeldSale[]>>
   /** Prints an order's receipt at the fiscal device. Requires a re-verified admin Manager PIN; succeeds only when the device's last receipt is this order's. */
   printFiscalDuplicate: (
     orderId: number,

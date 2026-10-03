@@ -607,6 +607,233 @@ function rmSyncRetrying(dir) {
 }
 
 /**
+ * Content clipped by an `overflow: hidden` box (docs/phase-217). The census above only
+ * sees page scroll and `auto`/`scroll` containers, so a strip that pushed the cart
+ * footer out of an `overflow-hidden` column would pass it. This probe lists every box
+ * whose own overflow is hidden and whose content is bigger than the box (a deliberate
+ * `truncate` ellipsis is not counted), and where the two buttons that must stay on
+ * screen sit.
+ */
+const HIDDEN_OVERFLOW_EXPR = `
+JSON.stringify((() => {
+  const clipped = []
+  for (const el of document.querySelectorAll('body *')) {
+    const s = getComputedStyle(el)
+    if (s.display === 'none' || s.textOverflow === 'ellipsis') continue
+    const clipsX = s.overflowX === 'hidden' || s.overflowX === 'clip'
+    const clipsY = s.overflowY === 'hidden' || s.overflowY === 'clip'
+    if ((clipsY && el.scrollHeight > el.clientHeight + 1) || (clipsX && el.scrollWidth > el.clientWidth + 1)) {
+      clipped.push({ tag: el.tagName, cls: (el.className || '').toString().slice(0, 80), overBy: Math.max(el.scrollHeight - el.clientHeight, el.scrollWidth - el.clientWidth) })
+    }
+  }
+  const bottomOf = (label) => {
+    const b = Array.from(document.querySelectorAll('button')).find((x) => x.textContent.trim() === label)
+    return b ? Math.round(b.getBoundingClientRect().bottom) : null
+  }
+  const strip = document.querySelector('[data-testid="held-sales-strip"]')
+  const table = document.querySelector('main table tbody')
+  return {
+    clipped,
+    innerHeight: window.innerHeight,
+    completeSaleBottom: bottomOf('COMPLETE SALE'),
+    holdBottom: bottomOf('Hold sale'),
+    stripHeight: strip ? Math.round(strip.getBoundingClientRect().height) : 0,
+    heldCards: document.querySelectorAll('[data-testid="held-sale-card"]').length,
+    cartRows: table ? table.querySelectorAll('tr').length : 0,
+    banner: document.querySelector('[data-testid="held-sale-banner"]')?.textContent ?? null
+  }
+})())
+`
+
+const HELD_STRIP_MAX_HEIGHT = 72
+const CART_LINES_PER_PAGE_NO_STRIP = 7
+
+async function heldProbe(cmd) {
+  return JSON.parse(await evaluate(cmd, HIDDEN_OVERFLOW_EXPR))
+}
+
+/** Adds distinct lines to the cart through the search bar, best-effort, up to `wanted` rows on screen. */
+async function addCartLines(cmd, wanted) {
+  for (const query of ['a', 'e', 'o', 'i', 'u', 's', 't', 'n', 'r', 'l', 'm', 'k']) {
+    const rows = await evaluate(cmd, `document.querySelectorAll('main table tbody tr').length`)
+    if (rows >= wanted) return rows
+    await evaluate(
+      cmd,
+      `(() => {
+        const input = document.querySelector('input[placeholder]');
+        if (!input) return false;
+        const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+        setter.call(input, ${JSON.stringify(query)});
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        return true;
+      })()`
+    )
+    await new Promise((r) => setTimeout(r, 600))
+    // The search bar picks a result on mouse down, not click (`PosSearchBar.tsx`).
+    await evaluate(
+      cmd,
+      `(() => {
+        const row = document.querySelector('[role="option"] button');
+        if (!row) return false;
+        row.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+        return true;
+      })()`
+    )
+    await new Promise((r) => setTimeout(r, 400))
+    // A product with several variants opens the variant picker; close it and carry on.
+    await clickBySelector(cmd, 'button[aria-label="Close"]')
+  }
+  return evaluate(cmd, `document.querySelectorAll('main table tbody tr').length`)
+}
+
+const signature = (c) => `${c.tag}|${c.cls}`
+
+/**
+ * Held sales on the sale screen (docs/phase-217): measured with none, then one, two
+ * and three held sales, by pressing the real Hold sale button; then a resumed sale on
+ * the M-Pesa and Card panels (the large label and total); then the End of Day list.
+ * Each state must clip nothing that the no-held baseline did not, keep Complete Sale
+ * and Hold sale on screen, keep the strip within one cart line's height, and give the
+ * cart one fewer line a page while the strip shows.
+ */
+async function checkHeldSales(cmd, testCase) {
+  const findings = []
+  let failures = 0
+  const record = (ok, line) => {
+    findings.push(`${ok ? '✔' : '✖'} ${line}`)
+    log(`${ok ? '✔' : '✖'} ${line}`)
+    if (!ok) failures++
+  }
+  const where = testCase.name
+
+  await clickWhereText(cmd, 'button', 'CASH')
+  await new Promise((r) => setTimeout(r, 200))
+  await addCartLines(cmd, CART_LINES_PER_PAGE_NO_STRIP)
+
+  const baseline = await heldProbe(cmd)
+  const baselineSignatures = new Set(baseline.clipped.map(signature))
+
+  const check = (label, probe, expectStrip, expectedCards) => {
+    const fresh = probe.clipped.filter((c) => !baselineSignatures.has(signature(c)))
+    const onScreen =
+      probe.completeSaleBottom !== null && probe.completeSaleBottom <= probe.innerHeight &&
+      probe.holdBottom !== null && probe.holdBottom <= probe.innerHeight
+    const stripOk = expectStrip ? probe.stripHeight > 0 && probe.stripHeight <= HELD_STRIP_MAX_HEIGHT : probe.stripHeight === 0
+    const cardsOk = probe.heldCards === expectedCards
+    const rowLimit = expectStrip ? CART_LINES_PER_PAGE_NO_STRIP - 1 : CART_LINES_PER_PAGE_NO_STRIP
+    const rowsOk = probe.cartRows <= rowLimit
+    const ok = fresh.length === 0 && onScreen && stripOk && cardsOk && rowsOk
+    record(
+      ok,
+      `${label} — ${where}: ${probe.heldCards} card(s), strip ${probe.stripHeight}px, ${probe.cartRows} cart row(s), Complete Sale bottom ${probe.completeSaleBottom}/${probe.innerHeight}, Hold sale bottom ${probe.holdBottom}${fresh.length ? `, newly clipped: ${JSON.stringify(fresh)}` : ''}${onScreen ? '' : ', a button is off screen'}${stripOk ? '' : ', strip height wrong'}${cardsOk ? '' : ', wrong number of cards'}${rowsOk ? '' : `, more than ${rowLimit} cart rows`}`
+    )
+  }
+
+  check('Held 0 (baseline)', baseline, false, 0)
+
+  // One held sale: hold the populated cart with the real button, then fill a new cart.
+  await clickWhereText(cmd, 'button', 'Hold sale')
+  await new Promise((r) => setTimeout(r, 500))
+  await addCartLines(cmd, CART_LINES_PER_PAGE_NO_STRIP)
+  check('Held 1', await heldProbe(cmd), true, 1)
+
+  // A resumed sale on the M-Pesa and Card panels: hold the cart on screen first, then resume.
+  if (await clickBySelector(cmd, 'button[aria-label="Resume Customer 1"]')) {
+    await new Promise((r) => setTimeout(r, 300))
+    await clickWhereText(cmd, 'button', 'Hold it and resume')
+    await new Promise((r) => setTimeout(r, 700))
+    for (const [label, method] of [['Resumed M-Pesa', 'M-PESA'], ['Resumed Card', 'CARD']]) {
+      await clickWhereText(cmd, 'button', method)
+      await new Promise((r) => setTimeout(r, 400))
+      const probe = await heldProbe(cmd)
+      const fresh = probe.clipped.filter((c) => !baselineSignatures.has(signature(c)))
+      const onScreen = probe.holdBottom !== null && probe.holdBottom <= probe.innerHeight
+      record(
+        fresh.length === 0 && onScreen,
+        `${label} — ${where}: banner ${JSON.stringify(probe.banner)}${fresh.length ? `, newly clipped: ${JSON.stringify(fresh)}` : ''}${onScreen ? '' : ', Hold sale is off screen'}`
+      )
+    }
+    await clickWhereText(cmd, 'button', 'CASH')
+    await new Promise((r) => setTimeout(r, 200))
+  } else {
+    record(false, `Resume — ${where}: no "Resume Customer 1" card found`)
+  }
+
+  // Two held: hold the resumed cart (it reuses its row), then fill a new cart.
+  await clickWhereText(cmd, 'button', 'Hold sale')
+  await new Promise((r) => setTimeout(r, 500))
+  await addCartLines(cmd, CART_LINES_PER_PAGE_NO_STRIP)
+  check('Held 2', await heldProbe(cmd), true, 2)
+
+  // Three held: the limit; Hold sale is disabled and says why.
+  await clickWhereText(cmd, 'button', 'Hold sale')
+  await new Promise((r) => setTimeout(r, 500))
+  await addCartLines(cmd, CART_LINES_PER_PAGE_NO_STRIP)
+  check('Held 3', await heldProbe(cmd), true, 3)
+
+  // Six discarded held sales through the real IPC, so End of Day shows a full page of them.
+  const seeded = await evaluate(
+    cmd,
+    `(async () => {
+      const staff = (await window.api.getStaffList()).data ?? []
+      const admin = staff.find((m) => m.role === 'admin')
+      if (!admin) return 'no admin'
+      const held = (await window.api.listHeldSales()).data ?? []
+      for (const sale of held.filter((x) => x.status === 'held')) {
+        await window.api.discardHeldSale({ id: sale.id, staffId: admin.id, managerId: admin.id, managerPin: '1234', reason: 'check:fit: customer left without paying' })
+      }
+      for (let i = 0; i < 6; i++) {
+        const made = await window.api.holdSale({ cartToken: 'check-fit-' + i, staffId: admin.id, total: 100 + i, items: [{ id: 'cf', productId: 'cf', title: 'Check fit', variantTitle: '', price: 100 + i, quantity: 1, image: null }] })
+        if (!made.success) return made.error
+        const discarded = await window.api.discardHeldSale({ id: made.data.id, staffId: admin.id, managerId: admin.id, managerPin: '1234', reason: 'check:fit: customer left without paying' })
+        if (!discarded.success) return discarded.error
+      }
+      return 'ok'
+    })()`
+  )
+  record(seeded === 'ok', `Seeded discarded held sales for End of Day — ${where}: ${seeded}`)
+
+  return { findings, failures }
+}
+
+/** End of Day with held sales discarded (docs/phase-217): the list is there, and the Approve button is still on screen. */
+async function checkEndOfDayHeldList(cmd, testCase) {
+  const findings = []
+  let failures = 0
+  if (!(await clickWhereText(cmd, 'button', 'Admin'))) {
+    return { findings: ['  (End of Day held list: no "Admin" nav button — skipping)'], failures }
+  }
+  await new Promise((r) => setTimeout(r, 400))
+  if (!(await clickWhereText(cmd, 'button', 'End of Day'))) {
+    return { findings: ['✖ End of Day held list: card not found'], failures: 1 }
+  }
+  await new Promise((r) => setTimeout(r, 700))
+  const result = JSON.parse(
+    await evaluate(
+      cmd,
+      `JSON.stringify((() => {
+        const section = document.querySelector('[data-testid="discarded-held-sales"]')
+        const action = Array.from(document.querySelectorAll('button')).find((b) => ['Nothing pending', 'Approve', 'Record review', 'Working…'].includes(b.textContent.trim()))
+        return {
+          rows: section ? section.querySelectorAll('tbody tr').length : -1,
+          sectionBottom: section ? Math.round(section.getBoundingClientRect().bottom) : null,
+          actionBottom: action ? Math.round(action.getBoundingClientRect().bottom) : null,
+          innerHeight: window.innerHeight
+        }
+      })())`
+    )
+  )
+  const ok = result.rows > 0 && result.actionBottom !== null && result.actionBottom <= result.innerHeight
+  const line = `${ok ? '✔' : '✖'} End of Day held list — ${testCase.name}: ${result.rows} row(s), list bottom ${result.sectionBottom}, action button bottom ${result.actionBottom}/${result.innerHeight}`
+  findings.push(line)
+  log(line)
+  if (!ok) failures++
+  await clickWhereText(cmd, 'button', 'Back to Admin')
+  await new Promise((r) => setTimeout(r, 300))
+  return { findings, failures }
+}
+
+/**
  * Launches one throwaway instance at `caseSize`, drives it through login
  * and a small cart, measures both scenarios (Cash, M-Pesa), screenshots
  * each, and tears the instance down before returning — one full
@@ -812,10 +1039,18 @@ async function runCase(testCase, outDir) {
 
     failures += extraFailures
 
+    const heldResult = await checkHeldSales(cmd, testCase)
+    findings.push(...heldResult.findings)
+    failures += heldResult.failures
+
     const adminResult = await checkAdminScreens(cmd)
     findings.push(...adminResult.findings)
     for (const line of adminResult.findings) log(line)
     failures += adminResult.failures
+
+    const eodResult = await checkEndOfDayHeldList(cmd, testCase)
+    findings.push(...eodResult.findings)
+    failures += eodResult.failures
 
     return { findings, failures }
   } finally {

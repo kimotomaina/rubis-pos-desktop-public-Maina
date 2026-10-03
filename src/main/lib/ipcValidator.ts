@@ -163,6 +163,41 @@ export const saveCartDraftSchema = z.object({
 })
 
 /**
+ * `held:hold` request payload (docs/phase-217): the cart being parked. Lines are
+ * validated with the schema checkout uses; no payment state is part of it, so a
+ * held sale cannot carry a payment method, a tendered amount or a typed code.
+ */
+export const holdSaleSchema = z.object({
+  cartToken: z.string().min(1).max(64),
+  staffId: z.number().int().positive(),
+  total: z.number().finite().nonnegative(),
+  label: z.string().max(40).optional(),
+  items: z.array(cartItemSchema).min(1).max(500),
+  cartDiscount: discountSchema.optional(),
+  customerPin: z.string().max(32).optional(),
+  companyName: z.string().max(200).optional()
+})
+
+/** `held:resume` request payload (docs/phase-217). */
+export const heldSaleIdSchema = z.object({ id: z.number().int().positive() })
+
+/** `held:rename` request payload (docs/phase-217). */
+export const renameHeldSaleSchema = heldSaleIdSchema.extend({ label: z.string().min(1).max(40) })
+
+/**
+ * `held:discard` request payload (docs/phase-217): discarding re-verifies the
+ * manager like every other privileged write, and needs a reason.
+ */
+export const discardHeldSaleSchema = managerAuthzSchema.extend({
+  id: z.number().int().positive(),
+  staffId: z.number().int().positive(),
+  reason: z.string().trim().min(3, 'Give a reason for discarding the sale').max(200)
+})
+
+/** `held:discarded-for-day` request payload (docs/phase-217): a `YYYY-MM-DD` day, or today when omitted. */
+export const discardedHeldSalesSchema = z.object({ localDay: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional() })
+
+/**
  * `cart:record-removals` request payload (docs/phase-197) - manager-approved
  * removals or reductions, so it re-verifies the manager like every other
  * privileged write. `staffId` is the cashier signed in; it is recorded, not

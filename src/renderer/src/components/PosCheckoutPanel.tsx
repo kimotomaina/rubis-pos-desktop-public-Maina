@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useCartStore } from '../stores/cartStore.js'
 import { useAuthStore } from '../stores/authStore.js'
+import { useHeldSalesStore } from '../stores/heldSalesStore.js'
 import { useFiscalModeStore, isFiscalModeLiveOrUnknown } from '../stores/fiscalModeStore.js'
 import {
   calculateChange,
@@ -105,8 +106,12 @@ export default function PosCheckoutPanel({
     if (forceMpesaManualKeyboard) setMethod('mpesa')
   }, [forceMpesaManualKeyboard])
   const [tenderedInput, setTenderedInput] = useState('')
-  const [companyName, setCompanyName] = useState('')
-  const [customerPin, setCustomerPin] = useState('')
+  /** The customer's company name and KRA PIN live in the cart store, so a held sale keeps them (docs/phase-217). */
+  const companyName = useCartStore((state) => state.companyName)
+  const customerPin = useCartStore((state) => state.customerPin)
+  const resumedHeld = useCartStore((state) => state.resumedHeld)
+  const setCompanyName = (next: string) => useCartStore.setState({ companyName: next })
+  const setCustomerPin = (next: string) => useCartStore.setState({ customerPin: next })
   const [editingPin, setEditingPin] = useState(false)
   const [showDiscountEditor, setShowDiscountEditor] = useState(false)
   const [discountType, setDiscountType] = useState<Discount['type']>('percent')
@@ -141,12 +146,25 @@ export default function PosCheckoutPanel({
   useEffect(() => {
     if (checkoutStatus === 'synced' || checkoutStatus === 'queued-offline') {
       setTenderedInput('')
-      setCompanyName('')
-      setCustomerPin('')
       setMethod('cash')
       resetCheckoutStatus()
     }
   }, [checkoutStatus, resetCheckoutStatus])
+
+  /**
+   * After a sale is held or resumed (docs/phase-217) nothing of the last customer's
+   * payment may show over the cart now on screen: the method goes back to Cash and the
+   * tendered amount is cleared. Unmounting the M-Pesa and card panels also drops any
+   * code typed in them.
+   */
+  const heldResetEpoch = useHeldSalesStore((state) => state.resetEpoch)
+  useEffect(() => {
+    if (heldResetEpoch === 0) return
+    setMethod('cash')
+    setTenderedInput('')
+    setEditingPin(false)
+    setShowDiscountEditor(false)
+  }, [heldResetEpoch])
 
   const tenderedAmount = parseFloat(tenderedInput) || 0
   const changeDue = calculateChange(cartTotal, tenderedAmount)
@@ -482,6 +500,7 @@ export default function PosCheckoutPanel({
                 total={cartTotal}
                 onPaid={handleMpesaPaid}
                 onCancel={() => setMethod('cash')}
+                heldLabel={resumedHeld?.label}
                 forcedCapabilities={
                   forceMpesaManualKeyboard
                     ? ({ status: 'ready', mode: 'manual', manualEntryEnabled: false } as MpesaCapabilitiesState)
@@ -491,7 +510,12 @@ export default function PosCheckoutPanel({
             )}
 
             {method === 'card' && (
-              <CardEntryPanel total={cartTotal} onPaid={handleCardPaid} onCancel={() => setMethod('cash')} />
+              <CardEntryPanel
+                total={cartTotal}
+                onPaid={handleCardPaid}
+                onCancel={() => setMethod('cash')}
+                heldLabel={resumedHeld?.label}
+              />
             )}
           </>
         )}

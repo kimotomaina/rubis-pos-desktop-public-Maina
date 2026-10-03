@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useAuthStore } from '../stores/authStore.js'
+import { useHeldSalesStore } from '../stores/heldSalesStore.js'
+import { closeShiftBlockedMessage } from '../lib/heldSale.js'
 import { useUnfiledCountStore } from '../stores/unfiledCountStore.js'
 import { useShopifyReconciliationStore } from '../stores/shopifyReconciliationStore.js'
 import { countActionableFindings } from '../lib/shopifyReconciliation.js'
@@ -1111,8 +1113,29 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
     setShowOpenForm(true)
   }
 
+  /**
+   * Held sales block Close Shift (docs/phase-217): a held sale left at shift end is the
+   * forgotten sale. The main process refuses too; this just says so before the cashier counts the till.
+   */
+  const heldBlockMessage = (): string | null => closeShiftBlockedMessage(useHeldSalesStore.getState().sales)
+
+  const handleStartCloseShift = () => {
+    const blocked = heldBlockMessage()
+    if (blocked) {
+      setShiftActionError(blocked)
+      return
+    }
+    setShiftActionError(null)
+    setShowCloseForm(true)
+  }
+
   const handleCloseShift = async () => {
     if (!currentShift) return
+    const blocked = heldBlockMessage()
+    if (blocked) {
+      setShiftActionError(blocked)
+      return
+    }
     setShiftActionError(null)
     const endingCash = parseFloat(endingCashInput)
     if (!Number.isFinite(endingCash) || endingCash < 0) {
@@ -2430,7 +2453,7 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
         {currentShift && !showCloseForm && (
           <button
             type="button"
-            onClick={() => setShowCloseForm(true)}
+            onClick={handleStartCloseShift}
             className="rounded-lg bg-rose-600 px-4 py-2 text-base font-semibold text-white hover:bg-rose-700"
           >
             Close Shift

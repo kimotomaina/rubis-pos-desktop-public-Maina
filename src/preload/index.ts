@@ -3,10 +3,18 @@ import type { VatMismatchRow } from '../main/services/vat-reconcile.js'
 import type { ShiftType } from '../main/lib/shiftWindows.js'
 import { electronAPI } from '@electron-toolkit/preload'
 import type { ServiceResult } from '../main/services/shopify-types.js'
-import type { CartItem, CartRemovalRequest, ProductSummary } from '../renderer/src/types/shopify.js'
+import type {
+  CartItem,
+  CartRemovalRequest,
+  DiscardHeldSaleRequest,
+  HoldSaleRequest,
+  ProductSummary
+} from '../renderer/src/types/shopify.js'
 import type {
   CheckoutIpcRequest,
   CheckoutReceipt,
+  DiscardedHeldSale,
+  HeldSaleSummary,
   MpesaPaymentRow,
   FiscalResendResult,
   OrderRow,
@@ -329,6 +337,57 @@ const api = {
    */
   recordCartRemovals: (request: CartRemovalRequest): Promise<ServiceResult<void>> =>
     ipcRenderer.invoke('cart:record-removals', request),
+
+  /**
+   * Every sale on hold or resumed on this till (docs/phase-217).
+   *
+   * @returns {Promise<ServiceResult<HeldSaleSummary[]>>}
+   */
+  listHeldSales: (): Promise<ServiceResult<HeldSaleSummary[]>> => ipcRenderer.invoke('held:list'),
+
+  /**
+   * Parks the cart. Not a sale: nothing is filed, queued or counted (docs/phase-217).
+   *
+   * @param {HoldSaleRequest} request
+   * @returns {Promise<ServiceResult<HeldSaleSummary>>}
+   */
+  holdSale: (request: HoldSaleRequest): Promise<ServiceResult<HeldSaleSummary>> =>
+    ipcRenderer.invoke('held:hold', request),
+
+  /**
+   * Takes a held sale back; its lines come back exactly as held (docs/phase-217).
+   *
+   * @param {number} id
+   * @returns {Promise<ServiceResult<{ summary: HeldSaleSummary; payloadJson: string }>>}
+   */
+  resumeHeldSale: (id: number): Promise<ServiceResult<{ summary: HeldSaleSummary; payloadJson: string }>> =>
+    ipcRenderer.invoke('held:resume', { id }),
+
+  /**
+   * @param {number} id
+   * @param {string} label
+   * @returns {Promise<ServiceResult<HeldSaleSummary>>}
+   */
+  renameHeldSale: (id: number, label: string): Promise<ServiceResult<HeldSaleSummary>> =>
+    ipcRenderer.invoke('held:rename', { id, label }),
+
+  /**
+   * Discards a held sale; the main process re-verifies the manager PIN (docs/phase-217).
+   *
+   * @param {DiscardHeldSaleRequest} request
+   * @returns {Promise<ServiceResult<HeldSaleSummary>>}
+   */
+  discardHeldSale: (request: DiscardHeldSaleRequest): Promise<ServiceResult<HeldSaleSummary>> =>
+    ipcRenderer.invoke('held:discard', request),
+
+  /**
+   * Held sales discarded on one Africa/Nairobi day, for End of Day (docs/phase-217).
+   *
+   * @param {string} [localDay] `YYYY-MM-DD`; today when omitted
+   * @returns {Promise<ServiceResult<DiscardedHeldSale[]>>}
+   */
+  getDiscardedHeldSales: (localDay?: string): Promise<ServiceResult<DiscardedHeldSale[]>> =>
+    ipcRenderer.invoke('held:discarded-for-day', { localDay }),
 
   /**
    * The back-office "needs attention" list — every `needs_fixing` sale

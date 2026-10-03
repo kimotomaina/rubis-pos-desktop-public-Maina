@@ -1,7 +1,8 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { formatCurrency } from '../lib/currency.js'
 import { canCompleteSale } from '../lib/checkoutMath.js'
 import { useKeyboardStore } from '../stores/keyboardStore.js'
+import { usePaymentActivityStore } from '../stores/paymentActivityStore.js'
 import type { CardManualEntry } from '../../../main/services/database.js'
 
 /**
@@ -17,6 +18,8 @@ interface CardEntryPanelProps {
   /** Fires once the cashier has entered a reference and ticked the attestation — the caller completes the sale. */
   onPaid: (reference: string, manual: CardManualEntry) => void
   onCancel: () => void
+  /** Set only while the sale on screen was resumed from hold (docs/phase-217): its label and total show in large type. */
+  heldLabel?: string
 }
 
 /**
@@ -34,10 +37,18 @@ interface CardEntryPanelProps {
  * @param {CardEntryPanelProps} props
  * @returns {JSX.Element}
  */
-export default function CardEntryPanel({ total, onPaid, onCancel }: CardEntryPanelProps) {
+export default function CardEntryPanel({ total, onPaid, onCancel, heldLabel }: CardEntryPanelProps) {
   const [reference, setReference] = useState('')
   const [acknowledged, setAcknowledged] = useState(false)
   const [error, setError] = useState<string | null>(null)
+
+  /** Tells Hold that a payment is in progress while a reference is typed or the slip is ticked (docs/phase-217). */
+  const setPaymentActive = usePaymentActivityStore((state) => state.setActive)
+  const paymentInProgress = reference.length > 0 || acknowledged
+  useEffect(() => {
+    setPaymentActive('card', paymentInProgress)
+  }, [paymentInProgress, setPaymentActive])
+  useEffect(() => () => setPaymentActive('card', false), [setPaymentActive])
 
   /**
    * Opens the shared on-screen keyboard for the reference field (caps
@@ -109,9 +120,15 @@ export default function CardEntryPanel({ total, onPaid, onCancel }: CardEntryPan
 
       <div className="rounded-xl border-2 border-amber-400 bg-amber-50/60 p-3">
         <p className="text-lg font-semibold text-amber-900">Record card payment</p>
-        <p className="mt-1 text-base text-amber-900/80">
-          Check the PDQ slip shows Approved, then enter the reference below.
-        </p>
+        {heldLabel ? (
+          <p className="mt-1 truncate text-2xl font-extrabold tabular-nums text-amber-950" data-testid="held-sale-banner">
+            {heldLabel} · {formatCurrency(total)}
+          </p>
+        ) : (
+          <p className="mt-1 text-base text-amber-900/80">
+            Check the PDQ slip shows Approved, then enter the reference below.
+          </p>
+        )}
 
         <label className="mb-1 mt-3 block text-base font-medium text-slate-700">
           Reference from the PDQ slip

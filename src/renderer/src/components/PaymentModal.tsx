@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { formatCurrency } from '../lib/currency.js'
 import { useKeyboardStore } from '../stores/keyboardStore.js'
+import { usePaymentActivityStore } from '../stores/paymentActivityStore.js'
 import {
   createMpesaPaymentPoller,
   MPESA_POLL_TIMEOUT_MS,
@@ -74,6 +75,12 @@ interface PaymentModalProps {
   onPaid: (referenceNumber: string, manual?: ManualMpesaEntryInput) => void
   /** Called when the cashier backs out to pick a different payment method. */
   onCancel: () => void
+  /**
+   * Set only while the sale on screen was resumed from hold (docs/phase-217): its label
+   * and total show in large type above the code field, so the cashier checks the code on
+   * the customer's phone against the right amount.
+   */
+  heldLabel?: string
   /**
    * Test-hook-only (docs/phase-167 Part B item 1): skips the real
    * `getMpesaCapabilities()` call and renders as if it had already
@@ -153,6 +160,7 @@ export default function PaymentModal({
   total,
   onPaid,
   onCancel,
+  heldLabel,
   forcedCapabilities
 }: PaymentModalProps) {
   const [capabilities, setCapabilities] = useState<MpesaCapabilitiesState>(
@@ -169,6 +177,17 @@ export default function PaymentModal({
 
   const [unverifiedCode, setUnverifiedCode] = useState('')
   const isManualCodeComplete = MANUAL_CODE_PATTERN.test(unverifiedCode)
+
+  /**
+   * Tells Hold that a payment is in progress (docs/phase-217): a push waiting, a push
+   * request in flight, or a code typed. Cleared when this panel goes away.
+   */
+  const setPaymentActive = usePaymentActivityStore((state) => state.setActive)
+  const paymentInProgress = stkPhase.kind === 'waiting' || stkLoading || unverifiedCode.length > 0
+  useEffect(() => {
+    setPaymentActive('mpesa', paymentInProgress)
+  }, [paymentInProgress, setPaymentActive])
+  useEffect(() => () => setPaymentActive('mpesa', false), [setPaymentActive])
 
   useEffect(() => {
     if (forcedCapabilities) return
@@ -344,7 +363,13 @@ export default function PaymentModal({
   const renderManualEntryPanel = (heading: string, description: string) => (
     <div className="rounded-xl border-2 border-amber-400 bg-amber-50/60 p-3">
       <p className="text-lg font-semibold text-amber-900">{heading}</p>
-      <p className="mt-1 text-base text-amber-900/80">{description}</p>
+      {heldLabel ? (
+        <p className="mt-1 truncate text-2xl font-extrabold tabular-nums text-amber-950" data-testid="held-sale-banner">
+          {heldLabel} · {formatCurrency(total)}
+        </p>
+      ) : (
+        <p className="mt-1 text-base text-amber-900/80">{description}</p>
+      )}
 
       <label className="mb-1 mt-3 block text-base font-medium text-slate-700">
         M-Pesa code from the customer&rsquo;s message

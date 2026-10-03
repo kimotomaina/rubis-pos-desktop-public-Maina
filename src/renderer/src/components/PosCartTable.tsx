@@ -17,6 +17,12 @@ interface PosCartTableProps {
   onClear?: () => void
   /** Variant id of the line most recently added via search/scan — briefly highlighted, then cleared by the caller. */
   flashId?: string | null
+  /** Parks the cart (docs/phase-217). Omitted, no Hold button is shown. */
+  onHold?: () => void
+  /** Why Hold is unavailable right now, or `null` when it is allowed; shown beside the disabled button. */
+  holdBlockedReason?: string | null
+  /** Lines per page; one fewer while the held-sales strip is showing, so the table keeps its height (docs/phase-217). */
+  linesPerPage?: number
 }
 
 /**
@@ -40,10 +46,13 @@ export default function PosCartTable({
   onUpdateQuantity,
   onRemove,
   onClear,
-  flashId
+  flashId,
+  onHold,
+  holdBlockedReason = null,
+  linesPerPage = CART_LINES_PER_PAGE
 }: PosCartTableProps) {
   const [page, setPage] = useState(1)
-  const pageResult = paginate(items, page, CART_LINES_PER_PAGE)
+  const pageResult = paginate(items, page, linesPerPage)
 
   /**
    * Jumps to the page holding the line most recently added/scanned
@@ -57,7 +66,7 @@ export default function PosCartTable({
     if (!flashId) return
     const index = items.findIndex((item) => item.id === flashId)
     if (index === -1) return
-    setPage(pageOfIndex(index, CART_LINES_PER_PAGE))
+    setPage(pageOfIndex(index, linesPerPage))
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [flashId])
 
@@ -136,17 +145,32 @@ export default function PosCartTable({
         </tbody>
       </table>
       <div className="flex items-center justify-between gap-3 border-t border-slate-100 px-4 py-2">
-        {onClear ? (
-          <button
-            type="button"
-            onClick={onClear}
-            className="h-9 rounded-lg border border-rose-200 px-3 text-sm font-medium text-rose-700 hover:bg-rose-50"
-          >
-            Clear cart
-          </button>
-        ) : (
-          <span />
-        )}
+        <div className="flex min-w-0 items-center gap-2">
+          {onClear && (
+            <button
+              type="button"
+              onClick={onClear}
+              className="h-9 shrink-0 rounded-lg border border-rose-200 px-3 text-sm font-medium text-rose-700 hover:bg-rose-50"
+            >
+              Clear cart
+            </button>
+          )}
+          {onHold && (
+            <button
+              type="button"
+              onClick={onHold}
+              disabled={holdBlockedReason !== null}
+              className="h-9 shrink-0 rounded-lg border border-slate-300 px-3 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              Hold sale
+            </button>
+          )}
+          {onHold && holdBlockedReason !== null && (
+            <span className="min-w-0 truncate text-sm text-amber-800" title={holdBlockedReason}>
+              {holdBlockedReason}
+            </span>
+          )}
+        </div>
         <Pager page={pageResult.page} pageCount={pageResult.pageCount} onChange={setPage} />
       </div>
     </div>

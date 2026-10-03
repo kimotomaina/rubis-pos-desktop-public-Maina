@@ -9,7 +9,9 @@ import { useBarcodeScanner } from './hooks/useBarcodeScanner'
 import type { ScanResult } from './hooks/useBarcodeScanner'
 import type { VariantSummary, ProductSummary } from './types/shopify'
 import PosSearchBar from './components/PosSearchBar'
-import PosCartTable from './components/PosCartTable'
+import PosCartTable, { CART_LINES_PER_PAGE } from './components/PosCartTable'
+import HeldSalesStrip from './components/HeldSalesStrip'
+import LogoutHeldWarning from './components/LogoutHeldWarning'
 import PosCheckoutPanel from './components/PosCheckoutPanel'
 import EmptyState from './components/EmptyState'
 import VariantModal from './components/VariantModal'
@@ -35,9 +37,13 @@ import NeedsAttentionPage from './pages/NeedsAttentionPage'
 import SaleCompleteToast from './components/SaleCompleteToast'
 import ToastStack from './components/ToastStack'
 import { useToastStore } from './stores/toastStore'
+import { useHeldSalesStore } from './stores/heldSalesStore'
+import { isPaymentInProgress, usePaymentActivityStore } from './stores/paymentActivityStore'
+import { decideHold, heldAgeTone } from './lib/heldSale'
 import {
   CART_CHANGE_BLOCKED_TOAST_TIMEOUT_MS,
   CART_RESTORED_TOAST_TIMEOUT_MS,
+  HELD_SALE_NOTICE_TOAST_TIMEOUT_MS,
   SCAN_TOAST_TIMEOUT_MS
 } from './lib/toastTimeouts'
 import { createCartDraftSaver, restoreCartDraft, restoreToastMessage } from './lib/cartDraft'
@@ -400,6 +406,56 @@ export default function App() {
     })()
   }, [catalogStatus, signedInStaff])
 
+  /**
+   * Held sales (docs/phase-217): read from the till's database once a cashier is signed in,
+   * so a restart brings them back onto the sale screen, and again after every completed
+   * sale, because the order's own transaction marks a resumed sale completed.
+   */
+  useEffect(() => {
+    if (signedInStaff) void useHeldSalesStore.getState().load()
+  }, [signedInStaff])
+  useEffect(
+    () =>
+      useCartStore.subscribe((state, previous) => {
+        if (state.lastReceipt !== previous.lastReceipt) void useHeldSalesStore.getState().load()
+      }),
+    []
+  )
+
+  const heldSales = useHeldSalesStore((state) => state.sales)
+  const paymentActive = usePaymentActivityStore((state) => state.active)
+  const resumedHeld = useCartStore((state) => state.resumedHeld)
+  const heldInStrip = heldSales.filter((sale) => sale.status === 'held')
+  const holdDecision = decideHold({
+    itemCount: cartItems.length,
+    paymentInProgress: isPaymentInProgress(paymentActive),
+    openHeldCount: heldSales.length,
+    cartIsResumedSale: resumedHeld !== null
+  })
+  const [logoutWarningOpen, setLogoutWarningOpen] = useState(false)
+
+  /** Parks the cart on screen and leaves a fresh empty one (docs/phase-217). */
+  const handleHold = async (): Promise<void> => {
+    const staffId = useAuthStore.getState().currentStaff?.id
+    if (staffId === undefined) return
+    const result = await useHeldSalesStore.getState().hold(staffId)
+    if (!result.ok) {
+      useToastStore.getState().show({
+        id: 'held-sale-notice',
+        tone: 'warning',
+        message: result.error,
+        timeoutMs: HELD_SALE_NOTICE_TOAST_TIMEOUT_MS,
+        onDismiss: () => useToastStore.getState().dismiss('held-sale-notice')
+      })
+    }
+  }
+
+  /** Log Out warns about held sales but never refuses: a cashier must be able to hand over mid-wait. */
+  const handleLogoutClick = (): void => {
+    if (useHeldSalesStore.getState().sales.length > 0) setLogoutWarningOpen(true)
+    else void logout()
+  }
+
   /** Variant id most recently added via search/scan — flashes its `PosCartTable` row, then self-clears. */
   const [flashId, setFlashId] = useState<string | null>(null)
 
@@ -674,7 +730,7 @@ export default function App() {
             )}
             <button
               type="button"
-              onClick={() => void logout()}
+              onClick={handleLogoutClick}
               className="shrink-0 text-sm font-medium text-rose-600 hover:text-rose-700"
             >
               Log Out
@@ -701,6 +757,20 @@ export default function App() {
             barcodeStatus={barcodeStatus}
             onSelectIntegration={setSelectedConnectivity}
           />
+          {heldInStrip.length > 0 && (
+            <span
+              data-testid="held-count-chip"
+              className={`shrink-0 rounded-full px-3 py-1 text-sm font-semibold ${
+                heldAgeTone(heldInStrip[0].heldAt, Date.now()) === 'red'
+                  ? 'bg-rose-100 text-rose-800'
+                  : heldAgeTone(heldInStrip[0].heldAt, Date.now()) === 'amber'
+                    ? 'bg-amber-100 text-amber-800'
+                    : 'bg-slate-100 text-slate-700'
+              }`}
+            >
+              Held {heldInStrip.length}
+            </span>
+          )}
           <span className="shrink-0 font-mono tabular-nums" aria-label="clock">
             {now}
           </span>
@@ -755,12 +825,17 @@ export default function App() {
               </span>
             )}
 
+            <HeldSalesStrip requestManagerPin={requestManagerPin} />
+
             <PosCartTable
               items={cartItems}
               onUpdateQuantity={guardedCart.updateQuantity}
               onRemove={guardedCart.remove}
               onClear={guardedCart.clear}
               flashId={flashId}
+              onHold={() => void handleHold()}
+              holdBlockedReason={holdDecision.allowed ? null : holdDecision.reason}
+              linesPerPage={heldInStrip.length > 0 ? CART_LINES_PER_PAGE - 1 : CART_LINES_PER_PAGE}
             />
           </section>
 
@@ -831,6 +906,17 @@ export default function App() {
         <div className="fixed inset-0 z-50 bg-slate-50 p-6">
           <NeedsAttentionPage shopifyCheckOverride={CHECK_FIT_SYNTHETIC_RECONCILIATION_RESULT} />
         </div>
+      )}
+
+      {logoutWarningOpen && (
+        <LogoutHeldWarning
+          sales={heldSales}
+          onStay={() => setLogoutWarningOpen(false)}
+          onLogout={() => {
+            setLogoutWarningOpen(false)
+            void logout()
+          }}
+        />
       )}
 
       {pinGate && (

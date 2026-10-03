@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import type { EndOfDayReport, ManualMpesaEntrySummary } from '../../../main/services/reports.js'
+import type { DiscardedHeldSale } from '../../../main/services/database.js'
 import { formatCurrency } from '../lib/currency.js'
 import { titleCaseName } from '../lib/text.js'
 import { paginate } from '../lib/paginate.js'
@@ -154,6 +155,10 @@ export default function EndOfDayPage() {
   const [note, setNote] = useState('')
   const [entriesPage, setEntriesPage] = useState(1)
   const [carryOverPage, setCarryOverPage] = useState(1)
+  /** Held sales discarded on the day shown (docs/phase-217). */
+  const [discardedHeld, setDiscardedHeld] = useState<DiscardedHeldSale[]>([])
+  const [discardedPage, setDiscardedPage] = useState(1)
+  const [discardedHeldFailed, setDiscardedHeldFailed] = useState(false)
   /**
    * One tick/reason choice per currently-pending entry, keyed by payment
    * id — deliberately state that outlives which page is showing, so
@@ -175,6 +180,17 @@ export default function EndOfDayPage() {
         setReport(result.data)
         setEntriesPage(1)
         setCarryOverPage(1)
+        setDiscardedPage(1)
+        // A discarded held sale may be an M-Pesa payment with no sale behind it, so the
+        // manager approving the day sees them here (docs/phase-217).
+        try {
+          const discarded = await window.api.getDiscardedHeldSales(result.data.localDay)
+          setDiscardedHeld(discarded.success && discarded.data ? discarded.data : [])
+          setDiscardedHeldFailed(!discarded.success)
+        } catch {
+          setDiscardedHeld([])
+          setDiscardedHeldFailed(true)
+        }
         // Every pending entry starts ticked (decision 1) — a fresh
         // report always resets choices, since the pending set itself
         // may have changed (a new sale, a just-recorded review).
@@ -293,6 +309,7 @@ export default function EndOfDayPage() {
 
   const entriesPageResult = paginate(report.manualEntries, entriesPage, ENTRIES_PER_PAGE)
   const carryOverPageResult = paginate(report.carryOver, carryOverPage, ENTRIES_PER_PAGE)
+  const discardedPageResult = paginate(discardedHeld, discardedPage, ENTRIES_PER_PAGE)
 
   const allPending = [...report.manualEntries, ...report.carryOver].filter((entry) => !entry.approved)
   const tickedEntries = allPending.filter((entry) => selections.get(entry.paymentId)?.ticked ?? true)
@@ -503,6 +520,67 @@ export default function EndOfDayPage() {
           )}
         </section>
       )}
+
+      <section className="overflow-x-auto rounded-xl border border-slate-200 bg-white p-4" data-testid="discarded-held-sales">
+        <h4 className="mb-3 text-lg font-semibold text-slate-800">Held sales discarded — {report.localDay}</h4>
+        {discardedHeldFailed ? (
+          <p className="text-base font-medium text-rose-700">Could not load the discarded held sales.</p>
+        ) : discardedHeld.length === 0 ? (
+          <p className="text-base text-slate-500">No held sales were discarded this day.</p>
+        ) : (
+          <>
+            <table className="w-full text-left text-base">
+              <thead className="text-slate-500">
+                <tr>
+                  <th className="py-2 pr-2">Time</th>
+                  <th className="py-2 pr-2">Held sale</th>
+                  <th className="py-2 pr-2 text-right">Total</th>
+                  <th className="py-2 pr-2 text-right">Lines</th>
+                  <th className="py-2 pr-2">Held by</th>
+                  <th className="py-2 pr-2">Approved by</th>
+                  <th className="py-2">Reason</th>
+                </tr>
+              </thead>
+              <tbody>
+                {discardedPageResult.items.map((sale) => (
+                  <tr key={sale.id} className="border-t border-slate-200/60">
+                    <td className="py-2 pr-2 text-slate-500">{new Date(sale.discardedAt).toLocaleTimeString()}</td>
+                    <td className="py-2 pr-2 font-medium text-slate-800">{sale.label}</td>
+                    <td className="py-2 pr-2 text-right text-slate-800">{formatCurrency(sale.total)}</td>
+                    <td className="py-2 pr-2 text-right text-slate-800">{sale.lineCount}</td>
+                    <td className="py-2 pr-2 text-slate-800">{titleCaseName(sale.heldByName ?? 'Unknown')}</td>
+                    <td className="py-2 pr-2 text-slate-800">{titleCaseName(sale.managerName ?? 'Unknown')}</td>
+                    <td className="max-w-xs truncate py-2 text-slate-700">{sale.reason}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            {discardedPageResult.pageCount > 1 && (
+              <div className="mt-3 flex items-center justify-between gap-3">
+                <button
+                  type="button"
+                  onClick={() => setDiscardedPage(discardedPageResult.page - 1)}
+                  disabled={!discardedPageResult.hasPrev}
+                  className="h-10 rounded-lg border border-slate-300 px-3 text-base font-medium text-slate-600 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  Previous
+                </button>
+                <span className="text-base text-slate-500">
+                  Page {discardedPageResult.page} of {discardedPageResult.pageCount}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setDiscardedPage(discardedPageResult.page + 1)}
+                  disabled={!discardedPageResult.hasNext}
+                  className="h-10 rounded-lg border border-slate-300 px-3 text-base font-medium text-slate-600 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  Next
+                </button>
+              </div>
+            )}
+          </>
+        )}
+      </section>
 
       <section className="rounded-xl border border-slate-200 bg-white p-4">
         <div className="mb-3 flex items-center justify-between">

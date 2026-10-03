@@ -17,6 +17,7 @@ import type { VatReconcileOrderRow } from './vat-reconcile.js'
 import { SHIFT_TYPES, type ShiftType } from '../lib/shiftWindows.js'
 import { UNVERIFIABLE_RETRY_REASON } from './integrations/real-etims-provider.js'
 import { buildLocationTraderInvNum, nextTraderSeq } from '../lib/traderSystemInvoiceNumber.js'
+import { MAX_HELD_LABEL_LENGTH, MAX_HELD_SALES } from '../lib/heldSaleRules.js'
 
 /** The `settings` key holding the last trader sequence value this till used (docs/phase-211). */
 const TRADER_SEQ_SETTING_KEY = 'last_trader_seq'
@@ -187,6 +188,50 @@ export interface UnprintedFiscalSlipRow {
 export interface CartDraftRow {
   payload_json: string
   updated_at: string
+}
+
+/** Where a held sale stands (docs/phase-217). `held` and `resumed` are the open ones. */
+export type HeldSaleStatus = 'held' | 'resumed' | 'completed' | 'discarded'
+
+/** One held sale as the renderer lists it: no lines, which come back only on resume. */
+export interface HeldSaleSummary {
+  id: number
+  cartToken: string
+  label: string
+  /** Display only; the sale's real total is recomputed when it is checked out. */
+  total: number
+  lineCount: number
+  unitCount: number
+  heldAt: string
+  heldByStaffId: number
+  status: HeldSaleStatus
+}
+
+/** What a hold stores: the lines, the discounts, who the sale is for. Never payment state. */
+export interface HoldSaleInput {
+  cartToken: string
+  /** The cart as JSON: `{ items, cartDiscount, customerPin, companyName }`. */
+  payloadJson: string
+  total: number
+  lineCount: number
+  unitCount: number
+  staffId: number
+  /** Omitted: the till names it "Customer N". */
+  label?: string
+}
+
+/** A discarded held sale, as the End of Day page lists it (docs/phase-217). */
+export interface DiscardedHeldSale {
+  id: number
+  label: string
+  total: number
+  lineCount: number
+  heldAt: string
+  discardedAt: string
+  heldByName: string | null
+  discardedByName: string | null
+  managerName: string | null
+  reason: string
 }
 
 /** One manager-approved removal or reduction of a cart line (docs/phase-197). */
@@ -1057,6 +1102,35 @@ export const SCHEMA = {
     updated_at TEXT NOT NULL
   )`,
   /**
+   * Sales parked while the cashier serves the next customer (docs/phase-217).
+   * Not a sale: nothing here is filed, pushed or counted as stock. `payload_json`
+   * holds the lines, discounts, customer PIN and company name exactly as held; no
+   * payment state. A row is `held`, then `resumed` while its cart is on screen, then
+   * `completed` (stamped in the order's own transaction, `settleCartForOrder`) or
+   * `discarded` (manager PIN and a reason). Discarded rows are kept: a held sale
+   * may be an M-Pesa payment with no sale behind it.
+   */
+  heldSales: `CREATE TABLE IF NOT EXISTS held_sales (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    cart_token TEXT NOT NULL,
+    label TEXT NOT NULL,
+    payload_json TEXT NOT NULL,
+    total REAL NOT NULL,
+    line_count INTEGER NOT NULL,
+    unit_count INTEGER NOT NULL,
+    held_at TEXT NOT NULL,
+    held_by_staff_id INTEGER NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('held', 'resumed', 'completed', 'discarded')),
+    order_local_id INTEGER,
+    completed_at TEXT,
+    discarded_at TEXT,
+    discarded_by_staff_id INTEGER,
+    discard_manager_id INTEGER,
+    discard_reason TEXT
+  )`,
+  /** One open row per cart, so a sale held, resumed and held again reuses its row. */
+  heldSalesOpenTokenIndex: `CREATE UNIQUE INDEX IF NOT EXISTS idx_held_sales_open_token ON held_sales (cart_token) WHERE status IN ('held', 'resumed')`,
+  /**
    * One row per cart line a manager approved removing or reducing
    * (docs/phase-197). Append-only audit: `order_local_id` is stamped when
    * the cart is checked out, and nothing in the POS path reads this table
@@ -1504,6 +1578,38 @@ export interface CommitStockTakeSessionInput {
   outcomes: StockTakeItemOutcome[]
 }
 
+/** A `held_sales` row as SQLite returns it. */
+interface HeldSaleRowShape {
+  id: number
+  cart_token: string
+  label: string
+  payload_json: string
+  total: number
+  line_count: number
+  unit_count: number
+  held_at: string
+  held_by_staff_id: number
+  status: HeldSaleStatus
+}
+
+/**
+ * The lowest "Customer N" not already used by an open held sale (docs/phase-217).
+ *
+ * @param {string[]} usedLabels
+ * @returns {string}
+ */
+export function nextHeldLabel(usedLabels: string[]): string {
+  const used = new Set(
+    usedLabels
+      .map((label) => /^Customer (\d+)$/.exec(label)?.[1])
+      .filter((n): n is string => n !== undefined)
+      .map(Number)
+  )
+  let n = 1
+  while (used.has(n)) n++
+  return `Customer ${n}`
+}
+
 /**
  * Thin, typed wrapper around the better-sqlite3 connection.
  *
@@ -1566,12 +1672,15 @@ export class RubisDatabase {
     connection.exec(SCHEMA.cartDrafts)
     connection.exec(SCHEMA.cartLineRemovals)
     connection.exec(SCHEMA.cartLineRemovalsTokenIndex)
+    connection.exec(SCHEMA.heldSales)
+    connection.exec(SCHEMA.heldSalesOpenTokenIndex)
     migrateOrdersFiscalColumns(connection)
     migrateOrdersReceiptColumns(connection)
     migrateOrdersPushColumns(connection)
     connection.exec(SCHEMA.fiscalInvoiceIndex)
     connection.exec(SCHEMA.ordersCreatedAtIndex)
     this.connection = connection
+    this.recoverHeldSales()
   }
 
   /** @returns the live connection, throwing when not initialized. */
@@ -1790,7 +1899,9 @@ export class RubisDatabase {
    * Inside the order's own transaction (docs/phase-197): deletes the saved
    * cart and stamps this cart's removal rows with the new order id, so a
    * stop between "order recorded" and "cart cleared" cannot bring the same
-   * cart back after a restart.
+   * cart back after a restart. A held sale that was resumed and is now being
+   * checked out is marked `completed` here too (docs/phase-217), so it cannot
+   * return to the held strip after a restart.
    *
    * Best effort by design: a failure here is logged and swallowed, because
    * a sale must never be aborted over a draft or an audit stamp. A
@@ -1806,6 +1917,11 @@ export class RubisDatabase {
         this.conn
           .prepare('UPDATE cart_line_removals SET order_local_id = ? WHERE cart_token = ? AND order_local_id IS NULL')
           .run(localId, cartToken)
+        this.conn
+          .prepare(
+            "UPDATE held_sales SET status = 'completed', order_local_id = ?, completed_at = ? WHERE cart_token = ? AND status IN ('held', 'resumed')"
+          )
+          .run(localId, new Date().toISOString(), cartToken)
       }
     } catch (err) {
       console.error(`[rubis-pos] Order ${localId}: could not clear the saved cart or stamp its removals:`, err)
@@ -1837,6 +1953,209 @@ export class RubisDatabase {
   /** Deletes the saved cart. */
   clearCartDraft(): void {
     this.conn.prepare('DELETE FROM cart_drafts').run()
+  }
+
+  /**
+   * Startup rules for held sales (docs/phase-217), run by {@link init}.
+   *
+   * A row left at `resumed` means the till stopped while its cart was on
+   * screen: it goes back to `held`, so the strip shows it again. A saved cart
+   * draft whose token matches a held sale that is not `completed` is deleted:
+   * the held row wins, so the sale is never restored twice and never repriced
+   * from the catalogue. Best effort, like the draft itself: a failure is logged
+   * and startup carries on.
+   */
+  private recoverHeldSales(): void {
+    try {
+      this.conn.prepare("UPDATE held_sales SET status = 'held' WHERE status = 'resumed'").run()
+      this.conn
+        .prepare(
+          "DELETE FROM cart_drafts WHERE json_extract(payload_json, '$.cartToken') IN (SELECT cart_token FROM held_sales WHERE status != 'completed')"
+        )
+        .run()
+    } catch (err) {
+      console.error('[rubis-pos] Could not reconcile held sales at startup:', err)
+    }
+  }
+
+  /**
+   * @param {HeldSaleRowShape} row
+   * @returns {HeldSaleSummary}
+   */
+  private toHeldSummary(row: HeldSaleRowShape): HeldSaleSummary {
+    return {
+      id: row.id,
+      cartToken: row.cart_token,
+      label: row.label,
+      total: row.total,
+      lineCount: row.line_count,
+      unitCount: row.unit_count,
+      heldAt: row.held_at,
+      heldByStaffId: row.held_by_staff_id,
+      status: row.status
+    }
+  }
+
+  /** @returns {HeldSaleSummary[]} every held or resumed sale, oldest first (docs/phase-217) */
+  listOpenHeldSales(): HeldSaleSummary[] {
+    const rows = this.conn
+      .prepare("SELECT * FROM held_sales WHERE status IN ('held', 'resumed') ORDER BY held_at ASC, id ASC")
+      .all() as HeldSaleRowShape[]
+    return rows.map((row) => this.toHeldSummary(row))
+  }
+
+  /**
+   * Parks a cart (docs/phase-217). Nothing else happens: no order, no fiscal
+   * request, no Shopify queue row and no trader number.
+   *
+   * A cart that was held, resumed and is now held again reuses its row and
+   * label, and its clock restarts. A new cart takes the next free "Customer N".
+   *
+   * @param {HoldSaleInput} input
+   * @returns {HeldSaleSummary}
+   * @throws if the till already holds {@link MAX_HELD_SALES} sales
+   */
+  holdSale(input: HoldSaleInput): HeldSaleSummary {
+    const now = new Date().toISOString()
+    const write = this.conn.transaction((): HeldSaleSummary => {
+      const existing = this.conn
+        .prepare("SELECT * FROM held_sales WHERE cart_token = ? AND status IN ('held', 'resumed')")
+        .get(input.cartToken) as HeldSaleRowShape | undefined
+      if (existing) {
+        this.conn
+          .prepare(
+            "UPDATE held_sales SET payload_json = ?, total = ?, line_count = ?, unit_count = ?, held_at = ?, held_by_staff_id = ?, status = 'held' WHERE id = ?"
+          )
+          .run(input.payloadJson, input.total, input.lineCount, input.unitCount, now, input.staffId, existing.id)
+        return this.toHeldSummary(
+          this.conn.prepare('SELECT * FROM held_sales WHERE id = ?').get(existing.id) as HeldSaleRowShape
+        )
+      }
+      const open = this.listOpenHeldSales()
+      if (open.length >= MAX_HELD_SALES) {
+        throw new Error(
+          `This till already holds ${MAX_HELD_SALES} sales. Complete or discard one before holding another.`
+        )
+      }
+      const label = input.label?.trim().slice(0, MAX_HELD_LABEL_LENGTH) || nextHeldLabel(open.map((sale) => sale.label))
+      const info = this.conn
+        .prepare(
+          "INSERT INTO held_sales (cart_token, label, payload_json, total, line_count, unit_count, held_at, held_by_staff_id, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'held')"
+        )
+        .run(input.cartToken, label, input.payloadJson, input.total, input.lineCount, input.unitCount, now, input.staffId)
+      return this.toHeldSummary(
+        this.conn.prepare('SELECT * FROM held_sales WHERE id = ?').get(Number(info.lastInsertRowid)) as HeldSaleRowShape
+      )
+    })
+    return write()
+  }
+
+  /**
+   * Takes a held sale back to the cart (docs/phase-217): the row becomes
+   * `resumed` and stays, so a stop before the sale is completed returns it to
+   * the strip, not to a repriced cart.
+   *
+   * @param {number} id
+   * @returns {{ summary: HeldSaleSummary; payloadJson: string }}
+   * @throws if the sale is no longer on hold
+   */
+  resumeHeldSale(id: number): { summary: HeldSaleSummary; payloadJson: string } {
+    const info = this.conn.prepare("UPDATE held_sales SET status = 'resumed' WHERE id = ? AND status = 'held'").run(id)
+    if (info.changes === 0) {
+      throw new Error('That sale is no longer on hold.')
+    }
+    const row = this.conn.prepare('SELECT * FROM held_sales WHERE id = ?').get(id) as HeldSaleRowShape
+    return { summary: this.toHeldSummary(row), payloadJson: row.payload_json }
+  }
+
+  /**
+   * @param {number} id
+   * @param {string} label
+   * @returns {HeldSaleSummary}
+   * @throws if the label is empty or the sale is not open
+   */
+  renameHeldSale(id: number, label: string): HeldSaleSummary {
+    const trimmed = label.trim().slice(0, MAX_HELD_LABEL_LENGTH)
+    if (!trimmed) {
+      throw new Error('A held sale needs a name.')
+    }
+    const info = this.conn
+      .prepare("UPDATE held_sales SET label = ? WHERE id = ? AND status IN ('held', 'resumed')")
+      .run(trimmed, id)
+    if (info.changes === 0) {
+      throw new Error('That sale is no longer on hold.')
+    }
+    return this.toHeldSummary(this.conn.prepare('SELECT * FROM held_sales WHERE id = ?').get(id) as HeldSaleRowShape)
+  }
+
+  /**
+   * Discards a held sale, keeping the row (docs/phase-217). The caller has
+   * already verified the manager's PIN; a sale on screen (`resumed`) cannot be
+   * discarded.
+   *
+   * @param {{ id: number; staffId: number; managerId: number; reason: string }} input
+   * @returns {HeldSaleSummary}
+   * @throws if the reason is empty or the sale is not `held`
+   */
+  discardHeldSale(input: { id: number; staffId: number; managerId: number; reason: string }): HeldSaleSummary {
+    const reason = input.reason.trim()
+    if (!reason) {
+      throw new Error('A reason is required to discard a held sale.')
+    }
+    const info = this.conn
+      .prepare(
+        "UPDATE held_sales SET status = 'discarded', discarded_at = ?, discarded_by_staff_id = ?, discard_manager_id = ?, discard_reason = ? WHERE id = ? AND status = 'held'"
+      )
+      .run(new Date().toISOString(), input.staffId, input.managerId, reason, input.id)
+    if (info.changes === 0) {
+      throw new Error('That sale is no longer on hold.')
+    }
+    return this.toHeldSummary(
+      this.conn.prepare('SELECT * FROM held_sales WHERE id = ?').get(input.id) as HeldSaleRowShape
+    )
+  }
+
+  /**
+   * @param {string} startIso inclusive
+   * @param {string} endIso exclusive
+   * @returns {DiscardedHeldSale[]} held sales discarded in the window, oldest first (docs/phase-217)
+   */
+  getDiscardedHeldSales(startIso: string, endIso: string): DiscardedHeldSale[] {
+    const rows = this.conn
+      .prepare(
+        `SELECT h.id, h.label, h.total, h.line_count, h.held_at, h.discarded_at, h.discard_reason,
+                held.name AS held_by_name, gone.name AS discarded_by_name, mgr.name AS manager_name
+           FROM held_sales h
+           LEFT JOIN staff held ON held.id = h.held_by_staff_id
+           LEFT JOIN staff gone ON gone.id = h.discarded_by_staff_id
+           LEFT JOIN staff mgr ON mgr.id = h.discard_manager_id
+          WHERE h.status = 'discarded' AND h.discarded_at >= ? AND h.discarded_at < ?
+          ORDER BY h.discarded_at ASC, h.id ASC`
+      )
+      .all(startIso, endIso) as Array<{
+      id: number
+      label: string
+      total: number
+      line_count: number
+      held_at: string
+      discarded_at: string
+      discard_reason: string
+      held_by_name: string | null
+      discarded_by_name: string | null
+      manager_name: string | null
+    }>
+    return rows.map((row) => ({
+      id: row.id,
+      label: row.label,
+      total: row.total,
+      lineCount: row.line_count,
+      heldAt: row.held_at,
+      discardedAt: row.discarded_at,
+      heldByName: row.held_by_name,
+      discardedByName: row.discarded_by_name,
+      managerName: row.manager_name,
+      reason: row.discard_reason
+    }))
   }
 
   /**

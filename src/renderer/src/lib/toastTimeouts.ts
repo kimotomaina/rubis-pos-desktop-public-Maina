@@ -22,6 +22,9 @@ export const CART_RESTORED_TOAST_TIMEOUT_MS = 8000
 /** The notice that a manager-approved cart change was not made (docs/phase-197). */
 export const CART_CHANGE_BLOCKED_TOAST_TIMEOUT_MS = 6000
 
+/** The notice that a hold, resume, rename or discard of a held sale did not happen (docs/phase-217). */
+export const HELD_SALE_NOTICE_TOAST_TIMEOUT_MS = 6000
+
 /**
  * `UpdateToast`. Long on purpose (an available/downloaded update must
  * not be lost) and, per `toastStore.ts`'s `updatedAt` stamp, reset on
