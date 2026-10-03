@@ -16,6 +16,10 @@
 import type { VatReconcileOrderRow } from './vat-reconcile.js'
 import { SHIFT_TYPES, type ShiftType } from '../lib/shiftWindows.js'
 import { UNVERIFIABLE_RETRY_REASON } from './integrations/real-etims-provider.js'
+import { buildLocationTraderInvNum, nextTraderSeq } from '../lib/traderSystemInvoiceNumber.js'
+
+/** The `settings` key holding the last trader sequence value this till used (docs/phase-211). */
+const TRADER_SEQ_SETTING_KEY = 'last_trader_seq'
 import BetterSqlite3 from 'better-sqlite3'
 import type { Database as SqliteConnection } from 'better-sqlite3'
 import type { Discount, OfflineOrderPayload } from './shopify-types.js'
@@ -314,10 +318,11 @@ export interface QueueOrderInput {
    * sale `waiting` and queues its fiscal row in the same transaction as
    * the order, so a stop at any later point leaves the sale where the
    * fiscal queue retries it (docs/phase-185.md §4.1). A function because
-   * `TraderSystemInvNum` is built from `localId`, which only exists after
-   * the INSERT.
+   * the request carries `localId`, which only exists after the INSERT, and
+   * the trader number (docs/phase-211), allocated in the same transaction
+   * when the sale has a location.
    */
-  buildFiscalRequest?: (localId: number) => FiscalInvoiceRequest
+  buildFiscalRequest?: (localId: number, traderInvNum?: string) => FiscalInvoiceRequest
   /**
    * The cart this sale came from (docs/phase-197). When present, the
    * sale's own transaction stamps that cart's removal rows with the new
@@ -334,6 +339,8 @@ export interface QueueOrderInput {
 export interface QueuedOrder {
   localId: number
   queueId: number
+  /** The trader number allocated in the sale's transaction (docs/phase-211); absent for a sale with no location. */
+  traderInvNum?: string
   fiscalQueueId?: number
 }
 
@@ -1720,6 +1727,12 @@ export class RubisDatabase {
         input.shiftId ?? null
       )
       const localId = Number(orderInfo.lastInsertRowid)
+      const traderInvNum = input.locationId ? this.allocateTraderInvNum(input.locationId) : undefined
+      if (traderInvNum) {
+        this.conn
+          .prepare('UPDATE orders SET fiscal_trader_inv_num = ? WHERE local_id = ?')
+          .run(traderInvNum, localId)
+      }
       const queueInfo = insertQueue.run(
         'order',
         localId,
@@ -1729,9 +1742,9 @@ export class RubisDatabase {
         createdAt,
         0
       )
-      const queued: QueuedOrder = { localId, queueId: Number(queueInfo.lastInsertRowid) }
+      const queued: QueuedOrder = { localId, queueId: Number(queueInfo.lastInsertRowid), traderInvNum }
       if (input.buildFiscalRequest) {
-        const request = input.buildFiscalRequest(localId)
+        const request = input.buildFiscalRequest(localId, traderInvNum)
         this.conn
           .prepare("UPDATE orders SET fiscal_status = 'waiting', fiscal_request_json = ? WHERE local_id = ?")
           .run(JSON.stringify(request), localId)
@@ -1740,7 +1753,26 @@ export class RubisDatabase {
       this.settleCartForOrder(localId, input.cartToken)
       return queued
     })
-    return enqueue()
+    // Immediate: the trader sequence is read, advanced and written inside this transaction, so it
+    // takes the write lock at the start instead of upgrading a read (docs/phase-211).
+    return enqueue.immediate()
+  }
+
+  /**
+   * Allocates the next trader system invoice number for a sale at `locationId` (docs/phase-211)
+   * and stores the sequence used in `settings.last_trader_seq`. Must run inside the sale's own
+   * transaction: the read, the advance and the write are one atomic step, and a refusal to build
+   * (a bad location id, a number over 15 characters) aborts the whole sale write.
+   *
+   * @param {string} locationId
+   * @returns {string}
+   */
+  private allocateTraderInvNum(locationId: string): string {
+    const stored = Number(this.getSetting(TRADER_SEQ_SETTING_KEY) ?? '0')
+    const seq = nextTraderSeq(Date.now(), Number.isFinite(stored) ? stored : 0)
+    const number = buildLocationTraderInvNum(locationId, seq)
+    this.setSetting(TRADER_SEQ_SETTING_KEY, String(seq))
+    return number
   }
 
   /**
@@ -2490,7 +2522,7 @@ export class RubisDatabase {
                 tendered_amount, change_due, reference_number, shift_id, fiscal_invoice_number, fiscal_qr_code,
                 fiscal_fiscalized_at, fiscal_status, fiscal_error_reason, fiscal_error_kind, fiscal_request_json,
                 fiscal_data_issue, fiscal_vat_groups_json, fiscal_fiscalized_at_source, fiscal_cu_serial,
-                receipt_printed_at
+                receipt_printed_at, fiscal_trader_inv_num
          FROM orders WHERE created_at >= ? AND created_at < ? ORDER BY created_at ASC`
       )
       .all(startIso, endIso) as OrderRow[]
@@ -2522,7 +2554,7 @@ export class RubisDatabase {
                 tendered_amount, change_due, reference_number, shift_id, fiscal_invoice_number, fiscal_qr_code,
                 fiscal_fiscalized_at, fiscal_status, fiscal_error_reason, fiscal_error_kind, fiscal_request_json,
                 fiscal_data_issue, fiscal_vat_groups_json, fiscal_fiscalized_at_source, fiscal_cu_serial,
-                receipt_printed_at
+                receipt_printed_at, fiscal_trader_inv_num
          FROM orders WHERE created_at >= ? AND created_at < ? ORDER BY created_at DESC LIMIT ? OFFSET ?`
       )
       .all(startIso, endIso, limit, offset) as OrderRow[]

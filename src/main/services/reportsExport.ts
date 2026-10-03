@@ -11,7 +11,7 @@ import type { RubisDatabase, MpesaPaymentRow, OrderRow } from './database.js'
 import type { OfflineOrderPayload } from './shopify-types.js'
 import type { FiscalVatGroupAmounts } from './integrations/etims.js'
 import { buildCsv, csvMoney } from '../lib/csv.js'
-import { buildTraderSystemInvNum } from '../lib/traderSystemInvoiceNumber.js'
+import { resolveTraderSystemInvNum } from '../lib/traderSystemInvoiceNumber.js'
 import { computeVatIncluded, formatNairobiDateTime, buildReconciliationRow, orderVatBase, type ReportRange } from './reports.js'
 
 /** `'A'`..`'E'`, in column order, for the raw per-VAT-group `orders.csv` columns. */
@@ -112,7 +112,7 @@ export function buildOrdersCsv(db: RubisDatabase, range: ReportRange, taxRate: n
       : {}
     return [
       formatNairobiDateTime(order.created_at),
-      buildTraderSystemInvNum(order.local_id, payload?.clientOrderUuid ?? ''),
+      resolveTraderSystemInvNum(order.fiscal_trader_inv_num, order.local_id, payload?.clientOrderUuid ?? ''),
       order.fiscal_invoice_number ?? '',
       order.fiscal_status ?? '',
       staffName(order.staff_id),
@@ -172,7 +172,7 @@ export function buildLinesCsv(db: RubisDatabase, range: ReportRange): string {
   for (const order of orders) {
     const payload = parsePayload(order)
     if (!payload) continue
-    const traderInvNum = buildTraderSystemInvNum(order.local_id, payload.clientOrderUuid)
+    const traderInvNum = resolveTraderSystemInvNum(order.fiscal_trader_inv_num, order.local_id, payload.clientOrderUuid)
     for (const line of payload.lineItems) {
       rows.push([
         traderInvNum,

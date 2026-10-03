@@ -12,6 +12,7 @@
 
 import type { ServiceResult } from '../shopify-types.js'
 import { ln } from '../../lib/receiptLayout.js'
+import { resolveTraderSystemInvNum } from '../../lib/traderSystemInvoiceNumber.js'
 import type { ReceiptLayoutEntry } from '../../lib/receiptLayout.js'
 import { VAT_CLASSES, netGroupTotals } from '../../lib/vatClass.js'
 import type {
@@ -113,7 +114,10 @@ export class MockFiscalizationProvider implements FiscalizationProvider {
     const invoiceNumber = `KRA-MOCK-${request.clientOrderUuid.slice(0, 8).toUpperCase()}`
     if (typeof request.localId === 'number' && this.recordTraderInvNum) {
       // Same shape the real provider sends, so a dev slip shows the "Receipt" line.
-      this.recordTraderInvNum(request.localId, `INV-${String(request.localId).padStart(9, '0')}`)
+      this.recordTraderInvNum(
+        request.localId,
+        resolveTraderSystemInvNum(request.traderInvNum, request.localId, request.clientOrderUuid)
+      )
     }
     const result: FiscalInvoiceResult = {
       invoiceNumber,

@@ -44,8 +44,14 @@ export interface FiscalInvoiceLine {
 export interface FiscalInvoiceRequest {
   /** Local order UUID — ties the KRA invoice back to the POS sale. */
   clientOrderUuid: string
-  /** Local order id, used to build a short, sequential `TraderSystemInvNum`. */
+  /** Local order id; builds the legacy `INV-<localId>` `TraderSystemInvNum` for a sale with no stored one. */
   localId?: number
+  /**
+   * The `TraderSystemInvNum` fixed when the sale was created (docs/phase-211): built from the
+   * location id, stored with the sale, and sent unchanged on every retry. Absent on a sale
+   * created before that phase.
+   */
+  traderInvNum?: string
   items: FiscalInvoiceLine[]
   /** Grand total including tax, in KES. */
   total: number

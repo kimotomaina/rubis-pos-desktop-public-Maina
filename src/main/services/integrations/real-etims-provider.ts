@@ -1671,13 +1671,14 @@ export class RealFiscalizationProvider implements FiscalizationProvider {
   }
 
   /**
-   * Builds a `TraderSystemInvNum` no longer than
-   * {@link MAX_TRADER_SYSTEM_INV_NUM_LENGTH} characters. Prefers a
-   * zero-padded `INV-<localId>` (short, sequential, and stable across a
-   * store-and-forward retry) and falls back to a truncated
-   * `clientOrderUuid` when no local order id is available yet.
+   * The `TraderSystemInvNum` for a request. A sale created from phase 211 carries the number
+   * fixed at creation (`request.traderInvNum`), sent unchanged on every retry. Only a sale
+   * without one gets the legacy form: a zero-padded `INV-<localId>`, or a truncated
+   * `clientOrderUuid` when no local order id is available yet, never longer than
+   * {@link MAX_TRADER_SYSTEM_INV_NUM_LENGTH} characters.
    */
   private buildTraderSystemInvNum(request: FiscalInvoiceRequest): string {
+    if (request.traderInvNum) return request.traderInvNum
     const raw =
       typeof request.localId === 'number'
         ? `INV-${String(request.localId).padStart(9, '0')}`

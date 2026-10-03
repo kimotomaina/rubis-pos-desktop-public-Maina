@@ -265,7 +265,7 @@ import type {
   FiscalReconciliationReport
 } from './services/reports.js'
 import { buildOrdersCsv, buildLinesCsv } from './services/reportsExport.js'
-import { buildTraderSystemInvNum } from './lib/traderSystemInvoiceNumber.js'
+import { resolveTraderSystemInvNum } from './lib/traderSystemInvoiceNumber.js'
 import { shouldRefuseCheckoutForDiscount } from './lib/requestHasDiscount.js'
 import { resolveCheckoutLocation, NO_LOCATION_MESSAGE } from './lib/checkoutLocation.js'
 import { resolveVatClass } from './lib/vatClass.js'
@@ -3617,7 +3617,7 @@ app.whenReady().then(async () => {
           }
           return {
             order,
-            traderInvoiceNumber: buildTraderSystemInvNum(order.local_id, clientOrderUuid)
+            traderInvoiceNumber: resolveTraderSystemInvNum(order.fiscal_trader_inv_num, order.local_id, clientOrderUuid)
           }
         })
         return { success: true, data: { invoices, total, page } }

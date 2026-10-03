@@ -10,7 +10,7 @@
 import type { RubisDatabase, PaymentMethod, OrderRow, MpesaPaymentRow, OrderStatus } from './database.js'
 import type { FiscalVatGroupAmounts } from './integrations/etims.js'
 import type { Logger } from './logger.js'
-import { buildTraderSystemInvNum } from '../lib/traderSystemInvoiceNumber.js'
+import { resolveTraderSystemInvNum } from '../lib/traderSystemInvoiceNumber.js'
 import { shiftWindowLabel, type ShiftType } from '../lib/shiftWindows.js'
 import {
   compareVatGroups,
@@ -1020,7 +1020,11 @@ function reconciliationSortWeight(status: FiscalReconciliationStatus): number {
  */
 export function buildReconciliationRow(order: OrderRow, logger: Logger): FiscalReconciliationRow {
   const payload = JSON.parse(order.payload_json || '{}') as { clientOrderUuid?: string }
-  const traderInvoiceNumber = buildTraderSystemInvNum(order.local_id, payload.clientOrderUuid ?? '')
+  const traderInvoiceNumber = resolveTraderSystemInvNum(
+    order.fiscal_trader_inv_num,
+    order.local_id,
+    payload.clientOrderUuid ?? ''
+  )
   const charged = order.total
   const base = {
     localId: order.local_id,

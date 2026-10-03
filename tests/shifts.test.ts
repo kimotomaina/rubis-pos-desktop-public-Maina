@@ -63,11 +63,12 @@ function createFakeConnection() {
     pragma: vi.fn(),
     exec: vi.fn(),
     close: vi.fn(),
-    transaction: vi.fn(
-      (fn: (...args: unknown[]) => unknown) =>
-        (...args: unknown[]) =>
-          fn(...args)
-    ),
+    // CHANGED (docs/phase-211). OLD: transaction returned a plain function. NEW: it also has .immediate,
+    // because queueOrder now takes its write lock up front; the fake runs it the same way.
+    transaction: vi.fn((fn: (...args: unknown[]) => unknown) => {
+      const run = (...args: unknown[]): unknown => fn(...args)
+      return Object.assign(run, { immediate: run })
+    }),
     prepare: vi.fn((sql: string) => ({
       run: (...params: unknown[]) => {
         calls.push({ sql, kind: 'run', params })

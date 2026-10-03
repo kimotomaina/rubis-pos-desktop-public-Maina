@@ -50,7 +50,9 @@ describe('resolveCheckoutLocation', () => {
     ['gid://shopify/Location/1', undefined],
     ['', 'Rubis Kisumu'],
     ['gid://shopify/Location/1', ''],
-    ['   ', '   ']
+    ['   ', '   '],
+    ['77557989479', 'Rubis Kisumu'],
+    ['gid://shopify/Product/1', 'Rubis Kisumu']
   ])('is null for id %j and name %j (the settings reset writes empty strings)', (id, name) => {
     expect(resolveCheckoutLocation(id, name)).toBeNull()
   })

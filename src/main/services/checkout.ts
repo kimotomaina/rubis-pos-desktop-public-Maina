@@ -296,11 +296,13 @@ function buildFiscalRequest(
   input: CheckoutRequest,
   clientOrderUuid: string,
   localId: number,
-  taxRate: number
+  taxRate: number,
+  traderInvNum?: string
 ): FiscalInvoiceRequest {
   return {
     clientOrderUuid,
     localId,
+    ...(traderInvNum ? { traderInvNum } : {}),
     items: input.items.map((item) => {
       // A class the till does not know keeps its raw value, so the
       // provider's validator refuses it; it is never filed as class A.
@@ -551,7 +553,8 @@ export async function runCheckout(
       locationName: input.locationName,
       // Rule 3 (docs/phase-185.md §4.1): the sale is `waiting`, queued and
       // carries this exact request from the moment it exists.
-      buildFiscalRequest: (id: number) => buildFiscalRequest(input, clientOrderUuid, id, taxRate)
+      buildFiscalRequest: (id: number, traderInvNum?: string) =>
+        buildFiscalRequest(input, clientOrderUuid, id, taxRate, traderInvNum)
     }
 
     /**
@@ -636,7 +639,7 @@ export async function runCheckout(
     let retryInBackground = false
     fiscalEngine.claim(localId)
     try {
-      const fiscalRequest = buildFiscalRequest(input, clientOrderUuid, localId, taxRate)
+      const fiscalRequest = buildFiscalRequest(input, clientOrderUuid, localId, taxRate, queued.traderInvNum)
       const invoice = await fiscalizationProvider.submitInvoice(fiscalRequest)
 
       if (invoice.ok) {
