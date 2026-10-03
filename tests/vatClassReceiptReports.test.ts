@@ -62,7 +62,10 @@ const BASE: ReceiptLayoutOrder = {
   fiscalizedAtSource: 'device',
   cuSerial: 'KRAMW0XXXXXXXXXX',
   total: 1650,
-  vatGroups: { A: '1422.41' },
+  // CHANGED (docs/phase-214). OLD: { A: '1422.41' }, the net amount, because the slip read the device's
+  // group amounts as net. NEW: { A: '1650.00' }, the gross amount the device returns (confirmed by the
+  // first live filing). The golden layout is unchanged: both inputs print A 16% 1,422.41 227.59 1,650.00.
+  vatGroups: { A: '1650.00' },
   items: [
     { title: 'Coca-Cola 500ml', variantTitle: '', quantity: 2, unitPrice: 100, vatClass: 'A' },
     { title: 'Bosch AeroTwin Wipers', variantTitle: 'Pair', quantity: 1, unitPrice: 1450, vatClass: 'A' }
@@ -88,7 +91,8 @@ const A_ONLY_SCENARIOS: Record<string, ReceiptLayoutOrder> = {
   discounted: {
     ...BASE,
     total: 1485,
-    vatGroups: { A: '1280.17' },
+    // CHANGED (docs/phase-214). OLD: { A: '1280.17' } (net). NEW: { A: '1485.00' } (gross). Same printed rows.
+    vatGroups: { A: '1485.00' },
     items: [
       { title: 'Coca-Cola 500ml', variantTitle: '', quantity: 2, unitPrice: 100, vatClass: 'A', discount: { type: 'percent', value: 10 } },
       BASE.items[1]

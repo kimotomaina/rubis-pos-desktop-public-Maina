@@ -1,12 +1,17 @@
 /**
- * VAT table reconciliation (docs/phase-198-1): the gross-to-net helpers, the
- * fallback table built from the lines, the reconcile of stored device groups
- * against the till's VAT, what the slip prints when they disagree, the mock's
+ * VAT table reconciliation (docs/phase-198-1, corrected by docs/phase-214): the gross-to-net
+ * and gross-to-VAT helpers, the fallback table built from the lines, the reconcile of stored
+ * device groups against the till's VAT, what the slip prints when they disagree, the mock's
  * groups, and the Needs Attention list "VAT figures to reconcile".
+ *
+ * The device's group amounts are GROSS (VAT included). Phase 198-1 read them as net "until the
+ * live test"; the first live filing (a 90.00 sale came back as group A 90.00; KRA's invoice shows
+ * taxable 77.59, tax 12.41) settled it. Tests below changed from net to gross inputs carry an
+ * OLD/NEW note.
  */
 
 import { describe, it, expect, vi } from 'vitest'
-import { grossToNet, netGroupTotals } from '../src/main/lib/vatClass.js'
+import { grossToNet, grossToVat } from '../src/main/lib/vatClass.js'
 import { reconcileVatGroups, VAT_RECONCILE_TOLERANCE } from '../src/main/lib/vatReconcile.js'
 import { buildReceiptLayout, isReceiptLayoutQr } from '../src/main/lib/receiptLayout.js'
 import type { ReceiptLayoutEntry, ReceiptLayoutOrder } from '../src/main/lib/receiptLayout.js'
@@ -36,7 +41,7 @@ const lines = (entries: ReceiptLayoutEntry[]): string[] =>
 
 const warnLogger = () => ({ warn: vi.fn() })
 
-describe('grossToNet and netGroupTotals', () => {
+describe('grossToNet and grossToVat', () => {
   it('turns a VAT-inclusive class A amount into net: x 100/116, two places', () => {
     expect(grossToNet('A', 1650)).toBe(1422.41)
     expect(grossToNet('A', 60)).toBe(51.72)
@@ -54,50 +59,64 @@ describe('grossToNet and netGroupTotals', () => {
     expect(grossToNet('E', 1)).toBe(1)
   })
 
-  it('works per class over the lines, with a blank class as A', () => {
-    const totals = netGroupTotals([
-      { unitPrice: 100, quantity: 1, vatClass: 'A' },
-      { unitPrice: 16, quantity: 1, vatClass: '' },
-      { unitPrice: 108, quantity: 1, vatClass: 'B' },
-      { unitPrice: 1, quantity: 1, vatClass: 'c' },
-      { unitPrice: 2.5, quantity: 1, vatClass: 'E' }
-    ])
+  // CHANGED (docs/phase-214). OLD: a test of netGroupTotals, which turned the lines' totals into net amounts for the
+  // slip's fallback table and the mock. NEW: that function is gone (the groups are gross, so the lines' own totals
+  // are used as they are); these test grossToVat, the VAT inside a gross amount, the figure the table now prints.
+  it('works out the VAT inside a class A amount: x 16/116, two places', () => {
+    expect(grossToVat('A', 60)).toBe(8.28)
+    expect(grossToVat('A', 90)).toBe(12.41)
+    expect(grossToVat('A', 1650)).toBe(227.59)
+    expect(grossToVat('A', 1485)).toBe(204.83)
+  })
 
-    expect(totals).toEqual({ A: 100, B: 100, C: 1, D: 0, E: 2.5 })
+  it('works out the VAT inside a class B amount: x 8/108', () => {
+    expect(grossToVat('B', 108)).toBe(8)
+  })
+
+  it('has no VAT figure for C, D and E', () => {
+    expect(grossToVat('C', 2.5)).toBe(0)
+    expect(grossToVat('D', 7.77)).toBe(0)
+    expect(grossToVat('E', 1)).toBe(0)
   })
 })
 
 describe('reconcileVatGroups', () => {
-  it('agrees when the groups, read as net, give the till VAT', () => {
-    const result = reconcileVatGroups({ A: '51.72' }, { vatIncluded: 8.28 })
+  // CHANGED (docs/phase-214). OLD: groups read as net, so { A: '51.72' } agreed with a till VAT of 8.28. NEW: groups
+  // are gross, so { A: '60.00' } agrees with 8.28, and the old net figure 51.72 would now be a disagreement.
+  it('agrees when the gross groups hold the till VAT', () => {
+    const result = reconcileVatGroups({ A: '60.00' }, { vatIncluded: 8.28 })
 
     expect(result).toEqual({ consistent: true, diff: 0, groupVat: 8.28, tillVat: 8.28 })
   })
 
-  it('disagrees when the device holds the gross amount: VAT 9.60 against the till 8.28', () => {
-    const result = reconcileVatGroups({ A: '60.00' }, { vatIncluded: 8.28 })
+  // CHANGED (docs/phase-214). OLD: { A: '60.00' } disagreed (VAT 9.60 against 8.28), because 60.00 was read as net.
+  // NEW: a group that is lower than the sale disagrees: { A: '51.72' } holds VAT 7.13 against the till's 8.28.
+  it('disagrees when the device holds less than the sale: VAT 7.13 against the till 8.28', () => {
+    const result = reconcileVatGroups({ A: '51.72' }, { vatIncluded: 8.28 })
 
     expect(result.consistent).toBe(false)
-    expect(result.diff).toBe(1.32)
-    expect(result.groupVat).toBe(9.6)
+    expect(result.diff).toBe(-1.15)
+    expect(result.groupVat).toBe(7.13)
     expect(result.tillVat).toBe(8.28)
   })
 
   it('tolerates a difference of 0.05 and no more', () => {
     expect(VAT_RECONCILE_TOLERANCE).toBe(0.05)
-    expect(reconcileVatGroups({ A: '51.72' }, { vatIncluded: 8.33 }).consistent).toBe(true)
-    expect(reconcileVatGroups({ A: '51.72' }, { vatIncluded: 8.34 }).consistent).toBe(false)
-    expect(reconcileVatGroups({ A: '51.72' }, { vatIncluded: 8.23 }).consistent).toBe(true)
-    expect(reconcileVatGroups({ A: '51.72' }, { vatIncluded: 8.22 }).consistent).toBe(false)
+    // CHANGED (docs/phase-214): the group is { A: '60.00' } (gross) where it was '51.72' (net); the VAT it holds is the same 8.28.
+    expect(reconcileVatGroups({ A: '60.00' }, { vatIncluded: 8.33 }).consistent).toBe(true)
+    expect(reconcileVatGroups({ A: '60.00' }, { vatIncluded: 8.34 }).consistent).toBe(false)
+    expect(reconcileVatGroups({ A: '60.00' }, { vatIncluded: 8.23 }).consistent).toBe(true)
+    expect(reconcileVatGroups({ A: '60.00' }, { vatIncluded: 8.22 }).consistent).toBe(false)
   })
 
   it('counts C and E as no VAT, and B at 8%', () => {
-    expect(reconcileVatGroups({ A: '86.21', C: '1.00', E: '2.50' }, { vatIncluded: 13.79 }).consistent).toBe(true)
-    expect(reconcileVatGroups({ B: '100.00' }, { vatIncluded: 8 }).consistent).toBe(true)
+    // CHANGED (docs/phase-214): A is '100.00' (gross) where it was '86.21' (net); B is '108.00' where it was '100.00'.
+    expect(reconcileVatGroups({ A: '100.00', C: '1.00', E: '2.50' }, { vatIncluded: 13.79 }).consistent).toBe(true)
+    expect(reconcileVatGroups({ B: '108.00' }, { vatIncluded: 8 }).consistent).toBe(true)
   })
 
   it('cannot compare a sale with a class D amount, and says nothing against it', () => {
-    const result = reconcileVatGroups({ A: '51.72', D: '500.00' }, { vatIncluded: 99 })
+    const result = reconcileVatGroups({ A: '60.00', D: '500.00' }, { vatIncluded: 99 })
 
     expect(result.consistent).toBe(true)
     expect(result.diff).toBe(0)
@@ -112,7 +131,8 @@ describe('the VAT table on the slip', () => {
   it('prints the table with no extra line when the device groups agree with the till', () => {
     const logger = warnLogger()
 
-    const out = lines(buildReceiptLayout(sale(60, { A: '51.72' }), SETTINGS, { width: 48, logger }))
+    // CHANGED (docs/phase-214). OLD: the device group was { A: '51.72' } (net). NEW: { A: '60.00' } (gross). Same row.
+    const out = lines(buildReceiptLayout(sale(60, { A: '60.00' }), SETTINGS, { width: 48, logger }))
 
     expect(out).toContain('A 16% 51.72 8.28 60.00')
     expect(out.some((l) => l.startsWith('Device figures'))).toBe(false)
@@ -122,9 +142,11 @@ describe('the VAT table on the slip', () => {
   it('prints the device figures and one line under them when they disagree, and logs at warn', () => {
     const logger = warnLogger()
 
-    const out = lines(buildReceiptLayout(sale(60, { A: '60.00' }), SETTINGS, { width: 48, logger }))
+    // CHANGED (docs/phase-214). OLD: { A: '60.00' } disagreed and printed 'A 16% 60.00 9.60 69.60' (gross 69.60 for a 60.00 sale).
+    // NEW: a device group of { A: '51.72' } disagrees and prints its own gross, 'A 16% 44.59 7.13 51.72'.
+    const out = lines(buildReceiptLayout(sale(60, { A: '51.72' }), SETTINGS, { width: 48, logger }))
 
-    const row = out.indexOf('A 16% 60.00 9.60 69.60')
+    const row = out.indexOf('A 16% 44.59 7.13 51.72')
     expect(row).toBeGreaterThan(-1)
     expect(out[row + 1]).toBe('Device figures. Till VAT: 8.28.')
     expect(out[row + 2]).toBe('-'.repeat(48))
@@ -134,10 +156,11 @@ describe('the VAT table on the slip', () => {
   })
 
   it('wraps the note on a narrow printer without hiding either figure', () => {
-    const out = lines(buildReceiptLayout(sale(60, { A: '60.00' }), SETTINGS, { width: 32, logger: warnLogger() }))
+    // CHANGED (docs/phase-214): { A: '51.72' } and 'A 16% 44.59 7.13 51.72' replace { A: '60.00' } and 'A 16% 60.00 9.60 69.60'.
+    const out = lines(buildReceiptLayout(sale(60, { A: '51.72' }), SETTINGS, { width: 32, logger: warnLogger() }))
 
     expect(out.join(' ')).toContain('Device figures. Till VAT: 8.28.')
-    expect(out).toContain('A 16% 60.00 9.60 69.60')
+    expect(out).toContain('A 16% 44.59 7.13 51.72')
   })
 
   it('prints no note for a table built from the lines, even when it would not reconcile', () => {
@@ -153,7 +176,7 @@ describe('the VAT table on the slip', () => {
     expect(logger.warn).not.toHaveBeenCalled()
   })
 
-  it('builds the fallback table from net amounts: a 1,650.00 sale prints 1,422.41 + 227.59 = 1,650.00', () => {
+  it('builds the fallback table from gross amounts: a 1,650.00 sale prints 1,422.41 + 227.59 = 1,650.00', () => {
     const out = lines(buildReceiptLayout(sale(1650), SETTINGS, { width: 48, logger: warnLogger() }))
 
     expect(out).toContain('A 16% 1,422.41 227.59 1,650.00')
@@ -184,16 +207,18 @@ describe('the VAT table on the slip', () => {
   })
 })
 
-describe('the mock provider reports its groups as net', () => {
+// CHANGED (docs/phase-214). OLD: the mock reported its groups as net (51.72 for a 60.00 sale). NEW: gross, as the real
+// device does (60.00); the slip it gives is the same.
+describe('the mock provider reports its groups as gross', () => {
   const request = (items: FiscalInvoiceRequest['items']): FiscalInvoiceRequest =>
     ({ clientOrderUuid: '9f3c2a17-0000-4000-8000-000000000001', items, total: 60, taxAmount: 8.28 }) as FiscalInvoiceRequest
 
-  it('reports 51.72 for a 60.00 class A sale', async () => {
+  it('reports 60.00 for a 60.00 class A sale', async () => {
     const outcome = await new MockFiscalizationProvider(0).submitInvoice(
       request([{ description: 'Mug', quantity: 1, unitPrice: 60, taxRate: 0.16 }])
     )
 
-    expect(outcome.ok && outcome.data.vatGroups).toEqual({ A: '51.72' })
+    expect(outcome.ok && outcome.data.vatGroups).toEqual({ A: '60.00' })
   })
 
   it('reports each class that has a line, and no other', async () => {
@@ -204,7 +229,7 @@ describe('the mock provider reports its groups as net', () => {
       ])
     )
 
-    expect(outcome.ok && outcome.data.vatGroups).toEqual({ A: '86.21', C: '1.00' })
+    expect(outcome.ok && outcome.data.vatGroups).toEqual({ A: '100.00', C: '1.00' })
   })
 
   it('gives a slip that reconciles, with the table the device figures print', async () => {
@@ -230,15 +255,17 @@ describe('the Needs Attention list "VAT figures to reconcile"', () => {
     return localId
   }
 
+  // CHANGED (docs/phase-214). OLD: { A: '51.72' } agreed and { A: '60.00' } disagreed (VAT 9.6, diff 1.32), groups read as net.
+  // NEW: { A: '60.00' } agrees and { A: '51.72' } disagrees (VAT 7.13 against 8.28, diff -1.15), groups read as gross.
   it('lists a sale whose device groups disagree, with both VAT figures, and leaves out one that agrees', () => {
     const db = freshDb()
-    const agrees = filed(db, { A: '51.72' })
-    const disagrees = filed(db, { A: '60.00' })
+    const agrees = filed(db, { A: '60.00' })
+    const disagrees = filed(db, { A: '51.72' })
 
     const rows = findVatMismatches(db.getFiscalisedOrdersWithVatGroups(), 0.16)
 
     expect(rows.map((r) => r.local_id)).toEqual([disagrees])
-    expect(rows[0]).toMatchObject({ group_vat: 9.6, till_vat: 8.28, diff: 1.32, total: 60, staff_name: 'Mary Wanjiku' })
+    expect(rows[0]).toMatchObject({ group_vat: 7.13, till_vat: 8.28, diff: -1.15, total: 60, staff_name: 'Mary Wanjiku' })
     expect(rows.some((r) => r.local_id === agrees)).toBe(false)
   })
 
@@ -253,7 +280,7 @@ describe('the Needs Attention list "VAT figures to reconcile"', () => {
 
   it('skips an order whose stored JSON cannot be read, and still lists the others', () => {
     const db = freshDb()
-    const disagrees = filed(db, { A: '60.00' })
+    const disagrees = filed(db, { A: '51.72' })
     const rows = db.getFiscalisedOrdersWithVatGroups()
 
     const result = findVatMismatches([{ ...rows[0], local_id: 99, payload_json: 'not json' }, ...rows], 0.16)
@@ -264,7 +291,7 @@ describe('the Needs Attention list "VAT figures to reconcile"', () => {
   it('follows the stored groups: once they agree, the sale leaves the list', () => {
     const db = freshDb()
     const { localId } = seedSale(db)
-    db.setOrderFiscalInfo(localId, 'CU1', 'qr', { A: '51.72' })
+    db.setOrderFiscalInfo(localId, 'CU1', 'qr', { A: '60.00' })
 
     expect(findVatMismatches(db.getFiscalisedOrdersWithVatGroups(), 0.16)).toEqual([])
   })

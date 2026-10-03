@@ -92,10 +92,11 @@ export function expectedGroupTotals(lines: VatClassLine[]): VatGroupTotals {
 
 /**
  * Compares the device's per-group subtotals with what the sale's lines
- * should have put in each group. Only the non-A groups are compared: the
- * device's group A amount has not yet been confirmed as gross or net
- * (docs/phase-194 section 2b), and groups B to E carry no VAT, so for them
- * gross and net agree. A group the device did not return counts as 0.00.
+ * should have put in each group. Only the non-A groups are compared: group A
+ * is covered by the sale-level total check, which sums every group
+ * (`buildReconciliationRow`). The device's group amounts are GROSS (VAT
+ * included), confirmed by the first live filing (docs/phase-214). A group the
+ * device did not return counts as 0.00.
  *
  * @param {VatGroupTotals} expected
  * @param {FiscalVatGroupAmounts} device the raw strings `ReadCurrentReceiptInfo` returned
@@ -134,16 +135,16 @@ export function grossToNet(letter: VatClass, gross: number): number {
 }
 
 /**
- * {@link expectedGroupTotals} read as net: each class's VAT-inclusive line
- * total turned into its ex-VAT amount. The till's own arithmetic for the
- * groups, used where no device figures were stored and by the development mock.
+ * The VAT inside a VAT-inclusive group amount: A is gross x 16/116, B is gross
+ * x 8/108, and C, D and E carry none the till can work out (docs/phase-214).
+ * Rounded to two places, the same arithmetic the reports use for a device group.
  *
- * @param {VatClassLine[]} lines
- * @returns {VatGroupTotals}
+ * @param {VatClass} letter
+ * @param {number} gross
+ * @returns {number}
  */
-export function netGroupTotals(lines: VatClassLine[]): VatGroupTotals {
-  const gross = expectedGroupTotals(lines)
-  const net: VatGroupTotals = { A: 0, B: 0, C: 0, D: 0, E: 0 }
-  for (const vatClass of VAT_CLASSES) net[vatClass] = grossToNet(vatClass, gross[vatClass])
-  return net
+export function grossToVat(letter: VatClass, gross: number): number {
+  if (letter === 'A') return round2((gross * 16) / 116)
+  if (letter === 'B') return round2((gross * 8) / 108)
+  return 0
 }

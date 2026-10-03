@@ -15,6 +15,7 @@ import { shiftWindowLabel, type ShiftType } from '../lib/shiftWindows.js'
 import {
   compareVatGroups,
   expectedGroupTotals,
+  grossToVat,
   hasNonAClass,
   type VatClassLine
 } from '../lib/vatClass.js'
@@ -846,8 +847,7 @@ const VAT_GROUP_LETTERS: readonly VatGroupLetter[] = ['A', 'B', 'C', 'D', 'E']
  * @returns {number | 'not-known'}
  */
 function deriveGroupVat(letter: VatGroupLetter, amount: number): number | 'not-known' {
-  if (letter === 'A') return Math.round(amount * (16 / 116) * 100) / 100
-  if (letter === 'B') return Math.round(amount * (8 / 108) * 100) / 100
+  if (letter === 'A' || letter === 'B') return grossToVat(letter, amount)
   if (letter === 'C' || letter === 'E') return 0
   return 'not-known'
 }

@@ -4,13 +4,14 @@
  * without saying so. VIL vendor checklist item 13: reconciling the system
  * amount against the validated amount.
  *
- * The group amounts are read as NET (ex-VAT), the reading the receipt's VAT
- * table already uses. The device's own contract does not say net or gross
- * (docs/phase-194 section 2b), so this reading stands until the live test.
+ * The group amounts are read as GROSS (VAT included), the reading the reports
+ * use. docs/phase-198-1 read them as net "until the live test"; the first live
+ * filing (docs/phase-214) settled it: a sale of 90.00 came back as group A
+ * `90.00`, and KRA's invoice shows total 90, taxable 77.59, tax 12.41.
  */
 
 import type { FiscalVatGroupAmounts } from '../services/integrations/etims.js'
-import { VAT_CLASS_RATES } from './vatClass.js'
+import { VAT_CLASS_RATES, grossToVat, type VatClass } from './vatClass.js'
 
 /** Largest gap, in KSh, between the groups' VAT and the till's VAT that still counts as agreeing. */
 export const VAT_RECONCILE_TOLERANCE = 0.05
@@ -21,7 +22,7 @@ export interface VatReconcileResult {
   consistent: boolean
   /** The groups' VAT minus the till's VAT, rounded to two places. */
   diff: number
-  /** The VAT the stored groups add up to, read as net. */
+  /** The VAT inside the stored groups, which are gross. */
   groupVat: number
   /** The VAT the till worked out for the sale. */
   tillVat: number
@@ -34,8 +35,8 @@ function round2(value: number): number {
 /**
  * Compares the VAT the stored groups imply with the till's VAT total.
  *
- * Each class's VAT is its net amount times the statutory rate, rounded to two
- * places, the same as the printed table. Class D has no fixed rate, so a sale
+ * Each class's VAT is the VAT inside its gross amount (A: 16/116, B: 8/108,
+ * C and E: none), rounded to two places, the same as the printed table. Class D has no fixed rate, so a sale
  * holding any class D amount cannot be compared: it is reported consistent
  * with no difference, rather than guessed at.
  *
@@ -57,7 +58,7 @@ export function reconcileVatGroups(
       if (amount !== 0) return { consistent: true, diff: 0, groupVat: tillVat, tillVat }
       continue
     }
-    groupVat += round2(amount * rate)
+    groupVat += grossToVat(letter as VatClass, amount)
   }
   groupVat = round2(groupVat)
   const diff = round2(groupVat - tillVat)

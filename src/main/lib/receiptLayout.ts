@@ -29,7 +29,7 @@
 
 import type { Discount } from '../services/shopify-types.js'
 import { computeReceiptTotals } from './receiptTotals.js'
-import { VAT_CLASSES, VAT_CLASS_RATES, grossToNet, netGroupTotals, resolveVatClass, type VatClass } from './vatClass.js'
+import { VAT_CLASSES, VAT_CLASS_RATES, expectedGroupTotals, grossToVat, resolveVatClass, type VatClass } from './vatClass.js'
 import { reconcileVatGroups } from './vatReconcile.js'
 import type { ReceiptTotalsLineItem } from './receiptTotals.js'
 import {
@@ -314,14 +314,22 @@ function itemAmountLine(item: ReceiptLayoutLineItem, width: number): ReceiptLayo
   return ln(text.length <= width ? text : text.slice(text.length - width), 'right')
 }
 
-/** A VAT-class table row's rate/VAT/gross, from its stored taxable (ex-VAT) subtotal. */
-function vatClassFigures(letter: string, taxable: number): { rateLabel: string; vatLabel: string; gross: number } {
+/**
+ * A VAT-class table row's rate, taxable amount and VAT, from its stored gross (VAT-inclusive)
+ * subtotal. The device's group amounts are gross (docs/phase-214), so the taxable amount is the
+ * gross less the VAT inside it, and the gross is shown as stored. A class with no fixed rate
+ * shows its amount as both taxable and gross, with no VAT figure.
+ */
+function vatClassFigures(
+  letter: string,
+  gross: number
+): { rateLabel: string; vatLabel: string; taxable: number } {
   const rate = VAT_CLASS_RATES[letter as VatClass] ?? null
   if (rate === null) {
-    return { rateLabel: 'n/a', vatLabel: 'n/a', gross: taxable }
+    return { rateLabel: 'n/a', vatLabel: 'n/a', taxable: gross }
   }
-  const vat = round2(taxable * rate)
-  return { rateLabel: `${Math.round(rate * 100)}%`, vatLabel: formatAmount(vat), gross: round2(taxable + vat) }
+  const vat = grossToVat(letter as VatClass, gross)
+  return { rateLabel: `${Math.round(rate * 100)}%`, vatLabel: formatAmount(vat), taxable: round2(gross - vat) }
 }
 
 /** The key entries for the classes the receipt's lines hold, in class order; class A alone for a receipt with none. */
@@ -333,21 +341,21 @@ function vatClassKeys(items: ReceiptLayoutLineItem[]): string[] {
 /**
  * The VAT-table amounts for a filed sale that has no stored device groups
  * (the already-filed recovery never re-reads the receipt): the lines' own
- * amounts per class, not the whole sale as class A. The table adds VAT on top
- * of each amount, so the lines' VAT-inclusive totals are turned into net
- * amounts first (docs/phase-198-1); the whole-receipt fallback likewise.
+ * VAT-inclusive amounts per class, not the whole sale as class A. These are
+ * gross, the same reading as the device's own groups (docs/phase-214); the
+ * whole-receipt fallback likewise.
  *
  * @param {ReceiptLayoutLineItem[]} items
  * @param {string} fallbackA the whole-receipt gross amount, used when no line resolves to a class
  * @returns {ReceiptLayoutVatGroups}
  */
 function groupsFromItems(items: ReceiptLayoutLineItem[], fallbackA: string): ReceiptLayoutVatGroups {
-  const totals = netGroupTotals(items)
+  const totals = expectedGroupTotals(items)
   const groups: ReceiptLayoutVatGroups = {}
   for (const letter of VAT_CLASSES) {
     if (items.some((item) => resolveVatClass(item.vatClass) === letter)) groups[letter] = String(totals[letter])
   }
-  return Object.keys(groups).length > 0 ? groups : { A: String(grossToNet('A', Number(fallbackA))) }
+  return Object.keys(groups).length > 0 ? groups : { A: fallbackA }
 }
 
 /**
@@ -485,9 +493,10 @@ export function buildReceiptLayout(
     for (const letter of ['A', 'B', 'C', 'D', 'E'] as const) {
       const raw = groups[letter]
       if (raw === undefined) continue
-      const taxable = Number(raw)
-      const figures = vatClassFigures(letter, Number.isFinite(taxable) ? taxable : 0)
-      const row = `${letter} ${figures.rateLabel} ${formatAmount(Number.isFinite(taxable) ? taxable : 0)} ${figures.vatLabel} ${formatAmount(figures.gross)}`
+      const parsed = Number(raw)
+      const gross = Number.isFinite(parsed) ? parsed : 0
+      const figures = vatClassFigures(letter, gross)
+      const row = `${letter} ${figures.rateLabel} ${formatAmount(figures.taxable)} ${figures.vatLabel} ${formatAmount(gross)}`
       wrapText(row, width).forEach((text) => push(ln(text)))
     }
     // Only the device's own figures are checked: a table built from the lines is the till's
