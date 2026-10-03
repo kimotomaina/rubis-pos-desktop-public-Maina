@@ -145,7 +145,7 @@
         "style": "normal"
       },
       {
-        "text": "TOTAL KSH                               1,650.00",
+        "text": "TOTAL KSH       1,650.00",
         "align": "left",
         "style": "double"
       },
@@ -370,7 +370,12 @@
         "style": "normal"
       },
       {
-        "text": "TOTAL KSH               1,650.00",
+        "text": "TOTAL KSH",
+        "align": "left",
+        "style": "double"
+      },
+      {
+        "text": "        1,650.00",
         "align": "left",
         "style": "double"
       },
@@ -600,7 +605,7 @@
         "style": "normal"
       },
       {
-        "text": "TOTAL KSH                               1,650.00",
+        "text": "TOTAL KSH       1,650.00",
         "align": "left",
         "style": "double"
       },
@@ -825,7 +830,12 @@
         "style": "normal"
       },
       {
-        "text": "TOTAL KSH               1,650.00",
+        "text": "TOTAL KSH",
+        "align": "left",
+        "style": "double"
+      },
+      {
+        "text": "        1,650.00",
         "align": "left",
         "style": "double"
       },
@@ -1055,7 +1065,7 @@
         "style": "normal"
       },
       {
-        "text": "TOTAL KSH                               1,650.00",
+        "text": "TOTAL KSH       1,650.00",
         "align": "left",
         "style": "double"
       },
@@ -1280,7 +1290,12 @@
         "style": "normal"
       },
       {
-        "text": "TOTAL KSH               1,650.00",
+        "text": "TOTAL KSH",
+        "align": "left",
+        "style": "double"
+      },
+      {
+        "text": "        1,650.00",
         "align": "left",
         "style": "double"
       },
@@ -1515,7 +1530,7 @@
         "style": "normal"
       },
       {
-        "text": "TOTAL KSH                               1,650.00",
+        "text": "TOTAL KSH       1,650.00",
         "align": "left",
         "style": "double"
       },
@@ -1750,7 +1765,12 @@
         "style": "normal"
       },
       {
-        "text": "TOTAL KSH               1,650.00",
+        "text": "TOTAL KSH",
+        "align": "left",
+        "style": "double"
+      },
+      {
+        "text": "        1,650.00",
         "align": "left",
         "style": "double"
       },
@@ -1985,7 +2005,7 @@
         "style": "normal"
       },
       {
-        "text": "TOTAL KSH                               1,650.00",
+        "text": "TOTAL KSH       1,650.00",
         "align": "left",
         "style": "double"
       },
@@ -2157,7 +2177,12 @@
         "style": "normal"
       },
       {
-        "text": "TOTAL KSH               1,650.00",
+        "text": "TOTAL KSH",
+        "align": "left",
+        "style": "double"
+      },
+      {
+        "text": "        1,650.00",
         "align": "left",
         "style": "double"
       },
@@ -2329,7 +2354,7 @@
         "style": "normal"
       },
       {
-        "text": "TOTAL KSH                               1,485.00",
+        "text": "TOTAL KSH       1,485.00",
         "align": "left",
         "style": "double"
       },
@@ -2559,7 +2584,12 @@
         "style": "normal"
       },
       {
-        "text": "TOTAL KSH               1,485.00",
+        "text": "TOTAL KSH",
+        "align": "left",
+        "style": "double"
+      },
+      {
+        "text": "        1,485.00",
         "align": "left",
         "style": "double"
       },

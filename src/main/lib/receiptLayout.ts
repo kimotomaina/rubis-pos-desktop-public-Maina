@@ -255,10 +255,24 @@ export function wrapText(text: string, width: number, maxLines = Infinity): stri
 }
 
 /**
+ * The characters one printed line holds at `style`. A `'double'` line is twice
+ * as wide per character, so it holds half as many; a longer one wraps on the
+ * printer (docs/phase-216).
+ *
+ * @param {ReceiptLineStyle} style
+ * @param {number} width characters per normal-size line
+ * @returns {number}
+ */
+export function columnsFor(style: ReceiptLineStyle, width: number): number {
+  return style === 'double' ? Math.floor(width / 2) : width
+}
+
+/**
  * Builds a two-anchor row — a label pinned to the left edge and a value
- * pinned to the right edge of the same `width`-character line. Falls
- * back to two lines (label, then the value right-aligned beneath it)
- * when both together would overflow the line.
+ * pinned to the right edge of the same line, which holds `columnsFor(style, width)`
+ * characters. Falls back to two lines (label, then the value right-aligned
+ * beneath it) when both together would overflow the line; each is cut or
+ * padded to the same line length, so neither wraps again.
  *
  * @param {string} label
  * @param {string} value
@@ -272,14 +286,15 @@ export function keyValueLines(
   width: number,
   style: ReceiptLineStyle = 'normal'
 ): ReceiptLayoutLine[] {
+  const columns = columnsFor(style, width)
   const plainLabel = toAscii(label)
   const plainValue = toAscii(value)
-  const gap = width - plainLabel.length - plainValue.length
+  const gap = columns - plainLabel.length - plainValue.length
   if (gap >= 1) {
     return [ln(plainLabel + ' '.repeat(gap) + plainValue, 'left', style)]
   }
-  const valueLine = plainValue.length <= width ? plainValue.padStart(width) : plainValue.slice(0, width)
-  return [ln(plainLabel.slice(0, width), 'left', style), ln(valueLine, 'left', style)]
+  const valueLine = plainValue.length <= columns ? plainValue.padStart(columns) : plainValue.slice(0, columns)
+  return [ln(plainLabel.slice(0, columns), 'left', style), ln(valueLine, 'left', style)]
 }
 
 /** Splits a `"Label: value"` string (as `buildFiscalBlockLines` returns) into its two halves. */
@@ -289,14 +304,18 @@ function splitLabelValue(text: string): { label: string; value: string } {
   return { label: text.slice(0, index + 1), value: text.slice(index + 2) }
 }
 
-/** Wraps free text (a setting or a fixed label) to `width`, applying one align/style to every resulting line. */
+/**
+ * Wraps free text (a setting or a fixed label) to the line length of `style`
+ * (`columnsFor`), breaking at a space where it can, applying one align/style to
+ * every resulting line.
+ */
 export function wrappedLines(
   text: string,
   width: number,
   align: ReceiptLineAlign = 'centre',
   style: ReceiptLineStyle = 'normal'
 ): ReceiptLayoutLine[] {
-  return wrapText(text, width).map((line) => ln(line, align, style))
+  return wrapText(text, columnsFor(style, width)).map((line) => ln(line, align, style))
 }
 
 /** One item's printed name — variant appended only for a real variant, wrapped to at most 2 lines. */
