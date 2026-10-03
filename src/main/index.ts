@@ -523,6 +523,19 @@ app.whenReady().then(async () => {
   }
 
   /**
+   * docs/phase-212: once, after migrations and before any sale or engine can run, corrects sales an
+   * older build recorded as filed from the device's all-zero "no invoice" counter. Writes nothing to
+   * the device; the sales go to Needs Attention.
+   */
+  const repaired = db.repairFalselyFiledOrders()
+  if (repaired.ran) {
+    console.log(
+      `[rubis-pos] Start-up repair (phase 212): ${repaired.localIds.length} sale(s) recorded as filed in error were moved to Needs Attention` +
+        (repaired.localIds.length > 0 ? ` (local ids ${repaired.localIds.join(', ')})` : '')
+    )
+  }
+
+  /**
    * docs/phase-169-1 commit A: `scripts/check-fit.mjs` sets
    * `RUBIS_CHECK_FIT` on every one of its throwaway launches. When set,
    * nothing real may ever be sent — no Shopify push, no fiscal device

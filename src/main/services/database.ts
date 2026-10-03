@@ -1245,6 +1245,17 @@ export const STUCK_WAITING_THRESHOLD_MS = 15 * 60_000
 export const INTERRUPTED_FILING_REASON =
   'The till stopped while this sale was being sent to the tax device, so it may not have been filed. Check whether it was a real sale, then press Resend. Nothing is sent automatically.'
 
+/** The `settings` key recording that the phase 212 repair has run. */
+const REPAIR_212_SETTING_KEY = 'repair_212_ran_at'
+
+/** Reason {@link RubisDatabase.repairFalselyFiledOrders} gives a sale it corrects. */
+export const FALSELY_FILED_REPAIR_REASON =
+  'Recorded as filed in error: the fiscal device refused this sale and no invoice was issued. Corrected automatically on update 2026-10-03. Check before resending.'
+
+/** The rows {@link RubisDatabase.repairFalselyFiledOrders} corrects: every condition is required. */
+const FALSELY_FILED_WHERE =
+  "fiscal_status = 'fiscalized' AND fiscal_invoice_number LIKE '%000000000' AND (fiscal_qr_code IS NULL OR fiscal_qr_code = '') AND fiscal_fiscalized_at_source = 'local-fallback'"
+
 /** Reason {@link RubisDatabase.sweepUnqueuedFiscalOrders} gives a stopped sale it cannot resend. */
 export const INTERRUPTED_UNSENT_REASON =
   'The till stopped before this sale reached the tax device, and it cannot be resent automatically. Ask support to check it.'
@@ -2116,6 +2127,54 @@ export class RubisDatabase {
       return { resendable, unsendable }
     })
     return sweep()
+  }
+
+  /**
+   * One-time start-up repair of sales falsely recorded as filed (docs/phase-212).
+   * Before phase 208 a refused retry asked the device for "the last invoice number" and recorded
+   * the all-zero counter it answers when it holds nothing as the sale's fiscal reference
+   * (docs/phase-206 section 1f). Those rows are write-once and a `fiscalized` sale is never
+   * retried, so no later code corrects them.
+   *
+   * A row matches only when all four are true: `fiscalized`, a number ending in nine zeros, an
+   * empty QR, and a `local-fallback` time source. The last two are the old recovery branch's own
+   * signature; a sale closed by this till has a device time and a QR. A match is set to
+   * `needs_fixing` and its fiscal reference, QR, time and unprinted-slip flag are cleared. This
+   * edits no real fiscal reference: the string cleared is the zero counter the device returned
+   * when it had no invoice. The serial, the trader number and the stored request are kept, so the
+   * sale can be resent from Needs Attention after a person has checked it.
+   *
+   * Runs once, recorded in `settings.repair_212_ran_at`; later calls change nothing. Must run
+   * before the fiscal engine starts.
+   *
+   * @returns {{ ran: boolean; localIds: number[] }} `ran` is false when it already ran
+   */
+  repairFalselyFiledOrders(): { ran: boolean; localIds: number[] } {
+    const repair = this.conn.transaction(() => {
+      if (this.getSetting(REPAIR_212_SETTING_KEY)) return { ran: false, localIds: [] as number[] }
+      const rows = this.conn
+        .prepare(`SELECT local_id FROM orders WHERE ${FALSELY_FILED_WHERE} ORDER BY local_id ASC`)
+        .all() as { local_id: number }[]
+      if (rows.length > 0) {
+        this.conn
+          .prepare(
+            `UPDATE orders SET
+               fiscal_status = 'needs_fixing',
+               fiscal_error_kind = 'system',
+               fiscal_error_reason = ?,
+               fiscal_invoice_number = NULL,
+               fiscal_qr_code = NULL,
+               fiscal_fiscalized_at = NULL,
+               fiscal_fiscalized_at_source = NULL,
+               fiscal_slip_unprinted_at = NULL
+             WHERE ${FALSELY_FILED_WHERE}`
+          )
+          .run(FALSELY_FILED_REPAIR_REASON)
+      }
+      this.setSetting(REPAIR_212_SETTING_KEY, new Date().toISOString())
+      return { ran: true, localIds: rows.map((row) => row.local_id) }
+    })
+    return repair()
   }
 
   /**
