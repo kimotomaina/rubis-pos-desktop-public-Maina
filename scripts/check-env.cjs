@@ -24,7 +24,11 @@ const BUNDLE_FORBIDDEN_KEYS = [
   'VITE_SHOPIFY_LOCATION_ID',
   'MPESA_CONSUMER_KEY',
   'MPESA_CONSUMER_SECRET',
-  'MPESA_PASSKEY'
+  'MPESA_PASSKEY',
+  // Publishing credentials (docs/phase-213): a token that can publish a release must never
+  // be shipped to a till. It is read from the environment by `dist:publish`, never from `.env`.
+  'GH_TOKEN',
+  'GITHUB_TOKEN'
 ]
 
 /**

@@ -31,15 +31,28 @@ describe('findBundledCredentialKeys', () => {
     expect(findBundledCredentialKeys(BLANK_ENV)).toEqual([])
   })
 
-  it('guards exactly the six credential keys', () => {
+  // CHANGED (docs/phase-213). OLD: exactly the six store and M-Pesa credential keys. NEW: also the two
+  // publishing credentials, GH_TOKEN and GITHUB_TOKEN, which must never be bundled into an installer.
+  it('guards exactly the eight credential keys', () => {
     expect(BUNDLE_FORBIDDEN_KEYS).toEqual([
       'VITE_SHOPIFY_STORE_URL',
       'VITE_SHOPIFY_ADMIN_API_TOKEN',
       'VITE_SHOPIFY_LOCATION_ID',
       'MPESA_CONSUMER_KEY',
       'MPESA_CONSUMER_SECRET',
-      'MPESA_PASSKEY'
+      'MPESA_PASSKEY',
+      'GH_TOKEN',
+      'GITHUB_TOKEN'
     ])
+  })
+
+  it.each(['GH_TOKEN', 'GITHUB_TOKEN'])('reports the publishing credential %s when it has a value', (key) => {
+    expect(findBundledCredentialKeys(`${BLANK_ENV}\n${key}=ghp_example`)).toEqual([key])
+  })
+
+  it('passes a blank or absent publishing credential', () => {
+    expect(findBundledCredentialKeys(`${BLANK_ENV}\nGH_TOKEN=`)).toEqual([])
+    expect(findBundledCredentialKeys(BLANK_ENV)).toEqual([])
   })
 
   it.each([
