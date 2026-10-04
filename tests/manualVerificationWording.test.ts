@@ -89,6 +89,8 @@ describe('no source text a person can read says "unverified"', () => {
     expect(all).toContain('Checked by the')
     expect(all).toContain('A manually verified M-Pesa payment must be explicitly confirmed')
     expect(all).toContain('Recording a manually verified M-Pesa payment is not switched on')
+    expect(all).toContain('Checked by the cashier, not by Safaricom.')
+    expect(readFileSync(join(SRC, 'renderer', 'src', 'components', 'PaymentModal.tsx'), 'utf8')).not.toContain('nobody has confirmed')
   })
 })
 

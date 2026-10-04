@@ -660,8 +660,8 @@ export default function PaymentModal({
       {tab === 'unverified' &&
         manualEntryEnabled &&
         renderManualEntryPanel(
-          'This records a payment nobody has confirmed.',
-          'Use this only when the customer has paid but the confirmation has not reached this till. The sale will complete and be listed for a manager to check against the M-Pesa statement later.'
+          'Checked by the cashier, not by Safaricom.',
+          'Use this only when the customer has paid but the confirmation has not reached this till. Check the code on the customer’s phone; the manager approves it at End of Day against the M-Pesa statement.'
         )}
     </div>
   )
