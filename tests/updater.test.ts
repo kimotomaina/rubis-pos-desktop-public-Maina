@@ -32,11 +32,11 @@ function createFakeAutoUpdater(options?: { checkForUpdatesError?: unknown }) {
 }
 
 describe('initAutoUpdater', () => {
-  it('enables autoDownload and registers all six event listeners', () => {
+  it('registers all six event listeners and leaves autoDownload off', () => {
     const { autoUpdater, listeners } = createFakeAutoUpdater()
     initAutoUpdater(autoUpdater, () => {})
 
-    expect(autoUpdater.autoDownload).toBe(true)
+    expect(autoUpdater.autoDownload).toBe(false)
     expect(listeners.has('checking-for-update')).toBe(true)
     expect(listeners.has('update-available')).toBe(true)
     expect(listeners.has('update-not-available')).toBe(true)

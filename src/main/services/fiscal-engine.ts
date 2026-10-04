@@ -106,6 +106,15 @@ export interface FiscalEngine {
   stop(): void
   /** Runs one retry pass; concurrent calls coalesce. */
   tick(): Promise<void>
+  /**
+   * Makes every tick a no-op until {@link resume}, whatever starts it (the timer, a checkout,
+   * a reconnect). A tick already running is not interrupted (docs/phase-219).
+   */
+  pause(): void
+  /** Ends a {@link pause}. */
+  resume(): void
+  /** Resolves once no tick is running, at once if none is (docs/phase-219). */
+  whenIdle(): Promise<void>
   /** Called on offline → online transitions (trigger c). */
   notifyOnline(): void
   /** Called right after a checkout queues a failed fiscalization (trigger a). */
@@ -139,6 +148,8 @@ export function createFiscalEngine(options: FiscalEngineOptions): FiscalEngine {
 
   let timer: ReturnType<typeof setInterval> | null = null
   let running = false
+  let paused = false
+  let idleWaiters: Array<() => void> = []
   const claimed = new Set<number>()
 
   /**
@@ -147,7 +158,7 @@ export function createFiscalEngine(options: FiscalEngineOptions): FiscalEngine {
    * code) and scheduling backoff on failures.
    */
   async function tick(): Promise<void> {
-    if (running) return
+    if (paused || running) return
     running = true
     try {
       const pending = db.getPendingFiscalQueue(now())
@@ -236,6 +247,9 @@ export function createFiscalEngine(options: FiscalEngineOptions): FiscalEngine {
       }
     } finally {
       running = false
+      const waiters = idleWaiters
+      idleWaiters = []
+      waiters.forEach((resolve) => resolve())
     }
   }
 
@@ -254,6 +268,19 @@ export function createFiscalEngine(options: FiscalEngineOptions): FiscalEngine {
     },
 
     tick,
+
+    pause(): void {
+      paused = true
+    },
+
+    resume(): void {
+      paused = false
+    },
+
+    whenIdle(): Promise<void> {
+      if (!running) return Promise.resolve()
+      return new Promise((resolve) => idleWaiters.push(resolve))
+    },
 
     notifyOnline(): void {
       void tick()

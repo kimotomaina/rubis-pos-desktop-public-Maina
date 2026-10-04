@@ -1,14 +1,19 @@
 import { useEffect, useState } from 'react'
 import type { UpdateStatus } from '../../../main/services/updater.js'
-import { UPDATE_TOAST_TIMEOUT_MS } from '../lib/toastTimeouts.js'
+import { UPDATE_INSTALL_ERROR_TOAST_TIMEOUT_MS, UPDATE_TOAST_TIMEOUT_MS } from '../lib/toastTimeouts.js'
 import { useToastStore } from '../stores/toastStore.js'
+import { useUpdateStatusStore } from '../stores/updateStatusStore.js'
 
 type ToastStatus = Extract<UpdateStatus, { kind: 'downloading' | 'downloaded' }>
 
 const UPDATE_TOAST_ID = 'update'
+const UPDATE_INSTALL_ERROR_TOAST_ID = 'update-install-error'
 
 /**
- * Pushes auto-update progress into the shared toast stack (phase-84).
+ * Pushes auto-update progress into the shared toast stack (phase-84). Since docs/phase-219
+ * a download only starts when a person asks for it (the update prompt or the App & Updates
+ * panel), and the toast stays quiet while the prompt is open because the prompt shows the
+ * same progress itself.
  * Silent for `checking`/`not-available`/`error` — only surfaces once a
  * download is actually in progress or ready to install, so it never
  * distracts a cashier mid-sale. Renders nothing itself; `ToastStack` is
@@ -27,6 +32,7 @@ const UPDATE_TOAST_ID = 'update'
 export default function UpdateToast() {
   const [status, setStatus] = useState<ToastStatus | null>(null)
   const [installing, setInstalling] = useState(false)
+  const promptOpen = useUpdateStatusStore((state) => state.promptOpen)
 
   useEffect(() => {
     return window.api.onUpdateStatus((next) => {
@@ -38,11 +44,21 @@ export default function UpdateToast() {
 
   const handleInstall = async (): Promise<void> => {
     setInstalling(true)
-    await window.api.installUpdate()
+    const result = await window.api.installUpdate()
+    if (!result.success) {
+      setInstalling(false)
+      useToastStore.getState().show({
+        id: UPDATE_INSTALL_ERROR_TOAST_ID,
+        tone: 'error',
+        message: result.error ?? 'The update could not be installed.',
+        timeoutMs: UPDATE_INSTALL_ERROR_TOAST_TIMEOUT_MS,
+        onDismiss: () => useToastStore.getState().dismiss(UPDATE_INSTALL_ERROR_TOAST_ID)
+      })
+    }
   }
 
   useEffect(() => {
-    if (!status) return
+    if (!status || promptOpen) return
 
     useToastStore.getState().show({
       id: UPDATE_TOAST_ID,
@@ -72,7 +88,7 @@ export default function UpdateToast() {
     })
     // Re-registers the toast (resetting its countdown) on every status
     // or installing-state change, not just on the first sighting.
-  }, [status, installing])
+  }, [status, installing, promptOpen])
 
   return null
 }

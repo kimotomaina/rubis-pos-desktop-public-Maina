@@ -47,7 +47,8 @@ import {
   guardCheckFitSending,
   shouldStartBackgroundSenders
 } from './lib/checkFit.js'
-import { initAutoUpdater, checkForUpdates } from './services/updater.js'
+import { initAutoUpdater, checkForUpdates, createStartupUpdateCheck, downloadUpdateNow } from './services/updater.js'
+import { installWhenQuiet } from './services/updateInstall.js'
 import type { UpdateStatus } from './services/updater.js'
 import { installUpdate, runPostUpdateCheck } from './services/updateBackup.js'
 import type { LastUpdateResult } from './services/updateBackup.js'
@@ -3784,12 +3785,19 @@ app.whenReady().then(async () => {
    */
   let downloadedVersion: string | null = null
 
+  /** The engines an install holds still while it waits for running work (docs/phase-219). */
+  const backgroundEngines = [engine, fiscalEngine]
+
+  /** The check made once per app start (docs/phase-219); its once-only state is in memory. */
+  const startupUpdateCheck = createStartupUpdateCheck(autoUpdater, { isPackaged: app.isPackaged, logger: console })
+
   /**
    * Auto-update wiring: pushes each status change to every
    * open window as `updater:status`, driving the renderer's toast.
    */
   initAutoUpdater(autoUpdater, (status: UpdateStatus) => {
     if (status.kind === 'downloaded') downloadedVersion = status.version
+    if (status.kind === 'error') backgroundEngines.forEach((background) => background.resume())
     broadcast('updater:status', status)
   })
 
@@ -3802,6 +3810,23 @@ app.whenReady().then(async () => {
     return { success: true }
   })
 
+  /**
+   * IPC handler for the check made once per app start, after login (docs/phase-219).
+   * Returns the version on offer, or null when there is none, when this run has already
+   * checked, in a dev run, or when the check failed (logged, never shown).
+   */
+  ipcMain.handle('updater:startup-check', async (): Promise<ServiceResult<string | null>> => ({
+    success: true,
+    data: await startupUpdateCheck()
+  }))
+
+  /**
+   * IPC handler that downloads the update found by the last check, on request
+   * (docs/phase-219). Resolves when the download has finished; progress arrives as
+   * `updater:status`. The prompt and the App & Updates panel both use it.
+   */
+  ipcMain.handle('updater:download', (): Promise<ServiceResult<void>> => downloadUpdateNow(autoUpdater))
+
   /** Where phase 178's pre-update backups live — survives an update (the phase-177 NSIS guard), wiped on a real uninstall like everything else under `userData`. */
   const updateBackupsDir = join(app.getPath('userData'), 'backups')
 
@@ -3810,22 +3835,30 @@ app.whenReady().then(async () => {
    * prunes old backups, then restarts the app to install the downloaded
    * update (docs/phase-178). Thin glue only — `installUpdate` owns the
    * ordering guarantee (backup and settings write fully resolved before
-   * `quitAndInstall()` ever runs) and is what's actually unit-tested.
+   * `quitAndInstall()` ever runs) and is what's actually unit-tested. Since
+   * docs/phase-219 `installWhenQuiet` first holds both background engines
+   * still and waits for a running tick; the prompt, the panel and the toast
+   * all install through here.
    */
   ipcMain.handle('updater:install', async (): Promise<ServiceResult<void>> => {
     if (!downloadedVersion) {
       return { success: false, error: 'No update ready to install.' }
     }
 
-    const result = await installUpdate({
-      db,
-      backupsDir: updateBackupsDir,
-      fromVersion: app.getVersion(),
-      toVersion: downloadedVersion,
-      ensureDir: (dir) => mkdirSync(dir, { recursive: true }),
-      listBackups: (dir) => readdirSync(dir),
-      deleteBackup: (path) => unlinkSync(path),
-      quitAndInstall: () => autoUpdater.quitAndInstall()
+    const toVersion = downloadedVersion
+    const result = await installWhenQuiet({
+      engines: backgroundEngines,
+      install: () =>
+        installUpdate({
+          db,
+          backupsDir: updateBackupsDir,
+          fromVersion: app.getVersion(),
+          toVersion,
+          ensureDir: (dir) => mkdirSync(dir, { recursive: true }),
+          listBackups: (dir) => readdirSync(dir),
+          deleteBackup: (path) => unlinkSync(path),
+          quitAndInstall: () => autoUpdater.quitAndInstall()
+        })
     })
 
     if (!result.success) {

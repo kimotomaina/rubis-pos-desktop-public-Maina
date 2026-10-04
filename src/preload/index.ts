@@ -730,6 +730,24 @@ const api = {
     ipcRenderer.invoke('updater:install'),
 
   /**
+   * Checks for an update once per app start (docs/phase-219). Resolves with the version
+   * on offer, or null when there is none, this run has already checked, or the check failed.
+   *
+   * @returns {Promise<ServiceResult<string | null>>}
+   */
+  startupUpdateCheck: (): Promise<ServiceResult<string | null>> =>
+    ipcRenderer.invoke('updater:startup-check'),
+
+  /**
+   * Downloads the update the last check found, on request (docs/phase-219). Resolves when
+   * the download has finished or failed; progress arrives through {@link onUpdateStatus}.
+   *
+   * @returns {Promise<ServiceResult<void>>}
+   */
+  downloadUpdate: (): Promise<ServiceResult<void>> =>
+    ipcRenderer.invoke('updater:download'),
+
+  /**
    * Subscribes to auto-update status changes broadcast by the main
    * process. Returns a cleanup function that removes the listener.
    *

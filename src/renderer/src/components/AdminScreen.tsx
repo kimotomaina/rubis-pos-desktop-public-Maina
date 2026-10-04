@@ -3,6 +3,7 @@ import { useAuthStore } from '../stores/authStore.js'
 import { useHeldSalesStore } from '../stores/heldSalesStore.js'
 import { closeShiftBlockedMessage } from '../lib/heldSale.js'
 import { useUnfiledCountStore } from '../stores/unfiledCountStore.js'
+import { useUpdateStatusStore } from '../stores/updateStatusStore.js'
 import { useShopifyReconciliationStore } from '../stores/shopifyReconciliationStore.js'
 import { countActionableFindings } from '../lib/shopifyReconciliation.js'
 import { formatCurrency } from '../lib/currency.js'
@@ -87,7 +88,8 @@ function ShiftWindowNote({ shiftType, openedAt }: { shiftType: ShiftType; opened
  * Phase 178: the App & Updates panel's status-derived result text — null
  * when the live status has nothing new to say (the button's own
  * "Checking…" label already covers `checking`, and the progress line
- * already covers `downloading`/`available`).
+ * already covers `downloading`). Since docs/phase-219 an `available`
+ * update waits for the Download update button, so it says so here.
  *
  * @param {UpdateStatus | null} status
  * @returns {string | null}
@@ -97,6 +99,8 @@ function updateResultText(status: UpdateStatus | null): string | null {
   switch (status.kind) {
     case 'not-available':
       return 'Up to date'
+    case 'available':
+      return `Version ${status.version} is available`
     case 'downloaded':
       return `Version ${status.version} is ready to install`
     case 'error':
@@ -290,6 +294,9 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
   const [installedVersion, setInstalledVersion] = useState<string | null>(null)
   const [updateStatus, setUpdateStatus] = useState<UpdateStatus | null>(null)
   const [installingUpdate, setInstallingUpdate] = useState(false)
+  const [downloadingUpdate, setDownloadingUpdate] = useState(false)
+  const sharedUpdateStatus = useUpdateStatusStore((state) => state.status)
+  const shownUpdateStatus = updateStatus ?? sharedUpdateStatus
   const [installError, setInstallError] = useState<string | null>(null)
   const [lastUpdateResult, setLastUpdateResult] = useState<LastUpdateResult | null>(null)
 
@@ -1213,6 +1220,20 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
     })
   }
 
+  /**
+   * Downloads the update found by the check, on request (docs/phase-219): nothing downloads
+   * by itself. Progress and the ready state arrive through the status subscription above.
+   */
+  const handleDownloadUpdate = async () => {
+    setDownloadingUpdate(true)
+    setUpdateCheckMessage(null)
+    const result = await window.api.downloadUpdate()
+    if (!result.success) {
+      setUpdateCheckMessage(result.error ?? 'The update could not be downloaded')
+    }
+    setDownloadingUpdate(false)
+  }
+
   const handleCheckForUpdates = async () => {
     setCheckingForUpdates(true)
     setUpdateCheckMessage(null)
@@ -1322,24 +1343,35 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
             >
               {checkingForUpdates ? 'Checking…' : 'Check for Updates'}
             </button>
-            {(updateCheckMessage ?? updateResultText(updateStatus)) && (
+            {(updateCheckMessage ?? updateResultText(shownUpdateStatus)) && (
               <p className="text-base text-slate-500">
-                {updateCheckMessage ?? updateResultText(updateStatus)}
+                {updateCheckMessage ?? updateResultText(shownUpdateStatus)}
               </p>
             )}
           </div>
 
+          {shownUpdateStatus?.kind === 'available' && (
+            <button
+              type="button"
+              disabled={downloadingUpdate}
+              onClick={() => void handleDownloadUpdate()}
+              className="mt-3 rounded-lg border border-slate-300 px-4 py-2 text-base font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {downloadingUpdate ? 'Downloading…' : 'Download update'}
+            </button>
+          )}
+
           {/* Line 3: download progress */}
-          {updateStatus?.kind === 'downloading' && (
+          {shownUpdateStatus?.kind === 'downloading' && (
             <p className="mt-2 text-base text-slate-500">
-              Downloading update… {Math.round(updateStatus.percent)}%
+              Downloading update… {Math.round(shownUpdateStatus.percent)}%
             </p>
           )}
 
           {/* Line 4: install, enabled only once a download has finished */}
           <button
             type="button"
-            disabled={updateStatus?.kind !== 'downloaded' || installingUpdate}
+            disabled={shownUpdateStatus?.kind !== 'downloaded' || installingUpdate}
             onClick={() => void handleInstallUpdate()}
             className="mt-3 rounded-lg bg-rose-600 px-4 py-2 text-base font-semibold text-white hover:bg-rose-700 disabled:cursor-not-allowed disabled:opacity-50"
           >

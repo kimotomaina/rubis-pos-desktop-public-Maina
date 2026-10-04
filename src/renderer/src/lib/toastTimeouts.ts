@@ -31,12 +31,16 @@ export const HELD_SALE_NOTICE_TOAST_TIMEOUT_MS = 6000
  * every new status event — a `download-progress` tick re-arms it, so it
  * can't disappear mid-download; it only starts counting down once
  * events go idle. The update itself is never actually lost either way:
- * `autoInstallOnAppQuit` defaults to `true` and is never overridden
- * (`src/main/services/updater.ts`), so a downloaded update installs on
- * the app's next normal restart whether or not this toast was ever
- * seen or clicked.
+ * Since docs/phase-219 `autoInstallOnAppQuit` is `false`
+ * (`src/main/services/updater.ts`), so a downloaded update installs only
+ * when a person presses an install button (this toast's, the update
+ * prompt's or the App & Updates panel's); the downloaded update itself
+ * is kept until then.
  */
 export const UPDATE_TOAST_TIMEOUT_MS = 5 * 60 * 1000
+
+/** The notice that an install from the update toast did not go ahead (docs/phase-219). */
+export const UPDATE_INSTALL_ERROR_TOAST_TIMEOUT_MS = 8000
 
 /**
  * The fiscal outcome notice (`FiscalNotice.tsx`) never auto-dismisses.

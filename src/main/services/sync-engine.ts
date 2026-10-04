@@ -66,6 +66,15 @@ export interface SyncEngine {
   stop(): void
   /** Runs one sync pass; concurrent calls coalesce. */
   tick(): Promise<void>
+  /**
+   * Makes every tick a no-op until {@link resume}, whatever starts it (the timer, a checkout,
+   * a reconnect). A tick already running is not interrupted (docs/phase-219).
+   */
+  pause(): void
+  /** Ends a {@link pause}. */
+  resume(): void
+  /** Resolves once no tick is running, at once if none is (docs/phase-219). */
+  whenIdle(): Promise<void>
   /** Called on offline → online transitions (trigger c). */
   notifyOnline(): void
   /** Called right after a checkout is queued (trigger a). */
@@ -87,6 +96,8 @@ export function createSyncEngine(options: SyncEngineOptions): SyncEngine {
 
   let timer: ReturnType<typeof setInterval> | null = null
   let running = false
+  let paused = false
+  let idleWaiters: Array<() => void> = []
 
   /**
    * Whether the Shopify sales-safety check should run on the next
@@ -139,7 +150,7 @@ export function createSyncEngine(options: SyncEngineOptions): SyncEngine {
    * check has finished or timed out").
    */
   async function tick(): Promise<void> {
-    if (running) return
+    if (paused || running) return
     running = true
     try {
       if (!isOnline()) return
@@ -188,6 +199,9 @@ export function createSyncEngine(options: SyncEngineOptions): SyncEngine {
       }
     } finally {
       running = false
+      const waiters = idleWaiters
+      idleWaiters = []
+      waiters.forEach((resolve) => resolve())
     }
   }
 
@@ -207,6 +221,19 @@ export function createSyncEngine(options: SyncEngineOptions): SyncEngine {
     },
 
     tick,
+
+    pause(): void {
+      paused = true
+    },
+
+    resume(): void {
+      paused = false
+    },
+
+    whenIdle(): Promise<void> {
+      if (!running) return Promise.resolve()
+      return new Promise((resolve) => idleWaiters.push(resolve))
+    },
 
     notifyOnline(): void {
       checkDue = true

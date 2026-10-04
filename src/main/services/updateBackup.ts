@@ -131,11 +131,12 @@ export type PreInstallResult =
  * the before-counts under `pendingUpdateCheck`, then prune old backups.
  *
  * The original brief's step 2a (refuse if a sale/fiscal call is
- * mid-flight) was dropped — no such flag exists anywhere in the main
- * process (docs/phase-178 Part 1 item 6), and none is being built for
- * this. The Install button lives only on the Admin screen, and a till
- * has one screen, so nobody can be completing a sale on this till while
- * an admin is pressing Install; the backup below covers the rest.
+ * mid-flight) was dropped in phase 178 on the ground that the Install
+ * button lived only on the Admin screen. That no longer holds: since
+ * docs/phase-219 the update prompt is on the sale screen. The prompt
+ * refuses while the cart has items, a payment is in progress or a sale
+ * is being completed, and `installWhenQuiet` (`updateInstall.ts`) holds
+ * the background engines still before this runs.
  *
  * If the backup throws, the function returns before writing
  * `pendingUpdateCheck` or pruning anything, and the caller must not call

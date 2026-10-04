@@ -23,6 +23,7 @@ import LocationPendingScreen from './components/LocationPendingScreen'
 import AdminScreen from './components/AdminScreen'
 import EtimsSetupGate from './components/EtimsSetupGate'
 import UpdateToast from './components/UpdateToast'
+import UpdatePrompt from './components/UpdatePrompt'
 import ManagerPinModal from './components/ManagerPinModal'
 import type { ConnectivityIntegration } from './types/connectivity'
 import ConnectivityModal from './components/ConnectivityModal'
@@ -937,6 +938,7 @@ export default function App() {
         * unified top-center column.
         */}
       <UpdateToast />
+      <UpdatePrompt />
       <ConnectivityToast />
       <FiscalNotice />
       <ShopifyCheckNotice />

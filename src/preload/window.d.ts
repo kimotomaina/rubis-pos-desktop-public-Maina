@@ -269,6 +269,10 @@ export interface PosApi {
   checkForUpdates: () => Promise<ServiceResult<void>>
   /** Quits and relaunches the app to install a downloaded update. */
   installUpdate: () => Promise<ServiceResult<void>>
+  /** The check made once per app start: the version on offer, or null (none, already checked, or the check failed). */
+  startupUpdateCheck: () => Promise<ServiceResult<string | null>>
+  /** Downloads the update the last check found; resolves when finished or failed. */
+  downloadUpdate: () => Promise<ServiceResult<void>>
   /** Subscribes to auto-update status changes; returns an unsubscribe fn. */
   onUpdateStatus: (callback: (status: UpdateStatus) => void) => () => void
   /** The result of the most recently completed OTA update, or null. */
