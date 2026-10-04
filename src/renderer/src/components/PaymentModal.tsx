@@ -129,7 +129,7 @@ function stripLeadingZero(rawInput: string): string {
  *     Daraja actually confirms the payment — this component never checks
  *     out on push-*acceptance* alone. If an administrator also enabled
  *     the manual fallback (for a payment Daraja never confirmed), a
- *     second "Unverified" tab appears alongside STK.
+ *     second "Manual verification" tab appears alongside STK.
  *   - **`'sms'`**: a plain notice that this till cannot take M-Pesa by
  *     message yet — its parser is still a stub (`MPESA_SMS_PARSER_READY`
  *     in `src/main/lib/mpesaSms.ts`).
@@ -351,9 +351,9 @@ export default function PaymentModal({
 
   /**
    * The code-entry form, shared between `'manual'` mode's
-   * sole screen and `'daraja'` mode's optional "Unverified" tab — the two
+   * sole screen and `'daraja'` mode's optional "Manual verification" tab — the two
    * contexts differ only in framing (manual mode is this till's normal
-   * way of taking every M-Pesa payment; Daraja's Unverified tab is an
+   * way of taking every M-Pesa payment; Daraja's Manual verification tab is an
    * exception for a payment Daraja itself never confirmed), never in
    * mechanics. Neither asks for a manager's PIN or a tick box — Complete
    * Sale only becomes active once the whole code is typed, and a manager's
@@ -588,7 +588,7 @@ export default function PaymentModal({
               tab === 'unverified' ? 'bg-amber-100 text-amber-900 shadow-sm' : 'text-amber-700'
             }`}
           >
-            Unverified
+            Manual verification
           </button>
         </div>
       )}

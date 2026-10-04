@@ -82,7 +82,7 @@ export const checkoutRequestSchema = z.object({
         .string()
         .regex(/^[A-Z0-9]{10}$/, 'Enter the 10-character M-Pesa code from the customer’s message'),
       confirmUnverified: z.literal(true, {
-        message: 'An unverified M-Pesa payment must be explicitly confirmed'
+        message: 'A manually verified M-Pesa payment must be explicitly confirmed'
       })
     })
     .optional(),

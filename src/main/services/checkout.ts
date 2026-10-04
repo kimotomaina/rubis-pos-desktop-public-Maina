@@ -126,7 +126,7 @@ export const MPESA_MANUAL_CODE_INVALID_MESSAGE =
 
 /** Shown when manual entry is attempted on a till that has not been allowed it. */
 export const MPESA_MANUAL_NOT_ENABLED_MESSAGE =
-  'Recording an unverified M-Pesa payment is not switched on for this till. Ask an administrator to enable it in Admin > Integrations.'
+  'Recording a manually verified M-Pesa payment is not switched on for this till. Ask an administrator to enable it in Admin > Integrations.'
 
 /** Shown when the cashier's attestation is missing (docs/phase-150.md step 3 — a positive statement, not a warning acknowledgement). */
 export const MPESA_MANUAL_NOT_ACKNOWLEDGED_MESSAGE =

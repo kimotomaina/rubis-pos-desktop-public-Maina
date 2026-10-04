@@ -2068,14 +2068,14 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
                           type="checkbox"
                           checked={mpesaManualEntryEnabled}
                           onChange={(e) => setMpesaManualEntryEnabled(e.target.checked)}
-                          aria-label="Allow recording unverified M-Pesa payments"
+                          aria-label="Allow recording manually verified M-Pesa payments"
                           className="mt-1 h-5 w-5"
                         />
-                        Allow recording unverified M-Pesa payments
+                        Allow recording manually verified M-Pesa payments
                       </label>
                       <p className="mt-1 text-base text-amber-900/80">
-                        <strong>Nothing checks that the payment really happened.</strong> Needs a
-                        manager&rsquo;s PIN; stays unverified until matched to the statement.
+                        <strong>Nothing checks that the payment really happened.</strong> Checked by the
+                        cashier on the customer&rsquo;s phone; approved by the manager at End of Day.
                       </p>
                     </div>
                   )}

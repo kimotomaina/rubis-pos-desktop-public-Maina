@@ -78,17 +78,17 @@ describe('PaymentModal renders by mode', () => {
     await mount()
 
     expect(container.textContent).toContain('Phone Number')
-    expect(container.textContent).not.toContain('Unverified')
+    expect(container.textContent).not.toContain('Manual verification')
     expect(container.textContent).not.toContain('Manual Code')
     expect(container.textContent).not.toContain('Record M-Pesa payment')
   })
 
-  it('daraja mode with the manual fallback enabled: STK + Unverified tabs, never a Manual Code tab', async () => {
+  it('daraja mode with the manual fallback enabled: STK + Manual verification tabs, never a Manual Code tab', async () => {
     stubApi({ manualCodeSupported: false, manualEntryEnabled: true, mode: 'daraja' })
     await mount()
 
     expect(container.textContent).toContain('STK Push')
-    expect(container.textContent).toContain('Unverified')
+    expect(container.textContent).toContain('Manual verification')
     expect(container.textContent).not.toContain('Manual Code')
   })
 
@@ -276,7 +276,7 @@ describe('manual mode completes with no manager PIN (docs/phase-150.md step 3)',
       root.render(createElement(PaymentModal, { total: 100, onPaid: vi.fn(), onCancel: vi.fn() }))
       await Promise.resolve()
     })
-    if (mode === 'daraja') act(() => button('Unverified').click())
+    if (mode === 'daraja') act(() => button('Manual verification').click())
 
     expect(container.querySelector('input[type="checkbox"]')).toBeNull()
     expect(container.textContent).not.toContain('I have seen the M-Pesa confirmation message')
