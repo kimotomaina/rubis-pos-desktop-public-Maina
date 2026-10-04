@@ -445,3 +445,11 @@ The trader system invoice number is `L` + the location id in base 36 + a time-ba
 ## A 58mm printer cannot print TOTAL KSH and its amount on one large line (phase 216)
 
 A double-size line holds half as many characters as a normal one: 24 at 48 columns, 21 at 42, 16 at 32. At 32 columns (a 58mm printer) `TOTAL KSH` and an amount such as `1,650.00` are 17 characters, so the row does not fit one large line. It prints as two large lines, the label first and the amount padded to the right edge beneath it (`keyValueLines`, `columnsFor`). The design mock-up's single large line is reproduced at 48 and 42 only. The owner accepted this as a known limit of 58mm printers. A smaller type size for that one row would remove it; not built. The same limit applies to the PDF fallback at 32 columns.
+
+## The End of Day page already runs past the design box when it has data (phase 217)
+
+Measured by `check:fit` on this PC's data at 1366x768 @150%: with no held sales discarded, the End of Day "Approve" button sits at y 857 in a 772px window, so it is clipped by the Admin content wrapper (`overflow-hidden`, no scroll). `check:fit`'s census cannot see this, because it only looks for page scroll and `auto`/`scroll` containers, not content clipped by an `overflow-hidden` box; its End of Day line passes. Phase 217 added a list of discarded held sales to this page, shown only when there is one and kept to three rows a page, so it adds nothing on a day with none. It does not fix the overflow.
+
+## A full cart page runs past the window when the offline-catalogue badge shows (phase 217)
+
+With 7 cart lines (`CART_LINES_PER_PAGE`) and the "Cached catalog (offline)" badge showing, the cart footer (Clear cart, Hold sale, the pager) ends at y 801 in a 772px window at 1366x768 @150%, so it is clipped. The held-sales strip keeps this no worse (6 lines a page while it shows: 795). Not fixed. The same blind spot as above applies: the census does not flag it.

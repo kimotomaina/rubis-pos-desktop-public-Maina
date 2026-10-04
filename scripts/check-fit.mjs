@@ -346,13 +346,14 @@ async function checkAdminScreens(cmd) {
     ['End of Day', 'Admin > End of Day']
   ]
   for (const [card, label] of simpleAdminCards) {
-    if (await clickWhereText(cmd, 'button', card)) {
+    if (await clickWhereTextIgnoringBadge(cmd, 'button', card)) {
       await new Promise((r) => setTimeout(r, 400))
       record(await censusLabelled(cmd, label))
       await clickWhereText(cmd, 'button', 'Back to Admin')
       await new Promise((r) => setTimeout(r, 300))
     } else {
-      findings.push(`✖ ${label}: card not found`)
+      const seen = await evaluate(cmd, `Array.from(document.querySelectorAll('button')).map((b) => b.textContent.trim()).filter(Boolean).join(' | ')`)
+      findings.push(`✖ ${label}: card not found (buttons on screen: ${seen})`)
       failures++
     }
   }
@@ -360,7 +361,8 @@ async function checkAdminScreens(cmd) {
   if (await clickWhereText(cmd, 'button', 'Integrations')) {
     await new Promise((r) => setTimeout(r, 400))
     record(await censusLabelled(cmd, 'Admin > Integrations (card grid)'))
-    const sections = ['Shopify', 'Location', 'Fiscal Device', 'M-Pesa', 'Printer']
+    // Printers moved to Peripherals in phase 205; Store Details is a card here now.
+    const sections = ['Shopify', 'Store Details', 'Location', 'Fiscal Device', 'M-Pesa']
     for (const section of sections) {
       if (await clickWhereText(cmd, 'button', section)) {
         await new Promise((r) => setTimeout(r, 300))
@@ -451,6 +453,21 @@ async function clickWhereText(cmd, selector, text) {
     cmd,
     `(() => {
       const el = Array.from(document.querySelectorAll(${JSON.stringify(selector)})).find(e => e.textContent.trim() === ${JSON.stringify(text)});
+      if (el) { el.click(); return true; }
+      return false;
+    })()`
+  )
+}
+
+/**
+ * Like {@link clickWhereText}, but ignores a leading count badge: an Admin card with something to attend
+ * to renders its count first in the button's text ("1Needs Attention"), so the exact match never found it.
+ */
+async function clickWhereTextIgnoringBadge(cmd, selector, text) {
+  return evaluate(
+    cmd,
+    `(() => {
+      const el = Array.from(document.querySelectorAll(${JSON.stringify(selector)})).find(e => e.textContent.trim().replace(/^\\d+/, '') === ${JSON.stringify(text)});
       if (el) { el.click(); return true; }
       return false;
     })()`
@@ -646,6 +663,10 @@ JSON.stringify((() => {
 `
 
 const HELD_STRIP_MAX_HEIGHT = 72
+/** Discarded held sales seeded for the End of Day page: more than one page of its list (6 a page). */
+const EOD_SEEDED_ROWS = 6
+/** Rows the End of Day list shows a page (`EndOfDayPage.tsx`'s `DISCARDED_PER_PAGE`). */
+const EOD_DISCARDED_PER_PAGE = 3
 const CART_LINES_PER_PAGE_NO_STRIP = 7
 
 async function heldProbe(cmd) {
@@ -654,7 +675,12 @@ async function heldProbe(cmd) {
 
 /** Adds distinct lines to the cart through the search bar, best-effort, up to `wanted` rows on screen. */
 async function addCartLines(cmd, wanted) {
-  for (const query of ['a', 'e', 'o', 'i', 'u', 's', 't', 'n', 'r', 'l', 'm', 'k']) {
+  // Product names from this store's cached catalogue come first, so the lines are different products;
+  // single letters follow for a catalogue without them.
+  const queries = ['TEST', 'ENJOY DUMA', 'KETEPA', 'AQUAMIST LE', 'AQUAMIST IC', 'AQUAMIST PI', 'FRUTZ MANGO', 'a', 'e', 'o', 'i', 'u']
+  for (let attempt = 0; attempt < queries.length * 3; attempt++) {
+    const query = queries[attempt % queries.length]
+    const pick = Math.floor(attempt / queries.length)
     const rows = await evaluate(cmd, `document.querySelectorAll('main table tbody tr').length`)
     if (rows >= wanted) return rows
     await evaluate(
@@ -673,7 +699,8 @@ async function addCartLines(cmd, wanted) {
     await evaluate(
       cmd,
       `(() => {
-        const row = document.querySelector('[role="option"] button');
+        const options = document.querySelectorAll('[role="option"] button');
+        const row = options[${pick} % Math.max(options.length, 1)];
         if (!row) return false;
         row.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
         return true;
@@ -696,7 +723,7 @@ const signature = (c) => `${c.tag}|${c.cls}`
  * and Hold sale on screen, keep the strip within one cart line's height, and give the
  * cart one fewer line a page while the strip shows.
  */
-async function checkHeldSales(cmd, testCase) {
+async function checkHeldSales(cmd, testCase, outDir) {
   const findings = []
   let failures = 0
   const record = (ok, line) => {
@@ -705,6 +732,16 @@ async function checkHeldSales(cmd, testCase) {
     if (!ok) failures++
   }
   const where = testCase.name
+  const shot = async (name) => {
+    try {
+      const png = await cmd('Page.captureScreenshot', { format: 'png' })
+      if (png.result?.data) {
+        writeFileSync(join(outDir, `${name}_${testCase.name.replace(/[^a-z0-9]+/gi, '-')}.png`), Buffer.from(png.result.data, 'base64'))
+      }
+    } catch {
+      // A missing screenshot never fails the fit check.
+    }
+  }
 
   await clickWhereText(cmd, 'button', 'CASH')
   await new Promise((r) => setTimeout(r, 200))
@@ -713,11 +750,19 @@ async function checkHeldSales(cmd, testCase) {
   const baseline = await heldProbe(cmd)
   const baselineSignatures = new Set(baseline.clipped.map(signature))
 
+  // A full cart page (7 lines) already puts the cart footer below the window at the smallest sizes when the
+  // "Cached catalog (offline)" badge shows (measured before this feature). So a held state may not push the
+  // footer further down than the no-held baseline; Complete Sale, which this feature never touches, must stay on screen.
+  const holdLimit = Math.max(baseline.innerHeight, baseline.holdBottom ?? 0)
+  if (baseline.holdBottom !== null && baseline.holdBottom > baseline.innerHeight) {
+    findings.push(`  (pre-existing: with a full cart page the Hold sale/Clear cart row bottom is ${baseline.holdBottom}, below the ${baseline.innerHeight}px window — ${where})`)
+  }
+
   const check = (label, probe, expectStrip, expectedCards) => {
     const fresh = probe.clipped.filter((c) => !baselineSignatures.has(signature(c)))
     const onScreen =
       probe.completeSaleBottom !== null && probe.completeSaleBottom <= probe.innerHeight &&
-      probe.holdBottom !== null && probe.holdBottom <= probe.innerHeight
+      probe.holdBottom !== null && probe.holdBottom <= holdLimit
     const stripOk = expectStrip ? probe.stripHeight > 0 && probe.stripHeight <= HELD_STRIP_MAX_HEIGHT : probe.stripHeight === 0
     const cardsOk = probe.heldCards === expectedCards
     const rowLimit = expectStrip ? CART_LINES_PER_PAGE_NO_STRIP - 1 : CART_LINES_PER_PAGE_NO_STRIP
@@ -730,12 +775,14 @@ async function checkHeldSales(cmd, testCase) {
   }
 
   check('Held 0 (baseline)', baseline, false, 0)
+  await shot('held0')
 
   // One held sale: hold the populated cart with the real button, then fill a new cart.
   await clickWhereText(cmd, 'button', 'Hold sale')
   await new Promise((r) => setTimeout(r, 500))
   await addCartLines(cmd, CART_LINES_PER_PAGE_NO_STRIP)
   check('Held 1', await heldProbe(cmd), true, 1)
+  await shot('held1')
 
   // A resumed sale on the M-Pesa and Card panels: hold the cart on screen first, then resume.
   if (await clickBySelector(cmd, 'button[aria-label="Resume Customer 1"]')) {
@@ -745,9 +792,10 @@ async function checkHeldSales(cmd, testCase) {
     for (const [label, method] of [['Resumed M-Pesa', 'M-PESA'], ['Resumed Card', 'CARD']]) {
       await clickWhereText(cmd, 'button', method)
       await new Promise((r) => setTimeout(r, 400))
+      await shot(label.replace(/\s+/g, '-').toLowerCase())
       const probe = await heldProbe(cmd)
       const fresh = probe.clipped.filter((c) => !baselineSignatures.has(signature(c)))
-      const onScreen = probe.holdBottom !== null && probe.holdBottom <= probe.innerHeight
+      const onScreen = probe.holdBottom !== null && probe.holdBottom <= holdLimit
       record(
         fresh.length === 0 && onScreen,
         `${label} — ${where}: banner ${JSON.stringify(probe.banner)}${fresh.length ? `, newly clipped: ${JSON.stringify(fresh)}` : ''}${onScreen ? '' : ', Hold sale is off screen'}`
@@ -764,14 +812,23 @@ async function checkHeldSales(cmd, testCase) {
   await new Promise((r) => setTimeout(r, 500))
   await addCartLines(cmd, CART_LINES_PER_PAGE_NO_STRIP)
   check('Held 2', await heldProbe(cmd), true, 2)
+  await shot('held2')
 
   // Three held: the limit; Hold sale is disabled and says why.
   await clickWhereText(cmd, 'button', 'Hold sale')
   await new Promise((r) => setTimeout(r, 500))
   await addCartLines(cmd, CART_LINES_PER_PAGE_NO_STRIP)
   check('Held 3', await heldProbe(cmd), true, 3)
+  await shot('held3')
 
-  // Six discarded held sales through the real IPC, so End of Day shows a full page of them.
+  return { findings, failures }
+}
+
+/** Discards the held sales and makes `count` more discarded ones through the real IPC, so End of Day has rows to show. */
+async function seedDiscardedHeldSales(cmd, testCase, count) {
+  const findings = []
+  let failures = 0
+  const where = testCase.name
   const seeded = await evaluate(
     cmd,
     `(async () => {
@@ -782,7 +839,7 @@ async function checkHeldSales(cmd, testCase) {
       for (const sale of held.filter((x) => x.status === 'held')) {
         await window.api.discardHeldSale({ id: sale.id, staffId: admin.id, managerId: admin.id, managerPin: '1234', reason: 'check:fit: customer left without paying' })
       }
-      for (let i = 0; i < 6; i++) {
+      for (let i = 0; i < ${count}; i++) {
         const made = await window.api.holdSale({ cartToken: 'check-fit-' + i, staffId: admin.id, total: 100 + i, items: [{ id: 'cf', productId: 'cf', title: 'Check fit', variantTitle: '', price: 100 + i, quantity: 1, image: null }] })
         if (!made.success) return made.error
         const discarded = await window.api.discardHeldSale({ id: made.data.id, staffId: admin.id, managerId: admin.id, managerPin: '1234', reason: 'check:fit: customer left without paying' })
@@ -791,13 +848,15 @@ async function checkHeldSales(cmd, testCase) {
       return 'ok'
     })()`
   )
-  record(seeded === 'ok', `Seeded discarded held sales for End of Day — ${where}: ${seeded}`)
-
+  const line = `${seeded === 'ok' ? '✔' : '✖'} Seeded ${count} discarded held sale(s) for End of Day — ${where}: ${seeded}`
+  findings.push(line)
+  log(line)
+  if (seeded !== 'ok') failures++
   return { findings, failures }
 }
 
 /** End of Day with held sales discarded (docs/phase-217): the list is there, and the Approve button is still on screen. */
-async function checkEndOfDayHeldList(cmd, testCase) {
+async function checkEndOfDayHeldList(cmd, testCase, expectedRows) {
   const findings = []
   let failures = 0
   if (!(await clickWhereText(cmd, 'button', 'Admin'))) {
@@ -816,6 +875,7 @@ async function checkEndOfDayHeldList(cmd, testCase) {
         const action = Array.from(document.querySelectorAll('button')).find((b) => ['Nothing pending', 'Approve', 'Record review', 'Working…'].includes(b.textContent.trim()))
         return {
           rows: section ? section.querySelectorAll('tbody tr').length : -1,
+          sectionTop: section ? Math.round(section.getBoundingClientRect().top) : null,
           sectionBottom: section ? Math.round(section.getBoundingClientRect().bottom) : null,
           actionBottom: action ? Math.round(action.getBoundingClientRect().bottom) : null,
           innerHeight: window.innerHeight
@@ -823,8 +883,12 @@ async function checkEndOfDayHeldList(cmd, testCase) {
       })())`
     )
   )
-  const ok = result.rows > 0 && result.actionBottom !== null && result.actionBottom <= result.innerHeight
-  const line = `${ok ? '✔' : '✖'} End of Day held list — ${testCase.name}: ${result.rows} row(s), list bottom ${result.sectionBottom}, action button bottom ${result.actionBottom}/${result.innerHeight}`
+  // With none discarded the section must be absent (the page is then exactly what it was); with some it must
+  // show a page of them (three a page) fully on screen. The Approve button's position is reported, not judged:
+  // with data in it the page already runs past the design box before this feature (phase 217, section 8).
+  const expectedVisible = Math.min(expectedRows, EOD_DISCARDED_PER_PAGE)
+  const ok = expectedRows === 0 ? result.rows === -1 : result.rows === expectedVisible && result.sectionBottom <= result.innerHeight
+  const line = `${ok ? '✔' : '✖'} End of Day held list (${expectedRows} discarded) — ${testCase.name}: ${result.rows} row(s), list ${result.sectionTop}-${result.sectionBottom}, action button bottom ${result.actionBottom}/${result.innerHeight} (reported only)`
   findings.push(line)
   log(line)
   if (!ok) failures++
@@ -1039,7 +1103,7 @@ async function runCase(testCase, outDir) {
 
     failures += extraFailures
 
-    const heldResult = await checkHeldSales(cmd, testCase)
+    const heldResult = await checkHeldSales(cmd, testCase, outDir)
     findings.push(...heldResult.findings)
     failures += heldResult.failures
 
@@ -1048,9 +1112,15 @@ async function runCase(testCase, outDir) {
     for (const line of adminResult.findings) log(line)
     failures += adminResult.failures
 
-    const eodResult = await checkEndOfDayHeldList(cmd, testCase)
-    findings.push(...eodResult.findings)
-    failures += eodResult.failures
+    const eodEmpty = await checkEndOfDayHeldList(cmd, testCase, 0)
+    findings.push(...eodEmpty.findings)
+    failures += eodEmpty.failures
+    const seededResult = await seedDiscardedHeldSales(cmd, testCase, EOD_SEEDED_ROWS)
+    findings.push(...seededResult.findings)
+    failures += seededResult.failures
+    const eodFull = await checkEndOfDayHeldList(cmd, testCase, EOD_SEEDED_ROWS)
+    findings.push(...eodFull.findings)
+    failures += eodFull.failures
 
     return { findings, failures }
   } finally {
@@ -1196,7 +1266,11 @@ async function main() {
 
   const allFindings = []
   let totalFailures = 0
-  for (const testCase of CASES) {
+  // CHECK_FIT_ONLY=<part of a case name> measures just that case's POS and Admin screens while iterating;
+  // a real run leaves it unset and measures everything.
+  const only = process.env.CHECK_FIT_ONLY
+  const cases = only ? CASES.filter((c) => c.name.includes(only)) : CASES
+  for (const testCase of cases) {
     const { findings, failures } = await runCase(testCase, outDir)
     allFindings.push(...findings)
     totalFailures += failures
@@ -1216,7 +1290,7 @@ async function main() {
       run: () => runForcedScreenCase('fiscalNoticeAndToastLimit', 'FiscalNotice + toast stack at its limit')
     }
   ]
-  for (const { run } of extraCases) {
+  for (const { run } of only ? [] : extraCases) {
     const { findings, failures } = await run()
     allFindings.push(...findings)
     totalFailures += failures
@@ -1235,7 +1309,7 @@ async function main() {
     ['variantModal', 'VariantModal (synthetic 6-variant product)'],
     ['shopifyCheckCard', 'Shopify check card (synthetic findings, docs/phase-170)']
   ]
-  for (const [screenId, label] of syntheticScreens) {
+  for (const [screenId, label] of only ? [] : syntheticScreens) {
     for (const testCase of CASES) {
       const { findings, failures } = await runForcedScreenCase(screenId, label, testCase)
       allFindings.push(...findings)

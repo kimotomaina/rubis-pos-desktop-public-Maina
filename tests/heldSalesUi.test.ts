@@ -757,18 +757,27 @@ describe('End of Day: held sales discarded', () => {
     expect(section.textContent).toContain('customer left without paying')
   })
 
-  it('says so when there are none', async () => {
+  it('adds nothing to the page when no held sale was discarded', async () => {
     await mountPage({ success: true, data: [] })
 
-    expect(container.querySelector('[data-testid="discarded-held-sales"]')!.textContent).toContain('No held sales were discarded')
+    expect(container.querySelector('[data-testid="discarded-held-sales"]')).toBeNull()
+    expect(container.textContent).not.toContain('Held sales discarded')
   })
 
-  it('is paginated like the page\'s other lists: six a page', async () => {
+  it("is paginated like the page's other lists, three rows a page to stay inside the design box", async () => {
     await mountPage({ success: true, data: Array.from({ length: 8 }, (_, i) => sale(i + 1, `Customer ${i + 1}`)) })
 
     const section = container.querySelector('[data-testid="discarded-held-sales"]')!
-    expect(section.querySelectorAll('tbody tr')).toHaveLength(6)
-    expect(section.textContent).toContain('Page 1 of 2')
+    expect(section.querySelectorAll('tbody tr')).toHaveLength(3)
+    expect(section.textContent).toContain('Page 1 of 3')
+  })
+
+  it('sits first, above the per-cashier totals, so the manager sees it before approving', async () => {
+    await mountPage({ success: true, data: [sale(1, 'Customer 1')] })
+
+    const section = container.querySelector('[data-testid="discarded-held-sales"]')!
+    const perCashier = Array.from(container.querySelectorAll('h4')).find((h) => h.textContent === 'Per cashier')!
+    expect(section.compareDocumentPosition(perCashier) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   })
 
   it('says when the list could not be loaded, instead of showing an empty day', async () => {
