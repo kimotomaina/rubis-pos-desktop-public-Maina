@@ -3,6 +3,7 @@ import type { VatMismatchRow } from '../main/services/vat-reconcile.js'
 import type { ShiftType } from '../main/lib/shiftWindows.js'
 import { electronAPI } from '@electron-toolkit/preload'
 import type { UnattachedDay, PastShiftPreview, CreatePastShiftRequest } from '../main/services/past-shifts.js'
+import type { ShiftCorrectionRequest } from '../main/services/shift-corrections.js'
 import type { ServiceResult } from '../main/services/shopify-types.js'
 import type {
   CartItem,
@@ -22,6 +23,7 @@ import type {
   StaffSummary,
   StaffRole,
   RetrospectiveShiftResult,
+  ShiftCorrectionRow,
   ShiftCloseResult,
   ShiftRow,
   IntegrationProviderName,
@@ -612,6 +614,16 @@ const api = {
    */
   createPastShift: (request: CreatePastShiftRequest): Promise<ServiceResult<RetrospectiveShiftResult>> =>
     ipcRenderer.invoke('shifts:create-past', request),
+
+  /**
+   * Appends a correction to a closed shift's typed-in figures (docs/phase-224). Manager-gated: the main process
+   * re-verifies the PIN. The shift's own row is never changed.
+   *
+   * @param {ShiftCorrectionRequest} request
+   * @returns {Promise<ServiceResult<ShiftCorrectionRow>>}
+   */
+  correctShift: (request: ShiftCorrectionRequest): Promise<ServiceResult<ShiftCorrectionRow>> =>
+    ipcRenderer.invoke('shifts:correct', request),
 
   /**
    * Generates the Z-report for a shift.

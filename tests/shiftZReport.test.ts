@@ -32,7 +32,8 @@ const dbFor = (shift: ShiftRow): RubisDatabase =>
     getShiftById: vi.fn(() => shift),
     getStaffById: vi.fn(() => staff),
     getOrdersForShift: vi.fn(() => []),
-    getMpesaPaymentsForShift: vi.fn(() => [])
+    getMpesaPaymentsForShift: vi.fn(() => []),
+    listShiftCorrections: vi.fn(() => []) // ADDED (docs/phase-224): the Z report reads the shift's corrections
   }) as unknown as RubisDatabase
 
 describe('generateZReport shift fields', () => {
@@ -65,6 +66,7 @@ describe('generateZReport shift fields', () => {
     // fields too: they are new, and tests/shiftMpesaBalances.test.ts covers them. Every figure below is unchanged.
     // CHANGED AGAIN (docs/phase-223): and the four fields that say a shift was recorded afterwards (kind, createdAt,
     // createdByName, reason), covered by tests/pastShift.test.ts.
+    // CHANGED AGAIN (docs/phase-224): and `corrections`, covered by tests/shiftCorrections.test.ts.
     const {
       shiftType: _type,
       shiftWindowLabel: _label,
@@ -76,6 +78,7 @@ describe('generateZReport shift fields', () => {
       createdAt: _createdAt,
       createdByName: _createdByName,
       reason: _reason,
+      corrections: _corrections,
       ...figures
     } = report
 

@@ -94,6 +94,7 @@ import type {
   MpesaPaymentRow,
   StaffSummary,
   RetrospectiveShiftResult,
+  ShiftCorrectionRow,
   ShiftCloseResult,
   ShiftRow,
   OrderRow
@@ -189,6 +190,7 @@ import {
   shiftCloseSchema,
   pastShiftPreviewSchema,
   createPastShiftSchema,
+  shiftCorrectionSchema,
   salesSummarySchema,
   fiscalByDaySchema,
   invoiceListSchema,
@@ -3500,6 +3502,45 @@ app.whenReady().then(async () => {
         return {
           success: false,
           error: err instanceof Error ? err.message : 'Failed to record this shift'
+        }
+      }
+    }
+  )
+
+  /**
+   * IPC handler that appends a correction to a closed shift's typed-in figures (docs/phase-224). Manager-gated
+   * with a PIN re-verified here; the corrector recorded is the manager the PIN belongs to. The shift's own row is
+   * never touched and nothing is queued for Shopify or the tax device.
+   */
+  ipcMain.handle(
+    'shifts:correct',
+    (_event, request: unknown): ServiceResult<ShiftCorrectionRow> => {
+      const validation = validate(shiftCorrectionSchema, request)
+      if (!validation.success) {
+        return { success: false, error: validation.error }
+      }
+      const authz = requireAdminPin(db, validation.data.managerId, validation.data.managerPin)
+      if (!authz.success) {
+        return { success: false, error: authz.error }
+      }
+      try {
+        const data = validation.data
+        return {
+          success: true,
+          data: db.addShiftCorrection({
+            shiftId: data.shiftId,
+            managerId: data.managerId,
+            reason: data.reason,
+            startingCash: data.startingCash,
+            endingCash: data.endingCash,
+            mpesaOpeningBalance: data.mpesaOpeningBalance,
+            mpesaClosingBalance: data.mpesaClosingBalance
+          })
+        }
+      } catch (err) {
+        return {
+          success: false,
+          error: err instanceof Error ? err.message : 'Failed to record this correction'
         }
       }
     }

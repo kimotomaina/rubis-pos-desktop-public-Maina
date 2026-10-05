@@ -12,6 +12,7 @@
 import type { VatMismatchRow } from '../main/services/vat-reconcile.js'
 import type { ShiftType } from '../main/lib/shiftWindows.js'
 import type { UnattachedDay, PastShiftPreview, CreatePastShiftRequest } from '../main/services/past-shifts.js'
+import type { ShiftCorrectionRequest } from '../main/services/shift-corrections.js'
 import type { ServiceResult } from '../main/services/shopify-types.js'
 import type { FiscalConnectionTestResult } from '../main/services/integrations/fiscal-connection-test.js'
 import type {
@@ -32,6 +33,7 @@ import type {
   StaffSummary,
   StaffRole,
   RetrospectiveShiftResult,
+  ShiftCorrectionRow,
   ShiftCloseResult,
   ShiftRow,
   IntegrationProviderName,
@@ -231,6 +233,8 @@ export interface PosApi {
   previewPastShift: (startIso: string, endIso: string) => Promise<ServiceResult<PastShiftPreview>>
   /** Records a shift for a period that already happened and attaches the sales that had none (docs/phase-223). Manager PIN re-checked in the main process. */
   createPastShift: (request: CreatePastShiftRequest) => Promise<ServiceResult<RetrospectiveShiftResult>>
+  /** Appends a correction to a closed shift's typed-in figures (docs/phase-224). Manager PIN re-checked in the main process; the shift's own row is never changed. */
+  correctShift: (request: ShiftCorrectionRequest) => Promise<ServiceResult<ShiftCorrectionRow>>
   /** Generates the Z-report for a shift. */
   getZReport: (shiftId: number) => Promise<ServiceResult<ZReport>>
   /** Generates today's sales summary for the Admin screen. */

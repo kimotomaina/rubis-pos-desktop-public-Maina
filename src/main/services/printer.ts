@@ -27,6 +27,7 @@ import type { PrinterConfig, PrinterType, PrinterConnectionType, FiscalStatus } 
 import { formatCurrency } from './currency.js'
 import { zReportMpesaLines } from '../lib/zReportMpesa.js'
 import { zReportRetroLines } from '../lib/zReportRetro.js'
+import { zReportCorrectionBlocks } from '../lib/zReportCorrections.js'
 import { generatePdfReceipt } from './pdf-receipt.js'
 import { buildReceiptLayout, isReceiptLayoutQr, asReceiptWidth } from '../lib/receiptLayout.js'
 import { buildEnjoySlip } from '../lib/enjoySlip.js'
@@ -456,7 +457,8 @@ function renderEntries(client: ThermalPrinterLike, entries: ReceiptLayoutEntry[]
  * closed/cashier → dashed line → starting cash + per-method sales →
  * dashed line → total revenue (bold) + tax → dashed line → expected
  * cash, counted cash, discrepancy (bold) → dashed line → the M-Pesa
- * balances (docs/phase-222).
+ * balances (docs/phase-222) → for each correction of the typed-in figures, a dashed
+ * line, its heading (bold) and the figures it gives (docs/phase-224).
  *
  * @param {ThermalPrinterLike} client
  * @param {ZReport} report
@@ -519,6 +521,15 @@ export function renderZReport(
   client.drawLine()
   for (const line of zReportMpesaLines(report, formatCurrency)) {
     client.println(`${line.label}: ${line.value}`)
+  }
+
+  // docs/phase-224: every correction of the typed-in figures, under the originals, which are left as they were.
+  for (const block of zReportCorrectionBlocks(report, formatCurrency, (iso) => new Date(iso).toLocaleString())) {
+    client.drawLine()
+    client.bold(true)
+    client.println(block.heading)
+    client.bold(false)
+    for (const line of block.details) client.println(line)
   }
 
   client.cut()

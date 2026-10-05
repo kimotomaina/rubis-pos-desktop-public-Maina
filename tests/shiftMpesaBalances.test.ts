@@ -242,7 +242,8 @@ const dbFor = (shift: ShiftRow, orders: OrderRow[] = []): RubisDatabase =>
     getShiftById: vi.fn(() => shift),
     getStaffById: vi.fn(() => staff),
     getOrdersForShift: vi.fn(() => orders),
-    getMpesaPaymentsForShift: vi.fn(() => [])
+    getMpesaPaymentsForShift: vi.fn(() => []),
+    listShiftCorrections: vi.fn(() => []) // ADDED (docs/phase-224)
   }) as unknown as RubisDatabase
 
 describe('generateZReport M-Pesa balances', () => {

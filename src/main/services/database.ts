@@ -16,6 +16,7 @@
 import type { VatReconcileOrderRow } from './vat-reconcile.js'
 import { SHIFT_TYPES, type ShiftType } from '../lib/shiftWindows.js'
 import { findOverlappingShift, parsePastShiftPeriod } from '../lib/pastShift.js'
+import { sameEnteredFigures, workShiftFigures, type ShiftEnteredFigures } from '../lib/shiftFigures.js'
 import { UNVERIFIABLE_RETRY_REASON } from './integrations/real-etims-provider.js'
 import { buildLocationTraderInvNum, nextTraderSeq } from '../lib/traderSystemInvoiceNumber.js'
 import { MAX_HELD_LABEL_LENGTH, MAX_HELD_SALES } from '../lib/heldSaleRules.js'
@@ -376,6 +377,34 @@ export interface CreateRetrospectiveShiftInput {
 export interface RetrospectiveShiftResult extends ShiftCloseResult {
   shiftId: number
   attachedCount: number
+}
+
+/**
+ * Row shape of the `shift_corrections` table (docs/phase-224): one correction of the figures typed in for a
+ * closed shift. The shift's own row is never changed; the latest correction is the current figures.
+ */
+export interface ShiftCorrectionRow {
+  id: number
+  shift_id: number
+  corrected_by_staff_id: number
+  corrected_at: string
+  reason: string
+  starting_cash: number
+  ending_cash: number
+  /** Worked out when the correction was made, from the shift's sales then, and stored. */
+  expected_cash: number
+  discrepancy: number
+  mpesa_opening_balance: number | null
+  mpesa_closing_balance: number | null
+  mpesa_expected: number | null
+  mpesa_difference: number | null
+}
+
+/** What a correction needs (docs/phase-224); the caller has already checked the manager's PIN. */
+export interface AddShiftCorrectionInput extends ShiftEnteredFigures {
+  shiftId: number
+  managerId: number
+  reason: string
 }
 
 /** Row shape of the `sync_queue` table. */
@@ -938,6 +967,32 @@ export const SCHEMA = {
     created_at TEXT,
     reason TEXT
   )`,
+  /**
+   * One correction of the figures typed in for a closed shift (docs/phase-224). Append-only: the only writer is
+   * {@link RubisDatabase.addShiftCorrection}, and two triggers refuse any UPDATE or DELETE, so a correction cannot be
+   * rewritten or removed afterwards, by this code or any other. `shifts` is never touched: the original figures stay
+   * as they were and the Z report shows both. The worked figures are stored, as `closeShift` stores its own.
+   */
+  shiftCorrections: `CREATE TABLE IF NOT EXISTS shift_corrections (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    shift_id INTEGER NOT NULL REFERENCES shifts(id),
+    corrected_by_staff_id INTEGER NOT NULL,
+    corrected_at TEXT NOT NULL,
+    reason TEXT NOT NULL,
+    starting_cash REAL NOT NULL,
+    ending_cash REAL NOT NULL,
+    expected_cash REAL NOT NULL,
+    discrepancy REAL NOT NULL,
+    mpesa_opening_balance REAL,
+    mpesa_closing_balance REAL,
+    mpesa_expected REAL,
+    mpesa_difference REAL
+  )`,
+  shiftCorrectionsShiftIndex: `CREATE INDEX IF NOT EXISTS idx_shift_corrections_shift ON shift_corrections (shift_id)`,
+  shiftCorrectionsNoUpdate: `CREATE TRIGGER IF NOT EXISTS shift_corrections_no_update BEFORE UPDATE ON shift_corrections
+    BEGIN SELECT RAISE(ABORT, 'shift_corrections is append-only'); END`,
+  shiftCorrectionsNoDelete: `CREATE TRIGGER IF NOT EXISTS shift_corrections_no_delete BEFORE DELETE ON shift_corrections
+    BEGIN SELECT RAISE(ABORT, 'shift_corrections is append-only'); END`,
   integrations: `CREATE TABLE IF NOT EXISTS integrations (
     provider TEXT PRIMARY KEY,
     config_json TEXT NOT NULL DEFAULT '{}'
@@ -1742,6 +1797,10 @@ export class RubisDatabase {
     connection.exec(SCHEMA.staff)
     connection.exec(SCHEMA.shifts)
     migrateShiftsColumns(connection)
+    connection.exec(SCHEMA.shiftCorrections)
+    connection.exec(SCHEMA.shiftCorrectionsShiftIndex)
+    connection.exec(SCHEMA.shiftCorrectionsNoUpdate)
+    connection.exec(SCHEMA.shiftCorrectionsNoDelete)
     connection.exec(SCHEMA.integrations)
     connection.exec(SCHEMA.printers)
     migratePrintersColumns(connection)
@@ -3894,6 +3953,122 @@ export class RubisDatabase {
     if (row.status === 'voided') return `Order #${orderId} was voided`
     if (row.created_at < startIso || row.created_at > endIso) return `Order #${orderId} is outside the period`
     return `Order #${orderId} could not be added to the shift`
+  }
+
+  /**
+   * Every correction of a shift's figures, oldest first; the last one is the current figures (docs/phase-224).
+   *
+   * @param {number} shiftId
+   * @returns {ShiftCorrectionRow[]}
+   */
+  listShiftCorrections(shiftId: number): ShiftCorrectionRow[] {
+    return this.conn
+      .prepare('SELECT * FROM shift_corrections WHERE shift_id = ? ORDER BY id ASC')
+      .all(shiftId) as ShiftCorrectionRow[]
+  }
+
+  /**
+   * Appends a correction of the figures typed in for a closed shift (docs/phase-224). Nothing is edited: the
+   * shift's own row stays as it was, a new row is added, and the Z report shows both. The expected and difference
+   * figures are worked out now from the shift's non-voided sales, exactly as at close, and stored.
+   *
+   * Refused (nothing written) for a missing or still-open shift, a blank reason, a figure that is not a finite
+   * non-negative number, and a correction that changes nothing from the current figures (the shift's own, or the
+   * last correction's). One write transaction, so two managers correcting at once cannot both pass the
+   * "changes something" check against the same current figures.
+   *
+   * @param {AddShiftCorrectionInput} input
+   * @param {number} [nowMs]
+   * @returns {ShiftCorrectionRow}
+   * @throws {Error} with a message fit to show the manager
+   */
+  addShiftCorrection(input: AddShiftCorrectionInput, nowMs: number = Date.now()): ShiftCorrectionRow {
+    const reason = input.reason.trim()
+    if (reason === '') {
+      throw new Error('A reason is required to correct a shift')
+    }
+    const figures = [input.startingCash, input.endingCash, input.mpesaOpeningBalance, input.mpesaClosingBalance]
+    if (figures.some((value) => value !== null && !(Number.isFinite(value) && value >= 0))) {
+      throw new Error('Every figure must be a number of 0 or more')
+    }
+
+    return this.conn.transaction((): ShiftCorrectionRow => {
+      const shift = this.getShiftById(input.shiftId)
+      if (!shift) {
+        throw new Error(`Shift ${input.shiftId} not found`)
+      }
+      if (shift.status !== 'closed') {
+        throw new Error(`Shift ${input.shiftId} is still open: close it before correcting its figures`)
+      }
+
+      const corrections = this.listShiftCorrections(input.shiftId)
+      const latest = corrections[corrections.length - 1]
+      const current: ShiftEnteredFigures = latest
+        ? {
+            startingCash: latest.starting_cash,
+            endingCash: latest.ending_cash,
+            mpesaOpeningBalance: latest.mpesa_opening_balance,
+            mpesaClosingBalance: latest.mpesa_closing_balance
+          }
+        : {
+            startingCash: shift.starting_cash,
+            endingCash: shift.ending_cash ?? 0,
+            mpesaOpeningBalance: shift.mpesa_opening_balance ?? null,
+            mpesaClosingBalance: shift.mpesa_closing_balance ?? null
+          }
+      const entered: ShiftEnteredFigures = {
+        startingCash: input.startingCash,
+        endingCash: input.endingCash,
+        mpesaOpeningBalance: input.mpesaOpeningBalance,
+        mpesaClosingBalance: input.mpesaClosingBalance
+      }
+      if (sameEnteredFigures(entered, current)) {
+        throw new Error('Nothing has changed from the current figures')
+      }
+
+      const counted = this.getOrdersForShift(input.shiftId).filter((order) => order.status !== 'voided')
+      const totalFor = (method: string): number =>
+        counted.filter((order) => order.payment_method === method).reduce((sum, order) => sum + order.total, 0)
+      const worked = workShiftFigures(entered, totalFor('cash'), totalFor('mpesa'))
+
+      const correctedAt = new Date(nowMs).toISOString()
+      const info = this.conn
+        .prepare(
+          `INSERT INTO shift_corrections (shift_id, corrected_by_staff_id, corrected_at, reason, starting_cash, ending_cash,
+                                          expected_cash, discrepancy, mpesa_opening_balance, mpesa_closing_balance,
+                                          mpesa_expected, mpesa_difference)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        )
+        .run(
+          input.shiftId,
+          input.managerId,
+          correctedAt,
+          reason,
+          entered.startingCash,
+          entered.endingCash,
+          worked.expectedCash,
+          worked.discrepancy,
+          entered.mpesaOpeningBalance,
+          entered.mpesaClosingBalance,
+          worked.mpesaExpected,
+          worked.mpesaDifference
+        )
+      return {
+        id: Number(info.lastInsertRowid),
+        shift_id: input.shiftId,
+        corrected_by_staff_id: input.managerId,
+        corrected_at: correctedAt,
+        reason,
+        starting_cash: entered.startingCash,
+        ending_cash: entered.endingCash,
+        expected_cash: worked.expectedCash,
+        discrepancy: worked.discrepancy,
+        mpesa_opening_balance: entered.mpesaOpeningBalance,
+        mpesa_closing_balance: entered.mpesaClosingBalance,
+        mpesa_expected: worked.mpesaExpected,
+        mpesa_difference: worked.mpesaDifference
+      }
+    }).immediate()
   }
 
   /**

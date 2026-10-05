@@ -419,7 +419,8 @@ describe('the Z report of a shift recorded afterwards', () => {
         getShiftById: () => shift,
         getStaffById: () => staff('Manager Mo'),
         getOrdersForShift: () => [],
-        getMpesaPaymentsForShift: () => []
+        getMpesaPaymentsForShift: () => [],
+        listShiftCorrections: () => []
       } as unknown as RubisDatabase,
       9,
       0.16

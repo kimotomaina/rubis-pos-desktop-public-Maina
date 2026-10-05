@@ -92,6 +92,27 @@ export interface ZReport {
   createdAt?: string | null
   createdByName?: string | null
   reason?: string | null
+  /**
+   * Corrections of the figures typed in for this shift, oldest first (docs/phase-224). The figures above are
+   * always the original ones; the last correction here is the current figures. Absent or empty when none.
+   */
+  corrections?: ZReportCorrection[]
+}
+
+/** One correction as the Z report shows it (docs/phase-224). */
+export interface ZReportCorrection {
+  id: number
+  correctedAt: string
+  correctedByName: string
+  reason: string
+  startingCash: number
+  endingCash: number
+  expectedCash: number
+  discrepancy: number
+  mpesaOpeningBalance: number | null
+  mpesaClosingBalance: number | null
+  mpesaExpected: number | null
+  mpesaDifference: number | null
 }
 
 /** Aggregate sales for a calendar day, independent of shift boundaries. */
@@ -316,7 +337,21 @@ export function generateZReport(
     createdAt: shift.created_at ?? null,
     createdByName:
       shift.created_by_staff_id != null ? (db.getStaffById(shift.created_by_staff_id)?.name ?? 'Unknown') : null,
-    reason: shift.reason ?? null
+    reason: shift.reason ?? null,
+    corrections: db.listShiftCorrections(shiftId).map((row) => ({
+      id: row.id,
+      correctedAt: row.corrected_at,
+      correctedByName: db.getStaffById(row.corrected_by_staff_id)?.name ?? 'Unknown',
+      reason: row.reason,
+      startingCash: row.starting_cash,
+      endingCash: row.ending_cash,
+      expectedCash: row.expected_cash,
+      discrepancy: row.discrepancy,
+      mpesaOpeningBalance: row.mpesa_opening_balance,
+      mpesaClosingBalance: row.mpesa_closing_balance,
+      mpesaExpected: row.mpesa_expected,
+      mpesaDifference: row.mpesa_difference
+    }))
   }
 }
 

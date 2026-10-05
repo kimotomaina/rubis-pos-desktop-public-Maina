@@ -551,6 +551,20 @@ export const createPastShiftSchema = managerAuthzSchema.extend({
   reason: z.string().trim().min(1, 'A reason is required').max(300, 'Keep the reason under 300 characters')
 })
 
+/**
+ * `shifts:correct` request payload (docs/phase-224). Manager-gated. The four figures are the whole set the manager
+ * confirms (what they now should be, not what to add), so the request is the same shape whichever one was wrong;
+ * the M-Pesa ones may be null ("not recorded"). The reason is required.
+ */
+export const shiftCorrectionSchema = managerAuthzSchema.extend({
+  shiftId: z.number().int().positive(),
+  startingCash: z.number().finite().nonnegative(),
+  endingCash: z.number().finite().nonnegative(),
+  mpesaOpeningBalance: z.number().finite().nonnegative().nullable(),
+  mpesaClosingBalance: z.number().finite().nonnegative().nullable(),
+  reason: z.string().trim().min(1, 'A reason is required').max(300, 'Keep the reason under 300 characters')
+})
+
 /** `reports:sales-summary` request payload. */
 export const salesSummarySchema = z.object({
   preset: reportRangePresetSchema
