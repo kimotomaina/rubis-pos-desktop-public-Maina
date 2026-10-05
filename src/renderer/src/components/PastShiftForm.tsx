@@ -36,15 +36,20 @@ interface PastShiftFormProps {
  * @returns {JSX.Element}
  */
 export default function PastShiftForm({ day, onCancel, banner, onRecorded }: PastShiftFormProps) {
-  const [startText, setStartText] = useState(() => nairobiMinuteText(day.firstAt))
-  const [endText, setEndText] = useState(() => nairobiMinuteText(day.lastAt))
+  // docs/phase-229: an offer carries its own period, held back from the shifts next to it. The texts show it in
+  // whole minutes; until the manager edits one, the exact instants are what is sent.
+  const initialStartText = nairobiMinuteText(day.periodStartIso ?? day.firstAt)
+  const initialEndText = nairobiMinuteText(day.periodEndIso ?? day.lastAt)
+  const [startText, setStartText] = useState(initialStartText)
+  const [endText, setEndText] = useState(initialEndText)
   const [preview, setPreview] = useState<PastShiftPreview | null>(null)
   const [periodError, setPeriodError] = useState<string | null>(null)
   const [refreshKey, setRefreshKey] = useState(0)
   const [page, setPage] = useState(1)
 
-  const [shiftType, setShiftType] = useState<ShiftType>('day')
-  const [typeTouched, setTypeTouched] = useState(false)
+  // docs/phase-229: an offer's type is its window's, and stays so when the period is edited.
+  const [shiftType, setShiftType] = useState<ShiftType>(day.shiftType ?? 'day')
+  const [typeTouched, setTypeTouched] = useState(day.shiftType !== undefined)
   // docs/phase-227: nobody counted the drawer for this period. The Z report then says so and works out no difference.
   const [cashNotCounted, setCashNotCounted] = useState(false)
   const [startingCash, setStartingCash] = useState('')
@@ -57,8 +62,10 @@ export default function PastShiftForm({ day, onCancel, banner, onRecorded }: Pas
   const [collectingPin, setCollectingPin] = useState(false)
   const [saving, setSaving] = useState(false)
 
-  const startIso = periodEdgeToIso(startText, 'start')
-  const endIso = periodEdgeToIso(endText, 'end')
+  const startIso =
+    day.periodStartIso && startText === initialStartText ? day.periodStartIso : periodEdgeToIso(startText, 'start')
+  const endIso =
+    day.periodEndIso && endText === initialEndText ? day.periodEndIso : periodEdgeToIso(endText, 'end')
 
   useEffect(() => {
     let cancelled = false
@@ -170,7 +177,9 @@ export default function PastShiftForm({ day, onCancel, banner, onRecorded }: Pas
   return (
     <div>
       <div className="mb-3 flex items-center justify-between gap-3">
-        <h3 className="text-2xl font-bold text-slate-800">Record a shift for {day.localDay}</h3>
+        <h3 className="text-2xl font-bold text-slate-800">Record a shift for {day.localDay}
+          {day.shiftType ? ` (${day.shiftType === 'day' ? 'Day' : 'Night'})` : ''}
+        </h3>
         <button
           type="button"
           onClick={onCancel}

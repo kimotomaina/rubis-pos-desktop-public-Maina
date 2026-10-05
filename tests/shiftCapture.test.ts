@@ -188,8 +188,12 @@ describe('D2: one offer per Nairobi day, cut at existing shifts', () => {
       shifts
     )
 
+    // docs/phase-229: old, two offers cut only at the shift (08:00 and 14:00 together, 18:00 and 19:00 together).
+    // New, three: 08:00 is the night that began on the 4th, 14:00 is Day, 18:00 and 19:00 are Night. The shift
+    // still separates the two sides, and no offer touches it.
     expect(offers.map((o) => [o.firstAt, o.lastAt, o.count, o.total])).toEqual([
-      ['2026-10-05T05:00:00.000Z', '2026-10-05T11:00:00.000Z', 2, 300],
+      ['2026-10-05T05:00:00.000Z', '2026-10-05T05:00:00.000Z', 1, 100],
+      ['2026-10-05T11:00:00.000Z', '2026-10-05T11:00:00.000Z', 1, 200],
       ['2026-10-05T15:00:00.000Z', '2026-10-05T16:00:00.000Z', 2, 700]
     ])
     for (const offer of offers) {

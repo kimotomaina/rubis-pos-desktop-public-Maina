@@ -91,6 +91,31 @@ export function shiftTypeForTime(iso: string): ShiftType {
   return minute >= DAY_SHIFT.startMinutes && minute <= DAY_SHIFT.endMinutes ? 'day' : 'night'
 }
 
+/** One occurrence of a window: its type and the Nairobi date it starts on (docs/phase-229). */
+export interface ShiftWindowInstance {
+  type: ShiftType
+  /** `YYYY-MM-DD`. A night that runs past midnight is dated by the evening it starts. */
+  startDate: string
+}
+
+/**
+ * Which window instance an instant falls in (docs/phase-229): its type from {@link shiftTypeForTime}, and the date
+ * that window started on. Day is 09:00:00 to 17:30:59 on its own date. Night is 17:31:00 to 08:59:59 the next
+ * morning, so 00:00 to 08:59 belongs to the night that began the evening before.
+ *
+ * @param {string} iso — an ISO-8601 instant
+ * @returns {ShiftWindowInstance}
+ * @throws {RangeError} if `iso` is not a valid instant
+ */
+export function shiftWindowOf(iso: string): ShiftWindowInstance {
+  const minute = nairobiMinuteOfDay(iso)
+  const wall = toNairobiWallClock(iso)
+  const type = shiftTypeForTime(iso)
+  const dayBack = type === 'night' && minute < DAY_SHIFT.startMinutes ? 1 : 0
+  const start = new Date(Date.UTC(wall.getUTCFullYear(), wall.getUTCMonth(), wall.getUTCDate() - dayBack))
+  return { type, startDate: start.toISOString().slice(0, 10) }
+}
+
 /**
  * The label shown beside a shift: `Day shift (09:00 to 17:30)` or
  * `Night shift (17:31 to 08:59)`.

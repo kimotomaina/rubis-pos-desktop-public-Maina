@@ -32,6 +32,16 @@ const REPORTS_PAGE_SIZE = 10
 /** Days with sales that have no shift, listed per page (docs/phase-223): the screen never scrolls. */
 const UNATTACHED_DAYS_PER_PAGE = 6
 
+/**
+ * The first offer that can be recorded (docs/phase-229): a sale inside an existing shift is reported, not offered.
+ *
+ * @param {UnattachedDay[]} offers
+ * @returns {UnattachedDay | undefined}
+ */
+function firstRecordable(offers: UnattachedDay[]): UnattachedDay | undefined {
+  return offers.find((offer) => offer.insideShiftId === undefined)
+}
+
 /** Fiscal-status rows per page — this table is paginated client-side (a month is at most 31 rows). */
 const FISCAL_ROWS_PER_PAGE = 10
 
@@ -158,7 +168,8 @@ function ShiftHistoryView({
       setUnattached(offers)
       if (openFirstOffer && !autoOpened) {
         setAutoOpened(true)
-        if (offers.length > 0) setRecording(offers[0])
+        const first = firstRecordable(offers)
+        if (first) setRecording(first)
       }
     })
     return () => {
@@ -201,6 +212,9 @@ function ShiftHistoryView({
     return (
       <section className="rounded-xl border border-slate-200 bg-white p-4">
         <PastShiftForm
+          // docs/phase-229: each offer is its own form. Without a key the next offer would keep the last one's
+          // reason, its "not counted" choice and its cash figures.
+          key={`${recording.firstAt}|${recording.lastAt}`}
           day={recording}
           banner={offerBanner}
           onCancel={() => {
@@ -216,10 +230,11 @@ function ShiftHistoryView({
             void window.api.getUnattachedDays().then((result) => {
               const rest = result.success && result.data ? result.data : []
               setUnattached(rest)
-              if (rest.length > 0) {
+              const recordable = rest.filter((offer) => offer.insideShiftId === undefined)
+              if (recordable.length > 0) {
                 setNotice(null)
-                setOfferBanner(`${message} ${rest.length === 1 ? 'One more period has' : `${rest.length} more periods have`} sales with no shift. Record this one, or Cancel to stop.`)
-                setRecording(rest[0])
+                setOfferBanner(`${message} ${recordable.length === 1 ? 'One more period has' : `${recordable.length} more periods have`} sales with no shift. Record this one, or Cancel to stop.`)
+                setRecording(recordable[0])
               } else {
                 setOfferBanner(null)
                 setNotice(message)
@@ -259,7 +274,12 @@ function ShiftHistoryView({
               <tbody>
                 {days.items.map((day) => (
                   <tr key={day.firstAt} className="border-t border-slate-100">
-                    <td className="py-2 pr-2 text-slate-800">{day.localDay}</td>
+                    <td className="py-2 pr-2 text-slate-800">
+                      {day.localDay}
+                      {day.shiftType && (
+                        <span className="ml-2 text-sm text-slate-500">{day.shiftType === 'day' ? 'Day' : 'Night'}</span>
+                      )}
+                    </td>
                     <td className="py-2 pr-2 text-slate-600">
                       {day.count} {day.count === 1 ? 'sale' : 'sales'}
                     </td>
@@ -268,16 +288,23 @@ function ShiftHistoryView({
                     </td>
                     <td className="py-2 pr-2 text-right text-slate-800">{formatCurrency(day.total)}</td>
                     <td className="py-2 text-right">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setNotice(null)
-                          setRecording(day)
-                        }}
-                        className="h-10 rounded-lg bg-rose-600 px-3 text-base font-semibold text-white hover:bg-rose-700"
-                      >
-                        Create shift for these
-                      </button>
+                      {day.insideShiftId !== undefined ? (
+                        // docs/phase-229: a sale inside an existing shift's window is reported, not offered.
+                        <span className="text-base font-medium text-amber-800">
+                          Inside shift #{day.insideShiftId}: not recorded
+                        </span>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setNotice(null)
+                            setRecording(day)
+                          }}
+                          className="h-10 rounded-lg bg-rose-600 px-3 text-base font-semibold text-white hover:bg-rose-700"
+                        >
+                          Create shift for these
+                        </button>
+                      )}
                     </td>
                   </tr>
                 ))}
