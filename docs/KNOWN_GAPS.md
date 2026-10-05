@@ -465,3 +465,19 @@ The till keeps no session in the main process: `auth:logout` does nothing and th
 ## The renderer has no way to write to a log file (phase 227)
 
 When the cart cannot read the current shift, the "No shift open" notice stays hidden and the failure is written with `console.error`. A packaged build keeps the console nowhere, so nothing reaches `error.log`. Seeing it needs DevTools, which a packaged build does not open. A renderer-to-file log channel would settle this and every other renderer-side failure.
+
+## `printReceiptToType` is never called (phase 228)
+
+`printReceiptToType` in `printer.ts` has no caller: sale slips go through `printOrderSlips`, which does the same printer-list lookup itself. The Z report now uses `printZReportToType`, which mirrors it. Left as it is; delete it only with its tests.
+
+## Release 2.2.2 carries a development printer address in its bundled `.env` (phase 228)
+
+`VITE_PRINTER_INTERFACE` is not compiled in: the installer copies the build machine's `.env` to `resources/.env` and the app reads it at start. 2.2.2 was built with `tcp://192.168.1.50:9100`, so a till with no printer in its list falls back to that address. `check-env.cjs` refuses credentials in that file but not a printer address. Not changed; the printer list in Admin → Peripherals is what a till should use.
+
+## The 30-second printer probe may clash with a print on a printer that takes one connection at a time (phase 228)
+
+The status dot opens and closes a TCP connection to the receipt printer every 30 seconds. Until phase 228 it probed the default address, not the printer receipts use; now it probes the real one. A printer that accepts one connection at a time could, rarely, refuse a print that lands in that moment. `till.log` records every print failure, so a clash would show there. No guard was added.
+
+## `till.log` is not rotated (phase 228)
+
+`userData/till.log` holds failures only and grows by about 150 bytes for each. A printer left down while sales auto-print adds a line per sale. There is no size limit and no rotation.

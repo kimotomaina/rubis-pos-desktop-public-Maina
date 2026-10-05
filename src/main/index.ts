@@ -53,6 +53,7 @@ import type { UpdateStatus } from './services/updater.js'
 import { installUpdate, runPostUpdateCheck } from './services/updateBackup.js'
 import type { LastUpdateResult } from './services/updateBackup.js'
 import { createFileErrorLogger, installGlobalErrorHandlers } from './services/errorHandler.js'
+import { createTillLog, printOutcomeEntry } from './services/tillLog.js'
 import {
   fetchAllProducts,
   createShopifyClient,
@@ -134,7 +135,6 @@ import {
   checkHttpReachable,
   checkTcpReachable,
   checkMpesaConnectivity,
-  mockConnectedResult,
   mockDisconnectedResult
 } from './services/connectivityMonitor.js'
 import type { FiscalEndpointPaths } from './services/integrations/real-etims-provider.js'
@@ -184,6 +184,7 @@ import {
   stockTakeCommitSchema,
   stockTakeSettingsSchema,
   zReportRequestSchema,
+  tillEventSchema,
   receiptPrintRequestSchema,
   shiftsListSchema,
   shiftOpenSchema,
@@ -243,7 +244,10 @@ import { pushOrderToShopify } from './services/orders.js'
 import {
   printOrderSlips,
   attachCustomerSlipResult,
-  printZReport,
+  printZReportToType,
+  checkReceiptPrinter,
+  describePrinter,
+  resolvePrinterSettings,
   printTestPage,
   printWindowsTestPage,
   buildPrinterRegistry,
@@ -514,6 +518,12 @@ app.whenReady().then(async () => {
     }),
     showFatalDialog: (message) => dialog.showErrorBox('RUBIS POS', message)
   })
+
+  /**
+   * `userData/till.log` (docs/phase-228): one line for each print that failed or fell back to a PDF, and for the
+   * cart's shift state that could not be read. Next to `error.log`, which stays for crashes only.
+   */
+  const tillLog = createTillLog(join(app.getPath('userData'), 'till.log'), { appendFileSync })
 
   /* ── Core services: SQLite, sync engine, connectivity ───── */
 
@@ -1186,10 +1196,8 @@ app.whenReady().then(async () => {
           : checkHttpReachable(
               db.getIntegrationConfig<{ baseUrl?: string }>('etims').baseUrl || DEFAULT_ETIMS_BASE_URL
             ),
-    checkPrinter: () =>
-      printerSettings.mock
-        ? Promise.resolve(mockConnectedResult())
-        : checkTcpReachable(printerSettings.interfaceName),
+    // docs/phase-228: the printer receipts use, found the way a print finds it, never the default address alone.
+    checkPrinter: () => checkReceiptPrinter(printerRegistry, printerSettings, checkTcpReachable),
     intervalMs: 30_000,
     emit: (status) => broadcast('connectivity:status', status)
   })
@@ -2229,12 +2237,28 @@ app.whenReady().then(async () => {
       if (!validation.success) {
         return { success: false, error: validation.error }
       }
-      if ('windowsPrinterName' in validation.data) {
-        return printWindowsTestPage(validation.data.windowsPrinterName, printerSettings.storeName)
-      }
-      return printTestPage(validation.data.interfaceName)
+      const tested =
+        'windowsPrinterName' in validation.data
+          ? await printWindowsTestPage(validation.data.windowsPrinterName, printerSettings.storeName)
+          : await printTestPage(validation.data.interfaceName)
+      const entry = printOutcomeEntry('test page', tested, () => 'the printer')
+      if (entry) tillLog.record(entry.event, entry.detail)
+      return tested
     }
   )
+
+  /**
+   * IPC handler that lets the screen write one of a fixed list of events to `till.log` (docs/phase-228). The event
+   * name must be on the list and the detail is flattened and capped: the screen cannot write arbitrary text.
+   */
+  ipcMain.handle('log:till-event', (_event, request: unknown): ServiceResult<void> => {
+    const validation = validate(tillEventSchema, request)
+    if (!validation.success) {
+      return { success: false, error: validation.error }
+    }
+    tillLog.record(validation.data.event, validation.data.detail ?? '')
+    return { success: true }
+  })
 
   /**
    * IPC handler that reports whether a Shopify Admin API token is
@@ -3060,6 +3084,25 @@ app.whenReady().then(async () => {
    * @param {PrinterType} options.printerType
    * @returns {Promise<OrderSlipsResult>}
    */
+  /**
+   * Writes a failed print, or a print that fell back to a PDF, to `till.log` (docs/phase-228). A success is not
+   * logged. The line carries the document, the printer and the message already shown to the cashier: nothing else.
+   *
+   * @param {string} document — for example `Z report for shift #1`
+   * @param {PrinterType} printerType
+   * @param {ServiceResult<ReceiptPrintResult> | null} result — `null` when that slip was not asked for
+   */
+  function logPrintOutcome(
+    document: string,
+    printerType: PrinterType,
+    result: ServiceResult<ReceiptPrintResult> | null
+  ): void {
+    const entry = printOutcomeEntry(document, result, () =>
+      describePrinter(resolvePrinterSettings(printerRegistry, printerType, printerSettings))
+    )
+    if (entry) tillLog.record(entry.event, entry.detail)
+  }
+
   async function printSlipsForOrder(
     order: OrderRow,
     options: {
@@ -3111,7 +3154,7 @@ app.whenReady().then(async () => {
         // Malformed JSON — the layout builder's own class-A fallback covers this.
       }
     }
-    return printOrderSlips(
+    const printed = await printOrderSlips(
       {
         localId: order.local_id,
         createdAt: order.created_at,
@@ -3150,6 +3193,10 @@ app.whenReady().then(async () => {
       options.slips,
       options.printerType
     )
+    // docs/phase-228: a slip that failed, or became a PDF because its printer was unreachable, is written to till.log.
+    logPrintOutcome(`receipt for order #${order.local_id}`, options.printerType, printed.fiscal)
+    logPrintOutcome(`Enjoy slip for order #${order.local_id}`, options.printerType, printed.customer)
+    return printed
   }
 
   /**
@@ -3209,7 +3256,9 @@ app.whenReady().then(async () => {
         }
         try {
           const report = generateZReport(db, shiftId, printerSettings.taxRate)
-          return openPdfFallbackIfPresent(await printZReport(report, printerSettings))
+          const zResult = await printZReportToType(report, printerRegistry, printerSettings)
+          logPrintOutcome(`Z report for shift #${shiftId}`, 'receipt', zResult)
+          return openPdfFallbackIfPresent(zResult)
         } catch (err) {
           return {
             success: false,

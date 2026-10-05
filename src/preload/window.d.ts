@@ -212,6 +212,8 @@ export interface PosApi {
     managerId: number,
     managerPin: string
   ) => Promise<ServiceResult<void>>
+  /** Writes one of a fixed list of events to `till.log`; the main process refuses anything else (docs/phase-228). */
+  logTillEvent: (event: 'shift-state-unreadable', detail?: string) => Promise<ServiceResult<void>>
   /** Reads the currently open till shift, if any. */
   getCurrentShift: () => Promise<ServiceResult<ShiftRow | null>>
   /** Opens a new store-wide till shift with a starting cash float, day or night (docs/phase-199). */

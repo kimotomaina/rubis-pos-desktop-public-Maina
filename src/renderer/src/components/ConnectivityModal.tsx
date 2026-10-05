@@ -141,7 +141,13 @@ export default function ConnectivityModal({
             <p>
               Status:{' '}
               <span className="font-medium text-slate-800">
-                {check?.notApplicable ? 'Not applicable' : check?.connected ? 'Connected' : 'Disconnected'}
+                {check?.notApplicable
+                  ? integration === 'printer'
+                    ? 'Status unknown'
+                    : 'Not applicable'
+                  : check?.connected
+                    ? 'Connected'
+                    : 'Disconnected'}
               </span>
             </p>
             <p>

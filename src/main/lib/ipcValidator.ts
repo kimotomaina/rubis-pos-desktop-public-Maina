@@ -15,6 +15,7 @@
 import { z } from 'zod'
 import { MPESA_SMS_PARSER_READY } from './mpesaSms.js'
 import { REPORT_RANGE_PRESETS } from '../services/reports.js'
+import { RENDERER_TILL_EVENTS, sanitizeTillDetail } from '../services/tillLog.js'
 
 /** A discount payload, shared by line items and the cart-level discount. */
 const discountSchema = z.object({
@@ -476,6 +477,19 @@ export const approveDayReportSchema = managerAuthzSchema
     },
     { message: 'The same entry id was given more than once', path: ['approvedIds'] }
   )
+
+/**
+ * `log:till-event` request payload (docs/phase-228): one of the events the screen may write to `till.log`, with a
+ * short detail. The detail is flattened to one line and capped; any other field, or any other event name, is refused,
+ * so the screen cannot write arbitrary text into the log.
+ */
+export const tillEventSchema = z
+  .object({
+    // Only the events the screen may write; the print events are the main process's own.
+    event: z.enum(RENDERER_TILL_EVENTS),
+    detail: z.string().transform(sanitizeTillDetail).optional()
+  })
+  .strict()
 
 /**
  * `reports:z-report` request payload (docs/phase-158) — previously this

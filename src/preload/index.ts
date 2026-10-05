@@ -557,6 +557,17 @@ const api = {
     ipcRenderer.invoke('shifts:current'),
 
   /**
+   * Asks the main process to write one event to `till.log` (docs/phase-228). Only the events on the main process's
+   * short list are accepted, and the detail is flattened and capped there.
+   *
+   * @param {'shift-state-unreadable'} event
+   * @param {string} [detail]
+   * @returns {Promise<ServiceResult<void>>}
+   */
+  logTillEvent: (event: 'shift-state-unreadable', detail?: string): Promise<ServiceResult<void>> =>
+    ipcRenderer.invoke('log:till-event', { event, detail }),
+
+  /**
    * Opens a new store-wide till shift with a starting cash float.
    *
    * @param {number} staffId

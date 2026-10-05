@@ -26,6 +26,21 @@ interface ShiftState {
   load: () => Promise<void>
 }
 
+/**
+ * Writes the failure to the console and to `till.log` (docs/phase-228). Never throws: the notice stays hidden
+ * whether or not the line could be written.
+ *
+ * @param {string} detail
+ */
+function reportUnreadable(detail: string): void {
+  console.error('[rubis-pos] could not read the current shift:', detail)
+  try {
+    void window.api.logTillEvent?.('shift-state-unreadable', detail)?.catch(() => {})
+  } catch {
+    // Nowhere left to report it to.
+  }
+}
+
 export const useShiftStore = create<ShiftState>()((set) => ({
   presence: 'unknown',
 
@@ -36,9 +51,9 @@ export const useShiftStore = create<ShiftState>()((set) => ({
         set({ presence: result.data ? 'open' : 'none' })
         return
       }
-      console.error('[rubis-pos] could not read the current shift:', result.error)
+      reportUnreadable(result.error ?? 'no reason given')
     } catch (err) {
-      console.error('[rubis-pos] could not read the current shift:', err)
+      reportUnreadable(err instanceof Error ? err.message : String(err))
     }
     set({ presence: 'unknown' })
   }

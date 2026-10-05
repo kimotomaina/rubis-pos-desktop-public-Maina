@@ -25,6 +25,7 @@ import type { ZReport } from './reports.js'
 import { formatVatRateLabel } from './reports.js'
 import type { PrinterConfig, PrinterType, PrinterConnectionType, FiscalStatus } from './database.js'
 import { formatCurrency } from './currency.js'
+import type { ConnectivityCheckResult } from './connectivityMonitor.js'
 import { zReportMpesaLines } from '../lib/zReportMpesa.js'
 import { zReportRetroLines } from '../lib/zReportRetro.js'
 import { zReportCorrectionBlocks } from '../lib/zReportCorrections.js'
@@ -82,6 +83,11 @@ export interface PrinterSettings {
   connectionType?: PrinterConnectionType
   /** The shop's location name, printed under the heading of the Enjoy customer slip (docs/phase-198) — omitted when unset. */
   locationName?: string
+  /**
+   * What a failure message calls this printer (docs/phase-228): the type of the registered printer it resolved to,
+   * such as "Receipt". Absent on the default settings, which {@link describePrinter} calls "Receipt".
+   */
+  printerLabel?: string
   /**
    * Set only when a development stand-in provider is running: marks the fiscal
    * slip as a test (docs/phase-198). Never set with the real provider.
@@ -316,6 +322,26 @@ export function buildPrinterRegistry(configs: PrinterConfig[]): PrinterRegistry 
   return new Map(configs.map((config) => [config.id, config]))
 }
 
+/** What a failure message calls each type of printer (docs/phase-228). */
+const PRINTER_TYPE_LABELS: Record<PrinterType, string> = { receipt: 'Receipt', kitchen: 'Kitchen', label: 'Label' }
+
+/** What a failure message calls the default printer, which has no registered type. */
+const DEFAULT_PRINTER_LABEL = 'Receipt'
+
+/**
+ * Says which printer a print was aimed at, for a failure message or a log line (docs/phase-228): a network printer
+ * by its type and address, a Windows queue by its name. Nothing else.
+ *
+ * @param {Pick<PrinterSettings, 'interfaceName' | 'connectionType' | 'printerLabel'>} settings
+ * @returns {string} for example `Printer "Receipt" (tcp://192.168.1.50:9100)` or `Printer "EPSON TM-T88"`
+ */
+export function describePrinter(
+  settings: Pick<PrinterSettings, 'interfaceName' | 'connectionType' | 'printerLabel'>
+): string {
+  if (settings.connectionType === 'windows') return `Printer "${settings.interfaceName}"`
+  return `Printer "${settings.printerLabel ?? DEFAULT_PRINTER_LABEL}" (${settings.interfaceName})`
+}
+
 /**
  * Resolves the {@link PrinterSettings} to print a `type` document to:
  * the first enabled registry entry of that type, otherwise
@@ -343,7 +369,8 @@ export function resolvePrinterSettings(
         ...defaultSettings,
         interfaceName: config.interfaceName,
         width: asReceiptWidth(config.width) ?? defaultSettings.width,
-        connectionType: config.connectionType
+        connectionType: config.connectionType,
+        printerLabel: PRINTER_TYPE_LABELS[type]
       }
     }
   }
@@ -608,29 +635,30 @@ function isPrinterOfflineError(err: unknown): boolean {
 }
 
 /**
- * Translates a printer/transport failure into a POS-safe message.
+ * Translates a printer/transport failure into a POS-safe message that names the printer (docs/phase-228).
  *
  * @param {unknown} err
+ * @param {string} printer — {@link describePrinter}'s words for the printer that was tried
  * @returns {string}
  */
-function translatePrinterError(err: unknown): string {
+function translatePrinterError(err: unknown, printer: string): string {
   if (err && typeof err === 'object' && 'code' in err) {
     const code = (err as { code?: string }).code
     if (code === 'ECONNREFUSED' || code === 'EHOSTUNREACH') {
-      return 'Printer unreachable — check the network connection and printer power'
+      return `${printer} is unreachable. Check the network connection and that it is switched on.`
     }
     if (code === 'ETIMEDOUT') {
-      return 'Printer connection timed out'
+      return `${printer} connection timed out.`
     }
   }
   const message = err instanceof Error ? err.message : String(err)
   if (/paper/i.test(message)) {
-    return 'Printer error — check paper and try again'
+    return `${printer} reports a problem. Check the paper and try again.`
   }
   if (/timeout/i.test(message)) {
-    return 'Printer connection timed out'
+    return `${printer} connection timed out.`
   }
-  return `Printer error — ${message}`
+  return `${printer} error: ${message}`
 }
 
 /**
@@ -662,7 +690,10 @@ async function sendToWindowsPrinter(
     return { success: true, data: { printed: true, mock: false } }
   } catch (err) {
     if (onOfflineFallback) return onOfflineFallback()
-    return { success: false, error: translatePrinterError(err) }
+    return {
+      success: false,
+      error: translatePrinterError(err, describePrinter({ interfaceName: printerName, connectionType: 'windows' }))
+    }
   }
 }
 
@@ -716,7 +747,7 @@ async function sendToPrinter(
         if (onOfflineFallback) return onOfflineFallback()
         return {
           success: false,
-          error: 'Printer offline or unreachable — check the connection and try again'
+          error: `${describePrinter(settings)} is offline or unreachable. Check it is switched on and connected.`
         }
       }
     }
@@ -733,7 +764,7 @@ async function sendToPrinter(
     if (onOfflineFallback && isPrinterOfflineError(err)) {
       return onOfflineFallback()
     }
-    return { success: false, error: translatePrinterError(err) }
+    return { success: false, error: translatePrinterError(err, describePrinter(settings)) }
   }
 }
 
@@ -757,7 +788,7 @@ async function fallBackToPdf(
     const filePath = await pdfGenerator(order, items, settings)
     return { success: true, data: { printed: false, mock: false, mode: 'pdf', filePath } }
   } catch (err) {
-    return { success: false, error: translatePrinterError(err) }
+    return { success: false, error: translatePrinterError(err, describePrinter(settings)) }
   }
 }
 
@@ -807,14 +838,74 @@ export async function printReceipt(
 export async function printZReport(
   report: ZReport,
   settings: PrinterSettings,
-  factory: PrinterFactory = defaultPrinterFactory
+  factory: PrinterFactory = defaultPrinterFactory,
+  windowsSender: WindowsPrintSender = sendRawToWindowsPrinter
 ): Promise<ServiceResult<ReceiptPrintResult>> {
   return sendToPrinter(
     (client) => renderZReport(client, report, settings),
     settings,
     factory,
-    `Z-Report Shift #${report.shiftId}`
+    `Z-Report Shift #${report.shiftId}`,
+    undefined,
+    windowsSender
   )
+}
+
+/**
+ * Formats and sends a Z-report to the printer receipts use (docs/phase-228): the same
+ * {@link resolvePrinterSettings} lookup, the first enabled printer of the type in `registry`, otherwise the default
+ * settings. So a till whose printer is a Windows queue, or at another address, prints its Z-report there. There is no
+ * PDF fallback: a Z-report that quietly became a file could be mistaken for the paper one.
+ *
+ * @param {ZReport} report
+ * @param {PrinterRegistry} registry
+ * @param {PrinterSettings} defaultSettings
+ * @param {PrinterType} [printerType] — defaults to `'receipt'`
+ * @param {PrinterFactory} [factory] — injected client factory for testing
+ * @param {WindowsPrintSender} [windowsSender] — injected Windows-queue sender for testing
+ * @returns {Promise<ServiceResult<ReceiptPrintResult>>}
+ */
+export async function printZReportToType(
+  report: ZReport,
+  registry: PrinterRegistry,
+  defaultSettings: PrinterSettings,
+  printerType: PrinterType = 'receipt',
+  factory: PrinterFactory = defaultPrinterFactory,
+  windowsSender: WindowsPrintSender = sendRawToWindowsPrinter
+): Promise<ServiceResult<ReceiptPrintResult>> {
+  const settings = resolvePrinterSettings(registry, printerType, defaultSettings)
+  return printZReport(report, settings, factory, windowsSender)
+}
+
+/**
+ * The status dot's check of the printer receipts use (docs/phase-228), through the same
+ * {@link resolvePrinterSettings} lookup the prints use. A mock printer reads as connected, a network printer is
+ * probed at its own address, and a Windows queue reads as "status unknown": nothing here can tell whether it is
+ * switched on, and it must never show as connected on a guess.
+ *
+ * @param {PrinterRegistry} registry
+ * @param {PrinterSettings} defaultSettings
+ * @param {(interfaceName: string) => Promise<ConnectivityCheckResult>} tcpCheck — the TCP reachability probe, injected
+ * @returns {Promise<ConnectivityCheckResult>}
+ */
+export function checkReceiptPrinter(
+  registry: PrinterRegistry,
+  defaultSettings: PrinterSettings,
+  tcpCheck: (interfaceName: string) => Promise<ConnectivityCheckResult>
+): Promise<ConnectivityCheckResult> {
+  if (defaultSettings.mock === true) {
+    return Promise.resolve({ connected: true, lastCheckedAt: new Date().toISOString(), latencyMs: 0 })
+  }
+  const settings = resolvePrinterSettings(registry, 'receipt', defaultSettings)
+  if (settings.connectionType === 'windows') {
+    return Promise.resolve({
+      connected: false,
+      notApplicable: true,
+      lastCheckedAt: new Date().toISOString(),
+      error: `${describePrinter(settings)}: its status cannot be read from here. Print a test page to check it.`
+    })
+  }
+  return tcpCheck(settings.interfaceName)
 }
 
 /**
@@ -987,7 +1078,7 @@ export async function printTestPage(
       client.println('is connected and working.')
       client.cut()
     },
-    { interfaceName, storeName: 'RUBIS POS', taxRate: 0 },
+    { interfaceName, storeName: 'RUBIS POS', taxRate: 0, printerLabel: 'Test page' },
     factory,
     `Test Page (${interfaceName})`
   )

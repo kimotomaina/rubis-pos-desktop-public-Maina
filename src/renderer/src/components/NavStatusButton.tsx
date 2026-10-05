@@ -114,11 +114,19 @@ export default function NavStatusButton({
   const mpesaNotApplicable = connectivityStatus?.mpesa.notApplicable ?? false
   const fiscalConnected = connectivityStatus?.fiscal.connected ?? false
   const printerConnected = connectivityStatus?.printer.connected ?? false
+  /**
+   * A printer whose status cannot be read, such as a Windows queue (docs/phase-228), is neutral like M-Pesa in
+   * manual mode: never green, because nothing says it is on, and never red, because nothing says it is off.
+   */
+  const printerStatusUnknown = connectivityStatus?.printer.notApplicable ?? false
   const scannerConnected = barcodeStatus === 'connected'
   const unfiled = unfiledCount === null ? null : describeUnfiledCount(unfiledCount)
 
   const hasBadConnectivity =
-    !online || (!mpesaConnected && !mpesaNotApplicable) || !fiscalConnected || !printerConnected
+    !online ||
+    (!mpesaConnected && !mpesaNotApplicable) ||
+    !fiscalConnected ||
+    (!printerConnected && !printerStatusUnknown)
   const overallTone: Tone = hasBadConnectivity ? 'bad' : unfiled?.tone === 'alert' ? 'warn' : 'ok'
 
   const select = (integration: ConnectivityIntegration) => {
@@ -203,8 +211,8 @@ export default function NavStatusButton({
               />
               <StatusRow
                 label="Receipt Printer"
-                tone={printerConnected ? 'ok' : 'bad'}
-                detail={printerConnected ? 'Connected' : 'Disconnected'}
+                tone={printerStatusUnknown ? 'unknown' : printerConnected ? 'ok' : 'bad'}
+                detail={printerStatusUnknown ? 'Status unknown' : printerConnected ? 'Connected' : 'Disconnected'}
                 onClick={() => select('printer')}
               />
             </div>
