@@ -496,7 +496,9 @@ export const zReportRequestSchema = z.object({
 export const shiftOpenSchema = z.object({
   staffId: z.number().int(),
   startingCash: z.number().finite(),
-  shiftType: z.enum(['day', 'night']).nullish()
+  shiftType: z.enum(['day', 'night']).nullish(),
+  // docs/phase-222: optional on purpose. Absent or null is "not recorded", which a zero is not.
+  mpesaOpeningBalance: z.number().finite().nonnegative().nullish()
 })
 
 /**
@@ -507,7 +509,9 @@ export const shiftOpenSchema = z.object({
  */
 export const shiftCloseSchema = z.object({
   shiftId: z.number().int(),
-  endingCash: z.number().finite()
+  endingCash: z.number().finite(),
+  // docs/phase-222: optional on purpose, as the opening balance is.
+  mpesaClosingBalance: z.number().finite().nonnegative().nullish()
 })
 
 /**

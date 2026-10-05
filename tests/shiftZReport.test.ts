@@ -61,7 +61,17 @@ describe('generateZReport shift fields', () => {
 
   it('leaves every other figure as it was', () => {
     const report = generateZReport(dbFor({ ...baseShift, shift_type: 'night' }), 4, 0.16)
-    const { shiftType: _type, shiftWindowLabel: _label, ...figures } = report
+    // CHANGED (docs/phase-222). OLD: only the shift type and its label were set aside. NEW: the four M-Pesa balance
+    // fields too: they are new, and tests/shiftMpesaBalances.test.ts covers them. Every figure below is unchanged.
+    const {
+      shiftType: _type,
+      shiftWindowLabel: _label,
+      mpesaOpeningBalance: _opening,
+      mpesaExpected: _expected,
+      mpesaClosingBalance: _closing,
+      mpesaDifference: _difference,
+      ...figures
+    } = report
 
     expect(figures).toEqual({
       shiftId: 4,

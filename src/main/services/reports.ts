@@ -7,7 +7,14 @@
  * Shopify sync status.
  */
 
-import type { RubisDatabase, PaymentMethod, OrderRow, MpesaPaymentRow, OrderStatus } from './database.js'
+import type {
+  RubisDatabase,
+  PaymentMethod,
+  OrderRow,
+  MpesaPaymentRow,
+  OrderStatus,
+  ShiftRow
+} from './database.js'
 import type { FiscalVatGroupAmounts } from './integrations/etims.js'
 import type { Logger } from './logger.js'
 import { resolveTraderSystemInvNum } from '../lib/traderSystemInvoiceNumber.js'
@@ -67,6 +74,16 @@ export interface ZReport {
   shiftType?: ShiftType | null
   /** The nominal window of {@link shiftType}, e.g. `Day shift (09:00 to 17:30)`; absent with it. */
   shiftWindowLabel?: string | null
+  /**
+   * The M-Pesa till balances for the shift (docs/phase-222). Every one is `null` when it was not recorded,
+   * which the report shows as "Not recorded", never as 0. Optional, so a report from before the phase has none.
+   */
+  mpesaOpeningBalance?: number | null
+  /** Opening balance + this shift's M-Pesa sales: live while open, as stored at close once closed. */
+  mpesaExpected?: number | null
+  mpesaClosingBalance?: number | null
+  /** Counted − expected: a prompt to check the M-Pesa statement, never a shortage. */
+  mpesaDifference?: number | null
 }
 
 /** Aggregate sales for a calendar day, independent of shift boundaries. */
@@ -285,7 +302,30 @@ export function generateZReport(
     endingCash: shift.ending_cash,
     discrepancy: shift.discrepancy,
     shiftType: shift.shift_type ?? null,
-    shiftWindowLabel: shift.shift_type ? shiftWindowLabel(shift.shift_type) : null
+    shiftWindowLabel: shift.shift_type ? shiftWindowLabel(shift.shift_type) : null,
+    ...mpesaBalanceFields(shift, totalsByMethod.mpesa)
+  }
+}
+
+/**
+ * The M-Pesa balance figures of a Z report (docs/phase-222). A closed shift reports what was stored at
+ * close, so a later change to this code cannot rewrite it; an open shift shows its expected figure live
+ * when it has an opening balance. A shift without a balance reports `null`, never 0.
+ *
+ * @param {ShiftRow} shift
+ * @param {number} mpesaSales — the shift's non-voided M-Pesa sales
+ */
+function mpesaBalanceFields(
+  shift: ShiftRow,
+  mpesaSales: number
+): Pick<ZReport, 'mpesaOpeningBalance' | 'mpesaExpected' | 'mpesaClosingBalance' | 'mpesaDifference'> {
+  const opening = shift.mpesa_opening_balance ?? null
+  const live = shift.status === 'open' && opening !== null ? opening + mpesaSales : null
+  return {
+    mpesaOpeningBalance: opening,
+    mpesaExpected: shift.status === 'closed' ? (shift.mpesa_expected ?? null) : live,
+    mpesaClosingBalance: shift.mpesa_closing_balance ?? null,
+    mpesaDifference: shift.mpesa_difference ?? null
   }
 }
 

@@ -313,6 +313,25 @@ export interface ShiftRow {
   status: ShiftStatus
   /** Day or night, as chosen when the shift was opened (docs/phase-199); `NULL` on a shift opened before then. */
   shift_type?: ShiftType | null
+  /**
+   * The M-Pesa till balance read from the portal or statement when the shift opened and when it closed
+   * (docs/phase-222). `NULL` when not recorded, which is not the same as 0: it is always optional, and
+   * every shift from before this phase has `NULL`.
+   */
+  mpesa_opening_balance?: number | null
+  mpesa_closing_balance?: number | null
+  /** `mpesa_opening_balance` + the shift's M-Pesa sales, stored at close; only when both balances were recorded. */
+  mpesa_expected?: number | null
+  /** `mpesa_closing_balance` − `mpesa_expected`: a prompt to check the statement, not a shortage. */
+  mpesa_difference?: number | null
+}
+
+/** What closing a shift returns: the cash figures as before, plus the M-Pesa ones (docs/phase-222), `null` when not recorded. */
+export interface ShiftCloseResult {
+  expectedCash: number
+  discrepancy: number
+  mpesaExpected: number | null
+  mpesaDifference: number | null
 }
 
 /** Row shape of the `sync_queue` table. */
@@ -670,6 +689,15 @@ function migrateShiftsColumns(connection: SqliteConnection): void {
   } catch {
     // Column already exists — table was created with the current schema.
   }
+  // docs/phase-222: the four M-Pesa balance columns, nullable with no default and no backfill, so a shift
+  // from before keeps NULL ("not recorded") and its Z report is unchanged.
+  for (const column of ['mpesa_opening_balance', 'mpesa_closing_balance', 'mpesa_expected', 'mpesa_difference']) {
+    try {
+      connection.exec(`ALTER TABLE shifts ADD COLUMN ${column} REAL`)
+    } catch {
+      // Column already exists — table was created with the current schema.
+    }
+  }
 }
 
 /**
@@ -841,7 +869,11 @@ export const SCHEMA = {
     ending_cash REAL,
     discrepancy REAL,
     status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'closed')),
-    shift_type TEXT CHECK (shift_type IN ('day', 'night'))
+    shift_type TEXT CHECK (shift_type IN ('day', 'night')),
+    mpesa_opening_balance REAL,
+    mpesa_closing_balance REAL,
+    mpesa_expected REAL,
+    mpesa_difference REAL
   )`,
   integrations: `CREATE TABLE IF NOT EXISTS integrations (
     provider TEXT PRIMARY KEY,
@@ -3529,13 +3561,15 @@ export class RubisDatabase {
    * @param {number} staffId — the staff member opening the shift
    * @param {number} startingCash
    * @param {ShiftType | null} [shiftType] — day or night as chosen at the till (docs/phase-199); omitted stores `NULL`
+   * @param {number | null} [mpesaOpeningBalance] — the M-Pesa till balance if it was read (docs/phase-222); omitted stores `NULL`, "not recorded"
    * @returns {{ shiftId: number }}
    * @throws if a shift is already open, or `shiftType` is not a known shift
    */
   openShift(
     staffId: number,
     startingCash: number,
-    shiftType: ShiftType | null = null
+    shiftType: ShiftType | null = null,
+    mpesaOpeningBalance: number | null = null
   ): { shiftId: number } {
     if (shiftType !== null && !SHIFT_TYPES.includes(shiftType)) {
       throw new Error(`Unknown shift type: ${String(shiftType)}`)
@@ -3544,19 +3578,24 @@ export class RubisDatabase {
       throw new Error('A shift is already open')
     }
     const opened = new Date().toISOString()
-    // A call that names no shift keeps the original statement as it was, so it behaves exactly as before.
-    const info =
-      shiftType === null
-        ? this.conn
-            .prepare(
-              "INSERT INTO shifts (staff_id, clock_in, starting_cash, status) VALUES (?, ?, ?, 'open')"
-            )
-            .run(staffId, opened, startingCash)
-        : this.conn
-            .prepare(
-              "INSERT INTO shifts (staff_id, clock_in, starting_cash, status, shift_type) VALUES (?, ?, ?, 'open', ?)"
-            )
-            .run(staffId, opened, startingCash, shiftType)
+    // Each optional column is added only when given, so a call that names neither keeps the original statement
+    // exactly as it was, and behaves exactly as before.
+    const columns = ['staff_id', 'clock_in', 'starting_cash', 'status']
+    const values = ['?', '?', '?', "'open'"]
+    const params: Array<string | number> = [staffId, opened, startingCash]
+    if (shiftType !== null) {
+      columns.push('shift_type')
+      values.push('?')
+      params.push(shiftType)
+    }
+    if (mpesaOpeningBalance !== null) {
+      columns.push('mpesa_opening_balance')
+      values.push('?')
+      params.push(mpesaOpeningBalance)
+    }
+    const info = this.conn
+      .prepare(`INSERT INTO shifts (${columns.join(', ')}) VALUES (${values.join(', ')})`)
+      .run(...params)
     return { shiftId: Number(info.lastInsertRowid) }
   }
 
@@ -3567,15 +3606,21 @@ export class RubisDatabase {
    * counted toward the drawer's expected total) and the discrepancy
    * against the counted ending cash.
    *
+   * With an M-Pesa closing balance (docs/phase-222) the balance is stored too; the expected figure
+   * (opening balance + the shift's non-voided M-Pesa sales) and the difference are stored only when
+   * the shift also has an opening balance. Cash is computed and stored exactly as before either way.
+   *
    * @param {number} shiftId
    * @param {number} endingCash
-   * @returns {{ expectedCash: number; discrepancy: number }}
+   * @param {number | null} [mpesaClosingBalance] — the M-Pesa till balance if it was read; omitted stores `NULL`
+   * @returns {ShiftCloseResult}
    * @throws if the shift does not exist or is already closed
    */
   closeShift(
     shiftId: number,
-    endingCash: number
-  ): { expectedCash: number; discrepancy: number } {
+    endingCash: number,
+    mpesaClosingBalance: number | null = null
+  ): ShiftCloseResult {
     const shift = this.getShiftById(shiftId)
     if (!shift) {
       throw new Error(`Shift ${shiftId} not found`)
@@ -3584,20 +3629,36 @@ export class RubisDatabase {
       throw new Error(`Shift ${shiftId} is already closed`)
     }
 
-    const cashTotal = this.getOrdersForShift(shiftId)
-      .filter((order) => order.payment_method === 'cash' && order.status !== 'voided')
-      .reduce((sum, order) => sum + order.total, 0)
+    const counted = this.getOrdersForShift(shiftId).filter((order) => order.status !== 'voided')
+    const totalFor = (method: string): number =>
+      counted.filter((order) => order.payment_method === method).reduce((sum, order) => sum + order.total, 0)
 
-    const expectedCash = shift.starting_cash + cashTotal
+    const expectedCash = shift.starting_cash + totalFor('cash')
     const discrepancy = endingCash - expectedCash
 
-    this.conn
-      .prepare(
-        "UPDATE shifts SET clock_out = ?, expected_cash = ?, ending_cash = ?, discrepancy = ?, status = 'closed' WHERE id = ?"
-      )
-      .run(new Date().toISOString(), expectedCash, endingCash, discrepancy, shiftId)
+    const mpesaOpening = shift.mpesa_opening_balance ?? null
+    const mpesaExpected = mpesaOpening !== null ? mpesaOpening + totalFor('mpesa') : null
+    const mpesaDifference =
+      mpesaExpected !== null && mpesaClosingBalance !== null ? mpesaClosingBalance - mpesaExpected : null
+    // Expected is stored only with a counted balance beside it, so a stored expected always has its difference.
+    const storedMpesaExpected = mpesaDifference !== null ? mpesaExpected : null
 
-    return { expectedCash, discrepancy }
+    this.conn.transaction(() => {
+      this.conn
+        .prepare(
+          "UPDATE shifts SET clock_out = ?, expected_cash = ?, ending_cash = ?, discrepancy = ?, status = 'closed' WHERE id = ?"
+        )
+        .run(new Date().toISOString(), expectedCash, endingCash, discrepancy, shiftId)
+      if (mpesaClosingBalance !== null) {
+        this.conn
+          .prepare(
+            'UPDATE shifts SET mpesa_closing_balance = ?, mpesa_expected = ?, mpesa_difference = ? WHERE id = ?'
+          )
+          .run(mpesaClosingBalance, storedMpesaExpected, mpesaDifference, shiftId)
+      }
+    })()
+
+    return { expectedCash, discrepancy, mpesaExpected: storedMpesaExpected, mpesaDifference }
   }
 
   /**

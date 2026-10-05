@@ -8,7 +8,7 @@
  */
 
 import { requireAdminPin } from '../lib/requireAdminPin.js'
-import type { HeldSaleSummary, HoldSaleInput, RubisDatabase } from './database.js'
+import type { HeldSaleSummary, HoldSaleInput, RubisDatabase, ShiftCloseResult } from './database.js'
 import type { ServiceResult } from './shopify-types.js'
 
 /** What {@link closeShiftUnlessHeld} needs from the database. */
@@ -22,13 +22,15 @@ export type CloseShiftDb = Pick<RubisDatabase, 'closeShift' | 'listOpenHeldSales
  * @param {CloseShiftDb} db
  * @param {number} shiftId
  * @param {number} endingCash
- * @returns {ServiceResult<{ expectedCash: number; discrepancy: number }>}
+ * @param {number | null} [mpesaClosingBalance] — the M-Pesa till balance if it was read (docs/phase-222)
+ * @returns {ServiceResult<ShiftCloseResult>}
  */
 export function closeShiftUnlessHeld(
   db: CloseShiftDb,
   shiftId: number,
-  endingCash: number
-): ServiceResult<{ expectedCash: number; discrepancy: number }> {
+  endingCash: number,
+  mpesaClosingBalance: number | null = null
+): ServiceResult<ShiftCloseResult> {
   const open = db.listOpenHeldSales()
   if (open.length > 0) {
     const list = open.map((sale) => sale.label).join(', ')
@@ -38,7 +40,7 @@ export function closeShiftUnlessHeld(
     }
   }
   try {
-    return { success: true, data: db.closeShift(shiftId, endingCash) }
+    return { success: true, data: db.closeShift(shiftId, endingCash, mpesaClosingBalance) }
   } catch (err) {
     return { success: false, error: err instanceof Error ? err.message : 'Failed to close shift' }
   }

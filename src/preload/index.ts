@@ -20,6 +20,7 @@ import type {
   OrderRow,
   StaffSummary,
   StaffRole,
+  ShiftCloseResult,
   ShiftRow,
   IntegrationProviderName,
   PrinterConfig,
@@ -557,27 +558,31 @@ const api = {
    * @param {number} staffId
    * @param {number} startingCash
    * @param {ShiftType} [shiftType] — day or night, as chosen at the till (docs/phase-199)
+   * @param {number} [mpesaOpeningBalance] — the M-Pesa till balance, if it was read (docs/phase-222)
    * @returns {Promise<ServiceResult<{ shiftId: number }>>}
    */
   openShift: (
     staffId: number,
     startingCash: number,
-    shiftType?: ShiftType
+    shiftType?: ShiftType,
+    mpesaOpeningBalance?: number
   ): Promise<ServiceResult<{ shiftId: number }>> =>
-    ipcRenderer.invoke('shifts:open', { staffId, startingCash, shiftType }),
+    ipcRenderer.invoke('shifts:open', { staffId, startingCash, shiftType, mpesaOpeningBalance }),
 
   /**
    * Closes the open till shift, reconciling counted cash.
    *
    * @param {number} shiftId
    * @param {number} endingCash
-   * @returns {Promise<ServiceResult<{ expectedCash: number; discrepancy: number }>>}
+   * @param {number} [mpesaClosingBalance] — the M-Pesa till balance, if it was read (docs/phase-222)
+   * @returns {Promise<ServiceResult<ShiftCloseResult>>}
    */
   closeShift: (
     shiftId: number,
-    endingCash: number
-  ): Promise<ServiceResult<{ expectedCash: number; discrepancy: number }>> =>
-    ipcRenderer.invoke('shifts:close', { shiftId, endingCash }),
+    endingCash: number,
+    mpesaClosingBalance?: number
+  ): Promise<ServiceResult<ShiftCloseResult>> =>
+    ipcRenderer.invoke('shifts:close', { shiftId, endingCash, mpesaClosingBalance }),
 
   /**
    * Generates the Z-report for a shift.

@@ -1,0 +1,190 @@
+/**
+ * The optional M-Pesa balance field on the Open Shift and Close Shift forms (docs/phase-222).
+ *
+ * Blank means "not recorded" and sends the call it always sent, so cash handling is unchanged; a figure is sent
+ * as a fourth (open) or third (close) argument; a bad figure stops before anything is sent. Real mount, the same
+ * way `tests/adminShiftWindows.test.ts` does it.
+ */
+
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { createElement, act } from 'react'
+import { createRoot, type Root } from 'react-dom/client'
+import AdminScreen from '../src/renderer/src/components/AdminScreen.js'
+import { useAuthStore } from '../src/renderer/src/stores/authStore.js'
+import { useKeyboardStore } from '../src/renderer/src/stores/keyboardStore.js'
+import type { ShiftRow } from '../src/main/services/database.js'
+
+let container: HTMLDivElement
+let root: Root
+
+const ok = <T,>(data?: T) => ({ success: true as const, data })
+
+const shiftRow = (overrides: Partial<ShiftRow> = {}): ShiftRow => ({
+  id: 5,
+  staff_id: 1,
+  clock_in: '2026-10-02T07:00:00.000Z',
+  clock_out: null,
+  starting_cash: 100,
+  expected_cash: null,
+  ending_cash: null,
+  discrepancy: null,
+  status: 'open',
+  ...overrides
+})
+
+function stubApi(shift: ShiftRow | null): void {
+  const named: Record<string, unknown> = {
+    platform: 'linux',
+    getCurrentShift: vi.fn().mockResolvedValue(ok(shift)),
+    getAppVersion: vi.fn().mockResolvedValue('2.2.1'),
+    onUpdateStatus: vi.fn(() => () => {}),
+    openShift: vi.fn().mockResolvedValue(ok({ shiftId: 6 })),
+    closeShift: vi
+      .fn()
+      .mockResolvedValue(ok({ expectedCash: 100, discrepancy: 0, mpesaExpected: null, mpesaDifference: null })),
+    getZReport: vi.fn().mockResolvedValue(ok(null))
+  }
+  window.api = new Proxy(named, {
+    get: (target, name: string) => target[name] ?? (target[name] = vi.fn().mockResolvedValue(ok(undefined)))
+  }) as unknown as typeof window.api
+}
+
+async function mount(): Promise<void> {
+  await act(async () => {
+    root.render(createElement(AdminScreen, { requestManagerPin: () => {} }))
+    await Promise.resolve()
+    await Promise.resolve()
+  })
+}
+
+async function click(label: string): Promise<void> {
+  const el = Array.from(container.querySelectorAll('button')).find((b) => b.textContent === label)
+  if (!el) throw new Error(`No button "${label}"`)
+  await act(async () => {
+    el.click()
+    await Promise.resolve()
+  })
+}
+
+/** Types into the nth text field of the open form, through the on-screen keyboard as the till does. */
+function type(index: number, value: string): void {
+  act(() => container.querySelectorAll('input')[index]!.click())
+  act(() => useKeyboardStore.getState().request?.onChange(value))
+}
+
+beforeEach(() => {
+  container = document.createElement('div')
+  document.body.appendChild(container)
+  root = createRoot(container)
+  useKeyboardStore.setState({ request: null })
+  useAuthStore.setState({ currentStaff: { id: 1, name: 'Admin', role: 'admin' } })
+})
+
+afterEach(() => {
+  act(() => root.unmount())
+  container.remove()
+})
+
+describe('Open Shift: M-Pesa balance (optional)', () => {
+  const openForm = async (): Promise<void> => {
+    stubApi(null)
+    await mount()
+    await click('Overview')
+    await click('Open Shift')
+  }
+
+  it('shows the field as optional, empty and marked "Not recorded"', async () => {
+    await openForm()
+
+    expect(container.textContent).toContain('M-Pesa balance (optional)')
+    const field = container.querySelectorAll('input')[1]!
+    expect(field.value).toBe('')
+    expect(field.placeholder).toBe('Not recorded')
+  })
+
+  it('sends the call it always sent when the field is left blank', async () => {
+    await openForm()
+    type(0, '250')
+    await click('Confirm')
+
+    expect(window.api.openShift).toHaveBeenCalledWith(1, 250, expect.any(String))
+    expect(vi.mocked(window.api.openShift).mock.calls[0]).toHaveLength(3)
+  })
+
+  it('sends the balance as the fourth argument, and a typed 0 as 0', async () => {
+    await openForm()
+    type(0, '250')
+    type(1, '1500.50')
+    await click('Confirm')
+    expect(vi.mocked(window.api.openShift).mock.calls[0]).toEqual([1, 250, expect.any(String), 1500.5])
+
+    act(() => root.unmount())
+    root = createRoot(container)
+    await openForm()
+    type(0, '250')
+    type(1, '0')
+    await click('Confirm')
+    expect(vi.mocked(window.api.openShift).mock.calls[0]).toEqual([1, 250, expect.any(String), 0])
+  })
+
+  it('refuses a bad balance with a message and sends nothing', async () => {
+    await openForm()
+    type(0, '250')
+    type(1, 'abc')
+    await click('Confirm')
+
+    expect(window.api.openShift).not.toHaveBeenCalled()
+    expect(container.textContent).toContain('Enter a valid M-Pesa balance, or leave it blank')
+  })
+})
+
+describe('Close Shift: M-Pesa balance (optional)', () => {
+  const closeForm = async (shift = shiftRow()): Promise<void> => {
+    stubApi(shift)
+    await mount()
+    await click('Overview')
+    await click('Close Shift')
+  }
+
+  it('sends the call it always sent when the field is left blank', async () => {
+    await closeForm()
+    type(0, '180')
+    await click('Confirm')
+
+    expect(window.api.closeShift).toHaveBeenCalledWith(5, 180)
+    expect(vi.mocked(window.api.closeShift).mock.calls[0]).toHaveLength(2)
+  })
+
+  it('sends the counted balance as the third argument', async () => {
+    await closeForm()
+    type(0, '180')
+    type(1, '1480')
+    await click('Confirm')
+
+    expect(window.api.closeShift).toHaveBeenCalledWith(5, 180, 1480)
+  })
+
+  it('refuses a negative balance and sends nothing', async () => {
+    await closeForm()
+    type(0, '180')
+    type(1, '-5')
+    await click('Confirm')
+
+    expect(window.api.closeShift).not.toHaveBeenCalled()
+    expect(container.textContent).toContain('Enter a valid M-Pesa balance, or leave it blank')
+  })
+
+  it('states the opening balance on the open shift when one was recorded, and says nothing when not', async () => {
+    stubApi(shiftRow({ mpesa_opening_balance: 1000 }))
+    await mount()
+    await click('Overview')
+    expect(container.textContent).toMatch(/starting cash and .*1,000\.00 M-Pesa balance\./)
+
+    act(() => root.unmount())
+    root = createRoot(container)
+    stubApi(shiftRow())
+    await mount()
+    await click('Overview')
+    expect(container.textContent).not.toContain('M-Pesa balance.')
+  })
+})

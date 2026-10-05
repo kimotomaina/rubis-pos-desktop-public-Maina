@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import type { ZReport } from '../../../main/services/reports.js'
 import { formatCurrency } from '../lib/currency.js'
+import { zReportMpesaLines } from '../lib/zReportMpesa.js'
 import { titleCaseName } from '../lib/text.js'
 import { formatVatRateLabel } from '../lib/vatLabel.js'
 import { CloseIcon } from './icons.js'
@@ -70,7 +71,7 @@ export default function ZReportModal({ report, onClose }: ZReportModalProps) {
       onClick={onClose}
     >
       <div
-        className="flex w-full max-w-2xl flex-col rounded-2xl bg-white shadow-xl"
+        className="flex w-full max-w-3xl flex-col rounded-2xl bg-white shadow-xl"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex shrink-0 items-center justify-between border-b border-slate-200 p-4">
@@ -137,22 +138,34 @@ export default function ZReportModal({ report, onClose }: ZReportModalProps) {
             </div>
           </div>
 
-          <div className="mb-3 space-y-1.5 rounded-lg border border-slate-200 p-3">
-            <div className="flex justify-between">
-              <span className="text-slate-600">Expected Cash</span>
-              <span className="font-medium">{formatCurrency(report.expectedCash)}</span>
+          {/* docs/phase-222: beside the cash card, not under it, so the modal is no taller than before. */}
+          <div className="mb-3 grid grid-cols-2 gap-3">
+            <div className="space-y-1.5 rounded-lg border border-slate-200 p-3">
+              <div className="flex justify-between">
+                <span className="text-slate-600">Expected Cash</span>
+                <span className="font-medium">{formatCurrency(report.expectedCash)}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-600">Counted Cash</span>
+                <span className="font-medium">
+                  {report.endingCash !== null ? formatCurrency(report.endingCash) : 'Pending'}
+                </span>
+              </div>
+              <div className="flex justify-between border-t border-slate-200 pt-1.5 text-lg font-semibold">
+                <span>Discrepancy</span>
+                <span className={discrepancyColor}>
+                  {report.discrepancy !== null ? formatCurrency(report.discrepancy) : 'Pending'}
+                </span>
+              </div>
             </div>
-            <div className="flex justify-between">
-              <span className="text-slate-600">Counted Cash</span>
-              <span className="font-medium">
-                {report.endingCash !== null ? formatCurrency(report.endingCash) : 'Pending'}
-              </span>
-            </div>
-            <div className="flex justify-between border-t border-slate-200 pt-1.5 text-lg font-semibold">
-              <span>Discrepancy</span>
-              <span className={discrepancyColor}>
-                {report.discrepancy !== null ? formatCurrency(report.discrepancy) : 'Pending'}
-              </span>
+
+            <div className="space-y-0.5 rounded-lg border border-slate-200 p-2 text-sm">
+              {zReportMpesaLines(report, formatCurrency).map((line) => (
+                <div key={line.label} className="flex justify-between">
+                  <span className="text-slate-600">{line.label}</span>
+                  <span className="font-medium">{line.value}</span>
+                </div>
+              ))}
             </div>
           </div>
 

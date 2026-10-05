@@ -30,6 +30,7 @@ import type {
   OrderRow,
   StaffSummary,
   StaffRole,
+  ShiftCloseResult,
   ShiftRow,
   IntegrationProviderName,
   PrinterConfig,
@@ -213,13 +214,15 @@ export interface PosApi {
   openShift: (
     staffId: number,
     startingCash: number,
-    shiftType?: ShiftType
+    shiftType?: ShiftType,
+    mpesaOpeningBalance?: number
   ) => Promise<ServiceResult<{ shiftId: number }>>
-  /** Closes the open till shift, reconciling counted cash. */
+  /** Closes the open till shift, reconciling counted cash and, if given, the M-Pesa balance (docs/phase-222). */
   closeShift: (
     shiftId: number,
-    endingCash: number
-  ) => Promise<ServiceResult<{ expectedCash: number; discrepancy: number }>>
+    endingCash: number,
+    mpesaClosingBalance?: number
+  ) => Promise<ServiceResult<ShiftCloseResult>>
   /** Generates the Z-report for a shift. */
   getZReport: (shiftId: number) => Promise<ServiceResult<ZReport>>
   /** Generates today's sales summary for the Admin screen. */

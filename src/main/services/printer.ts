@@ -25,6 +25,7 @@ import type { ZReport } from './reports.js'
 import { formatVatRateLabel } from './reports.js'
 import type { PrinterConfig, PrinterType, PrinterConnectionType, FiscalStatus } from './database.js'
 import { formatCurrency } from './currency.js'
+import { zReportMpesaLines } from '../lib/zReportMpesa.js'
 import { generatePdfReceipt } from './pdf-receipt.js'
 import { buildReceiptLayout, isReceiptLayoutQr, asReceiptWidth } from '../lib/receiptLayout.js'
 import { buildEnjoySlip } from '../lib/enjoySlip.js'
@@ -453,7 +454,8 @@ function renderEntries(client: ThermalPrinterLike, entries: ReceiptLayoutEntry[]
  * Layout: store name + "Z-REPORT" (centered, bold) → shift #/opened/
  * closed/cashier → dashed line → starting cash + per-method sales →
  * dashed line → total revenue (bold) + tax → dashed line → expected
- * cash, counted cash, discrepancy (bold).
+ * cash, counted cash, discrepancy (bold) → dashed line → the M-Pesa
+ * balances (docs/phase-222).
  *
  * @param {ThermalPrinterLike} client
  * @param {ZReport} report
@@ -503,6 +505,12 @@ export function renderZReport(
     `Discrepancy: ${report.discrepancy !== null ? formatCurrency(report.discrepancy) : 'Pending'}`
   )
   client.bold(false)
+
+  // docs/phase-222: the M-Pesa balances, below the cash figures; "Not recorded" where none was entered.
+  client.drawLine()
+  for (const line of zReportMpesaLines(report, formatCurrency)) {
+    client.println(`${line.label}: ${line.value}`)
+  }
 
   client.cut()
 }

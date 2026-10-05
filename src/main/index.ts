@@ -93,6 +93,7 @@ import type {
   ManualMpesaApproval,
   MpesaPaymentRow,
   StaffSummary,
+  ShiftCloseResult,
   ShiftRow,
   OrderRow
 } from './services/database.js'
@@ -3393,8 +3394,8 @@ app.whenReady().then(async () => {
         return { success: false, error: validation.error }
       }
       try {
-        const { staffId, startingCash, shiftType } = validation.data
-        const data = db.openShift(staffId, startingCash, shiftType ?? null)
+        const { staffId, startingCash, shiftType, mpesaOpeningBalance } = validation.data
+        const data = db.openShift(staffId, startingCash, shiftType ?? null, mpesaOpeningBalance ?? null)
         return { success: true, data }
       } catch (err) {
         return {
@@ -3411,12 +3412,17 @@ app.whenReady().then(async () => {
    */
   ipcMain.handle(
     'shifts:close',
-    (_event, request: unknown): ServiceResult<{ expectedCash: number; discrepancy: number }> => {
+    (_event, request: unknown): ServiceResult<ShiftCloseResult> => {
       const validation = validate(shiftCloseSchema, request)
       if (!validation.success) {
         return { success: false, error: validation.error }
       }
-      return closeShiftUnlessHeld(db, validation.data.shiftId, validation.data.endingCash)
+      return closeShiftUnlessHeld(
+        db,
+        validation.data.shiftId,
+        validation.data.endingCash,
+        validation.data.mpesaClosingBalance ?? null
+      )
     }
   )
 

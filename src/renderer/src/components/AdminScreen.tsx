@@ -64,6 +64,18 @@ import type { FiscalConnectionTestResult } from '../../../main/services/integrat
 import type { UpdateStatus } from '../../../main/services/updater.js'
 import type { LastUpdateResult } from '../../../main/services/updateBackup.js'
 
+const MPESA_BALANCE_INVALID = 'Enter a valid M-Pesa balance, or leave it blank'
+
+/**
+ * Reads an optional balance field (docs/phase-222): blank is `null` ("not recorded"), a number is itself,
+ * anything else is `'invalid'`. A blank is never turned into 0, which would read as "the balance was nothing".
+ */
+function parseOptionalBalance(input: string): number | null | 'invalid' {
+  if (input.trim() === '') return null
+  const value = Number(input)
+  return Number.isFinite(value) && value >= 0 ? value : 'invalid'
+}
+
 /**
  * The open shift's nominal window, with a plain note once it has run past the
  * window's end (docs/phase-199). A note only: it never blocks the close, warns,
@@ -275,6 +287,9 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
 
   const [startingCashInput, setStartingCashInput] = useState('')
   const [endingCashInput, setEndingCashInput] = useState('')
+  // docs/phase-222: optional; blank means "not recorded", which a zero is not.
+  const [mpesaOpeningInput, setMpesaOpeningInput] = useState('')
+  const [mpesaClosingInput, setMpesaClosingInput] = useState('')
   const [showOpenForm, setShowOpenForm] = useState(false)
   const [selectedShiftType, setSelectedShiftType] = useState<ShiftType>('day')
   const [showCloseForm, setShowCloseForm] = useState(false)
@@ -1104,12 +1119,24 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
       setShiftActionError('Enter a valid starting cash amount')
       return
     }
-    const result = await window.api.openShift(currentStaff.id, startingCash, selectedShiftType)
+    const mpesaOpening = parseOptionalBalance(mpesaOpeningInput)
+    if (mpesaOpening === 'invalid') {
+      setShiftActionError(MPESA_BALANCE_INVALID)
+      return
+    }
+    // A blank balance sends no fourth argument at all, so the call is the one it was before docs/phase-222.
+    const result = await window.api.openShift(
+      currentStaff.id,
+      startingCash,
+      selectedShiftType,
+      ...(mpesaOpening === null ? [] : [mpesaOpening])
+    )
     if (!result.success) {
       setShiftActionError(result.error ?? 'Failed to open shift')
       return
     }
     setStartingCashInput('')
+    setMpesaOpeningInput('')
     setShowOpenForm(false)
     await refresh()
   }
@@ -1149,12 +1176,22 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
       setShiftActionError('Enter a valid ending cash amount')
       return
     }
-    const result = await window.api.closeShift(currentShift.id, endingCash)
+    const mpesaClosing = parseOptionalBalance(mpesaClosingInput)
+    if (mpesaClosing === 'invalid') {
+      setShiftActionError(MPESA_BALANCE_INVALID)
+      return
+    }
+    const result = await window.api.closeShift(
+      currentShift.id,
+      endingCash,
+      ...(mpesaClosing === null ? [] : [mpesaClosing])
+    )
     if (!result.success) {
       setShiftActionError(result.error ?? 'Failed to close shift')
       return
     }
     setEndingCashInput('')
+    setMpesaClosingInput('')
     setShowCloseForm(false)
 
     const reportResult = await window.api.getZReport(currentShift.id)
@@ -2401,7 +2438,10 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
         {currentShift && (
           <p className="mb-3 text-base text-slate-600">
             Opened {new Date(currentShift.clock_in).toLocaleString()} with{' '}
-            {formatCurrency(currentShift.starting_cash)} starting cash.
+            {formatCurrency(currentShift.starting_cash)} starting cash
+            {currentShift.mpesa_opening_balance != null &&
+              ` and ${formatCurrency(currentShift.mpesa_opening_balance)} M-Pesa balance`}
+            .
           </p>
         )}
 
@@ -2462,6 +2502,20 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
                 autoFocus
               />
             </div>
+            <div>
+              <label className="mb-1 block text-lg font-medium text-slate-600">
+                M-Pesa balance (optional)
+              </label>
+              <input
+                type="text"
+                readOnly
+                value={mpesaOpeningInput}
+                placeholder="Not recorded"
+                onClick={() => openField(mpesaOpeningInput, setMpesaOpeningInput, 'M-Pesa balance (optional)', { mode: 'decimal' })}
+                onFocus={() => openField(mpesaOpeningInput, setMpesaOpeningInput, 'M-Pesa balance (optional)', { mode: 'decimal' })}
+                className="w-40 h-12 rounded-lg border border-slate-300 px-3 text-xl focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-100"
+              />
+            </div>
             <button
               type="button"
               onClick={() => void handleOpenShift()}
@@ -2474,6 +2528,7 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
               onClick={() => {
                 setShowOpenForm(false)
                 setStartingCashInput('')
+                setMpesaOpeningInput('')
               }}
               className="rounded-lg border border-slate-300 px-4 py-2 text-base text-slate-600 hover:bg-slate-50"
             >
@@ -2508,6 +2563,20 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
                 autoFocus
               />
             </div>
+            <div>
+              <label className="mb-1 block text-lg font-medium text-slate-600">
+                M-Pesa balance (optional)
+              </label>
+              <input
+                type="text"
+                readOnly
+                value={mpesaClosingInput}
+                placeholder="Not recorded"
+                onClick={() => openField(mpesaClosingInput, setMpesaClosingInput, 'M-Pesa balance (optional)', { mode: 'decimal' })}
+                onFocus={() => openField(mpesaClosingInput, setMpesaClosingInput, 'M-Pesa balance (optional)', { mode: 'decimal' })}
+                className="w-40 h-12 rounded-lg border border-slate-300 px-3 text-xl focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-100"
+              />
+            </div>
             <button
               type="button"
               onClick={() => void handleCloseShift()}
@@ -2520,6 +2589,7 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
               onClick={() => {
                 setShowCloseForm(false)
                 setEndingCashInput('')
+                setMpesaClosingInput('')
               }}
               className="rounded-lg border border-slate-300 px-4 py-2 text-base text-slate-600 hover:bg-slate-50"
             >
