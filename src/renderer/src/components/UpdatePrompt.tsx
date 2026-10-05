@@ -3,6 +3,7 @@ import { useCartStore } from '../stores/cartStore.js'
 import { isPaymentInProgress, usePaymentActivityStore } from '../stores/paymentActivityStore.js'
 import { useUpdateStatusStore } from '../stores/updateStatusStore.js'
 import { updateNowRefusal } from '../lib/updateNow.js'
+import { UPDATE_DOWNLOAD_FAILED_TEXT, UPDATE_INSTALL_FAILED_TEXT, plainUpdateText } from '../lib/updateMessages.js'
 
 type Step = 'offer' | 'downloading' | 'installing'
 
@@ -82,7 +83,7 @@ export default function UpdatePrompt() {
       if (!download.success) {
         setStep('offer')
         setNotice(
-          `The update could not be downloaded: ${download.error ?? 'unknown error'}. ` +
+          `${plainUpdateText(download.error, UPDATE_DOWNLOAD_FAILED_TEXT)} ` +
             `The till is still running version ${installedVersion ?? 'as before'}.`
         )
         return
@@ -101,7 +102,7 @@ export default function UpdatePrompt() {
     const install = await window.api.installUpdate()
     if (!install.success) {
       setStep('offer')
-      setNotice(install.error ?? 'The update could not be installed. The till is still running.')
+      setNotice(plainUpdateText(install.error, UPDATE_INSTALL_FAILED_TEXT))
     }
   }
 

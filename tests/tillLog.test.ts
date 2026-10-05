@@ -44,8 +44,9 @@ describe('a log line', () => {
     expect(sanitizeTillDetail('x'.repeat(TILL_LOG_DETAIL_MAX))).toHaveLength(TILL_LOG_DETAIL_MAX)
   })
 
-  it('knows three events, and the screen may write only one of them', () => {
-    expect([...TILL_LOG_EVENTS]).toEqual(['print-failed', 'print-fallback', 'shift-state-unreadable'])
+  it('knows four events, and the screen may write only one of them', () => {
+    // docs/phase-230: old, three events; `update-failed` is the fourth, written by the main process only.
+    expect([...TILL_LOG_EVENTS]).toEqual(['print-failed', 'print-fallback', 'shift-state-unreadable', 'update-failed'])
     expect([...RENDERER_TILL_EVENTS]).toEqual(['shift-state-unreadable'])
   })
 })

@@ -306,7 +306,10 @@ describe('Update now on an empty cart', () => {
 
     await click('Update now')
 
-    expect(container.textContent).toContain('The update could not be downloaded: net::ERR_CONNECTION_RESET.')
+    // docs/phase-230: old, the raw error was shown (`The update could not be downloaded: net::ERR_CONNECTION_RESET.`).
+    // New: a plain sentence; the raw error never reaches the screen.
+    expect(container.textContent).toContain('The update could not be downloaded. Check the internet connection and try again.')
+    expect(container.textContent).not.toContain('net::')
     expect(container.textContent).toContain('The till is still running version 2.1.9.')
     expect(api.installUpdate).not.toHaveBeenCalled()
     expect(buttons()).toEqual(['Later', 'Update now'])

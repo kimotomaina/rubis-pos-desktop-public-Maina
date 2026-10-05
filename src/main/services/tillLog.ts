@@ -7,8 +7,8 @@
  * object or a stack. The file is not rotated: it grows by about 150 bytes for each failure.
  */
 
-/** Every event the log knows. The first two are written by the main process only. */
-export const TILL_LOG_EVENTS = ['print-failed', 'print-fallback', 'shift-state-unreadable'] as const
+/** Every event the log knows. `print-failed`, `print-fallback` and `update-failed` are written by the main process only. */
+export const TILL_LOG_EVENTS = ['print-failed', 'print-fallback', 'shift-state-unreadable', 'update-failed'] as const
 
 export type TillLogEvent = (typeof TILL_LOG_EVENTS)[number]
 

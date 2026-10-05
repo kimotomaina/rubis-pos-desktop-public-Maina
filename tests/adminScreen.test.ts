@@ -579,7 +579,11 @@ describe('AdminScreen > Admin page > App & Updates', () => {
 
       expect(container.textContent).toContain('Updated 2.0.5 to 2.0.6')
       expect(container.textContent).toContain('Sales carried over: 1,234 of 1,234')
-      expect(container.textContent).toContain('C:\\backups\\pre-update-2.0.5-to-2.0.6-x.sqlite')
+      // docs/phase-230: old, the line ended with the backup's path (`toContain('C:\\backups\\pre-update-…sqlite')`).
+      // New: no path, folder or file name on this screen.
+      expect(container.textContent).not.toContain('C:\\backups')
+      expect(container.textContent).not.toContain('.sqlite')
+      expect(container.textContent).not.toContain('Backup:')
     })
 
     it('renders in red for a failed update, with the differing numbers', async () => {

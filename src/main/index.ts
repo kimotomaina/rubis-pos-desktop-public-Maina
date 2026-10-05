@@ -54,6 +54,7 @@ import { installUpdate, runPostUpdateCheck } from './services/updateBackup.js'
 import type { LastUpdateResult } from './services/updateBackup.js'
 import { createFileErrorLogger, installGlobalErrorHandlers } from './services/errorHandler.js'
 import { createTillLog, printOutcomeEntry } from './services/tillLog.js'
+import { createUpdateErrors } from './services/updateErrors.js'
 import {
   fetchAllProducts,
   createShopifyClient,
@@ -3963,7 +3964,11 @@ app.whenReady().then(async () => {
    * Auto-update wiring: pushes each status change to every
    * open window as `updater:status`, driving the renderer's toast.
    */
-  initAutoUpdater(autoUpdater, (status: UpdateStatus) => {
+  // docs/phase-230: what the update screens say, and what till.log keeps. The screens never see a raw updater error.
+  const updateErrors = createUpdateErrors((detail) => tillLog.record('update-failed', detail))
+
+  initAutoUpdater(autoUpdater, (rawStatus: UpdateStatus) => {
+    const status = updateErrors.onStatus(rawStatus)
     if (status.kind === 'downloaded') downloadedVersion = status.version
     if (status.kind === 'error') backgroundEngines.forEach((background) => background.resume())
     broadcast('updater:status', status)
@@ -3993,7 +3998,10 @@ app.whenReady().then(async () => {
    * (docs/phase-219). Resolves when the download has finished; progress arrives as
    * `updater:status`. The prompt and the App & Updates panel both use it.
    */
-  ipcMain.handle('updater:download', (): Promise<ServiceResult<void>> => downloadUpdateNow(autoUpdater))
+  ipcMain.handle('updater:download', async (): Promise<ServiceResult<void>> => {
+    updateErrors.beginDownload()
+    return updateErrors.download(await downloadUpdateNow(autoUpdater))
+  })
 
   /** Where phase 178's pre-update backups live — survives an update (the phase-177 NSIS guard), wiped on a real uninstall like everything else under `userData`. */
   const updateBackupsDir = join(app.getPath('userData'), 'backups')
@@ -4029,11 +4037,7 @@ app.whenReady().then(async () => {
         })
     })
 
-    if (!result.success) {
-      return { success: false, error: result.error }
-    }
-
-    return { success: true }
+    return updateErrors.install(result, app.getVersion())
   })
 
   /**

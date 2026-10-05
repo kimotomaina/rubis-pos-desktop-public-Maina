@@ -3,6 +3,7 @@ import type { UpdateStatus } from '../../../main/services/updater.js'
 import { UPDATE_INSTALL_ERROR_TOAST_TIMEOUT_MS, UPDATE_TOAST_TIMEOUT_MS } from '../lib/toastTimeouts.js'
 import { useToastStore } from '../stores/toastStore.js'
 import { useUpdateStatusStore } from '../stores/updateStatusStore.js'
+import { UPDATE_INSTALL_FAILED_TEXT, plainUpdateText } from '../lib/updateMessages.js'
 
 type ToastStatus = Extract<UpdateStatus, { kind: 'downloading' | 'downloaded' }>
 
@@ -50,7 +51,7 @@ export default function UpdateToast() {
       useToastStore.getState().show({
         id: UPDATE_INSTALL_ERROR_TOAST_ID,
         tone: 'error',
-        message: result.error ?? 'The update could not be installed.',
+        message: plainUpdateText(result.error, UPDATE_INSTALL_FAILED_TEXT),
         timeoutMs: UPDATE_INSTALL_ERROR_TOAST_TIMEOUT_MS,
         onDismiss: () => useToastStore.getState().dismiss(UPDATE_INSTALL_ERROR_TOAST_ID)
       })

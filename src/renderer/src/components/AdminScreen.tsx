@@ -4,6 +4,12 @@ import { useHeldSalesStore } from '../stores/heldSalesStore.js'
 import { closeShiftBlockedMessage } from '../lib/heldSale.js'
 import { useUnfiledCountStore } from '../stores/unfiledCountStore.js'
 import { useUpdateStatusStore } from '../stores/updateStatusStore.js'
+import {
+  UPDATE_CHECK_FAILED_TEXT,
+  UPDATE_DOWNLOAD_FAILED_TEXT,
+  UPDATE_INSTALL_FAILED_TEXT,
+  plainUpdateText
+} from '../lib/updateMessages.js'
 import { useShopifyReconciliationStore } from '../stores/shopifyReconciliationStore.js'
 import { countActionableFindings } from '../lib/shopifyReconciliation.js'
 import { formatCurrency } from '../lib/currency.js'
@@ -105,7 +111,7 @@ function updateResultText(status: UpdateStatus | null): string | null {
     case 'downloaded':
       return `Version ${status.version} is ready to install`
     case 'error':
-      return status.message
+      return plainUpdateText(status.message, UPDATE_CHECK_FAILED_TEXT)
     default:
       return null
   }
@@ -124,8 +130,7 @@ function formatUpdateResultLine(result: LastUpdateResult): string {
   const date = new Date(result.checkedAt).toLocaleDateString()
   return (
     `Updated ${result.fromVersion} to ${result.toVersion} on ${date}. ` +
-    `Sales carried over: ${result.after.orders.toLocaleString()} of ${result.before.orders.toLocaleString()}. ` +
-    `Backup: ${result.backupPath}.`
+    `Sales carried over: ${result.after.orders.toLocaleString()} of ${result.before.orders.toLocaleString()}.`
   )
 }
 
@@ -1308,7 +1313,7 @@ export default function AdminScreen({ requestManagerPin, initialTab, initialRepo
     setUpdateCheckMessage(null)
     const result = await window.api.downloadUpdate()
     if (!result.success) {
-      setUpdateCheckMessage(result.error ?? 'The update could not be downloaded')
+      setUpdateCheckMessage(plainUpdateText(result.error, UPDATE_DOWNLOAD_FAILED_TEXT))
     }
     setDownloadingUpdate(false)
   }
@@ -1323,7 +1328,7 @@ export default function AdminScreen({ requestManagerPin, initialTab, initialRepo
     // result text from here on. Only a failure to even start the check
     // needs its own message.
     if (!result.success) {
-      setUpdateCheckMessage(result.error ?? 'Update check failed')
+      setUpdateCheckMessage(plainUpdateText(result.error, UPDATE_CHECK_FAILED_TEXT))
     }
     setCheckingForUpdates(false)
   }
@@ -1339,7 +1344,7 @@ export default function AdminScreen({ requestManagerPin, initialTab, initialRepo
     setInstallError(null)
     const result = await window.api.installUpdate()
     if (!result.success) {
-      setInstallError(result.error ?? 'Install failed')
+      setInstallError(plainUpdateText(result.error, UPDATE_INSTALL_FAILED_TEXT))
       setInstallingUpdate(false)
     }
     // On success the app quits immediately — no state left to reset.
