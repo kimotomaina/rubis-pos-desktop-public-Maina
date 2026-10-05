@@ -5,12 +5,8 @@ import { formatCurrency } from '../lib/currency.js'
 import { parseFiscalTimestamp } from '../lib/fiscalDate.js'
 import { getEtrCopyEligibility } from '../lib/etrCopy.js'
 import { useToastStore } from '../stores/toastStore.js'
-import { paginate } from '../lib/paginate.js'
-import Pager from './Pager.js'
+import { useMoreBelow } from '../lib/useMoreBelow.js'
 import etimsLogoSrc from '../assets/logo-etims.png'
-
-/** Orders per page (docs/phase-166 Commit E4) — replaces this screen's reliance on the outer window scrolling. */
-export const ORDER_HISTORY_PAGE_SIZE = 10
 
 /**
  * Renders the eTIMS brand logo, falling back to a plain "eTIMS" text
@@ -56,11 +52,9 @@ interface OrderHistoryProps {
  * Displays a list of recent orders with status badges and retry
  * functionality for failed or pending orders.
  *
- * Paginated at {@link ORDER_HISTORY_PAGE_SIZE} (docs/phase-166 Commit
- * E4) over the up-to-50 orders `fetchOrders` already loads — this
- * screen used to rely entirely on `App.tsx`'s outer window scrolling
- * to show more than fit; Phase E's no-scroll rule replaces that with
- * paging instead.
+ * The up-to-50 orders `fetchOrders` loads scroll inside the list
+ * region alone (docs/phase-225), the same pattern as End of Day
+ * (docs/phase-220); the page title above it stays put.
  *
  * @param {OrderHistoryProps} props
  * @returns {JSX.Element}
@@ -70,7 +64,7 @@ export default function OrderHistory({ onRetry, onPrint, requestManagerPin }: Or
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [expandedOrderId, setExpandedOrderId] = useState<number | null>(null)
-  const [page, setPage] = useState(1)
+  const { ref: scrollRef, moreBelow, onScroll } = useMoreBelow<HTMLDivElement>()
 
   const fetchOrders = async () => {
     try {
@@ -219,11 +213,15 @@ export default function OrderHistory({ onRetry, onPrint, requestManagerPin }: Or
     )
   }
 
-  const pageResult = paginate(orders, page, ORDER_HISTORY_PAGE_SIZE)
-
   return (
-    <div className="space-y-3">
-      {pageResult.items.map((order) => {
+    <div className="relative flex min-h-0 flex-1 flex-col">
+      <div
+        ref={scrollRef}
+        onScroll={onScroll}
+        data-testid="order-history-scroll"
+        className="touch-scrollbar min-h-0 flex-1 space-y-3 overflow-y-auto pr-2"
+      >
+      {orders.map((order) => {
         const isExpanded = expandedOrderId === order.local_id
         const etrCopy = getEtrCopyEligibility(orders, order)
         return (
@@ -347,7 +345,14 @@ export default function OrderHistory({ onRetry, onPrint, requestManagerPin }: Or
           </div>
         )
       })}
-      <Pager page={pageResult.page} pageCount={pageResult.pageCount} onChange={setPage} />
+      </div>
+      {moreBelow && (
+        <div
+          aria-hidden="true"
+          data-testid="order-history-fade"
+          className="pointer-events-none absolute bottom-0 left-0 right-5 h-12 bg-linear-to-t from-slate-50 to-transparent"
+        />
+      )}
     </div>
   )
 }

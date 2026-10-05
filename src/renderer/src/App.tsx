@@ -849,13 +849,12 @@ export default function App() {
         </main>
       ) : activeView === 'orders' ? (
         /**
-         * `overflow-hidden`, not `-auto` (docs/phase-166 Commit E4):
-         * `OrderHistory` is the only thing this wrapper ever renders, and
-         * it now paginates its own list, so nothing inside can ever be
-         * taller than this box again.
+         * `overflow-hidden`, not `-auto`: `OrderHistory` scrolls its own
+         * list (docs/phase-225), so the title stays put and nothing here
+         * is ever taller than this box.
          */
-        <main className="flex-1 overflow-hidden p-6">
-          <h2 className="mb-4 text-xl font-semibold text-slate-700">
+        <main className="flex flex-1 flex-col overflow-hidden p-6">
+          <h2 className="mb-4 shrink-0 text-xl font-semibold text-slate-700">
             Order History
           </h2>
           <OrderHistory

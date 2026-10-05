@@ -632,7 +632,7 @@ const api = {
    * @returns {Promise<ServiceResult<ZReport>>}
    */
   getZReport: (shiftId: number): Promise<ServiceResult<ZReport>> =>
-    ipcRenderer.invoke('reports:z-report', shiftId),
+    ipcRenderer.invoke('reports:z-report', { shiftId }),
 
   /**
    * Generates today's sales summary for the Admin screen.

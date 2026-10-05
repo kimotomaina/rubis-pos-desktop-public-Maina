@@ -55,7 +55,8 @@ const ALLOW_LIST: Record<string, number> = {
   [join('src', 'renderer', 'src', 'components', 'OnboardingScreen.tsx')]: 1, // Pre-login; out of scope for this phase.
   [join('src', 'renderer', 'src', 'components', 'LocationConfirmScreen.tsx')]: 1, // Pre-login; out of scope for this phase.
   [join('src', 'renderer', 'src', 'components', 'EtimsSetupGate.tsx')]: 1, // Pre-login; out of scope for this phase.
-  [join('src', 'renderer', 'src', 'pages', 'EndOfDayPage.tsx')]: 1 // docs/phase-220: was 0 (ZERO_SCROLL_FILES), now 1. End of Day entries, owner's design, 2026-10-05.
+  [join('src', 'renderer', 'src', 'pages', 'EndOfDayPage.tsx')]: 1, // docs/phase-220: was 0 (ZERO_SCROLL_FILES), now 1. End of Day entries, owner's design, 2026-10-05.
+  [join('src', 'renderer', 'src', 'components', 'OrderHistory.tsx')]: 1 // docs/phase-225: was 0 (ZERO_SCROLL_FILES), now 1. Order list scrolls, owner's request, 2026-10-05.
 }
 
 /** Files expected to have ZERO vertical-scroll classes — either always have, or (this commit) now do. */
@@ -64,7 +65,6 @@ const ZERO_SCROLL_FILES = [
   join('src', 'renderer', 'src', 'components', 'LoginScreen.tsx'),
   join('src', 'renderer', 'src', 'components', 'LocationPendingScreen.tsx'),
   join('src', 'renderer', 'src', 'components', 'AdminScreen.tsx'),
-  join('src', 'renderer', 'src', 'components', 'OrderHistory.tsx'),
   join('src', 'renderer', 'src', 'components', 'PosCartTable.tsx'),
   join('src', 'renderer', 'src', 'components', 'VariantModal.tsx'),
   join('src', 'renderer', 'src', 'components', 'ZReportModal.tsx'),
