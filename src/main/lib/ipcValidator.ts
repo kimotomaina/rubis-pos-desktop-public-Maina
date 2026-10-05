@@ -512,7 +512,17 @@ export const shiftOpenSchema = z
     staffId: z.number().int(),
     // docs/phase-227: a float cannot be negative. Before, only the renderer refused one.
     startingCash: z.number().finite().nonnegative(),
+    // docs/phase-231: ignored. The shift's type comes from the clock in the main process; still accepted so an older caller validates.
     shiftType: z.enum(['day', 'night']).nullish(),
+    // docs/phase-231: what the form showed of the earlier sales in this window, and an admin's choice to start at 0.
+    earlierShown: z
+      .object({
+        count: z.number().int().nonnegative(),
+        cash: z.number().finite().nonnegative(),
+        mpesa: z.number().finite().nonnegative()
+      })
+      .optional(),
+    startAtZero: z.boolean().optional(),
     // docs/phase-222: optional on purpose. Absent or null is "not recorded", which a zero is not.
     mpesaOpeningBalance: z.number().finite().nonnegative().nullish(),
     // docs/phase-227: a manager's PIN for a shift opened from the cart by someone who is not an admin. Both or neither.
@@ -549,35 +559,28 @@ export const shiftsListSchema = z.object({
   page: z.number().int().positive().default(1)
 })
 
-/** A period for a shift recorded after the fact (docs/phase-223): two instants, checked properly in the main process. */
-const pastShiftPeriodFields = {
-  startIso: z.string().min(1).max(40),
-  endIso: z.string().min(1).max(40)
-}
+/** `reports:window-report` request payload (docs/phase-231) — read-only: one window by type and start date. */
+export const windowReportSchema = z.object({
+  type: z.enum(['day', 'night']),
+  startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/)
+})
 
-/** `shifts:past-preview` request payload (docs/phase-223) — read-only. */
-export const pastShiftPreviewSchema = z.object(pastShiftPeriodFields)
+/** `shifts:move-sale-preview` request payload (docs/phase-231) — read-only. */
+export const moveSalePreviewSchema = z.object({
+  orderId: z.number().int().positive(),
+  toShiftId: z.number().int().positive()
+})
 
 /**
- * `shifts:create-past` request payload (docs/phase-223). Manager-gated like `reports:approve-day`. The cash figures
- * are required (expected cash cannot be worked out without a float, and the cashier can count it); the M-Pesa
- * balances are optional as on any shift. `orderIds` is exactly the list the manager was shown; the reason is required.
+ * `shifts:move-sale` request payload (docs/phase-231). Admin-gated with a PIN re-verified in the main process, like
+ * `shifts:correct`; the reason is required. A sale made in a different window from the target shift needs the tick.
  */
-export const createPastShiftSchema = managerAuthzSchema.extend({
-  ...pastShiftPeriodFields,
-  orderIds: z.array(z.number().int().positive()).min(1, 'Choose the sales for this shift').max(5000),
-  // docs/phase-227: both cash figures, or `cashNotCounted: true` and neither (they are ignored if sent).
-  startingCash: z.number().finite().nonnegative().optional(),
-  endingCash: z.number().finite().nonnegative().optional(),
-  cashNotCounted: z.boolean().optional(),
-  mpesaOpeningBalance: z.number().finite().nonnegative().nullish(),
-  mpesaClosingBalance: z.number().finite().nonnegative().nullish(),
-  shiftType: z.enum(['day', 'night']),
-  reason: z.string().trim().min(1, 'A reason is required').max(300, 'Keep the reason under 300 characters')
-}).refine(
-  (data) => data.cashNotCounted === true || (data.startingCash !== undefined && data.endingCash !== undefined),
-  { message: 'Enter the starting cash and the counted ending cash, or choose Not counted', path: ['endingCash'] }
-)
+export const moveSaleSchema = managerAuthzSchema.extend({
+  orderId: z.number().int().positive(),
+  toShiftId: z.number().int().positive(),
+  reason: z.string().trim().min(1, 'A reason is required').max(300, 'Keep the reason under 300 characters'),
+  acknowledgeDifferentWindow: z.boolean().optional()
+})
 
 /**
  * `shifts:correct` request payload (docs/phase-224). Manager-gated. The four figures are the whole set the manager

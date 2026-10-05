@@ -14,9 +14,24 @@
  */
 
 import type { VatReconcileOrderRow } from './vat-reconcile.js'
-import { SHIFT_TYPES, type ShiftType } from '../lib/shiftWindows.js'
-import { findOverlappingShift, parsePastShiftPeriod } from '../lib/pastShift.js'
-import { sameEnteredFigures, workShiftFigures, type ShiftEnteredFigures } from '../lib/shiftFigures.js'
+import { sameWindow, shiftWindowOf, type ShiftType, type ShiftWindowInstance } from '../lib/shiftWindows.js'
+import { findOverlappingShift } from '../lib/pastShift.js'
+import { planAutoAssignment } from '../lib/autoAssign.js'
+import {
+  AUTO_SHIFT_REASON,
+  OPENED_WITH_EARLIER_SALES_REASON,
+  STALE_EARLIER_SALES_MESSAGE,
+  drawerBelowEarlierMessage,
+  mpesaBelowEarlierMessage,
+  startedAtZeroReason,
+  windowHasShiftMessage
+} from '../lib/shiftRules.js'
+import {
+  sameEnteredFigures,
+  workShiftFigures,
+  type ShiftEnteredFigures,
+  type ShiftWorkedFigures
+} from '../lib/shiftFigures.js'
 import { UNVERIFIABLE_RETRY_REASON } from './integrations/real-etims-provider.js'
 import { buildLocationTraderInvNum, nextTraderSeq } from '../lib/traderSystemInvoiceNumber.js'
 import { MAX_HELD_LABEL_LENGTH, MAX_HELD_SALES } from '../lib/heldSaleRules.js'
@@ -343,6 +358,15 @@ export interface ShiftRow {
    * including every shift from before this phase.
    */
   cash_not_counted?: 0 | 1
+  /**
+   * The window `clock_in` falls in (docs/phase-231, W4), added when a shift is read for the screens and never stored:
+   * the type is the window's whatever `shift_type` says. `labelled_as` is the stored label, only when it differs.
+   */
+  window_type?: ShiftType
+  window_date?: string
+  labelled_as?: ShiftType
+  /** How many shifts hold this shift's window (docs/phase-231); more than 1 only for older data. */
+  window_shift_count?: number
 }
 
 /** How a shift came to exist: opened and closed at the till, or recorded afterwards by a manager. */
@@ -364,30 +388,114 @@ export interface UnattachedSaleRow {
   payment_method: PaymentMethod | null
 }
 
-/** What recording a past shift needs (docs/phase-223). The times are instants; the caller has already checked the manager's PIN. */
-export interface CreateRetrospectiveShiftInput {
-  managerId: number
-  startIso: string
-  endIso: string
-  /** Exactly the sales the manager was shown. The shift takes these, and only these. */
-  orderIds: number[]
-  startingCash: number
-  endingCash: number
-  mpesaOpeningBalance: number | null
-  mpesaClosingBalance: number | null
-  shiftType: ShiftType
+/** Why a shift's sales changed after it was opened (docs/phase-231). */
+export type ShiftAdjustmentKind = 'opening' | 'auto' | 'reassign_in' | 'reassign_out'
+
+/** Row shape of the `shift_adjustments` table (docs/phase-231): one append-only record of sales joining or leaving a shift. */
+export interface ShiftAdjustmentRow {
+  id: number
+  shift_id: number
+  kind: ShiftAdjustmentKind
+  at: string
+  /** `NULL` when the till did it by itself. */
+  by_staff_id: number | null
   reason: string
-  /** Nobody counted the drawer (docs/phase-227): `startingCash` and `endingCash` are then ignored and stored as no figures. */
-  cashNotCounted?: boolean
+  /** For a reassignment, the shift the sale came from or went to. */
+  peer_shift_id: number | null
+  sales_count: number
+  sales_total: number
+  cash_total: number
+  mpesa_total: number
+  card_total: number
+  first_sale_at: string | null
+  last_sale_at: string | null
+  /** For an `opening` record: the cash counted in the drawer when the shift opened. */
+  opening_drawer_cash: number | null
+  /** The figures as they stood once this record was written; `NULL` for an open shift or one whose cash was not counted. */
+  starting_cash: number | null
+  ending_cash: number | null
+  expected_cash: number | null
+  discrepancy: number | null
+  mpesa_opening_balance: number | null
+  mpesa_closing_balance: number | null
+  mpesa_expected: number | null
+  mpesa_difference: number | null
 }
 
-/** What recording a past shift returns: the new shift and the figures stored on it. */
-export interface RetrospectiveShiftResult extends Omit<ShiftCloseResult, 'expectedCash' | 'discrepancy'> {
+/** One sale named by an adjustment, with what the reports need to add it up. */
+export interface ShiftAdjustmentSaleRow {
+  adjustment_id: number
+  kind: ShiftAdjustmentKind
+  order_id: number
+  total: number
+  payment_method: PaymentMethod | null
+  status: OrderStatus
+}
+
+/** The sales already made in a window with no shift in it, as the Open Shift form shows them (docs/phase-231). */
+export interface EarlierSalesShown {
+  count: number
+  cash: number
+  mpesa: number
+}
+
+/** The extra things opening a shift can carry (docs/phase-231). */
+export interface OpenShiftOptions {
+  /** What the form showed. If the sales now differ, the shift is not opened. */
+  earlierShown?: EarlierSalesShown
+  /** An admin's choice when the drawer holds less than the earlier cash sales: start at 0. */
+  startAtZero?: boolean
+}
+
+/** What one run of automatic assignment did to one shift. */
+export interface AutoAssignTouched {
   shiftId: number
-  attachedCount: number
-  /** `null` when the cash was not counted (docs/phase-227): there is nothing to compare. */
-  expectedCash: number | null
-  discrepancy: number | null
+  created: boolean
+  windowType: ShiftType
+  windowDate: string
+  count: number
+}
+
+/** What a run of automatic assignment did. */
+export interface AutoAssignResult {
+  touched: AutoAssignTouched[]
+  /** Sales left waiting for the current window's shift. */
+  waiting: number
+  /** Another run was already in progress, so this one did nothing. */
+  skipped?: boolean
+}
+
+/** What moving a sale to another shift needs (docs/phase-231); the caller has already checked the admin's PIN. */
+export interface ReassignSaleInput {
+  orderId: number
+  toShiftId: number
+  managerId: number
+  reason: string
+  /** Required when the sale was made in a different window from the shift it goes to. */
+  acknowledgeDifferentWindow?: boolean
+}
+
+/** The figures one shift would show after a sale moves, `null` when it has none (open, or cash not counted). */
+export interface MoveFigures {
+  expectedCash: number
+  discrepancy: number
+  mpesaExpected: number | null
+  mpesaDifference: number | null
+}
+
+/** What moving a sale would do (docs/phase-231), read-only; `problem` says why it cannot be done, or is `null`. */
+export interface SaleMovePreview {
+  orderId: number
+  total: number
+  paymentMethod: PaymentMethod | null
+  createdAt: string | null
+  fromShiftId: number | null
+  toShiftId: number
+  /** The sale was made outside the target shift's window and times: moving it needs a tick. */
+  differentWindow: boolean
+  from: MoveFigures | null
+  to: MoveFigures | null
+  problem: string | null
 }
 
 /**
@@ -883,6 +991,33 @@ function migrateMpesaDayApprovalsColumns(connection: SqliteConnection): void {
  * DDL for all database tables.  Kept as named constants so tests can
  * assert the exact schema statements executed at startup.
  */
+/**
+ * @param {number} amount
+ * @returns {number} rounded to cents, so arithmetic on money has no stray fractions
+ */
+function roundMoney(amount: number): number {
+  return Math.round(amount * 100) / 100
+}
+
+/**
+ * @param {UnattachedSaleRow[]} sales
+ * @returns {EarlierSalesShown} how many, and the cash and M-Pesa they hold
+ */
+function totalOfSales(sales: UnattachedSaleRow[]): EarlierSalesShown {
+  const totalFor = (method: string): number =>
+    roundMoney(sales.filter((sale) => sale.payment_method === method).reduce((sum, sale) => sum + sale.total, 0))
+  return { count: sales.length, cash: totalFor('cash'), mpesa: totalFor('mpesa') }
+}
+
+/**
+ * @param {EarlierSalesShown} shown
+ * @param {EarlierSalesShown} actual
+ * @returns {boolean} whether the form showed what is there now
+ */
+function sameEarlierSales(shown: EarlierSalesShown, actual: EarlierSalesShown): boolean {
+  return shown.count === actual.count && roundMoney(shown.cash) === actual.cash && roundMoney(shown.mpesa) === actual.mpesa
+}
+
 export const SCHEMA = {
   products: `CREATE TABLE IF NOT EXISTS products (
     id TEXT NOT NULL,
@@ -1007,6 +1142,53 @@ export const SCHEMA = {
     BEGIN SELECT RAISE(ABORT, 'shift_corrections is append-only'); END`,
   shiftCorrectionsNoDelete: `CREATE TRIGGER IF NOT EXISTS shift_corrections_no_delete BEFORE DELETE ON shift_corrections
     BEGIN SELECT RAISE(ABORT, 'shift_corrections is append-only'); END`,
+  /**
+   * Every change to which sales a shift holds after it was opened (docs/phase-231), in one append-only ledger:
+   * sales that joined when the shift opened or was made (`opening`), sales that joined automatically (`auto`), and a
+   * sale an admin moved in or out (`reassign_in`, `reassign_out`, a pair sharing who, when and why, each naming the
+   * other shift). The figures are a snapshot taken when the record was written, and are NULL for a shift that was
+   * open or whose cash was not counted. `by_staff_id` is NULL when the till did it. Two triggers refuse any UPDATE or
+   * DELETE, here and on the sales table below.
+   */
+  shiftAdjustments: `CREATE TABLE IF NOT EXISTS shift_adjustments (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    shift_id INTEGER NOT NULL REFERENCES shifts(id),
+    kind TEXT NOT NULL CHECK (kind IN ('opening', 'auto', 'reassign_in', 'reassign_out')),
+    at TEXT NOT NULL,
+    by_staff_id INTEGER,
+    reason TEXT NOT NULL,
+    peer_shift_id INTEGER,
+    sales_count INTEGER NOT NULL,
+    sales_total REAL NOT NULL,
+    cash_total REAL NOT NULL,
+    mpesa_total REAL NOT NULL,
+    card_total REAL NOT NULL,
+    first_sale_at TEXT,
+    last_sale_at TEXT,
+    opening_drawer_cash REAL,
+    starting_cash REAL,
+    ending_cash REAL,
+    expected_cash REAL,
+    discrepancy REAL,
+    mpesa_opening_balance REAL,
+    mpesa_closing_balance REAL,
+    mpesa_expected REAL,
+    mpesa_difference REAL
+  )`,
+  shiftAdjustmentsShiftIndex: `CREATE INDEX IF NOT EXISTS idx_shift_adjustments_shift ON shift_adjustments (shift_id)`,
+  shiftAdjustmentsNoUpdate: `CREATE TRIGGER IF NOT EXISTS shift_adjustments_no_update BEFORE UPDATE ON shift_adjustments
+    BEGIN SELECT RAISE(ABORT, 'shift_adjustments is append-only'); END`,
+  shiftAdjustmentsNoDelete: `CREATE TRIGGER IF NOT EXISTS shift_adjustments_no_delete BEFORE DELETE ON shift_adjustments
+    BEGIN SELECT RAISE(ABORT, 'shift_adjustments is append-only'); END`,
+  shiftAdjustmentSales: `CREATE TABLE IF NOT EXISTS shift_adjustment_sales (
+    adjustment_id INTEGER NOT NULL REFERENCES shift_adjustments(id),
+    order_id INTEGER NOT NULL REFERENCES orders(local_id),
+    PRIMARY KEY (adjustment_id, order_id)
+  )`,
+  shiftAdjustmentSalesNoUpdate: `CREATE TRIGGER IF NOT EXISTS shift_adjustment_sales_no_update BEFORE UPDATE ON shift_adjustment_sales
+    BEGIN SELECT RAISE(ABORT, 'shift_adjustment_sales is append-only'); END`,
+  shiftAdjustmentSalesNoDelete: `CREATE TRIGGER IF NOT EXISTS shift_adjustment_sales_no_delete BEFORE DELETE ON shift_adjustment_sales
+    BEGIN SELECT RAISE(ABORT, 'shift_adjustment_sales is append-only'); END`,
   integrations: `CREATE TABLE IF NOT EXISTS integrations (
     provider TEXT PRIMARY KEY,
     config_json TEXT NOT NULL DEFAULT '{}'
@@ -1785,6 +1967,8 @@ export class RubisDatabase {
   private readonly factory: typeof BetterSqlite3
   private readonly maxAttempts: number
   private connection: SqliteConnection | null = null
+  /** Set while {@link autoAssignUnattachedSales} runs, so a second call does nothing (docs/phase-231). */
+  private autoAssigning = false
 
   constructor(options: DatabaseOptions) {
     this.dbPath = options.dbPath
@@ -1815,6 +1999,13 @@ export class RubisDatabase {
     connection.exec(SCHEMA.shiftCorrectionsShiftIndex)
     connection.exec(SCHEMA.shiftCorrectionsNoUpdate)
     connection.exec(SCHEMA.shiftCorrectionsNoDelete)
+    connection.exec(SCHEMA.shiftAdjustments)
+    connection.exec(SCHEMA.shiftAdjustmentsShiftIndex)
+    connection.exec(SCHEMA.shiftAdjustmentsNoUpdate)
+    connection.exec(SCHEMA.shiftAdjustmentsNoDelete)
+    connection.exec(SCHEMA.shiftAdjustmentSales)
+    connection.exec(SCHEMA.shiftAdjustmentSalesNoUpdate)
+    connection.exec(SCHEMA.shiftAdjustmentSalesNoDelete)
     connection.exec(SCHEMA.integrations)
     connection.exec(SCHEMA.printers)
     migratePrintersColumns(connection)
@@ -3692,47 +3883,315 @@ export class RubisDatabase {
   }
 
   /**
-   * Opens a new store-wide till shift with a starting cash float.
+   * Opens the one shift of the current window (docs/phase-231), in one write transaction so a refusal anywhere
+   * writes nothing:
    *
-   * @param {number} staffId — the staff member opening the shift
-   * @param {number} startingCash
-   * @param {ShiftType | null} [shiftType] — day or night as chosen at the till (docs/phase-199); omitted stores `NULL`
-   * @param {number | null} [mpesaOpeningBalance] — the M-Pesa till balance if it was read (docs/phase-222); omitted stores `NULL`, "not recorded"
+   * 1. no shift is open, and the window of this moment has no shift at all (one shift per window); a closed one
+   *    counts;
+   * 2. the shift's type is the window's, from the clock; a type from the screen is not a parameter any more;
+   * 3. sales already made in this window with no shift join the new shift. `startingCash` is the cash counted in the
+   *    drawer now, and the float stored is that less the earlier cash sales, so they are not counted twice. The
+   *    M-Pesa balance is treated the same way. If the form showed different earlier sales from the ones that are
+   *    there now, nothing is opened;
+   * 4. a drawer below the earlier cash refuses, unless an admin chose to start at 0, which is written into the
+   *    opening record.
+   *
+   * @param {number} staffId — the admin the shift is recorded under
+   * @param {number} startingCash — the cash counted in the drawer now
+   * @param {number | null} [mpesaOpeningBalance] — the M-Pesa till balance if it was read (docs/phase-222), now
+   * @param {OpenShiftOptions} [options]
+   * @param {number} [nowMs] — the clock; the main process's own
    * @returns {{ shiftId: number }}
-   * @throws if a shift is already open, or `shiftType` is not a known shift
+   * @throws {Error} with a message fit to show the person opening the shift; nothing is written when it throws
    */
   openShift(
     staffId: number,
     startingCash: number,
-    shiftType: ShiftType | null = null,
-    mpesaOpeningBalance: number | null = null
+    mpesaOpeningBalance: number | null = null,
+    options: OpenShiftOptions = {},
+    nowMs: number = Date.now()
   ): { shiftId: number } {
-    if (shiftType !== null && !SHIFT_TYPES.includes(shiftType)) {
-      throw new Error(`Unknown shift type: ${String(shiftType)}`)
+    return this.conn.transaction((): { shiftId: number } => {
+      if (this.getOpenShift()) {
+        throw new Error('A shift is already open')
+      }
+      const opened = new Date(nowMs).toISOString()
+      const window = shiftWindowOf(opened)
+      const shifts = this.listShiftWindows()
+      const holder = this.shiftOfWindow(window, shifts)
+      if (holder) {
+        throw new Error(windowHasShiftMessage(window, holder.id))
+      }
+
+      const sales = this.listUnattachedSales()
+      const byId = new Map(sales.map((sale) => [sale.local_id, sale]))
+      const waiting = planAutoAssignment(sales, shifts, nowMs).waiting.map((id) => byId.get(id) as UnattachedSaleRow)
+      const earlier = totalOfSales(waiting)
+      if (options.earlierShown && !sameEarlierSales(options.earlierShown, earlier)) {
+        throw new Error(STALE_EARLIER_SALES_MESSAGE)
+      }
+
+      let startingFloat = startingCash
+      let reason = OPENED_WITH_EARLIER_SALES_REASON
+      if (earlier.count > 0) {
+        startingFloat = roundMoney(startingCash - earlier.cash)
+        if (startingFloat < 0) {
+          if (options.startAtZero !== true) {
+            throw new Error(drawerBelowEarlierMessage(startingCash, earlier.cash))
+          }
+          startingFloat = 0
+          reason = startedAtZeroReason(startingCash, earlier.cash)
+        }
+      }
+      let mpesaOpening = mpesaOpeningBalance
+      if (mpesaOpening !== null && earlier.mpesa > 0) {
+        mpesaOpening = roundMoney(mpesaOpening - earlier.mpesa)
+        if (mpesaOpening < 0) {
+          throw new Error(mpesaBelowEarlierMessage(mpesaOpeningBalance as number, earlier.mpesa))
+        }
+      }
+
+      const info = this.conn
+        .prepare(
+          "INSERT INTO shifts (staff_id, clock_in, starting_cash, status, shift_type, mpesa_opening_balance) VALUES (?, ?, ?, 'open', ?, ?)"
+        )
+        .run(staffId, opened, startingFloat, window.type, mpesaOpening)
+      const shiftId = Number(info.lastInsertRowid)
+
+      if (waiting.length > 0) {
+        const orderIds = waiting.map((sale) => sale.local_id)
+        this.attachUnattached(orderIds, shiftId)
+        this.recordAdjustment({
+          shiftId,
+          kind: 'opening',
+          nowMs,
+          byStaffId: staffId,
+          reason,
+          orderIds,
+          openingDrawerCash: startingCash,
+          figures: null
+        })
+      }
+      return { shiftId }
+    }).immediate()
+  }
+
+  /**
+   * The shift that holds a window, if any: the first one whose `clock_in` falls in it, open or closed.
+   *
+   * @param {ShiftWindowInstance} window
+   * @param {Array<{ id: number; clock_in: string }>} shifts
+   * @returns {{ id: number } | undefined}
+   */
+  private shiftOfWindow(
+    window: ShiftWindowInstance,
+    shifts: Array<{ id: number; clock_in: string }>
+  ): { id: number } | undefined {
+    return shifts.find((shift) => {
+      try {
+        return sameWindow(shiftWindowOf(shift.clock_in), window)
+      } catch {
+        return false
+      }
+    })
+  }
+
+  /**
+   * Gives sales that have no shift to a shift, each by one `UPDATE` that only matches while the sale still has no
+   * shift and is not voided. A sale that does not match throws, which rolls the whole transaction back.
+   *
+   * @param {number[]} orderIds
+   * @param {number} shiftId
+   */
+  private attachUnattached(orderIds: number[], shiftId: number): void {
+    const attach = this.conn.prepare(
+      "UPDATE orders SET shift_id = ? WHERE local_id = ? AND shift_id IS NULL AND status <> 'voided'"
+    )
+    for (const id of orderIds) {
+      if (attach.run(shiftId, id).changes !== 1) {
+        throw new Error(`Order #${id} could not be given to shift #${shiftId}: it has a shift now, or was voided`)
+      }
     }
-    if (this.getOpenShift()) {
-      throw new Error('A shift is already open')
+  }
+
+  /**
+   * The time a new record for a shift is stamped with: now, but always after the newest correction or adjustment of
+   * that shift, so the newest record is unambiguous even if the clock was set back.
+   *
+   * @param {number} shiftId
+   * @param {number} nowMs
+   * @returns {number}
+   */
+  private nextRecordMs(shiftId: number, nowMs: number): number {
+    const row = this.conn
+      .prepare(
+        'SELECT MAX(at) AS latest FROM (SELECT corrected_at AS at FROM shift_corrections WHERE shift_id = ? UNION ALL SELECT at FROM shift_adjustments WHERE shift_id = ?)'
+      )
+      .get(shiftId, shiftId) as { latest: string | null }
+    const latest = row.latest === null ? Number.NaN : Date.parse(row.latest)
+    return Number.isNaN(latest) ? nowMs : Math.max(nowMs, latest + 1)
+  }
+
+  /**
+   * The figures typed in for a closed shift as they now stand: the newest of the shift's own, its corrections' and
+   * its adjustments' snapshots. `null` while the shift is open, and for a shift whose cash was not counted until a
+   * correction gives it figures.
+   *
+   * @param {ShiftRow} shift
+   * @returns {ShiftEnteredFigures | null}
+   */
+  private latestTypedFigures(shift: ShiftRow): ShiftEnteredFigures | null {
+    if (shift.status !== 'closed') return null
+    const candidates: Array<{ at: string; entered: ShiftEnteredFigures }> = [
+      ...this.listShiftCorrections(shift.id).map((row) => ({
+        at: row.corrected_at,
+        entered: {
+          startingCash: row.starting_cash,
+          endingCash: row.ending_cash,
+          mpesaOpeningBalance: row.mpesa_opening_balance,
+          mpesaClosingBalance: row.mpesa_closing_balance
+        }
+      })),
+      ...this.listShiftAdjustments(shift.id)
+        .filter((row) => row.starting_cash !== null && row.ending_cash !== null)
+        .map((row) => ({
+          at: row.at,
+          entered: {
+            startingCash: row.starting_cash as number,
+            endingCash: row.ending_cash as number,
+            mpesaOpeningBalance: row.mpesa_opening_balance,
+            mpesaClosingBalance: row.mpesa_closing_balance
+          }
+        }))
+    ]
+    if (candidates.length === 0) {
+      if (shift.cash_not_counted === 1) return null
+      return {
+        startingCash: shift.starting_cash,
+        endingCash: shift.ending_cash ?? 0,
+        mpesaOpeningBalance: shift.mpesa_opening_balance ?? null,
+        mpesaClosingBalance: shift.mpesa_closing_balance ?? null
+      }
     }
-    const opened = new Date().toISOString()
-    // Each optional column is added only when given, so a call that names neither keeps the original statement
-    // exactly as it was, and behaves exactly as before.
-    const columns = ['staff_id', 'clock_in', 'starting_cash', 'status']
-    const values = ['?', '?', '?', "'open'"]
-    const params: Array<string | number> = [staffId, opened, startingCash]
-    if (shiftType !== null) {
-      columns.push('shift_type')
-      values.push('?')
-      params.push(shiftType)
-    }
-    if (mpesaOpeningBalance !== null) {
-      columns.push('mpesa_opening_balance')
-      values.push('?')
-      params.push(mpesaOpeningBalance)
-    }
+    return candidates.reduce((newest, next) => (next.at >= newest.at ? next : newest)).entered
+  }
+
+  /**
+   * The figures a closed shift would show now: the latest typed figures with expected cash and the differences
+   * worked out from the shift's sales (docs/phase-231, S7: the counted cash is kept, so a difference shows).
+   * `deltaCash` and `deltaMpesa` project a sale that is about to join (or leave): used by the preview of a move.
+   *
+   * @param {ShiftRow} shift
+   * @param {number} [deltaCash]
+   * @param {number} [deltaMpesa]
+   * @returns {(ShiftEnteredFigures & ShiftWorkedFigures) | null} `null` when there are no figures to work from
+   */
+  private workedFiguresNow(
+    shift: ShiftRow,
+    deltaCash = 0,
+    deltaMpesa = 0
+  ): (ShiftEnteredFigures & ShiftWorkedFigures) | null {
+    const entered = this.latestTypedFigures(shift)
+    if (entered === null) return null
+    const counted = this.getOrdersForShift(shift.id).filter((order) => order.status !== 'voided')
+    const totalFor = (method: string): number =>
+      counted.filter((order) => order.payment_method === method).reduce((sum, order) => sum + order.total, 0)
+    return { ...entered, ...workShiftFigures(entered, totalFor('cash') + deltaCash, totalFor('mpesa') + deltaMpesa) }
+  }
+
+  /**
+   * Appends one record to the shift adjustments ledger, with the sales it names. The record's time is
+   * {@link nextRecordMs}.
+   *
+   * @param {object} input
+   * @returns {number} the new record's id
+   */
+  private recordAdjustment(input: {
+    shiftId: number
+    kind: ShiftAdjustmentKind
+    nowMs: number
+    byStaffId: number | null
+    reason: string
+    orderIds: number[]
+    peerShiftId?: number | null
+    openingDrawerCash?: number | null
+    figures: (ShiftEnteredFigures & ShiftWorkedFigures) | null
+  }): number {
+    const find = this.conn.prepare('SELECT local_id, total, payment_method, created_at FROM orders WHERE local_id = ?')
+    const sales = input.orderIds.map(
+      (id) => find.get(id) as { local_id: number; total: number; payment_method: PaymentMethod | null; created_at: string }
+    )
+    const totalFor = (method: string): number =>
+      sales.filter((sale) => sale.payment_method === method).reduce((sum, sale) => sum + sale.total, 0)
+    const times = sales.map((sale) => sale.created_at).sort()
+    const figures = input.figures
     const info = this.conn
-      .prepare(`INSERT INTO shifts (${columns.join(', ')}) VALUES (${values.join(', ')})`)
-      .run(...params)
-    return { shiftId: Number(info.lastInsertRowid) }
+      .prepare(
+        `INSERT INTO shift_adjustments (shift_id, kind, at, by_staff_id, reason, peer_shift_id, sales_count, sales_total,
+                                        cash_total, mpesa_total, card_total, first_sale_at, last_sale_at, opening_drawer_cash,
+                                        starting_cash, ending_cash, expected_cash, discrepancy,
+                                        mpesa_opening_balance, mpesa_closing_balance, mpesa_expected, mpesa_difference)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(
+        input.shiftId,
+        input.kind,
+        new Date(this.nextRecordMs(input.shiftId, input.nowMs)).toISOString(),
+        input.byStaffId,
+        input.reason,
+        input.peerShiftId ?? null,
+        sales.length,
+        sales.reduce((sum, sale) => sum + sale.total, 0),
+        totalFor('cash'),
+        totalFor('mpesa'),
+        totalFor('card'),
+        times[0] ?? null,
+        times[times.length - 1] ?? null,
+        input.openingDrawerCash ?? null,
+        figures?.startingCash ?? null,
+        figures?.endingCash ?? null,
+        figures?.expectedCash ?? null,
+        figures?.discrepancy ?? null,
+        figures?.mpesaOpeningBalance ?? null,
+        figures?.mpesaClosingBalance ?? null,
+        figures?.mpesaExpected ?? null,
+        figures?.mpesaDifference ?? null
+      )
+    const adjustmentId = Number(info.lastInsertRowid)
+    const link = this.conn.prepare('INSERT INTO shift_adjustment_sales (adjustment_id, order_id) VALUES (?, ?)')
+    for (const id of input.orderIds) link.run(adjustmentId, id)
+    return adjustmentId
+  }
+
+  /**
+   * Every adjustment of a shift's sales, oldest first (docs/phase-231).
+   *
+   * @param {number} shiftId
+   * @returns {ShiftAdjustmentRow[]}
+   */
+  listShiftAdjustments(shiftId: number): ShiftAdjustmentRow[] {
+    return this.conn
+      .prepare('SELECT * FROM shift_adjustments WHERE shift_id = ? ORDER BY at ASC, id ASC')
+      .all(shiftId) as ShiftAdjustmentRow[]
+  }
+
+  /**
+   * The sales every adjustment of a shift names, with what the Z report needs to add them up.
+   *
+   * @param {number} shiftId
+   * @returns {ShiftAdjustmentSaleRow[]}
+   */
+  listAdjustmentSales(shiftId: number): ShiftAdjustmentSaleRow[] {
+    return this.conn
+      .prepare(
+        `SELECT a.id AS adjustment_id, a.kind AS kind, s.order_id AS order_id, o.total AS total,
+                o.payment_method AS payment_method, o.status AS status
+         FROM shift_adjustments a
+         JOIN shift_adjustment_sales s ON s.adjustment_id = a.id
+         JOIN orders o ON o.local_id = s.order_id
+         WHERE a.shift_id = ? ORDER BY a.id ASC, s.order_id ASC`
+      )
+      .all(shiftId) as ShiftAdjustmentSaleRow[]
   }
 
   /**
@@ -3813,22 +4272,6 @@ export class RubisDatabase {
   }
 
   /**
-   * The sales a past shift for `[startIso, endIso]` would take: no shift, not voided, created inside the closed
-   * period. Both bounds are normalised `.000Z` instants, so the text comparison is a time comparison.
-   *
-   * @param {string} startIso
-   * @param {string} endIso
-   * @returns {UnattachedSaleRow[]}
-   */
-  listUnattachedSalesInPeriod(startIso: string, endIso: string): UnattachedSaleRow[] {
-    return this.conn
-      .prepare(
-        "SELECT local_id, created_at, total, payment_method FROM orders WHERE shift_id IS NULL AND status <> 'voided' AND created_at >= ? AND created_at <= ? ORDER BY created_at ASC"
-      )
-      .all(startIso, endIso) as UnattachedSaleRow[]
-  }
-
-  /**
    * Every shift's window, for the overlap rule (docs/phase-223).
    *
    * @returns {Array<{ id: number; clock_in: string; clock_out: string | null }>}
@@ -3842,135 +4285,232 @@ export class RubisDatabase {
   }
 
   /**
-   * Records a shift for a period that already happened and attaches to it the sales that had none (docs/phase-223).
-   * Everything happens in one write transaction, so a refusal anywhere leaves the database exactly as it was:
+   * Gives every sale with no shift to the shift it belongs to (docs/phase-231), by the plan
+   * {@link planAutoAssignment} makes: inside a shift's times, otherwise the shift of its window (the nearest when
+   * a window holds two), otherwise, for a window that has ended, a new shift made for it (cash not counted). Sales
+   * of the current window with no shift yet are left to join the shift when it opens.
    *
-   * 1. the period is valid, ends no later than now, and overlaps no shift (an open shift counts as running on
-   *    for ever, so a period wholly before it is allowed);
-   * 2. the sales the manager was shown are exactly the sales that now have no shift in the period, none more:
-   *    otherwise the preview is stale and the shift would claim a period while omitting a sale in it;
-   * 3. the shift is inserted already closed, with its cash (and M-Pesa) figures worked out the way `closeShift`
-   *    works them out, and who, when and why recorded;
-   * 4. each sale gets the new `shift_id` by one `UPDATE` that only matches while it still has no shift, is not
-   *    voided and lies inside the period. A sale that does not match throws, naming why.
+   * One write transaction: any refusal writes nothing. A sale that already has a shift is never touched (the
+   * `UPDATE` only matches while it has none). Running it again straight away finds nothing to do and writes nothing.
+   * A run that starts while another is in progress does nothing.
    *
-   * The only column of `orders` written is `shift_id`, and only from NULL. No amount, time, payment, fiscal or
-   * sync field, and nothing is queued, so nothing is sent to Shopify or the tax device.
-   *
-   * @param {CreateRetrospectiveShiftInput} input
    * @param {number} [nowMs] — the clock; the main process's own
-   * @returns {RetrospectiveShiftResult}
-   * @throws {Error} with a message fit to show the manager; nothing is written when it throws
+   * @returns {AutoAssignResult}
+   * @throws {Error} when a step is refused; nothing is written
    */
-  createRetrospectiveShift(
-    input: CreateRetrospectiveShiftInput,
-    nowMs: number = Date.now()
-  ): RetrospectiveShiftResult {
-    const reason = input.reason.trim()
-    if (reason === '') {
-      throw new Error('A reason is required to record a shift after the fact')
-    }
-    if (!SHIFT_TYPES.includes(input.shiftType)) {
-      throw new Error(`Unknown shift type: ${String(input.shiftType)}`)
-    }
-    const orderIds = Array.from(new Set(input.orderIds))
-    if (orderIds.length === 0 || orderIds.length !== input.orderIds.length) {
-      throw new Error('Choose the sales for this shift: the list was empty or repeated a sale')
-    }
-    const period = parsePastShiftPeriod(input.startIso, input.endIso, nowMs)
+  autoAssignUnattachedSales(nowMs: number = Date.now()): AutoAssignResult {
+    if (this.autoAssigning) return { touched: [], waiting: 0, skipped: true }
+    this.autoAssigning = true
+    try {
+      return this.conn.transaction((): AutoAssignResult => {
+        const sales = this.listUnattachedSales()
+        if (sales.length === 0) return { touched: [], waiting: 0 }
+        const plan = planAutoAssignment(sales, this.listShiftWindows(), nowMs)
+        const touched: AutoAssignTouched[] = []
 
-    return this.conn.transaction((): RetrospectiveShiftResult => {
-      const overlap = findOverlappingShift(this.listShiftWindows(), period.startMs, period.endMs)
-      if (overlap) {
-        throw new Error(`This period overlaps shift #${overlap.id}`)
-      }
-
-      // The preview is stale if the period now holds a sale with no shift that the manager was not shown.
-      const requested = new Set(orderIds)
-      const now = this.listUnattachedSalesInPeriod(period.startIso, period.endIso)
-      const unseen = now.filter((sale) => !requested.has(sale.local_id))
-      if (unseen.length > 0) {
-        throw new Error(
-          `${unseen.length === 1 ? 'A sale has' : `${unseen.length} sales have`} appeared in this period since the list was shown (order #${unseen[0].local_id}). Refresh the list and check it again.`
-        )
-      }
-
-      const sales = new Map(now.map((sale) => [sale.local_id, sale]))
-      const totalFor = (method: string): number =>
-        orderIds
-          .map((id) => sales.get(id))
-          .filter((sale): sale is UnattachedSaleRow => sale !== undefined && sale.payment_method === method)
-          .reduce((sum, sale) => sum + sale.total, 0)
-
-      const cashNotCounted = input.cashNotCounted === true
-      const startingCash = cashNotCounted ? 0 : input.startingCash
-      const expectedCash = cashNotCounted ? null : startingCash + totalFor('cash')
-      const endingCash = cashNotCounted ? null : input.endingCash
-      const discrepancy = expectedCash === null || endingCash === null ? null : endingCash - expectedCash
-      const mpesaExpected =
-        input.mpesaOpeningBalance !== null && input.mpesaClosingBalance !== null
-          ? input.mpesaOpeningBalance + totalFor('mpesa')
-          : null
-      const mpesaDifference =
-        mpesaExpected !== null && input.mpesaClosingBalance !== null ? input.mpesaClosingBalance - mpesaExpected : null
-
-      // The flag is written only when set, so a counted shift's statement is exactly what it was before docs/phase-227.
-      const info = this.conn
-        .prepare(
-          `INSERT INTO shifts (staff_id, clock_in, clock_out, starting_cash, expected_cash, ending_cash, discrepancy, status, shift_type,
-                               mpesa_opening_balance, mpesa_closing_balance, mpesa_expected, mpesa_difference,
-                               kind, created_by_staff_id, created_at, reason${cashNotCounted ? ', cash_not_counted' : ''})
-           VALUES (?, ?, ?, ?, ?, ?, ?, 'closed', ?, ?, ?, ?, ?, 'retrospective', ?, ?, ?${cashNotCounted ? ', 1' : ''})`
-        )
-        .run(
-          input.managerId,
-          period.startIso,
-          period.endIso,
-          startingCash,
-          expectedCash,
-          endingCash,
-          discrepancy,
-          input.shiftType,
-          input.mpesaOpeningBalance,
-          input.mpesaClosingBalance,
-          mpesaExpected,
-          mpesaDifference,
-          input.managerId,
-          new Date(nowMs).toISOString(),
-          reason
-        )
-      const shiftId = Number(info.lastInsertRowid)
-
-      const attach = this.conn.prepare(
-        "UPDATE orders SET shift_id = ? WHERE local_id = ? AND shift_id IS NULL AND status <> 'voided' AND created_at >= ? AND created_at <= ?"
-      )
-      for (const id of orderIds) {
-        if (attach.run(shiftId, id, period.startIso, period.endIso).changes !== 1) {
-          throw new Error(this.whyNotAttachable(id, period.startIso, period.endIso))
+        for (const create of plan.creates) {
+          const shiftId = this.insertAutomaticShift(create.windowType, create.startIso, create.endIso, nowMs)
+          this.attachUnattached(create.orderIds, shiftId)
+          this.recordAdjustment({
+            shiftId,
+            kind: 'opening',
+            nowMs,
+            byStaffId: null,
+            reason: AUTO_SHIFT_REASON,
+            orderIds: create.orderIds,
+            figures: null
+          })
+          touched.push({
+            shiftId,
+            created: true,
+            windowType: create.windowType,
+            windowDate: create.windowDate,
+            count: create.orderIds.length
+          })
         }
-      }
 
-      return { shiftId, attachedCount: orderIds.length, expectedCash, discrepancy, mpesaExpected, mpesaDifference }
-    }).immediate()
+        for (const join of plan.joins) {
+          this.attachUnattached(join.orderIds, join.shiftId)
+          const shift = this.getShiftById(join.shiftId) as ShiftRow
+          this.recordAdjustment({
+            shiftId: join.shiftId,
+            kind: 'auto',
+            nowMs,
+            byStaffId: null,
+            reason: join.reason,
+            orderIds: join.orderIds,
+            figures: this.workedFiguresNow(shift)
+          })
+          const window = shiftWindowOf(shift.clock_in)
+          touched.push({
+            shiftId: join.shiftId,
+            created: false,
+            windowType: window.type,
+            windowDate: window.startDate,
+            count: join.orderIds.length
+          })
+        }
+        return { touched, waiting: plan.waiting.length }
+      }).immediate()
+    } finally {
+      this.autoAssigning = false
+    }
   }
 
   /**
-   * Says why one sale could not join a past shift, for the manager (docs/phase-223).
+   * Makes the closed, cash-not-counted shift for the sales of an ended window (docs/phase-231). The shift has no
+   * staff member (`staff_id` 0, nobody recorded it) and says why in its reason. Refused, writing nothing, if the
+   * window already has a shift, the period is not inside one window, or it overlaps a shift.
    *
-   * @param {number} orderId
+   * @param {ShiftType} windowType
    * @param {string} startIso
    * @param {string} endIso
-   * @returns {string}
+   * @param {number} nowMs
+   * @returns {number} the new shift's id
    */
-  private whyNotAttachable(orderId: number, startIso: string, endIso: string): string {
-    const row = this.conn
-      .prepare('SELECT status, created_at, shift_id FROM orders WHERE local_id = ?')
-      .get(orderId) as { status: string; created_at: string; shift_id: number | null } | undefined
-    if (!row) return `Order #${orderId} does not exist`
-    if (row.shift_id !== null) return `Order #${orderId} now belongs to shift #${row.shift_id}`
-    if (row.status === 'voided') return `Order #${orderId} was voided`
-    if (row.created_at < startIso || row.created_at > endIso) return `Order #${orderId} is outside the period`
-    return `Order #${orderId} could not be added to the shift`
+  private insertAutomaticShift(windowType: ShiftType, startIso: string, endIso: string, nowMs: number): number {
+    const window = shiftWindowOf(startIso)
+    if (window.type !== windowType || !sameWindow(window, shiftWindowOf(endIso))) {
+      throw new Error('A shift made for sales must lie inside one window')
+    }
+    const shifts = this.listShiftWindows()
+    const holder = this.shiftOfWindow(window, shifts)
+    if (holder) {
+      throw new Error(windowHasShiftMessage(window, holder.id))
+    }
+    const overlap = findOverlappingShift(shifts, Date.parse(startIso), Date.parse(endIso))
+    if (overlap) {
+      throw new Error(`This period overlaps shift #${overlap.id}`)
+    }
+    const info = this.conn
+      .prepare(
+        `INSERT INTO shifts (staff_id, clock_in, clock_out, starting_cash, expected_cash, ending_cash, discrepancy, status, shift_type,
+                             mpesa_opening_balance, mpesa_closing_balance, mpesa_expected, mpesa_difference,
+                             kind, created_by_staff_id, created_at, reason, cash_not_counted)
+         VALUES (0, ?, ?, 0, NULL, NULL, NULL, 'closed', ?, NULL, NULL, NULL, NULL, 'retrospective', NULL, ?, ?, 1)`
+      )
+      .run(startIso, endIso, window.type, new Date(nowMs).toISOString(), AUTO_SHIFT_REASON)
+    return Number(info.lastInsertRowid)
+  }
+
+  /**
+   * What moving one sale to another shift would do, read-only (docs/phase-231): the sale, the two shifts, and the
+   * expected cash and difference each would show afterwards. Never throws: the screen shows `problem` instead.
+   *
+   * @param {number} orderId
+   * @param {number} toShiftId
+   * @returns {SaleMovePreview}
+   */
+  previewSaleMove(orderId: number, toShiftId: number): SaleMovePreview {
+    const order = this.conn
+      .prepare('SELECT local_id, total, status, created_at, payment_method, shift_id FROM orders WHERE local_id = ?')
+      .get(orderId) as
+      | { local_id: number; total: number; status: OrderStatus; created_at: string; payment_method: PaymentMethod | null; shift_id: number | null }
+      | undefined
+    const empty: SaleMovePreview = {
+      orderId,
+      total: 0,
+      paymentMethod: null,
+      createdAt: null,
+      fromShiftId: null,
+      toShiftId,
+      differentWindow: false,
+      from: null,
+      to: null,
+      problem: null
+    }
+    if (!order) return { ...empty, problem: `Order #${orderId} does not exist` }
+    const base = {
+      ...empty,
+      total: order.total,
+      paymentMethod: order.payment_method,
+      createdAt: order.created_at,
+      fromShiftId: order.shift_id
+    }
+    if (order.status === 'voided') return { ...base, problem: `Order #${orderId} was voided` }
+    if (order.shift_id === null) return { ...base, problem: `Order #${orderId} has no shift. The till gives it one by itself.` }
+    if (order.shift_id === toShiftId) return { ...base, problem: `Order #${orderId} is already in shift #${toShiftId}` }
+    const to = this.getShiftById(toShiftId)
+    const from = this.getShiftById(order.shift_id)
+    if (!to) return { ...base, problem: `Shift ${toShiftId} not found` }
+    if (!from) return { ...base, problem: `Shift ${order.shift_id} not found` }
+    const cash = order.payment_method === 'cash' ? order.total : 0
+    const mpesa = order.payment_method === 'mpesa' ? order.total : 0
+    const after = (shift: ShiftRow, sign: 1 | -1): MoveFigures | null => {
+      const worked = this.workedFiguresNow(shift, sign * cash, sign * mpesa)
+      return worked && { expectedCash: worked.expectedCash, discrepancy: worked.discrepancy, mpesaExpected: worked.mpesaExpected, mpesaDifference: worked.mpesaDifference }
+    }
+    return {
+      ...base,
+      differentWindow: this.isDifferentWindow(order.created_at, to),
+      from: after(from, -1),
+      to: after(to, 1),
+      problem: null
+    }
+  }
+
+  /**
+   * Whether a sale was made outside the window of a shift and outside its times.
+   *
+   * @param {string} saleAt
+   * @param {ShiftRow} shift
+   * @returns {boolean}
+   */
+  private isDifferentWindow(saleAt: string, shift: ShiftRow): boolean {
+    const saleMs = Date.parse(saleAt)
+    if (findOverlappingShift([shift], saleMs, saleMs)) return false
+    return !sameWindow(shiftWindowOf(saleAt), shiftWindowOf(shift.clock_in))
+  }
+
+  /**
+   * Moves one sale from the shift it is in to another (docs/phase-231, S5). The only way a sale ever leaves a shift.
+   * One write transaction: the sale must exist, not be voided, and be in a shift other than the target; a sale
+   * made in a different window needs `acknowledgeDifferentWindow`. A single `UPDATE` that only matches while the
+   * sale is still in the shift it was read in moves it. Two adjustment records follow, one on each shift, sharing
+   * who, when and why, each with the figures its shift now shows. The caller has already checked the admin's PIN.
+   *
+   * @param {ReassignSaleInput} input
+   * @param {number} [nowMs]
+   * @returns {{ fromShiftId: number; toShiftId: number }}
+   * @throws {Error} with a message fit to show the admin; nothing is written when it throws
+   */
+  reassignSale(input: ReassignSaleInput, nowMs: number = Date.now()): { fromShiftId: number; toShiftId: number } {
+    const reason = input.reason.trim()
+    if (reason === '') {
+      throw new Error('A reason is required to move a sale')
+    }
+    return this.conn.transaction((): { fromShiftId: number; toShiftId: number } => {
+      const preview = this.previewSaleMove(input.orderId, input.toShiftId)
+      if (preview.problem !== null) {
+        throw new Error(preview.problem)
+      }
+      if (preview.differentWindow && input.acknowledgeDifferentWindow !== true) {
+        throw new Error('This sale was made in a different window from that shift. Confirm that it belongs there.')
+      }
+      const fromShiftId = preview.fromShiftId as number
+      const move = this.conn.prepare(
+        "UPDATE orders SET shift_id = ? WHERE local_id = ? AND shift_id = ? AND status <> 'voided'"
+      )
+      if (move.run(input.toShiftId, input.orderId, fromShiftId).changes !== 1) {
+        throw new Error(`Order #${input.orderId} could not be moved: it changed while this was being done`)
+      }
+      for (const [shiftId, kind, peerShiftId] of [
+        [fromShiftId, 'reassign_out', input.toShiftId],
+        [input.toShiftId, 'reassign_in', fromShiftId]
+      ] as const) {
+        this.recordAdjustment({
+          shiftId,
+          kind,
+          nowMs,
+          byStaffId: input.managerId,
+          reason,
+          peerShiftId,
+          orderIds: [input.orderId],
+          figures: this.workedFiguresNow(this.getShiftById(shiftId) as ShiftRow)
+        })
+      }
+      return { fromShiftId, toShiftId: input.toShiftId }
+    }).immediate()
   }
 
   /**
@@ -4051,7 +4591,7 @@ export class RubisDatabase {
         counted.filter((order) => order.payment_method === method).reduce((sum, order) => sum + order.total, 0)
       const worked = workShiftFigures(entered, totalFor('cash'), totalFor('mpesa'))
 
-      const correctedAt = new Date(nowMs).toISOString()
+      const correctedAt = new Date(this.nextRecordMs(input.shiftId, nowMs)).toISOString()
       const info = this.conn
         .prepare(
           `INSERT INTO shift_corrections (shift_id, corrected_by_staff_id, corrected_at, reason, starting_cash, ending_cash,

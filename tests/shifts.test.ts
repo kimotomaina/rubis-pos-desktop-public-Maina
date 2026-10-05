@@ -127,18 +127,20 @@ describe('RubisDatabase.openShift', () => {
     const { fake, db } = freshDb()
     fake.queueRunResult('INSERT INTO shifts', { lastInsertRowid: 5 })
 
-    const result = db.openShift(1, 100)
+    // CHANGED (docs/phase-231). OLD: params [1, clock_in, 100]. NEW: the shift's type (the window of clock_in) and the
+    // M-Pesa opening balance (null: not recorded) are always written, so the params are [1, clock_in, 100, 'day', null].
+    const result = db.openShift(1, 100, null, {}, Date.parse('2026-10-02T07:00:00.000Z'))
 
     expect(result).toEqual({ shiftId: 5 })
     const [insert] = fake.callsFor('run', 'INSERT INTO shifts')
-    expect(insert.params).toEqual([1, expect.any(String), 100])
+    expect(insert.params).toEqual([1, '2026-10-02T07:00:00.000Z', 100, 'day', null])
   })
 
   it('throws when a shift is already open', () => {
     const { fake, db } = freshDb()
     fake.queueGetResult("status = 'open'", openShiftRow)
 
-    expect(() => db.openShift(2, 50)).toThrow(/already open/i)
+    expect(() => db.openShift(2, 50, null, {}, Date.parse('2026-10-02T07:00:00.000Z'))).toThrow(/already open/i)
   })
 })
 
@@ -280,35 +282,22 @@ describe('recording orders against an open shift', () => {
 })
 
 describe('RubisDatabase shift type (docs/phase-199)', () => {
-  it.each(['day', 'night'] as const)('openShift persists shift_type %s', (shiftType) => {
+  // CHANGED (docs/phase-231, W4). OLD: openShift took the type from the screen, stored it as given, omitted shift_type
+  // when none was named, and rejected a type that was not day or night. NEW: there is no type parameter. The stored
+  // type is the window of clock_in, always written; what a screen sends is ignored (see tests/oneShiftPerWindow.test.ts).
+  it.each([
+    ['day', Date.parse('2026-10-02T07:00:00.000Z'), 'day'],
+    ['night', Date.parse('2026-10-02T17:00:00.000Z'), 'night']
+  ] as const)('openShift stores the window of the clock, %s', (_name, nowMs, shiftType) => {
     const { fake, db } = freshDb()
     fake.queueRunResult('INSERT INTO shifts', { lastInsertRowid: 8 })
 
-    const result = db.openShift(1, 100, shiftType)
+    const result = db.openShift(1, 100, null, {}, nowMs)
 
     expect(result).toEqual({ shiftId: 8 })
     const [insert] = fake.callsFor('run', 'INSERT INTO shifts')
     expect(insert.sql).toContain('shift_type')
-    expect(insert.params).toEqual([1, expect.any(String), 100, shiftType])
-  })
-
-  it('a call that names no shift keeps the original INSERT, with no shift_type in it', () => {
-    const { fake, db } = freshDb()
-
-    db.openShift(1, 100)
-
-    const [insert] = fake.callsFor('run', 'INSERT INTO shifts')
-    expect(insert.sql).not.toContain('shift_type')
-    expect(insert.params).toEqual([1, expect.any(String), 100])
-  })
-
-  it('rejects a shift type that is not day or night, and writes nothing', () => {
-    const { fake, db } = freshDb()
-
-    expect(() => db.openShift(1, 100, 'evening' as never)).toThrow(/unknown shift type/i)
-    expect(() => db.openShift(1, 100, '' as never)).toThrow(/unknown shift type/i)
-
-    expect(fake.callsFor('run', 'INSERT INTO shifts')).toHaveLength(0)
+    expect(insert.params).toEqual([1, new Date(nowMs).toISOString(), 100, shiftType, null])
   })
 
   it('reads back a shift row whose shift_type is NULL, and one that has a value', () => {

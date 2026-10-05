@@ -95,7 +95,8 @@ import type {
   ManualMpesaApproval,
   MpesaPaymentRow,
   StaffSummary,
-  RetrospectiveShiftResult,
+  AutoAssignResult,
+  SaleMovePreview,
   ShiftCorrectionRow,
   ShiftCloseResult,
   ShiftRow,
@@ -190,8 +191,9 @@ import {
   shiftsListSchema,
   shiftOpenSchema,
   shiftCloseSchema,
-  pastShiftPreviewSchema,
-  createPastShiftSchema,
+  moveSalePreviewSchema,
+  windowReportSchema,
+  moveSaleSchema,
   shiftCorrectionSchema,
   salesSummarySchema,
   fiscalByDaySchema,
@@ -266,9 +268,11 @@ import type {
 import { toWindowsPrinterInfo, markMissingWindowsPrinters } from './services/windowsPrinter.js'
 import type { WindowsPrinterInfo, PrinterWithAvailability } from './services/windowsPrinter.js'
 import { hashPin, authenticateStaff } from './services/auth.js'
-import { listUnattachedOffers, previewPastShift } from './services/past-shifts.js'
+import { runAutoAssign } from './services/auto-assign.js'
+import { withWindow, countShiftsByWindow } from './lib/shiftLabel.js'
+import { generateWindowReport, type WindowReport } from './services/window-report.js'
+import { getShiftWindowStatus, type ShiftWindowStatus } from './services/shift-window-status.js'
 import { openShiftChecked } from './services/shift-open.js'
-import type { UnattachedDay, PastShiftPreview } from './services/past-shifts.js'
 import {
   generateZReport,
   generateDailySummary,
@@ -531,6 +535,15 @@ app.whenReady().then(async () => {
   const dbPath = join(app.getPath('userData'), 'rubis-pos.db')
   const db = createDatabase({ dbPath })
   db.init()
+
+  /**
+   * Sales with no shift are given to the shift they belong to (docs/phase-231), also when the app starts: a window
+   * can have ended while it was closed. A failure goes to `till.log` and never stops the app starting.
+   */
+  const assignSalesToShifts = (): void => {
+    runAutoAssign(db, (detail) => tillLog.record('auto-assign-failed', detail))
+  }
+  assignSalesToShifts()
 
   /**
    * Resolves whatever `pendingUpdateCheck` a prior `updater:install` left
@@ -3429,7 +3442,8 @@ app.whenReady().then(async () => {
     'shifts:current',
     (): ServiceResult<ShiftRow | null> => {
       try {
-        return { success: true, data: db.getOpenShift() ?? null }
+        const open = db.getOpenShift()
+        return { success: true, data: open ? withWindow(open) : null }
       } catch (err) {
         return {
           success: false,
@@ -3451,6 +3465,7 @@ app.whenReady().then(async () => {
       if (!validation.success) {
         return { success: false, error: validation.error }
       }
+      assignSalesToShifts()
       return openShiftChecked(db, validation.data)
     }
   )
@@ -3466,56 +3481,59 @@ app.whenReady().then(async () => {
       if (!validation.success) {
         return { success: false, error: validation.error }
       }
-      return closeShiftUnlessHeld(
+      const closed = closeShiftUnlessHeld(
         db,
         validation.data.shiftId,
         validation.data.endingCash,
         validation.data.mpesaClosingBalance ?? null
       )
+      if (closed.success) assignSalesToShifts()
+      return closed
     }
   )
 
   /**
-   * IPC handlers for a shift recorded after the fact (docs/phase-223). The two reads are open like every
-   * `reports:*` read (see the KNOWN GAP note on `reports:end-of-day`); only the write is manager-gated, with a
-   * PIN re-verified here, and the manager recorded is the one the PIN belongs to.
+   * IPC handlers for the shift window (docs/phase-231). `shifts:window-status` is a read, like every `reports:*` read.
+   * `shifts:auto-assign` gives every sale with no shift to the shift it belongs to: it takes no input and no PIN
+   * because it can only do what the rules say, and running it again changes nothing; a failure goes to `till.log`.
    */
-  ipcMain.handle('shifts:unattached-days', (): ServiceResult<UnattachedDay[]> => {
+  ipcMain.handle('shifts:window-status', (): ServiceResult<ShiftWindowStatus> => {
     try {
-      return { success: true, data: listUnattachedOffers(db) }
+      return { success: true, data: getShiftWindowStatus(db) }
     } catch (err) {
-      return {
-        success: false,
-        error: err instanceof Error ? err.message : 'Failed to list sales with no shift'
-      }
+      return { success: false, error: err instanceof Error ? err.message : 'Failed to read the shift window' }
     }
   })
 
   ipcMain.handle(
-    'shifts:past-preview',
-    (_event, request: unknown): ServiceResult<PastShiftPreview> => {
-      const validation = validate(pastShiftPreviewSchema, request)
+    'shifts:auto-assign',
+    (): ServiceResult<AutoAssignResult> => runAutoAssign(db, (detail) => tillLog.record('auto-assign-failed', detail))
+  )
+
+  /**
+   * IPC handlers for moving a sale to another shift (docs/phase-231, S5). The preview is a read. The move is
+   * admin-gated with a PIN re-verified here, and the admin recorded is the one the PIN belongs to. Nothing is queued
+   * for Shopify or the tax device.
+   */
+  ipcMain.handle(
+    'shifts:move-sale-preview',
+    (_event, request: unknown): ServiceResult<SaleMovePreview> => {
+      const validation = validate(moveSalePreviewSchema, request)
       if (!validation.success) {
         return { success: false, error: validation.error }
       }
       try {
-        return {
-          success: true,
-          data: previewPastShift(db, validation.data.startIso, validation.data.endIso)
-        }
+        return { success: true, data: db.previewSaleMove(validation.data.orderId, validation.data.toShiftId) }
       } catch (err) {
-        return {
-          success: false,
-          error: err instanceof Error ? err.message : 'Failed to preview this period'
-        }
+        return { success: false, error: err instanceof Error ? err.message : 'Failed to preview this move' }
       }
     }
   )
 
   ipcMain.handle(
-    'shifts:create-past',
-    (_event, request: unknown): ServiceResult<RetrospectiveShiftResult> => {
-      const validation = validate(createPastShiftSchema, request)
+    'shifts:move-sale',
+    (_event, request: unknown): ServiceResult<{ fromShiftId: number; toShiftId: number }> => {
+      const validation = validate(moveSaleSchema, request)
       if (!validation.success) {
         return { success: false, error: validation.error }
       }
@@ -3527,25 +3545,16 @@ app.whenReady().then(async () => {
         const data = validation.data
         return {
           success: true,
-          data: db.createRetrospectiveShift({
+          data: db.reassignSale({
+            orderId: data.orderId,
+            toShiftId: data.toShiftId,
             managerId: data.managerId,
-            startIso: data.startIso,
-            endIso: data.endIso,
-            orderIds: data.orderIds,
-            startingCash: data.startingCash ?? 0,
-            endingCash: data.endingCash ?? 0,
-            cashNotCounted: data.cashNotCounted === true,
-            mpesaOpeningBalance: data.mpesaOpeningBalance ?? null,
-            mpesaClosingBalance: data.mpesaClosingBalance ?? null,
-            shiftType: data.shiftType,
-            reason: data.reason
+            reason: data.reason,
+            acknowledgeDifferentWindow: data.acknowledgeDifferentWindow
           })
         }
       } catch (err) {
-        return {
-          success: false,
-          error: err instanceof Error ? err.message : 'Failed to record this shift'
-        }
+        return { success: false, error: err instanceof Error ? err.message : 'Failed to move this sale' }
       }
     }
   )
@@ -3611,6 +3620,31 @@ app.whenReady().then(async () => {
         return {
           success: false,
           error: err instanceof Error ? err.message : 'Failed to generate Z-report'
+        }
+      }
+    }
+  )
+
+  /**
+   * IPC handler for the combined report of one window (docs/phase-231, S10): every shift that began in it, each
+   * with its own Z report, and the sums that are safe to add. Read-only.
+   */
+  ipcMain.handle(
+    'reports:window-report',
+    (_event, request: unknown): ServiceResult<WindowReport> => {
+      const validation = validate(windowReportSchema, request)
+      if (!validation.success) {
+        return { success: false, error: validation.error }
+      }
+      try {
+        return {
+          success: true,
+          data: generateWindowReport(db, printerSettings.taxRate, validation.data.type, validation.data.startDate)
+        }
+      } catch (err) {
+        return {
+          success: false,
+          error: err instanceof Error ? err.message : 'Failed to build the window report'
         }
       }
     }
@@ -3742,7 +3776,8 @@ app.whenReady().then(async () => {
       try {
         const { page } = validation.data
         const offset = (page - 1) * REPORTS_PAGE_SIZE
-        const shifts = db.listShifts(REPORTS_PAGE_SIZE, offset)
+        const counts = countShiftsByWindow(db.listShiftWindows())
+        const shifts = db.listShifts(REPORTS_PAGE_SIZE, offset).map((shift) => withWindow(shift, counts))
         return { success: true, data: { shifts, total: db.countShifts(), page } }
       } catch (err) {
         return {

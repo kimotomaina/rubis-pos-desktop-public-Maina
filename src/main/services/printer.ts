@@ -28,7 +28,7 @@ import { formatCurrency } from './currency.js'
 import type { ConnectivityCheckResult } from './connectivityMonitor.js'
 import { zReportMpesaLines } from '../lib/zReportMpesa.js'
 import { zReportRetroLines } from '../lib/zReportRetro.js'
-import { zReportCorrectionBlocks } from '../lib/zReportCorrections.js'
+import { zReportChangeBlocks, zReportLabelledLine, zReportSalesAtCloseLine } from '../lib/zReportAdjustments.js'
 import { generatePdfReceipt } from './pdf-receipt.js'
 import { buildReceiptLayout, isReceiptLayoutQr, asReceiptWidth } from '../lib/receiptLayout.js'
 import { buildEnjoySlip } from '../lib/enjoySlip.js'
@@ -505,6 +505,10 @@ export function renderZReport(
   if (report.shiftWindowLabel) {
     client.println(report.shiftWindowLabel)
   }
+  const labelled = zReportLabelledLine(report)
+  if (labelled) {
+    client.println(labelled)
+  }
   client.println(`Opened: ${new Date(report.openedAt).toLocaleString()}`)
   client.println(
     `Closed: ${report.closedAt ? new Date(report.closedAt).toLocaleString() : 'In progress'}`
@@ -560,7 +564,12 @@ export function renderZReport(
   }
 
   // docs/phase-224: every correction of the typed-in figures, under the originals, which are left as they were.
-  for (const block of zReportCorrectionBlocks(report, formatCurrency, (iso) => new Date(iso).toLocaleString())) {
+  const atClose = zReportSalesAtCloseLine(report, formatCurrency)
+  if (atClose) {
+    client.drawLine()
+    client.println(atClose)
+  }
+  for (const block of zReportChangeBlocks(report, formatCurrency, (iso) => new Date(iso).toLocaleString())) {
     client.drawLine()
     client.bold(true)
     client.println(block.heading)

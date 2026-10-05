@@ -13,8 +13,7 @@
  */
 
 import { requireAdminPin } from '../lib/requireAdminPin.js'
-import type { ShiftType } from '../lib/shiftWindows.js'
-import type { RubisDatabase } from './database.js'
+import type { EarlierSalesShown, RubisDatabase } from './database.js'
 import type { ServiceResult } from './shopify-types.js'
 
 /** What {@link openShiftChecked} needs from the database. */
@@ -24,8 +23,13 @@ export type OpenShiftDb = Pick<RubisDatabase, 'getStaffById' | 'openShift'> & Pa
 export interface OpenShiftRequest {
   staffId: number
   startingCash: number
-  shiftType?: ShiftType | null
+  /** Ignored (docs/phase-231): the type comes from the clock. Still accepted so an older caller validates. */
+  shiftType?: string | null
   mpesaOpeningBalance?: number | null
+  /** What the form showed (docs/phase-231); the shift is not opened if the sales now differ. */
+  earlierShown?: EarlierSalesShown
+  /** An admin's choice when the drawer holds less than the earlier cash sales: start at 0. */
+  startAtZero?: boolean
   /** Both or neither (the schema checks): a manager's PIN, re-verified here. */
   managerId?: number
   managerPin?: string
@@ -55,7 +59,10 @@ export function openShiftChecked(db: OpenShiftDb, request: OpenShiftRequest): Se
   try {
     return {
       success: true,
-      data: db.openShift(openedBy, request.startingCash, request.shiftType ?? null, request.mpesaOpeningBalance ?? null)
+      data: db.openShift(openedBy, request.startingCash, request.mpesaOpeningBalance ?? null, {
+        earlierShown: request.earlierShown,
+        startAtZero: request.startAtZero
+      })
     }
   } catch (err) {
     return { success: false, error: err instanceof Error ? err.message : 'Failed to open shift' }

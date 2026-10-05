@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import type { ShiftRow } from '../../../main/services/database.js'
-import type { UnattachedDay } from '../../../main/services/past-shifts.js'
+import type { ShiftType } from '../lib/shiftWindows.js'
 import type {
   ZReport,
   SalesSummary,
@@ -13,8 +13,8 @@ import { titleCaseName } from '../lib/text.js'
 import { formatVatRateLabel } from '../lib/vatLabel.js'
 import { paginate } from '../lib/paginate.js'
 import ZReportModal from '../components/ZReportModal.js'
-import PastShiftForm from '../components/PastShiftForm.js'
-import { nairobiMinuteText } from '../lib/pastShiftPeriod.js'
+import MoveSaleForm from '../components/MoveSaleForm.js'
+import WindowReportModal from '../components/WindowReportModal.js'
 import BackButton from '../components/BackButton.js'
 import SectionCardGrid, { type SectionCard } from '../components/SectionCardGrid.js'
 import {
@@ -28,19 +28,6 @@ import {
 
 /** Orders/shifts per page — matches the server-side `REPORTS_PAGE_SIZE` in `index.ts`. */
 const REPORTS_PAGE_SIZE = 10
-
-/** Days with sales that have no shift, listed per page (docs/phase-223): the screen never scrolls. */
-const UNATTACHED_DAYS_PER_PAGE = 6
-
-/**
- * The first offer that can be recorded (docs/phase-229): a sale inside an existing shift is reported, not offered.
- *
- * @param {UnattachedDay[]} offers
- * @returns {UnattachedDay | undefined}
- */
-function firstRecordable(offers: UnattachedDay[]): UnattachedDay | undefined {
-  return offers.find((offer) => offer.insideShiftId === undefined)
-}
 
 /** Fiscal-status rows per page — this table is paginated client-side (a month is at most 31 rows). */
 const FISCAL_ROWS_PER_PAGE = 10
@@ -135,53 +122,37 @@ function Pager({
 /**
  * Shift history: paginated, tap a row to open its Z-report (with the
  * existing, unchanged Reprint action inside `ZReportModal`).
+ *
+ * Opening it gives every sale with no shift to the shift it belongs to (docs/phase-231), so there is no list of
+ * sales with no shift to work through. A shift is shown by its window; an older one labelled otherwise says so. A
+ * window that holds more than one shift (older data) has a combined report. An admin can move a sale to another
+ * shift, with a reason and their PIN.
  */
-function ShiftHistoryView({
-  staffName,
-  openFirstOffer = false
-}: {
-  staffName: (id: number) => string
-  /** Opens the first offered period as soon as the list loads (docs/phase-227: "Record them" from Open or Close Shift). */
-  openFirstOffer?: boolean
-}) {
+function ShiftHistoryView({ staffName }: { staffName: (id: number) => string }) {
   const [page, setPage] = useState(1)
   const [data, setData] = useState<{ shifts: ShiftRow[]; total: number } | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [openReport, setOpenReport] = useState<ZReport | null>(null)
   const [openError, setOpenError] = useState<string | null>(null)
-  // docs/phase-223: days with sales that have no shift, the one being recorded, and the last result.
-  const [unattached, setUnattached] = useState<UnattachedDay[]>([])
-  const [unattachedPage, setUnattachedPage] = useState(1)
-  const [recording, setRecording] = useState<UnattachedDay | null>(null)
-  const [showingDays, setShowingDays] = useState(false)
+  const [windowReport, setWindowReport] = useState<{ type: ShiftType; startDate: string } | null>(null)
+  const [moving, setMoving] = useState(false)
   const [notice, setNotice] = useState<string | null>(null)
   const [reloadKey, setReloadKey] = useState(0)
-  const [offerBanner, setOfferBanner] = useState<string | null>(null)
-  const [autoOpened, setAutoOpened] = useState(false)
-
-  useEffect(() => {
-    let cancelled = false
-    void window.api.getUnattachedDays().then((result) => {
-      if (cancelled) return
-      const offers = result.success && result.data ? result.data : []
-      setUnattached(offers)
-      if (openFirstOffer && !autoOpened) {
-        setAutoOpened(true)
-        const first = firstRecordable(offers)
-        if (first) setRecording(first)
-      }
-    })
-    return () => {
-      cancelled = true
-    }
-  }, [reloadKey])
 
   useEffect(() => {
     let cancelled = false
     setLoading(true)
     setError(null)
-    void window.api.getShiftsList(page).then((result) => {
+    void (async () => {
+      // docs/phase-231: every sale with no shift is given to its shift before the list is read. A failure is logged
+      // by the main process and never stops the history showing.
+      try {
+        await window.api.autoAssignSales?.()
+      } catch {
+        // The history is still shown.
+      }
+      const result = await window.api.getShiftsList(page)
       if (cancelled) return
       if (result.success && result.data) {
         setData({ shifts: result.data.shifts, total: result.data.total })
@@ -189,7 +160,7 @@ function ShiftHistoryView({
         setError(result.error ?? 'Failed to load shift history')
       }
       setLoading(false)
-    })
+    })()
     return () => {
       cancelled = true
     }
@@ -206,113 +177,18 @@ function ShiftHistoryView({
   }
 
   const pageCount = Math.max(1, Math.ceil((data?.total ?? 0) / REPORTS_PAGE_SIZE))
-  const days = paginate(unattached, unattachedPage, UNATTACHED_DAYS_PER_PAGE)
 
-  if (recording) {
+  if (moving) {
     return (
       <section className="rounded-xl border border-slate-200 bg-white p-4">
-        <PastShiftForm
-          // docs/phase-229: each offer is its own form. Without a key the next offer would keep the last one's
-          // reason, its "not counted" choice and its cash figures.
-          key={`${recording.firstAt}|${recording.lastAt}`}
-          day={recording}
-          banner={offerBanner}
-          onCancel={() => {
-            setRecording(null)
-            setOfferBanner(null)
-          }}
-          onRecorded={(message) => {
-            setShowingDays(false)
-            setPage(1)
+        <MoveSaleForm
+          onCancel={() => setMoving(false)}
+          onMoved={(message) => {
+            setMoving(false)
+            setNotice(message)
             setReloadKey((key) => key + 1)
-            // docs/phase-227: offer the next period that still has sales with no shift, oldest first. Each offer
-            // is its own form with its own manager PIN; Cancel stops the run.
-            void window.api.getUnattachedDays().then((result) => {
-              const rest = result.success && result.data ? result.data : []
-              setUnattached(rest)
-              const recordable = rest.filter((offer) => offer.insideShiftId === undefined)
-              if (recordable.length > 0) {
-                setNotice(null)
-                setOfferBanner(`${message} ${recordable.length === 1 ? 'One more period has' : `${recordable.length} more periods have`} sales with no shift. Record this one, or Cancel to stop.`)
-                setRecording(recordable[0])
-              } else {
-                setOfferBanner(null)
-                setNotice(message)
-                setRecording(null)
-              }
-            })
           }}
         />
-      </section>
-    )
-  }
-
-  // docs/phase-223: the days list is its own view, reached from a button on the history's title row, so the
-  // history table (ten rows, no scrolling) is no taller than it was.
-  if (showingDays) {
-    return (
-      <section className="rounded-xl border border-slate-200 bg-white p-4">
-        <div className="mb-3 flex items-center justify-between gap-3">
-          <h3 className="text-2xl font-bold text-slate-800">Sales with no shift</h3>
-          <button
-            type="button"
-            onClick={() => setShowingDays(false)}
-            className="h-10 rounded-lg border border-slate-300 px-4 text-base font-medium text-slate-600 hover:bg-slate-50"
-          >
-            Back to Shift History
-          </button>
-        </div>
-        {unattached.length === 0 ? (
-          <p className="text-base text-slate-500">Every sale has a shift.</p>
-        ) : (
-          <>
-            <p className="mb-2 text-base text-slate-600">
-              These sales were made with no shift open. Choose a day to record a shift for them; nothing about the sales
-              themselves changes.
-            </p>
-            <table className="w-full text-left text-base">
-              <tbody>
-                {days.items.map((day) => (
-                  <tr key={day.firstAt} className="border-t border-slate-100">
-                    <td className="py-2 pr-2 text-slate-800">
-                      {day.localDay}
-                      {day.shiftType && (
-                        <span className="ml-2 text-sm text-slate-500">{day.shiftType === 'day' ? 'Day' : 'Night'}</span>
-                      )}
-                    </td>
-                    <td className="py-2 pr-2 text-slate-600">
-                      {day.count} {day.count === 1 ? 'sale' : 'sales'}
-                    </td>
-                    <td className="py-2 pr-2 text-slate-600">
-                      {nairobiMinuteText(day.firstAt).slice(11)} to {nairobiMinuteText(day.lastAt).slice(11)}
-                    </td>
-                    <td className="py-2 pr-2 text-right text-slate-800">{formatCurrency(day.total)}</td>
-                    <td className="py-2 text-right">
-                      {day.insideShiftId !== undefined ? (
-                        // docs/phase-229: a sale inside an existing shift's window is reported, not offered.
-                        <span className="text-base font-medium text-amber-800">
-                          Inside shift #{day.insideShiftId}: not recorded
-                        </span>
-                      ) : (
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setNotice(null)
-                            setRecording(day)
-                          }}
-                          className="h-10 rounded-lg bg-rose-600 px-3 text-base font-semibold text-white hover:bg-rose-700"
-                        >
-                          Create shift for these
-                        </button>
-                      )}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            <Pager page={days.page} pageCount={days.pageCount} onChange={setUnattachedPage} />
-          </>
-        )}
       </section>
     )
   }
@@ -321,15 +197,16 @@ function ShiftHistoryView({
     <section className="rounded-xl border border-slate-200 bg-white p-4">
       <div className="mb-3 flex items-center justify-between gap-3">
         <h3 className="text-2xl font-bold text-slate-800">Shift History</h3>
-        {unattached.length > 0 && (
-          <button
-            type="button"
-            onClick={() => setShowingDays(true)}
-            className="h-10 rounded-lg bg-amber-100 px-4 text-base font-semibold text-amber-900 hover:bg-amber-200"
-          >
-            Sales with no shift: {unattached.reduce((sum, day) => sum + day.count, 0)}
-          </button>
-        )}
+        <button
+          type="button"
+          onClick={() => {
+            setNotice(null)
+            setMoving(true)
+          }}
+          className="h-10 rounded-lg border border-slate-300 px-4 text-base font-medium text-slate-600 hover:bg-slate-50"
+        >
+          Move a sale
+        </button>
       </div>
       {notice && (
         <p role="status" className="mb-3 rounded-lg bg-emerald-50 px-3 py-2 text-base font-medium text-emerald-700">
@@ -366,12 +243,24 @@ function ShiftHistoryView({
                     onClick={() => void openShift(shift.id)}
                     className="cursor-pointer border-t border-slate-100 hover:bg-slate-50"
                   >
-                    <td className="py-2 pr-2 text-slate-800">#{shift.id}</td>
+                    <td className="py-2 pr-2 text-slate-800">
+                      #{shift.id}
+                      {shift.window_type && (
+                        <span className="ml-2 text-sm text-slate-500">{shift.window_type === 'day' ? 'Day' : 'Night'}</span>
+                      )}
+                      {shift.labelled_as && (
+                        <span className="ml-2 text-sm text-slate-500">
+                          Labelled {shift.labelled_as === 'day' ? 'Day' : 'Night'} when opened
+                        </span>
+                      )}
+                    </td>
                     <td className="py-2 pr-2 text-slate-500">{new Date(shift.clock_in).toLocaleString()}</td>
                     <td className="py-2 pr-2 text-slate-500">
                       {shift.clock_out ? new Date(shift.clock_out).toLocaleString() : 'In progress'}
                     </td>
-                    <td className="py-2 pr-2 text-slate-800">{staffName(shift.staff_id)}</td>
+                    <td className="py-2 pr-2 text-slate-800">
+                      {shift.staff_id === 0 ? 'Created automatically' : staffName(shift.staff_id)}
+                    </td>
                     <td className="py-2">
                       <span
                         className={`rounded-full px-2 py-1 text-sm font-medium ${
@@ -382,7 +271,7 @@ function ShiftHistoryView({
                       >
                         {shift.status}
                       </span>
-                      {shift.kind === 'retrospective' && (
+                      {shift.kind === 'retrospective' && shift.staff_id !== 0 && (
                         <span className="ml-2 rounded-full bg-amber-100 px-2 py-1 text-sm font-medium text-amber-800">
                           Recorded later
                         </span>
@@ -391,6 +280,18 @@ function ShiftHistoryView({
                         <span className="ml-2 rounded-full bg-slate-100 px-2 py-1 text-sm font-medium text-slate-600">
                           Cash not counted
                         </span>
+                      )}
+                      {(shift.window_shift_count ?? 1) > 1 && shift.window_type && shift.window_date && (
+                        <button
+                          type="button"
+                          onClick={(event) => {
+                            event.stopPropagation()
+                            setWindowReport({ type: shift.window_type as ShiftType, startDate: shift.window_date as string })
+                          }}
+                          className="ml-2 rounded-full bg-sky-100 px-2 py-1 text-sm font-medium text-sky-800 hover:bg-sky-200"
+                        >
+                          Window report ({shift.window_shift_count} shifts)
+                        </button>
                       )}
                     </td>
                   </tr>
@@ -402,6 +303,17 @@ function ShiftHistoryView({
         </>
       )}
       {openReport && <ZReportModal report={openReport} onClose={() => setOpenReport(null)} />}
+      {windowReport && (
+        <WindowReportModal
+          type={windowReport.type}
+          startDate={windowReport.startDate}
+          onClose={() => setWindowReport(null)}
+          onOpenShift={(shiftId) => {
+            setWindowReport(null)
+            void openShift(shiftId)
+          }}
+        />
+      )}
     </section>
   )
 }
@@ -839,8 +751,8 @@ function ExportView() {
  *
  * @returns {JSX.Element}
  */
-export default function ReportsPage({ initialAction }: { initialAction?: 'recordUnattached' }) {
-  const [subView, setSubView] = useState<ReportsSubView | null>(initialAction === 'recordUnattached' ? 'shifts' : null)
+export default function ReportsPage() {
+  const [subView, setSubView] = useState<ReportsSubView | null>(null)
   const [staffById, setStaffById] = useState<Map<number, string>>(new Map())
 
   useEffect(() => {
@@ -863,7 +775,7 @@ export default function ReportsPage({ initialAction }: { initialAction?: 'record
       )}
 
       {subView === 'shifts' && (
-        <ShiftHistoryView staffName={staffName} openFirstOffer={initialAction === 'recordUnattached'} />
+        <ShiftHistoryView staffName={staffName} />
       )}
       {subView === 'salesSummary' && <SalesSummaryView />}
       {subView === 'fiscalByDay' && <FiscalStatusView />}

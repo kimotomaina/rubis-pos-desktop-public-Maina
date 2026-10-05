@@ -10,7 +10,7 @@
  * from `main/`); `tests/shiftWindows.test.ts` runs both over the same inputs.
  */
 
-import { toNairobiWallClock } from '../services/reports.js'
+import { NAIROBI_UTC_OFFSET_MINUTES, toNairobiWallClock } from '../services/reports.js'
 
 /** The two shifts a till day is split into. */
 export type ShiftType = 'day' | 'night'
@@ -114,6 +114,33 @@ export function shiftWindowOf(iso: string): ShiftWindowInstance {
   const dayBack = type === 'night' && minute < DAY_SHIFT.startMinutes ? 1 : 0
   const start = new Date(Date.UTC(wall.getUTCFullYear(), wall.getUTCMonth(), wall.getUTCDate() - dayBack))
   return { type, startDate: start.toISOString().slice(0, 10) }
+}
+
+/**
+ * Whether two window instances are the same window (docs/phase-231): the same type on the same date.
+ *
+ * @param {ShiftWindowInstance} a
+ * @param {ShiftWindowInstance} b
+ * @returns {boolean}
+ */
+export function sameWindow(a: ShiftWindowInstance, b: ShiftWindowInstance): boolean {
+  return a.type === b.type && a.startDate === b.startDate
+}
+
+/**
+ * The first instant a shift may be closed (docs/phase-231): the start of its window's last minute, so a Day shift
+ * can be closed from 17:30:00 and a Night shift from 08:59:00 the next morning. The window is the one the shift's
+ * `clock_in` falls in; a shift left open past it can be closed at any time after.
+ *
+ * @param {string} clockInIso — the shift's `clock_in`
+ * @returns {number} epoch milliseconds
+ * @throws {RangeError} if `clockInIso` is not a valid instant
+ */
+export function windowClosableFrom(clockInIso: string): number {
+  const { type, startDate } = shiftWindowOf(clockInIso)
+  const nightEndsNextMorning = type === 'night' ? MINUTES_PER_DAY : 0
+  const wallMinutes = nightEndsNextMorning + windowFor(type).endMinutes
+  return Date.parse(`${startDate}T00:00:00.000Z`) + (wallMinutes - NAIROBI_UTC_OFFSET_MINUTES) * 60 * 1000
 }
 
 /**

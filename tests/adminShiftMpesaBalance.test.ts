@@ -107,16 +107,18 @@ describe('Open Shift: M-Pesa balance (optional)', () => {
     type(0, '250')
     await click('Confirm')
 
-    expect(window.api.openShift).toHaveBeenCalledWith(1, 250, expect.any(String))
-    expect(vi.mocked(window.api.openShift).mock.calls[0]).toHaveLength(3)
+    // CHANGED (docs/phase-231). OLD: openShift(1, 250, type), three arguments. NEW: openShift(1, 250, balance, options): no type is
+    // sent, a blank balance is undefined, and the options carry what the form showed of the earlier sales.
+    expect(vi.mocked(window.api.openShift).mock.calls[0].slice(0, 3)).toEqual([1, 250, undefined])
   })
 
-  it('sends the balance as the fourth argument, and a typed 0 as 0', async () => {
+  it('sends the balance as the third argument, and a typed 0 as 0', async () => {
     await openForm()
     type(0, '250')
     type(1, '1500.50')
     await click('Confirm')
-    expect(vi.mocked(window.api.openShift).mock.calls[0]).toEqual([1, 250, expect.any(String), 1500.5])
+    // CHANGED (docs/phase-231). OLD: [1, 250, type, 1500.5], the balance the fourth argument. NEW: it is the third.
+    expect(vi.mocked(window.api.openShift).mock.calls[0].slice(0, 3)).toEqual([1, 250, 1500.5])
 
     act(() => root.unmount())
     root = createRoot(container)
@@ -124,7 +126,7 @@ describe('Open Shift: M-Pesa balance (optional)', () => {
     type(0, '250')
     type(1, '0')
     await click('Confirm')
-    expect(vi.mocked(window.api.openShift).mock.calls[0]).toEqual([1, 250, expect.any(String), 0])
+    expect(vi.mocked(window.api.openShift).mock.calls[0].slice(0, 3)).toEqual([1, 250, 0])
   })
 
   it('refuses a bad balance with a message and sends nothing', async () => {

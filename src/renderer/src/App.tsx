@@ -42,6 +42,8 @@ import { useHeldSalesStore } from './stores/heldSalesStore'
 import { isPaymentInProgress, usePaymentActivityStore } from './stores/paymentActivityStore'
 import { shouldShowNoShiftNotice, useShiftStore } from './stores/shiftStore'
 import NoShiftNotice from './components/NoShiftNotice'
+import WindowEndBanner, { shouldShowWindowEndBanner } from './components/WindowEndBanner'
+import { useShiftWindowStatus } from './lib/useShiftWindowStatus'
 import OpenShiftDialog from './components/OpenShiftDialog'
 import { HOLD_PAYMENT_REASON } from './lib/heldSale'
 import { decideHold, heldAgeTone } from './lib/heldSale'
@@ -491,9 +493,11 @@ export default function App() {
   const initShopifyReconciliation = useShopifyReconciliationStore((state) => state.init)
   const initFiscalMode = useFiscalModeStore((state) => state.init)
   const [adminInitialTab, setAdminInitialTab] = useState<'needsAttention' | 'reports' | undefined>(undefined)
-  const [adminInitialReportsAction, setAdminInitialReportsAction] = useState<'recordUnattached' | undefined>(undefined)
   // docs/phase-227: the cart's "No shift open" notice and its dialog.
   const shiftPresence = useShiftStore((state) => state.presence)
+  // docs/phase-231: the open shift's window end, read from the main process so the cart holds no time rule.
+  const { status: windowStatus } = useShiftWindowStatus()
+  const showWindowEndBanner = shouldShowWindowEndBanner(windowStatus)
   const [openShiftDialogShown, setOpenShiftDialogShown] = useState(false)
 
   const selectedProductForModal = useUiStore((state) => state.selectedProductForModal)
@@ -725,7 +729,6 @@ export default function App() {
                 onClick={() => {
                   setActiveView('admin')
                   setAdminInitialTab(undefined)
-                  setAdminInitialReportsAction(undefined)
                 }}
                 className={`flex h-14 items-center rounded-lg px-6 text-lg font-medium transition-colors ${
                   activeView === 'admin'
@@ -852,6 +855,8 @@ export default function App() {
               />
             )}
 
+            {showWindowEndBanner && windowStatus && <WindowEndBanner status={windowStatus} />}
+
             <HeldSalesStrip requestManagerPin={requestManagerPin} />
 
             <PosCartTable
@@ -863,7 +868,9 @@ export default function App() {
               onHold={() => void handleHold()}
               holdBlockedReason={holdDecision.allowed ? null : holdDecision.reason}
               linesPerPage={
-                CART_LINES_PER_PAGE - (heldInStrip.length > 0 ? 1 : 0) - (shouldShowNoShiftNotice(shiftPresence) ? 1 : 0)
+                CART_LINES_PER_PAGE -
+                (heldInStrip.length > 0 ? 1 : 0) -
+                (shouldShowNoShiftNotice(shiftPresence) || showWindowEndBanner ? 1 : 0)
               }
             />
           </section>
@@ -905,7 +912,6 @@ export default function App() {
             <AdminScreen
               requestManagerPin={requestManagerPin}
               initialTab={adminInitialTab}
-              initialReportsAction={adminInitialReportsAction}
             />
           </div>
         </main>
@@ -919,12 +925,6 @@ export default function App() {
           onOpened={() => {
             setOpenShiftDialogShown(false)
             void useShiftStore.getState().load()
-          }}
-          onRecordThem={() => {
-            setOpenShiftDialogShown(false)
-            setAdminInitialTab('reports')
-            setAdminInitialReportsAction('recordUnattached')
-            setActiveView('admin')
           }}
         />
       )}

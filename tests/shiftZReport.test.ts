@@ -33,7 +33,9 @@ const dbFor = (shift: ShiftRow): RubisDatabase =>
     getStaffById: vi.fn(() => staff),
     getOrdersForShift: vi.fn(() => []),
     getMpesaPaymentsForShift: vi.fn(() => []),
-    listShiftCorrections: vi.fn(() => []) // ADDED (docs/phase-224): the Z report reads the shift's corrections
+    listShiftCorrections: vi.fn(() => []), // ADDED (docs/phase-224): the Z report reads the shift's corrections
+    listShiftAdjustments: vi.fn(() => []), // ADDED (docs/phase-231): the Z report reads the shift's adjustments
+    listAdjustmentSales: vi.fn(() => []), // ADDED (docs/phase-231)
   }) as unknown as RubisDatabase
 
 describe('generateZReport shift fields', () => {
@@ -45,18 +47,37 @@ describe('generateZReport shift fields', () => {
   })
 
   it('returns the night shift and its window label', () => {
-    const report = generateZReport(dbFor({ ...baseShift, shift_type: 'night' }), 4, 0.16)
+    // CHANGED (docs/phase-231, W4). OLD: a shift stored as 'night' read back as the night shift whatever its clock_in
+    // was (here 09:10 Nairobi). NEW: the type is the window of clock_in, so it is the day shift, and the stored label
+    // is kept as `labelledAs` ("Labelled Night when opened"). The night case now uses a clock_in inside the night window.
+    const report = generateZReport(
+      dbFor({ ...baseShift, clock_in: '2026-10-02T15:00:00.000Z', clock_out: '2026-10-02T16:00:00.000Z', shift_type: 'night' }),
+      4,
+      0.16
+    )
 
     expect(report.shiftType).toBe('night')
     expect(report.shiftWindowLabel).toBe('Night shift (17:31 to 08:59)')
+    expect(report.labelledAs).toBeUndefined()
   })
 
-  it('returns null for both on a shift opened before shift types existed', () => {
+  it('shows a shift by its window and notes the label it was given when it differs (docs/phase-231, W4)', () => {
+    const report = generateZReport(dbFor({ ...baseShift, shift_type: 'night' }), 4, 0.16)
+
+    expect(report.shiftType).toBe('day')
+    expect(report.shiftWindowLabel).toBe('Day shift (09:00 to 17:30)')
+    expect(report.labelledAs).toBe('night')
+  })
+
+  it('shows the window for a shift opened before shift types existed, with no "labelled" note', () => {
+    // CHANGED (docs/phase-231, W4). OLD: null for both when the shift had no label. NEW: every shift has a window
+    // (its clock_in), so the type and label are the window's; there was no label, so there is no "labelled" note.
     for (const shift of [baseShift, { ...baseShift, shift_type: null }]) {
       const report = generateZReport(dbFor(shift), 4, 0.16)
 
-      expect(report.shiftType).toBeNull()
-      expect(report.shiftWindowLabel).toBeNull()
+      expect(report.shiftType).toBe('day')
+      expect(report.shiftWindowLabel).toBe('Day shift (09:00 to 17:30)')
+      expect(report.labelledAs).toBeUndefined()
     }
   })
 
@@ -67,6 +88,7 @@ describe('generateZReport shift fields', () => {
     // CHANGED AGAIN (docs/phase-223): and the four fields that say a shift was recorded afterwards (kind, createdAt,
     // createdByName, reason), covered by tests/pastShift.test.ts.
     // CHANGED AGAIN (docs/phase-224): and `corrections`, covered by tests/shiftCorrections.test.ts.
+    // CHANGED AGAIN (docs/phase-231): and `labelledAs` (here the stored 'night' differs from the window), covered above.
     const {
       shiftType: _type,
       shiftWindowLabel: _label,
@@ -79,6 +101,7 @@ describe('generateZReport shift fields', () => {
       createdByName: _createdByName,
       reason: _reason,
       corrections: _corrections,
+      labelledAs: _labelledAs,
       ...figures
     } = report
 

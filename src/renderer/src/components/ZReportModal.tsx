@@ -5,6 +5,7 @@ import { zReportMpesaLines } from '../lib/zReportMpesa.js'
 import { zReportRetroLines } from '../lib/zReportRetro.js'
 import { zReportCorrectionBlocks } from '../lib/zReportCorrections.js'
 import ShiftCorrectionForm from './ShiftCorrectionForm.js'
+import { zReportAdjustmentBlocks, zReportLabelledLine, zReportSalesAtCloseLine } from '../lib/zReportAdjustments.js'
 import { titleCaseName } from '../lib/text.js'
 import { formatVatRateLabel } from '../lib/vatLabel.js'
 import { CloseIcon } from './icons.js'
@@ -56,6 +57,13 @@ export default function ZReportModal({ report: initialReport, onClose }: ZReport
   // docs/phase-224: the latest correction, compactly. The original figures above are never replaced.
   const corrections = zReportCorrectionBlocks(report, formatCurrency, (iso) => new Date(iso).toLocaleString())
   const latestCorrection = corrections[corrections.length - 1]
+
+  // docs/phase-231: sales that joined or left this shift after it was opened or made, the type's note, and what the
+  // shift held at close when later changes mean the figures above now count more or fewer sales.
+  const adjustments = zReportAdjustmentBlocks(report, formatCurrency, (iso) => new Date(iso).toLocaleString())
+  const latestAdjustment = adjustments[adjustments.length - 1]
+  const labelledLine = zReportLabelledLine(report)
+  const salesAtCloseLine = zReportSalesAtCloseLine(report, formatCurrency)
   const CORRECTION_SUMMARY = ['Counted Cash', 'Discrepancy', 'M-Pesa counted', 'Check against the M-Pesa statement']
 
   const handleCorrected = async (): Promise<void> => {
@@ -114,6 +122,7 @@ export default function ZReportModal({ report: initialReport, onClose }: ZReport
             <div className="mb-3 space-y-1 text-slate-600">
               <p>Shift #{report.shiftId}</p>
               {report.shiftWindowLabel && <p>{report.shiftWindowLabel}</p>}
+              {labelledLine && <p className="text-slate-500">{labelledLine}</p>}
               <p>Opened: {new Date(report.openedAt).toLocaleString()}</p>
               <p>
                 Closed:{' '}
@@ -160,6 +169,12 @@ export default function ZReportModal({ report: initialReport, onClose }: ZReport
                 <span className="font-medium">{report.orderCount}</span>
               </div>
             </div>
+
+            {salesAtCloseLine && (
+              <p className="mb-3 text-sm text-slate-500" data-testid="sales-at-close">
+                {salesAtCloseLine}
+              </p>
+            )}
 
             <div className="mb-3 space-y-1.5 rounded-lg bg-slate-50 p-3">
               <div className="flex justify-between text-lg font-semibold">
@@ -222,6 +237,15 @@ export default function ZReportModal({ report: initialReport, onClose }: ZReport
                   <p className="text-slate-500">
                     {corrections.length} corrections in all; the printed report lists each one.
                   </p>
+                )}
+              </div>
+            )}
+
+            {latestAdjustment && (
+              <div className="mb-3 rounded-lg border border-sky-200 bg-sky-50 p-2 text-sm text-slate-700" data-testid="latest-adjustment">
+                <p className="line-clamp-2 font-semibold">{latestAdjustment.heading}</p>
+                {adjustments.length > 1 && (
+                  <p className="text-slate-500">{adjustments.length} changes to the sales in all; the printed report lists each one.</p>
                 )}
               </div>
             )}

@@ -58,6 +58,8 @@ function fakeDb(options: {
     getOrdersForDateRange: vi.fn(() => options.ordersForRange ?? []),
     getMpesaPaymentsForShift: vi.fn(() => options.mpesaPaymentsForShift ?? []),
     listShiftCorrections: vi.fn(() => []), // ADDED (docs/phase-224)
+    listShiftAdjustments: vi.fn(() => []), // ADDED (docs/phase-231): the Z report reads the shift's adjustments
+    listAdjustmentSales: vi.fn(() => []), // ADDED (docs/phase-231)
     getMpesaPaymentsForDateRange: vi.fn(() => options.mpesaPaymentsForRange ?? [])
   } as unknown as RubisDatabase
 }

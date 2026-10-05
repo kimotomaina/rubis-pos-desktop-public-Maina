@@ -70,6 +70,8 @@ function createFakeConnection() {
         calls.push({ sql, kind: 'get', params })
         const queued = find(getResults, sql)
         if (queued && queued.length > 0) return queued.shift()
+        // ADDED (docs/phase-231): a record's time is after the shift's newest record; an aggregate always answers one row.
+        if (sql.includes('MAX(at)')) return { latest: null }
         return undefined
       },
       all: (...params: unknown[]) => {
@@ -344,7 +346,9 @@ const reportDb = (corrections: ShiftCorrectionRow[]) =>
     getStaffById: () => staffRow('Manager Mo'),
     getOrdersForShift: () => [],
     getMpesaPaymentsForShift: () => [],
-    listShiftCorrections: () => corrections
+    listShiftCorrections: () => corrections,
+    listShiftAdjustments: () => [], // ADDED (docs/phase-231)
+    listAdjustmentSales: () => []
   }) as unknown as RubisDatabase
 
 describe('the Z report with corrections', () => {

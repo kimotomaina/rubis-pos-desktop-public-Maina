@@ -19,6 +19,7 @@ import type { FiscalVatGroupAmounts } from './integrations/etims.js'
 import type { Logger } from './logger.js'
 import { resolveTraderSystemInvNum } from '../lib/traderSystemInvoiceNumber.js'
 import { shiftWindowLabel, type ShiftType } from '../lib/shiftWindows.js'
+import { withWindow } from '../lib/shiftLabel.js'
 import {
   compareVatGroups,
   expectedGroupTotals,
@@ -103,6 +104,47 @@ export interface ZReport {
    * `null` here and mean nothing. Absent or `false` for every other shift.
    */
   cashNotCounted?: boolean
+  /**
+   * The stored label when it differs from the window of `clock_in` (docs/phase-231, W4): `shiftType` is always the
+   * window's. The report says "Labelled Day when opened". Absent when they agree, or there was no label.
+   */
+  labelledAs?: ShiftType | null
+  /** `true` for a shift the till made itself for sales that had none (docs/phase-231). Absent otherwise. */
+  createdAutomatically?: boolean
+  /** Sales that joined or left this shift after it was opened or made, oldest first (docs/phase-231). Absent or empty when none. */
+  adjustments?: ZReportAdjustment[]
+  /**
+   * What the shift held when it was closed, present only when later joins or moves mean the figures above now count
+   * more or fewer sales (docs/phase-231).
+   */
+  salesAtClose?: { orderCount: number; totalRevenue: number; cash: number; mpesa: number; card: number }
+}
+
+/** One adjustment as the Z report shows it (docs/phase-231). */
+export interface ZReportAdjustment {
+  id: number
+  kind: 'opening' | 'auto' | 'reassign_in' | 'reassign_out'
+  at: string
+  /** The admin who moved the sale; `null` when the till did it itself. */
+  byName: string | null
+  reason: string
+  peerShiftId: number | null
+  salesCount: number
+  salesTotal: number
+  cashTotal: number
+  mpesaTotal: number
+  cardTotal: number
+  firstSaleAt: string | null
+  lastSaleAt: string | null
+  openingDrawerCash: number | null
+  startingCash: number | null
+  endingCash: number | null
+  expectedCash: number | null
+  discrepancy: number | null
+  mpesaOpeningBalance: number | null
+  mpesaClosingBalance: number | null
+  mpesaExpected: number | null
+  mpesaDifference: number | null
 }
 
 /** One correction as the Z report shows it (docs/phase-224). */
@@ -304,10 +346,13 @@ export function generateZReport(
   shiftId: number,
   taxRate: number
 ): ZReport {
-  const shift = db.getShiftById(shiftId)
-  if (!shift) {
+  const stored = db.getShiftById(shiftId)
+  if (!stored) {
     throw new Error(`Shift ${shiftId} not found`)
   }
+  const shift = stored
+  const windowed = withWindow(stored)
+  const shownType: ShiftType | null = windowed.window_type ?? shift.shift_type ?? null
 
   const orders = excludeVoided(db.getOrdersForShift(shiftId))
   const totalsByMethod = sumByPaymentMethod(orders)
@@ -338,8 +383,11 @@ export function generateZReport(
     expectedCash,
     endingCash: shift.ending_cash,
     discrepancy: shift.discrepancy,
-    shiftType: shift.shift_type ?? null,
-    shiftWindowLabel: shift.shift_type ? shiftWindowLabel(shift.shift_type) : null,
+    shiftType: shownType,
+    shiftWindowLabel: shownType ? shiftWindowLabel(shownType) : null,
+    ...(windowed.labelled_as ? { labelledAs: windowed.labelled_as } : {}),
+    ...(shift.staff_id === 0 ? { createdAutomatically: true } : {}),
+    ...adjustmentFields(db, shiftId, orders),
     ...mpesaBalanceFields(shift, totalsByMethod.mpesa),
     kind: shift.kind ?? 'normal',
     createdAt: shift.created_at ?? null,
@@ -362,6 +410,78 @@ export function generateZReport(
       mpesaExpected: row.mpesa_expected,
       mpesaDifference: row.mpesa_difference
     }))
+  }
+}
+
+/**
+ * The adjustments of a Z report and, when later joins or moves changed what the shift counts, the sales it held at
+ * close (docs/phase-231). A sale is "at close" if its first record on this shift is that it came with the shift
+ * (`opening`) or was moved out of it, or it has no record at all and is attached now. A sale that joined later, or
+ * was voided since, is not. Empty for a shift with no adjustments, so its report is exactly what it was.
+ *
+ * @param {RubisDatabase} db
+ * @param {number} shiftId
+ * @param {OrderRow[]} liveOrders — the shift's sales now, voided ones left out
+ * @returns {Pick<ZReport, 'adjustments' | 'salesAtClose'>}
+ */
+function adjustmentFields(
+  db: RubisDatabase,
+  shiftId: number,
+  liveOrders: OrderRow[]
+): Pick<ZReport, 'adjustments' | 'salesAtClose'> {
+  const rows = db.listShiftAdjustments(shiftId)
+  if (rows.length === 0) return {}
+  const adjustments: ZReportAdjustment[] = rows.map((row) => ({
+    id: row.id,
+    kind: row.kind,
+    at: row.at,
+    byName: row.by_staff_id === null ? null : (db.getStaffById(row.by_staff_id)?.name ?? 'Unknown'),
+    reason: row.reason,
+    peerShiftId: row.peer_shift_id,
+    salesCount: row.sales_count,
+    salesTotal: row.sales_total,
+    cashTotal: row.cash_total,
+    mpesaTotal: row.mpesa_total,
+    cardTotal: row.card_total,
+    firstSaleAt: row.first_sale_at,
+    lastSaleAt: row.last_sale_at,
+    openingDrawerCash: row.opening_drawer_cash,
+    startingCash: row.starting_cash,
+    endingCash: row.ending_cash,
+    expectedCash: row.expected_cash,
+    discrepancy: row.discrepancy,
+    mpesaOpeningBalance: row.mpesa_opening_balance,
+    mpesaClosingBalance: row.mpesa_closing_balance,
+    mpesaExpected: row.mpesa_expected,
+    mpesaDifference: row.mpesa_difference
+  }))
+  if (rows.every((row) => row.kind === 'opening')) return { adjustments }
+
+  const sales = db.listAdjustmentSales(shiftId)
+  const firstKind = new Map<number, string>()
+  for (const sale of sales) if (!firstKind.has(sale.order_id)) firstKind.set(sale.order_id, sale.kind)
+  const known = new Map<number, { total: number; method: string | null; voided: boolean }>()
+  for (const order of liveOrders) known.set(order.local_id, { total: order.total, method: order.payment_method, voided: false })
+  for (const sale of sales) {
+    if (!known.has(sale.order_id)) {
+      known.set(sale.order_id, { total: sale.total, method: sale.payment_method, voided: sale.status === 'voided' })
+    }
+  }
+  const atClose = Array.from(known.entries()).filter(([id, sale]) => {
+    const kind = firstKind.get(id)
+    return !sale.voided && (kind === undefined || kind === 'opening' || kind === 'reassign_out')
+  })
+  const totalFor = (method: string): number =>
+    atClose.filter(([, sale]) => sale.method === method).reduce((sum, [, sale]) => sum + sale.total, 0)
+  return {
+    adjustments,
+    salesAtClose: {
+      orderCount: atClose.length,
+      totalRevenue: atClose.reduce((sum, [, sale]) => sum + sale.total, 0),
+      cash: totalFor('cash'),
+      mpesa: totalFor('mpesa'),
+      card: totalFor('card')
+    }
   }
 }
 
@@ -424,7 +544,7 @@ export function generateDailySummary(
  * constant is the wrong tool and `Intl.DateTimeFormat`'s timezone
  * support should replace it.
  */
-const NAIROBI_UTC_OFFSET_MINUTES = 3 * 60
+export const NAIROBI_UTC_OFFSET_MINUTES = 3 * 60
 
 /**
  * Computes the UTC boundaries `[startIso, endIso)` of one Africa/Nairobi

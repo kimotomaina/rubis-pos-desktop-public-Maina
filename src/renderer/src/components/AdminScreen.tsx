@@ -14,14 +14,8 @@ import { useShopifyReconciliationStore } from '../stores/shopifyReconciliationSt
 import { countActionableFindings } from '../lib/shopifyReconciliation.js'
 import { formatCurrency } from '../lib/currency.js'
 import { titleCaseName } from '../lib/text.js'
-import {
-  isPastShiftEnd,
-  shiftEndClock,
-  shiftName,
-  shiftTypeForTime,
-  shiftWindowLabel,
-  type ShiftType
-} from '../lib/shiftWindows.js'
+import { shiftWindowLabel, type ShiftType } from '../lib/shiftWindows.js'
+import { useShiftWindowStatus } from '../lib/useShiftWindowStatus.js'
 import EmptyState from './EmptyState.js'
 import ZReportModal from './ZReportModal.js'
 import OpenShiftForm from './OpenShiftForm.js'
@@ -70,24 +64,43 @@ import { MPESA_BALANCE_INVALID, parseOptionalBalance } from '../lib/optionalBala
 import type { FiscalConnectionTestResult } from '../../../main/services/integrations/fiscal-connection-test.js'
 import type { UpdateStatus } from '../../../main/services/updater.js'
 import type { LastUpdateResult } from '../../../main/services/updateBackup.js'
+import type { ShiftWindowStatus } from '../../../main/services/shift-window-status.js'
 
 /**
- * The open shift's nominal window, with a plain note once it has run past the
- * window's end (docs/phase-199). A note only: it never blocks the close, warns,
- * or closes anything. Read once per render, so it appears the next time the
- * screen refreshes after the window ends.
+ * The open shift's window, with the close note (docs/phase-231). The type is the window of `clock_in`, never the
+ * stored label; an older shift labelled otherwise says so. Once the window's last minute has begun the note asks for
+ * the drawer count and the close; before then it says when the shift may be closed. Selling is never affected. The
+ * times come from the main process (`shifts:window-status`): this screen holds no time rule.
  */
-function ShiftWindowNote({ shiftType, openedAt }: { shiftType: ShiftType; openedAt: string }) {
-  const pastEnd = isPastShiftEnd(shiftType, openedAt, new Date().toISOString())
+function ShiftWindowNote({
+  shift,
+  closeStatus
+}: {
+  shift: ShiftRow
+  closeStatus: NonNullable<ShiftWindowStatus['openShift']> | null
+}) {
+  const type: ShiftType | null = shift.window_type ?? shift.shift_type ?? null
+  if (!type) return null
   return (
-    <p className="mb-3 text-base text-slate-600">
-      {shiftWindowLabel(shiftType)}
-      {pastEnd && (
-        <span className="ml-2 font-medium text-amber-700">
-          {shiftName(shiftType)}, due to close at {shiftEndClock(shiftType)}
-        </span>
+    <div className="mb-3 text-base text-slate-600">
+      <p>
+        {shiftWindowLabel(type)}
+        {shift.labelled_as && (
+          <span className="ml-2 text-slate-500">Labelled {shift.labelled_as === 'day' ? 'Day' : 'Night'} when opened</span>
+        )}
+      </p>
+      {closeStatus?.closeAllowed && (
+        <p role="status" className="mt-1 rounded-lg bg-amber-50 px-3 py-2 font-medium text-amber-900" data-testid="close-banner">
+          {closeStatus.windowName.replace(' shift', '')} window ended at {closeStatus.endClock}. Count the drawer and close
+          shift #{closeStatus.id}.
+        </p>
       )}
-    </p>
+      {closeStatus && !closeStatus.closeAllowed && closeStatus.closeMessage && (
+        <p className="mt-1 text-slate-500" data-testid="close-not-yet">
+          {closeStatus.closeMessage}
+        </p>
+      )}
+    </div>
   )
 }
 
@@ -252,8 +265,6 @@ interface AdminScreenProps {
    * next visit).
    */
   initialTab?: 'needsAttention' | 'reports'
-  /** With `initialTab: 'reports'`: opens Shift History on the sales with no shift (docs/phase-227). */
-  initialReportsAction?: 'recordUnattached'
 }
 
 /**
@@ -271,7 +282,7 @@ interface AdminScreenProps {
  * @param {AdminScreenProps} props
  * @returns {JSX.Element}
  */
-export default function AdminScreen({ requestManagerPin, initialTab, initialReportsAction }: AdminScreenProps) {
+export default function AdminScreen({ requestManagerPin, initialTab }: AdminScreenProps) {
   const currentStaff = useAuthStore((state) => state.currentStaff)
   const unfiledCount = useUnfiledCountStore((state) => state.count)
   const shopifyActionCount = useShopifyReconciliationStore((state) => countActionableFindings(state.result))
@@ -287,7 +298,8 @@ export default function AdminScreen({ requestManagerPin, initialTab, initialRepo
   const [mpesaOpeningInput, setMpesaOpeningInput] = useState('')
   const [mpesaClosingInput, setMpesaClosingInput] = useState('')
   const [showOpenForm, setShowOpenForm] = useState(false)
-  const [selectedShiftType, setSelectedShiftType] = useState<ShiftType>('day')
+  const [startAtZero, setStartAtZero] = useState(false)
+  const { status: windowStatus, reload: reloadWindowStatus } = useShiftWindowStatus()
   const [showCloseForm, setShowCloseForm] = useState(false)
   const [shiftActionError, setShiftActionError] = useState<string | null>(null)
   const [zReport, setZReport] = useState<ZReport | null>(null)
@@ -322,12 +334,6 @@ export default function AdminScreen({ requestManagerPin, initialTab, initialRepo
    * tab click) is new.
    */
   const [activeTab, setActiveTab] = useState<AdminTabKey | null>(initialTab ?? null)
-  // docs/phase-227: sales with no shift, the warning shown before Open or Close Shift, and the Reports hand-over.
-  const [noShiftSales, setNoShiftSales] = useState(0)
-  const [noShiftPrompt, setNoShiftPrompt] = useState<'open' | 'close' | null>(null)
-  const [reportsAction, setReportsAction] = useState<'recordUnattached' | undefined>(
-    initialTab === 'reports' ? initialReportsAction : undefined
-  )
   /**
    * Which Integrations section is on screen (Phase E2(e)) — the tab used
    * to show Shopify/Location/Fiscal device/M-Pesa/Printer all at once,
@@ -1060,19 +1066,6 @@ export default function AdminScreen({ requestManagerPin, initialTab, initialRepo
     })()
   }
 
-  /**
-   * How many sales have no shift (docs/phase-227), for the warning on Open Shift and Close Shift. A failure, or a
-   * bridge without the call, reads as none: the warning is a courtesy and must never block a shift.
-   */
-  const loadNoShiftSales = async () => {
-    try {
-      const result = await window.api.getUnattachedDays?.()
-      setNoShiftSales(result?.success && result.data ? result.data.reduce((sum, day) => sum + day.count, 0) : 0)
-    } catch {
-      setNoShiftSales(0)
-    }
-  }
-
   const refresh = async () => {
     setLoading(true)
     const [summaryResult, shiftResult, staffResult] = await Promise.all([
@@ -1084,16 +1077,12 @@ export default function AdminScreen({ requestManagerPin, initialTab, initialRepo
     if (shiftResult.success) setCurrentShift(shiftResult.data ?? null)
     if (staffResult.success && staffResult.data) setStaffList(staffResult.data)
     setLoading(false)
-    await loadNoShiftSales()
+    await reloadWindowStatus()
   }
 
   useEffect(() => {
     void refresh()
   }, [])
-
-  useEffect(() => {
-    if (activeTab !== 'reports') setReportsAction(undefined)
-  }, [activeTab])
 
   /**
    * Phase 177: a human's only way to confirm an over-the-air update landed
@@ -1144,12 +1133,13 @@ export default function AdminScreen({ requestManagerPin, initialTab, initialRepo
       setShiftActionError(MPESA_BALANCE_INVALID)
       return
     }
-    // A blank balance sends no fourth argument at all, so the call is the one it was before docs/phase-222.
+    // docs/phase-231: the type is the window's, worked out in the main process. What the form showed of the earlier
+    // sales goes with the request, so a sale made while it was open stops the shift being opened on stale figures.
     const result = await window.api.openShift(
       currentStaff.id,
       startingCash,
-      selectedShiftType,
-      ...(mpesaOpening === null ? [] : [mpesaOpening])
+      mpesaOpening === null ? undefined : mpesaOpening,
+      { earlierShown: windowStatus?.earlier, startAtZero: startAtZero || undefined }
     )
     if (!result.success) {
       setShiftActionError(result.error ?? 'Failed to open shift')
@@ -1157,22 +1147,16 @@ export default function AdminScreen({ requestManagerPin, initialTab, initialRepo
     }
     setStartingCashInput('')
     setMpesaOpeningInput('')
+    setStartAtZero(false)
     setShowOpenForm(false)
     await refresh()
   }
 
-  /** Opens the form with the shift that matches the time now preselected; the operator can still change it (docs/phase-199). */
-  const startOpenForm = () => {
-    setSelectedShiftType(shiftTypeForTime(new Date().toISOString()))
-    setShowOpenForm(true)
-  }
-
+  /** Opens the form. The window is shown, never chosen (docs/phase-231). */
   const handleShowOpenForm = () => {
-    if (noShiftSales > 0) {
-      setNoShiftPrompt('open')
-      return
-    }
-    startOpenForm()
+    setStartAtZero(false)
+    void reloadWindowStatus()
+    setShowOpenForm(true)
   }
 
   /**
@@ -1188,26 +1172,7 @@ export default function AdminScreen({ requestManagerPin, initialTab, initialRepo
       return
     }
     setShiftActionError(null)
-    if (noShiftSales > 0) {
-      setNoShiftPrompt('close')
-      return
-    }
     setShowCloseForm(true)
-  }
-
-  /** "Carry on without": the shift action goes ahead exactly as it would have. Nothing is attached. */
-  const handleCarryOnWithoutRecording = () => {
-    const which = noShiftPrompt
-    setNoShiftPrompt(null)
-    if (which === 'open') startOpenForm()
-    if (which === 'close') setShowCloseForm(true)
-  }
-
-  /** "Record them": opens Shift History on the first period offered, where the manager confirms with a PIN. */
-  const handleRecordNoShiftSales = () => {
-    setNoShiftPrompt(null)
-    setReportsAction('recordUnattached')
-    setActiveTab('reports')
   }
 
   const handleCloseShift = async () => {
@@ -1483,7 +1448,7 @@ export default function AdminScreen({ requestManagerPin, initialTab, initialRepo
 
       {activeTab === 'endOfDay' && <EndOfDayPage />}
 
-      {activeTab === 'reports' && <ReportsPage initialAction={reportsAction} />}
+      {activeTab === 'reports' && <ReportsPage />}
 
       {activeTab === 'system' && (
         <section className="rounded-xl border border-slate-200 bg-white p-4">
@@ -2492,8 +2457,11 @@ export default function AdminScreen({ requestManagerPin, initialTab, initialRepo
           </p>
         )}
 
-        {currentShift?.shift_type && (
-          <ShiftWindowNote shiftType={currentShift.shift_type} openedAt={currentShift.clock_in} />
+        {currentShift && (
+          <ShiftWindowNote
+            shift={currentShift}
+            closeStatus={windowStatus?.openShift?.id === currentShift.id ? windowStatus.openShift : null}
+          />
         )}
 
         {shiftActionError && (
@@ -2502,31 +2470,7 @@ export default function AdminScreen({ requestManagerPin, initialTab, initialRepo
           </p>
         )}
 
-        {noShiftPrompt && (
-          <div role="alert" className="mb-3 rounded-lg bg-amber-50 p-3" data-testid="no-shift-sales-prompt">
-            <p className="mb-2 text-base font-medium text-amber-900">
-              {noShiftSales} {noShiftSales === 1 ? 'sale has' : 'sales have'} no shift. Record them now?
-            </p>
-            <div className="flex gap-2">
-              <button
-                type="button"
-                onClick={handleRecordNoShiftSales}
-                className="rounded-lg bg-rose-600 px-4 py-2 text-base font-semibold text-white hover:bg-rose-700"
-              >
-                Record them
-              </button>
-              <button
-                type="button"
-                onClick={handleCarryOnWithoutRecording}
-                className="rounded-lg border border-slate-300 px-4 py-2 text-base text-slate-600 hover:bg-slate-50"
-              >
-                Carry on without
-              </button>
-            </div>
-          </div>
-        )}
-
-        {!currentShift && !showOpenForm && !noShiftPrompt && (
+        {!currentShift && !showOpenForm && (
           <button
             type="button"
             onClick={handleShowOpenForm}
@@ -2538,8 +2482,12 @@ export default function AdminScreen({ requestManagerPin, initialTab, initialRepo
 
         {!currentShift && showOpenForm && (
           <OpenShiftForm
-            shiftType={selectedShiftType}
-            onShiftTypeChange={setSelectedShiftType}
+            windowLabel={windowStatus?.window.label ?? ''}
+            windowHasShift={windowStatus?.windowShift ? windowStatus.windowShiftMessage : null}
+            earlier={windowStatus?.earlier ?? { count: 0, cash: 0, mpesa: 0 }}
+            isAdmin={currentStaff.role === 'admin'}
+            startAtZero={startAtZero}
+            onStartAtZeroChange={setStartAtZero}
             startingCash={startingCashInput}
             onStartingCashChange={setStartingCashInput}
             mpesaOpening={mpesaOpeningInput}
@@ -2553,11 +2501,12 @@ export default function AdminScreen({ requestManagerPin, initialTab, initialRepo
           />
         )}
 
-        {currentShift && !showCloseForm && !noShiftPrompt && (
+        {currentShift && !showCloseForm && (
           <button
             type="button"
             onClick={handleStartCloseShift}
-            className="rounded-lg bg-rose-600 px-4 py-2 text-base font-semibold text-white hover:bg-rose-700"
+            disabled={windowStatus?.openShift?.id === currentShift.id && !windowStatus.openShift.closeAllowed}
+            className="rounded-lg bg-rose-600 px-4 py-2 text-base font-semibold text-white hover:bg-rose-700 disabled:cursor-not-allowed disabled:opacity-50"
           >
             Close Shift
           </button>

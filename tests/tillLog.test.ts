@@ -44,9 +44,16 @@ describe('a log line', () => {
     expect(sanitizeTillDetail('x'.repeat(TILL_LOG_DETAIL_MAX))).toHaveLength(TILL_LOG_DETAIL_MAX)
   })
 
-  it('knows four events, and the screen may write only one of them', () => {
+  it('knows five events, and the screen may write only one of them', () => {
     // docs/phase-230: old, three events; `update-failed` is the fourth, written by the main process only.
-    expect([...TILL_LOG_EVENTS]).toEqual(['print-failed', 'print-fallback', 'shift-state-unreadable', 'update-failed'])
+    // CHANGED (docs/phase-231). OLD: four events. NEW: five; `auto-assign-failed` is written by the main process only.
+    expect([...TILL_LOG_EVENTS]).toEqual([
+      'print-failed',
+      'print-fallback',
+      'shift-state-unreadable',
+      'update-failed',
+      'auto-assign-failed'
+    ])
     expect([...RENDERER_TILL_EVENTS]).toEqual(['shift-state-unreadable'])
   })
 })

@@ -8,11 +8,28 @@
  */
 
 import { requireAdminPin } from '../lib/requireAdminPin.js'
+import { closeTiming } from '../lib/shiftRules.js'
+import { shiftWindowOf } from '../lib/shiftWindows.js'
 import type { HeldSaleSummary, HoldSaleInput, RubisDatabase, ShiftCloseResult } from './database.js'
 import type { ServiceResult } from './shopify-types.js'
 
+/**
+ * Why a shift may not be closed yet (docs/phase-231, S2), or `null` when it may: no shift closes before its window's
+ * last minute begins, for anyone. A missing shift is left to `closeShift`, which says so.
+ *
+ * @param {CloseShiftDb} db
+ * @param {number} shiftId
+ * @param {number} nowMs
+ * @returns {string | null}
+ */
+function closeTimingFor(db: CloseShiftDb, shiftId: number, nowMs: number): string | null {
+  const shift = db.getShiftById(shiftId)
+  if (!shift || shift.status !== 'open') return null
+  return closeTiming(shift.clock_in, shiftWindowOf(shift.clock_in), nowMs).message
+}
+
 /** What {@link closeShiftUnlessHeld} needs from the database. */
-export type CloseShiftDb = Pick<RubisDatabase, 'closeShift' | 'listOpenHeldSales'>
+export type CloseShiftDb = Pick<RubisDatabase, 'closeShift' | 'listOpenHeldSales' | 'getShiftById'>
 
 /**
  * Closes the shift, unless a sale is held or resumed (docs/phase-217): a held sale left at
@@ -23,14 +40,20 @@ export type CloseShiftDb = Pick<RubisDatabase, 'closeShift' | 'listOpenHeldSales
  * @param {number} shiftId
  * @param {number} endingCash
  * @param {number | null} [mpesaClosingBalance] — the M-Pesa till balance if it was read (docs/phase-222)
+ * @param {number} [nowMs] — the clock; the main process's own
  * @returns {ServiceResult<ShiftCloseResult>}
  */
 export function closeShiftUnlessHeld(
   db: CloseShiftDb,
   shiftId: number,
   endingCash: number,
-  mpesaClosingBalance: number | null = null
+  mpesaClosingBalance: number | null = null,
+  nowMs: number = Date.now()
 ): ServiceResult<ShiftCloseResult> {
+  const timing = closeTimingFor(db, shiftId, nowMs)
+  if (timing !== null) {
+    return { success: false, error: timing }
+  }
   const open = db.listOpenHeldSales()
   if (open.length > 0) {
     const list = open.map((sale) => sale.label).join(', ')

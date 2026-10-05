@@ -8,7 +8,7 @@
  */
 
 /** Every event the log knows. `print-failed`, `print-fallback` and `update-failed` are written by the main process only. */
-export const TILL_LOG_EVENTS = ['print-failed', 'print-fallback', 'shift-state-unreadable', 'update-failed'] as const
+export const TILL_LOG_EVENTS = ['print-failed', 'print-fallback', 'shift-state-unreadable', 'update-failed', 'auto-assign-failed'] as const
 
 export type TillLogEvent = (typeof TILL_LOG_EVENTS)[number]
 

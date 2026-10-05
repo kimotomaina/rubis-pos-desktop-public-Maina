@@ -11,8 +11,10 @@
 
 import type { VatMismatchRow } from '../main/services/vat-reconcile.js'
 import type { ShiftType } from '../main/lib/shiftWindows.js'
-import type { UnattachedDay, PastShiftPreview, CreatePastShiftRequest } from '../main/services/past-shifts.js'
+import type { ShiftWindowStatus } from '../main/services/shift-window-status.js'
+import type { WindowReport } from '../main/services/window-report.js'
 import type { ShiftCorrectionRequest } from '../main/services/shift-corrections.js'
+import type { MoveSaleRequest } from '../main/services/sale-moves.js'
 import type { ServiceResult } from '../main/services/shopify-types.js'
 import type { FiscalConnectionTestResult } from '../main/services/integrations/fiscal-connection-test.js'
 import type {
@@ -32,7 +34,9 @@ import type {
   OrderRow,
   StaffSummary,
   StaffRole,
-  RetrospectiveShiftResult,
+  AutoAssignResult,
+  OpenShiftOptions,
+  SaleMovePreview,
   ShiftCorrectionRow,
   ShiftCloseResult,
   ShiftRow,
@@ -220,16 +224,16 @@ export interface PosApi {
   openShift: (
     staffId: number,
     startingCash: number,
-    shiftType?: ShiftType,
-    mpesaOpeningBalance?: number
+    mpesaOpeningBalance?: number,
+    options?: OpenShiftOptions
   ) => Promise<ServiceResult<{ shiftId: number }>>
   /** Opens a shift under a manager's PIN, from the cart when the person at the till is not an admin (docs/phase-227). */
   openShiftAsManager: (
     managerId: number,
     managerPin: string,
     startingCash: number,
-    shiftType?: ShiftType,
-    mpesaOpeningBalance?: number
+    mpesaOpeningBalance?: number,
+    options?: OpenShiftOptions
   ) => Promise<ServiceResult<{ shiftId: number }>>
   /** Closes the open till shift, reconciling counted cash and, if given, the M-Pesa balance (docs/phase-222). */
   closeShift: (
@@ -237,12 +241,16 @@ export interface PosApi {
     endingCash: number,
     mpesaClosingBalance?: number
   ) => Promise<ServiceResult<ShiftCloseResult>>
-  /** The Nairobi days that have sales with no shift (docs/phase-223). */
-  getUnattachedDays: () => Promise<ServiceResult<UnattachedDay[]>>
-  /** What a past shift for a period would take, and whether it may be recorded (docs/phase-223). Read-only. */
-  previewPastShift: (startIso: string, endIso: string) => Promise<ServiceResult<PastShiftPreview>>
-  /** Records a shift for a period that already happened and attaches the sales that had none (docs/phase-223). Manager PIN re-checked in the main process. */
-  createPastShift: (request: CreatePastShiftRequest) => Promise<ServiceResult<RetrospectiveShiftResult>>
+  /** The shift window of this moment, its shift, the earlier sales an Open Shift would bring in, and when the open shift may close (docs/phase-231). */
+  getShiftWindowStatus: () => Promise<ServiceResult<ShiftWindowStatus>>
+  /** The combined report of one window (docs/phase-231). Read-only. */
+  getWindowReport: (type: ShiftType, startDate: string) => Promise<ServiceResult<WindowReport>>
+  /** Gives every sale with no shift to the shift it belongs to (docs/phase-231). No input, no PIN; running it again changes nothing. */
+  autoAssignSales: () => Promise<ServiceResult<AutoAssignResult>>
+  /** What moving one sale to another shift would do (docs/phase-231). Read-only. */
+  previewSaleMove: (orderId: number, toShiftId: number) => Promise<ServiceResult<SaleMovePreview>>
+  /** Moves one sale to another shift (docs/phase-231). Admin PIN re-checked in the main process. */
+  moveSale: (request: MoveSaleRequest) => Promise<ServiceResult<{ fromShiftId: number; toShiftId: number }>>
   /** Appends a correction to a closed shift's typed-in figures (docs/phase-224). Manager PIN re-checked in the main process; the shift's own row is never changed. */
   correctShift: (request: ShiftCorrectionRequest) => Promise<ServiceResult<ShiftCorrectionRow>>
   /** Generates the Z-report for a shift. */

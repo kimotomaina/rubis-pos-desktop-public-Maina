@@ -2,8 +2,10 @@ import { contextBridge, ipcRenderer } from 'electron'
 import type { VatMismatchRow } from '../main/services/vat-reconcile.js'
 import type { ShiftType } from '../main/lib/shiftWindows.js'
 import { electronAPI } from '@electron-toolkit/preload'
-import type { UnattachedDay, PastShiftPreview, CreatePastShiftRequest } from '../main/services/past-shifts.js'
+import type { ShiftWindowStatus } from '../main/services/shift-window-status.js'
+import type { WindowReport } from '../main/services/window-report.js'
 import type { ShiftCorrectionRequest } from '../main/services/shift-corrections.js'
+import type { MoveSaleRequest } from '../main/services/sale-moves.js'
 import type { ServiceResult } from '../main/services/shopify-types.js'
 import type {
   CartItem,
@@ -22,7 +24,9 @@ import type {
   OrderRow,
   StaffSummary,
   StaffRole,
-  RetrospectiveShiftResult,
+  AutoAssignResult,
+  OpenShiftOptions,
+  SaleMovePreview,
   ShiftCorrectionRow,
   ShiftCloseResult,
   ShiftRow,
@@ -568,21 +572,22 @@ const api = {
     ipcRenderer.invoke('log:till-event', { event, detail }),
 
   /**
-   * Opens a new store-wide till shift with a starting cash float.
+   * Opens the one shift of the current window (docs/phase-231). The type is the window's, from the clock in the main
+   * process: it is not sent. `startingCash` is the cash counted in the drawer now.
    *
    * @param {number} staffId
-   * @param {number} startingCash
-   * @param {ShiftType} [shiftType] — day or night, as chosen at the till (docs/phase-199)
-   * @param {number} [mpesaOpeningBalance] — the M-Pesa till balance, if it was read (docs/phase-222)
+   * @param {number} startingCash — the cash counted in the drawer now
+   * @param {number} [mpesaOpeningBalance] — the M-Pesa till balance now, if it was read (docs/phase-222)
+   * @param {OpenShiftOptions} [options] — what the form showed of the earlier sales, and an admin's start-at-0 choice
    * @returns {Promise<ServiceResult<{ shiftId: number }>>}
    */
   openShift: (
     staffId: number,
     startingCash: number,
-    shiftType?: ShiftType,
-    mpesaOpeningBalance?: number
+    mpesaOpeningBalance?: number,
+    options?: OpenShiftOptions
   ): Promise<ServiceResult<{ shiftId: number }>> =>
-    ipcRenderer.invoke('shifts:open', { staffId, startingCash, shiftType, mpesaOpeningBalance }),
+    ipcRenderer.invoke('shifts:open', { staffId, startingCash, mpesaOpeningBalance, ...options }),
 
   /**
    * Opens a shift under a manager's PIN, from the cart's "No shift open" dialog when the person at the till is not
@@ -590,25 +595,25 @@ const api = {
    *
    * @param {number} managerId
    * @param {string} managerPin
-   * @param {number} startingCash
-   * @param {ShiftType} [shiftType]
+   * @param {number} startingCash — the cash counted in the drawer now
    * @param {number} [mpesaOpeningBalance]
+   * @param {OpenShiftOptions} [options]
    * @returns {Promise<ServiceResult<{ shiftId: number }>>}
    */
   openShiftAsManager: (
     managerId: number,
     managerPin: string,
     startingCash: number,
-    shiftType?: ShiftType,
-    mpesaOpeningBalance?: number
+    mpesaOpeningBalance?: number,
+    options?: OpenShiftOptions
   ): Promise<ServiceResult<{ shiftId: number }>> =>
     ipcRenderer.invoke('shifts:open', {
       staffId: managerId,
       managerId,
       managerPin,
       startingCash,
-      shiftType,
-      mpesaOpeningBalance
+      mpesaOpeningBalance,
+      ...options
     }),
 
   /**
@@ -627,31 +632,50 @@ const api = {
     ipcRenderer.invoke('shifts:close', { shiftId, endingCash, mpesaClosingBalance }),
 
   /**
-   * The Nairobi days that have sales with no shift (docs/phase-223).
+   * The shift window of this moment, its shift, the earlier sales an Open Shift would bring in, and when the open
+   * shift may be closed (docs/phase-231). Read-only: the screens carry no time rule of their own.
    *
-   * @returns {Promise<ServiceResult<UnattachedDay[]>>}
+   * @returns {Promise<ServiceResult<ShiftWindowStatus>>}
    */
-  getUnattachedDays: (): Promise<ServiceResult<UnattachedDay[]>> => ipcRenderer.invoke('shifts:unattached-days'),
+  getShiftWindowStatus: (): Promise<ServiceResult<ShiftWindowStatus>> => ipcRenderer.invoke('shifts:window-status'),
 
   /**
-   * What a past shift for a period would take, and whether it may be recorded (docs/phase-223). Read-only.
+   * The combined report of one window: every shift that began in it, each with its own Z report, and the sums that
+   * are safe to add (docs/phase-231). Read-only.
    *
-   * @param {string} startIso
-   * @param {string} endIso
-   * @returns {Promise<ServiceResult<PastShiftPreview>>}
+   * @param {ShiftType} type
+   * @param {string} startDate — `YYYY-MM-DD`
+   * @returns {Promise<ServiceResult<WindowReport>>}
    */
-  previewPastShift: (startIso: string, endIso: string): Promise<ServiceResult<PastShiftPreview>> =>
-    ipcRenderer.invoke('shifts:past-preview', { startIso, endIso }),
+  getWindowReport: (type: ShiftType, startDate: string): Promise<ServiceResult<WindowReport>> =>
+    ipcRenderer.invoke('reports:window-report', { type, startDate }),
 
   /**
-   * Records a shift for a period that already happened and attaches the sales that had none (docs/phase-223).
-   * Manager-gated: the main process re-verifies the PIN.
+   * Gives every sale with no shift to the shift it belongs to (docs/phase-231). Takes no input and no PIN: it can
+   * only do what the rules say, and running it again changes nothing.
    *
-   * @param {CreatePastShiftRequest} request
-   * @returns {Promise<ServiceResult<RetrospectiveShiftResult>>}
+   * @returns {Promise<ServiceResult<AutoAssignResult>>}
    */
-  createPastShift: (request: CreatePastShiftRequest): Promise<ServiceResult<RetrospectiveShiftResult>> =>
-    ipcRenderer.invoke('shifts:create-past', request),
+  autoAssignSales: (): Promise<ServiceResult<AutoAssignResult>> => ipcRenderer.invoke('shifts:auto-assign'),
+
+  /**
+   * What moving one sale to another shift would do (docs/phase-231). Read-only.
+   *
+   * @param {number} orderId
+   * @param {number} toShiftId
+   * @returns {Promise<ServiceResult<SaleMovePreview>>}
+   */
+  previewSaleMove: (orderId: number, toShiftId: number): Promise<ServiceResult<SaleMovePreview>> =>
+    ipcRenderer.invoke('shifts:move-sale-preview', { orderId, toShiftId }),
+
+  /**
+   * Moves one sale to another shift (docs/phase-231, S5). Admin-gated: the main process re-verifies the PIN.
+   *
+   * @param {MoveSaleRequest} request
+   * @returns {Promise<ServiceResult<{ fromShiftId: number; toShiftId: number }>>}
+   */
+  moveSale: (request: MoveSaleRequest): Promise<ServiceResult<{ fromShiftId: number; toShiftId: number }>> =>
+    ipcRenderer.invoke('shifts:move-sale', request),
 
   /**
    * Appends a correction to a closed shift's typed-in figures (docs/phase-224). Manager-gated: the main process

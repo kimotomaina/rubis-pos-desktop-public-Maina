@@ -1,8 +1,13 @@
 /**
- * The Open Shift and Close Shift controls on the Admin screen (docs/phase-199):
- * the shift that matches the clock is preselected, both shifts stay visible and
- * can be switched, the chosen one is sent, and an open shift shows its window
- * with a note, never a block, once it has run past its end.
+ * The Open Shift and Close Shift controls on the Admin screen (docs/phase-199, changed in docs/phase-231): the window
+ * of the clock is shown and never chosen, nothing about the type is sent, an open shift shows its window by its
+ * `clock_in` (with a note when an older label differs), and from the last minute of the window the screen asks for the
+ * drawer count and closes it; before then Close Shift is off and says when.
+ *
+ * CHANGED (docs/phase-231). OLD: the shift that matched the clock was preselected, both shifts stayed on screen and
+ * could be switched, the chosen one was sent, and a note appeared from 17:31:00 ("due to close at 17:30"). NEW: see
+ * above. The boundary results (day at 17:30:59 and 09:00:00, night at 17:31:00 and 08:59:59) are unchanged: they now
+ * come from the main process's `getShiftWindowStatus`, which these tests run for real.
  *
  * Real mount, the same way `tests/adminScreen.test.ts` does it.
  */
@@ -14,6 +19,8 @@ import AdminScreen from '../src/renderer/src/components/AdminScreen.js'
 import { useAuthStore } from '../src/renderer/src/stores/authStore.js'
 import { useKeyboardStore } from '../src/renderer/src/stores/keyboardStore.js'
 import type { ShiftRow } from '../src/main/services/database.js'
+import { getShiftWindowStatus } from '../src/main/services/shift-window-status.js'
+import { withWindow } from '../src/main/lib/shiftLabel.js'
 
 let container: HTMLDivElement
 let root: Root
@@ -36,11 +43,24 @@ const openShiftRow = (overrides: Partial<ShiftRow> = {}): ShiftRow => ({
   ...overrides
 })
 
-/** Every `window.api` method resolves an empty success unless a test names it; only the shift calls matter here. */
-function stubApi(shift: ShiftRow | null): void {
+/**
+ * Every `window.api` method resolves an empty success unless a test names it. The window status is the main
+ * process's own `getShiftWindowStatus`, run for real at the system time, over the shift given.
+ */
+function stubApi(shift: ShiftRow | null, holder: ShiftRow | null = null): void {
+  const known = shift ?? holder
+  const status = getShiftWindowStatus(
+    {
+      getOpenShift: () => (shift && shift.status === 'open' ? shift : undefined),
+      listShiftWindows: () => (known ? [{ id: known.id, clock_in: known.clock_in, clock_out: known.clock_out }] : []),
+      listUnattachedSales: () => []
+    },
+    Date.now()
+  )
   const named: Record<string, unknown> = {
     platform: 'linux',
-    getCurrentShift: vi.fn().mockResolvedValue(ok(shift)),
+    getCurrentShift: vi.fn().mockResolvedValue(ok(shift ? withWindow(shift) : null)),
+    getShiftWindowStatus: vi.fn().mockResolvedValue(ok(status)),
     getAppVersion: vi.fn().mockResolvedValue('2.1.6'),
     onUpdateStatus: vi.fn(() => () => {}),
     openShift: vi.fn().mockResolvedValue(ok({ shiftId: 6 })),
@@ -55,6 +75,7 @@ function stubApi(shift: ShiftRow | null): void {
 async function mount(): Promise<void> {
   await act(async () => {
     root.render(createElement(AdminScreen, { requestManagerPin: () => {} }))
+    await Promise.resolve()
     await Promise.resolve()
     await Promise.resolve()
   })
@@ -73,23 +94,19 @@ async function click(label: string): Promise<void> {
   })
 }
 
-const radios = (): HTMLButtonElement[] =>
-  Array.from(container.querySelectorAll<HTMLButtonElement>('[role="radio"]'))
-
-const checkedRadio = (): string | undefined =>
-  radios().find((r) => r.getAttribute('aria-checked') === 'true')?.textContent ?? undefined
-
 const DAY_LABEL = 'Day shift (09:00 to 17:30)'
 const NIGHT_LABEL = 'Night shift (17:31 to 08:59)'
 
 /** Opens the Overview tab with no shift open at the given Nairobi time, and presses Open Shift. */
-async function openFormAt(time: string): Promise<void> {
+async function openFormAt(time: string, holder: ShiftRow | null = null): Promise<void> {
   vi.setSystemTime(nairobi(time))
-  stubApi(null)
+  stubApi(null, holder)
   await mount()
   await click('Overview')
   await click('Open Shift')
 }
+
+const windowText = (): string | null => container.querySelector('[data-testid="open-shift-window"]')?.textContent ?? null
 
 beforeEach(() => {
   vi.useFakeTimers({ toFake: ['Date'] })
@@ -106,85 +123,64 @@ afterEach(() => {
   vi.useRealTimers()
 })
 
-describe('Open Shift: the suggested shift', () => {
-  it('preselects the day shift at a day time and shows both shifts with their full labels', async () => {
+describe('Open Shift: the window is shown, never chosen', () => {
+  it('shows the day window at a day time, with no buttons to choose between them', async () => {
     await openFormAt('10:30:00')
 
-    expect(radios().map((r) => r.textContent)).toEqual([DAY_LABEL, NIGHT_LABEL])
-    expect(checkedRadio()).toBe(DAY_LABEL)
+    expect(windowText()).toBe(DAY_LABEL)
+    expect(container.querySelectorAll('[role="radio"]')).toHaveLength(0)
+    expect(container.textContent).not.toContain(NIGHT_LABEL)
   })
 
-  it('preselects the night shift at a night time', async () => {
+  it('shows the night window at a night time', async () => {
     await openFormAt('22:15:00')
 
-    expect(radios().map((r) => r.textContent)).toEqual([DAY_LABEL, NIGHT_LABEL])
-    expect(checkedRadio()).toBe(NIGHT_LABEL)
+    expect(windowText()).toBe(NIGHT_LABEL)
+    expect(container.querySelectorAll('[role="radio"]')).toHaveLength(0)
   })
 
   it('follows the boundary: day at 17:30:59 and 09:00:00, night at 17:31:00 and 08:59:59', async () => {
-    await openFormAt('17:30:59')
-    expect(checkedRadio()).toBe(DAY_LABEL)
-    act(() => root.unmount())
-    root = createRoot(container)
-
-    await openFormAt('17:31:00')
-    expect(checkedRadio()).toBe(NIGHT_LABEL)
-    act(() => root.unmount())
-    root = createRoot(container)
-
-    await openFormAt('08:59:59')
-    expect(checkedRadio()).toBe(NIGHT_LABEL)
-    act(() => root.unmount())
-    root = createRoot(container)
-
-    await openFormAt('09:00:00')
-    expect(checkedRadio()).toBe(DAY_LABEL)
+    const cases: Array<[string, string]> = [
+      ['17:30:59', DAY_LABEL],
+      ['17:31:00', NIGHT_LABEL],
+      ['08:59:59', NIGHT_LABEL],
+      ['09:00:00', DAY_LABEL]
+    ]
+    for (const [time, label] of cases) {
+      await openFormAt(time)
+      expect(windowText()).toBe(label)
+      act(() => root.unmount())
+      root = createRoot(container)
+    }
   })
 
-  it('lets the operator switch, in both directions, with both options still on screen', async () => {
-    await openFormAt('10:30:00')
-
-    await click(NIGHT_LABEL)
-    expect(checkedRadio()).toBe(NIGHT_LABEL)
-    expect(radios()).toHaveLength(2)
-
-    await click(DAY_LABEL)
-    expect(checkedRadio()).toBe(DAY_LABEL)
-    expect(radios()).toHaveLength(2)
-  })
-
-  it('sends the suggested shift when the operator changes nothing', async () => {
+  it('sends no shift type: the type is worked out in the main process', async () => {
     await openFormAt('22:15:00')
     act(() => container.querySelector('input')!.click())
     act(() => useKeyboardStore.getState().request?.onChange('250'))
     await click('Confirm')
 
-    expect(window.api.openShift).toHaveBeenCalledWith(1, 250, 'night')
+    const call = vi.mocked(window.api.openShift).mock.calls[0]
+    expect(call.slice(0, 3)).toEqual([1, 250, undefined])
+    expect(JSON.stringify(call)).not.toMatch(/"(day|night)"/)
   })
 
-  it('sends the shift the operator chose instead of the suggested one', async () => {
-    await openFormAt('10:30:00')
-    await click(NIGHT_LABEL)
-    act(() => container.querySelector('input')!.click())
-    act(() => useKeyboardStore.getState().request?.onChange('250'))
-    await click('Confirm')
+  it('says so, and will not confirm, when the window already has its shift', async () => {
+    const closed = openShiftRow({
+      id: 1,
+      clock_in: nairobi('17:43:21').toISOString(),
+      clock_out: nairobi('17:43:36').toISOString(),
+      status: 'closed'
+    })
 
-    expect(window.api.openShift).toHaveBeenCalledWith(1, 250, 'night')
-  })
+    await openFormAt('21:00:00', closed)
 
-  it('suggests afresh each time the form is opened', async () => {
-    await openFormAt('10:30:00')
-    await click(NIGHT_LABEL)
-    await click('Cancel')
-
-    vi.setSystemTime(nairobi('10:45:00'))
-    await click('Open Shift')
-
-    expect(checkedRadio()).toBe(DAY_LABEL)
+    expect(container.textContent).toContain('Night shift, 2 Oct 2026 already has shift #1. A window has one shift.')
+    expect(button('Confirm').disabled).toBe(true)
   })
 })
 
-describe('an open shift: its window and the due-to-close note', () => {
+describe('an open shift: its window and the close note', () => {
   const mountOpen = async (shift: ShiftRow, now: string, date = '2026-10-02'): Promise<void> => {
     vi.setSystemTime(nairobi(now, date))
     stubApi(shift)
@@ -192,57 +188,67 @@ describe('an open shift: its window and the due-to-close note', () => {
     await click('Overview')
   }
 
-  it('shows the shift and its window in the status line, with no note while inside the window', async () => {
+  it('shows the shift and its window, and when it can be closed, while inside the window', async () => {
     await mountOpen(openShiftRow({ shift_type: 'day' }), '12:00:00')
 
     expect(container.textContent).toContain(DAY_LABEL)
-    expect(container.textContent).not.toContain('due to close')
+    expect(container.textContent).toContain('Day shift can be closed from 17:30')
+    expect(container.querySelector('[data-testid="close-banner"]')).toBeNull()
+    expect(button('Close Shift').disabled).toBe(true)
   })
 
-  it('adds "Day shift, due to close at 17:30" once the clock is past the end of the window', async () => {
-    await mountOpen(openShiftRow({ shift_type: 'day' }), '17:31:00')
+  it('asks for the drawer count from 17:30:00, the first second of the day window\'s last minute', async () => {
+    await mountOpen(openShiftRow({ shift_type: 'day' }), '17:30:00')
 
-    expect(container.textContent).toContain('Day shift, due to close at 17:30')
+    expect(container.querySelector('[data-testid="close-banner"]')?.textContent).toBe(
+      'Day window ended at 17:30. Count the drawer and close shift #5.'
+    )
+    expect(button('Close Shift').disabled).toBe(false)
   })
 
-  it('does not add the note at 17:30:59, the last second of the day shift', async () => {
-    await mountOpen(openShiftRow({ shift_type: 'day' }), '17:30:59')
+  it('does not ask at 17:29:59 and keeps Close Shift off', async () => {
+    await mountOpen(openShiftRow({ shift_type: 'day' }), '17:29:59')
 
-    expect(container.textContent).not.toContain('due to close')
+    expect(container.querySelector('[data-testid="close-banner"]')).toBeNull()
+    expect(button('Close Shift').disabled).toBe(true)
   })
 
-  it('adds "Night shift, due to close at 08:59" for a night shift opened at 02:00 once it is 09:00', async () => {
-    const shift = openShiftRow({ shift_type: 'night', clock_in: nairobi('02:00:00').toISOString() })
-
-    await mountOpen(shift, '09:00:00')
-
-    expect(container.textContent).toContain(NIGHT_LABEL)
-    expect(container.textContent).toContain('Night shift, due to close at 08:59')
-  })
-
-  it('shows no note for a night shift opened the evening before, before 09:00 the next morning', async () => {
+  it('asks from 08:59:00 for a night shift opened the evening before, and not at 08:58:59', async () => {
     const shift = openShiftRow({ shift_type: 'night', clock_in: nairobi('18:30:00').toISOString() })
 
-    await mountOpen(shift, '08:59:00', '2026-10-03')
-
-    expect(container.textContent).not.toContain('due to close')
-  })
-
-  it('shows nothing about a window for a shift opened before shift types existed', async () => {
-    await mountOpen(openShiftRow({ shift_type: null }), '23:00:00')
-    expect(container.textContent).not.toContain('Day shift')
-    expect(container.textContent).not.toContain('Night shift')
-    expect(container.textContent).toContain('Shift #5 open')
-
+    await mountOpen(shift, '08:58:59', '2026-10-03')
+    expect(container.querySelector('[data-testid="close-banner"]')).toBeNull()
     act(() => root.unmount())
     root = createRoot(container)
-    await mountOpen(openShiftRow(), '23:00:00')
-    expect(container.textContent).not.toContain('Night shift')
+
+    await mountOpen(shift, '08:59:00', '2026-10-03')
+    expect(container.querySelector('[data-testid="close-banner"]')?.textContent).toBe(
+      'Night window ended at 08:59. Count the drawer and close shift #5.'
+    )
   })
 
-  it('still closes a shift that is past its window: the note blocks nothing', async () => {
+  it('shows an older shift by its window, with a note of the label it was given', async () => {
+    // Opened 17:43 and labelled Day, as shift #1 on the live till was.
+    const shift = openShiftRow({ shift_type: 'day', clock_in: nairobi('17:43:21').toISOString() })
+
+    await mountOpen(shift, '20:00:00')
+
+    expect(container.textContent).toContain(NIGHT_LABEL)
+    expect(container.textContent).toContain('Labelled Day when opened')
+  })
+
+  it('shows the window of a shift opened before shift types existed, with no "labelled" note', async () => {
+    // CHANGED (docs/phase-231). OLD: nothing about a window for a shift with no label. NEW: every shift has a window.
+    await mountOpen(openShiftRow({ shift_type: null }), '23:00:00')
+
+    expect(container.textContent).toContain(DAY_LABEL)
+    expect(container.textContent).not.toContain('Labelled')
+    expect(container.textContent).toContain('Shift #5 open')
+  })
+
+  it('still closes a shift that is past its window', async () => {
     await mountOpen(openShiftRow({ shift_type: 'day' }), '19:00:00')
-    expect(container.textContent).toContain('due to close')
+    expect(container.querySelector('[data-testid="close-banner"]')).not.toBeNull()
 
     await click('Close Shift')
     act(() => container.querySelector('input')!.click())
@@ -252,13 +258,13 @@ describe('an open shift: its window and the due-to-close note', () => {
     expect(window.api.closeShift).toHaveBeenCalledWith(5, 180)
   })
 
-  it('keeps the window and the note on screen while the close form is open', async () => {
+  it('keeps the window and the banner on screen while the close form is open', async () => {
     await mountOpen(openShiftRow({ shift_type: 'day' }), '19:00:00')
 
     await click('Close Shift')
 
     expect(container.textContent).toContain('Ending Cash (counted)')
     expect(container.textContent).toContain(DAY_LABEL)
-    expect(container.textContent).toContain('Day shift, due to close at 17:30')
+    expect(container.textContent).toContain('Day window ended at 17:30')
   })
 })

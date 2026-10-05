@@ -117,39 +117,39 @@ const order = (total: number, method: 'cash' | 'mpesa' | 'card', status = 'compl
     fiscal_request_json: null
   }) as unknown as OrderRow
 
+// CHANGED (docs/phase-231). OLD: openShift(1, 100, 'day', 2500) took a type from the screen and left shift_type and the
+// M-Pesa column out of the INSERT when they were not given. NEW: openShift(1, 100, 2500, {}, nowMs): the type is the
+// window of the clock and both columns are always written (null is "not recorded").
 describe('openShift with an M-Pesa opening balance', () => {
+  const nowMs = Date.parse('2026-10-02T07:00:00.000Z')
+
   it('stores it in its own column, after the existing ones', () => {
     const { fake, db } = freshDb()
     fake.queueRunResult('INSERT INTO shifts', { lastInsertRowid: 7 })
 
-    expect(db.openShift(1, 100, 'day', 2500)).toEqual({ shiftId: 7 })
+    expect(db.openShift(1, 100, 2500, {}, nowMs)).toEqual({ shiftId: 7 })
 
     const [insert] = fake.callsFor('run', 'INSERT INTO shifts')
     expect(insert.sql).toBe(
       "INSERT INTO shifts (staff_id, clock_in, starting_cash, status, shift_type, mpesa_opening_balance) VALUES (?, ?, ?, 'open', ?, ?)"
     )
-    expect(insert.params).toEqual([1, expect.any(String), 100, 'day', 2500])
+    expect(insert.params).toEqual([1, new Date(nowMs).toISOString(), 100, 'day', 2500])
   })
 
   it('stores a recorded balance of 0 as 0, not as "not recorded"', () => {
     const { fake, db } = freshDb()
-    db.openShift(1, 100, null, 0)
+    db.openShift(1, 100, 0, {}, nowMs)
 
     const [insert] = fake.callsFor('run', 'INSERT INTO shifts')
-    expect(insert.sql).toContain('mpesa_opening_balance')
-    expect(insert.params).toEqual([1, expect.any(String), 100, 0])
+    expect(insert.params).toEqual([1, new Date(nowMs).toISOString(), 100, 'day', 0])
   })
 
-  it('keeps the statements it had before when no balance is given', () => {
+  it('stores null for a balance that was not given, in the same statement', () => {
     const { fake, db } = freshDb()
-    db.openShift(1, 100)
-    db.openShift(1, 100, 'night')
+    db.openShift(1, 100, null, {}, nowMs)
 
-    const [plain, typed] = fake.callsFor('run', 'INSERT INTO shifts')
-    expect(plain.sql).toBe("INSERT INTO shifts (staff_id, clock_in, starting_cash, status) VALUES (?, ?, ?, 'open')")
-    expect(typed.sql).toBe(
-      "INSERT INTO shifts (staff_id, clock_in, starting_cash, status, shift_type) VALUES (?, ?, ?, 'open', ?)"
-    )
+    const [insert] = fake.callsFor('run', 'INSERT INTO shifts')
+    expect(insert.params).toEqual([1, new Date(nowMs).toISOString(), 100, 'day', null])
   })
 })
 
@@ -213,7 +213,9 @@ describe('closeShift with M-Pesa balances', () => {
 
   it('passes the counted balance through the held-sales guard', () => {
     const closeShift = vi.fn(() => ({ expectedCash: 1, discrepancy: 0, mpesaExpected: null, mpesaDifference: null }))
-    closeShiftUnlessHeld({ closeShift, listOpenHeldSales: () => [] }, 3, 100, 640)
+    // CHANGED (docs/phase-231). OLD: the guard's database had two methods. NEW: it also reads the shift, to check the window
+    // has reached its last minute; a shift it cannot find is left to closeShift, which says so.
+    closeShiftUnlessHeld({ closeShift, listOpenHeldSales: () => [], getShiftById: () => undefined }, 3, 100, 640)
 
     expect(closeShift).toHaveBeenCalledWith(3, 100, 640)
   })
@@ -243,7 +245,9 @@ const dbFor = (shift: ShiftRow, orders: OrderRow[] = []): RubisDatabase =>
     getStaffById: vi.fn(() => staff),
     getOrdersForShift: vi.fn(() => orders),
     getMpesaPaymentsForShift: vi.fn(() => []),
-    listShiftCorrections: vi.fn(() => []) // ADDED (docs/phase-224)
+    listShiftCorrections: vi.fn(() => []), // ADDED (docs/phase-224)
+    listShiftAdjustments: vi.fn(() => []), // ADDED (docs/phase-231): the Z report reads the shift's adjustments
+    listAdjustmentSales: vi.fn(() => []), // ADDED (docs/phase-231)
   }) as unknown as RubisDatabase
 
 describe('generateZReport M-Pesa balances', () => {

@@ -49,9 +49,11 @@ describe('listShifts / countShifts', () => {
   })
 
   it('lists shifts most recently opened first', () => {
-    const first = db.openShift(staffId, 100)
+    // CHANGED (docs/phase-231). OLD: two shifts opened one after the other at the real clock. NEW: a window holds one shift,
+    // so the two are opened in different windows (Day and Night of 2 Oct).
+    const first = db.openShift(staffId, 100, null, {}, Date.parse('2026-10-02T07:00:00.000Z'))
     db.closeShift(first.shiftId, 100)
-    const second = db.openShift(staffId, 50)
+    const second = db.openShift(staffId, 50, null, {}, Date.parse('2026-10-02T17:00:00.000Z'))
     db.closeShift(second.shiftId, 50)
 
     const shifts = db.listShifts(10, 0)
@@ -59,8 +61,9 @@ describe('listShifts / countShifts', () => {
   })
 
   it('paginates with limit/offset, and countShifts reports the true total regardless of the page size', () => {
+    // CHANGED (docs/phase-231). OLD: five shifts at the real clock. NEW: five Day windows, one shift each.
     for (let i = 0; i < 5; i++) {
-      const { shiftId } = db.openShift(staffId, 0)
+      const { shiftId } = db.openShift(staffId, 0, null, {}, Date.parse(`2026-10-0${i + 1}T07:00:00.000Z`))
       db.closeShift(shiftId, 0)
     }
 
@@ -133,7 +136,7 @@ describe('getMpesaPaymentsForShift', () => {
   it('returns only the payments whose order belongs to the given shift', () => {
     const db = freshDb()
     const staffId = db.createStaff({ name: 'Ann', pinHash: 'x', role: 'cashier' }).staffId
-    const { shiftId } = db.openShift(staffId, 0)
+    const { shiftId } = db.openShift(staffId, 0, null, {}, Date.parse('2026-10-02T07:00:00.000Z'))
 
     const orderInput = {
       items: [],
@@ -157,7 +160,8 @@ describe('getMpesaPaymentsForShift', () => {
 
     // A second shift's payment must not leak into the first shift's list.
     db.closeShift(shiftId, 0)
-    const { shiftId: otherShiftId } = db.openShift(staffId, 0)
+    // CHANGED (docs/phase-231): the second shift is in the Night window, since a window holds one shift.
+    const { shiftId: otherShiftId } = db.openShift(staffId, 0, null, {}, Date.parse('2026-10-02T17:00:00.000Z'))
     db.queueOrderRecordingManualPayment(
       { ...orderInput, clientOrderUuid: 'uuid-shift-2', shiftId: otherShiftId },
       {

@@ -10,7 +10,7 @@
 
 import type { ZReport } from '../../../main/services/reports.js'
 
-type RetroFields = Pick<ZReport, 'kind' | 'createdAt' | 'createdByName' | 'reason'>
+type RetroFields = Pick<ZReport, 'kind' | 'createdAt' | 'createdByName' | 'reason' | 'createdAutomatically'>
 
 /**
  * @param {RetroFields} report
@@ -20,6 +20,10 @@ type RetroFields = Pick<ZReport, 'kind' | 'createdAt' | 'createdByName' | 'reaso
 export function zReportRetroLines(report: RetroFields, formatDateTime: (iso: string) => string): string[] {
   if (report.kind !== 'retrospective') return []
   const when = report.createdAt ? ` ${formatDateTime(report.createdAt)}` : ''
+  // docs/phase-231: the till made this shift itself, for sales that had none.
+  if (report.createdAutomatically) {
+    return [`CREATED AUTOMATICALLY${when}`, `Reason: ${report.reason ?? ''}`]
+  }
   return [
     `RETROSPECTIVE SHIFT, created${when} by ${report.createdByName ?? 'Unknown'}`,
     `Reason: ${report.reason ?? ''}`

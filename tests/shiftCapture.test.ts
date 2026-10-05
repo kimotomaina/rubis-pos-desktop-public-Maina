@@ -1,7 +1,14 @@
 /**
- * Phase 227, the main-process half: every sale lands in a shift. One confirmation attaches every sale in a period
- * (D1); one offer per day, cut at existing shifts (D2); "Cash not counted" (D4); who may open a shift, and the
- * schemas that guard it.
+ * Phase 227, the main-process half: every sale lands in a shift. "Cash not counted" (D4); who may open a shift, and
+ * the schemas that guard it.
+ *
+ * CHANGED (docs/phase-231). OLD: this file also tested D1 (one confirmation attaches every sale in a period, through
+ * `createRetrospectiveShift`), D2 (one offer per day, cut at existing shifts, `listUnattachedOffers`), the
+ * `shifts:create-past` request schema, and the handlers `shifts:create-past` and `shifts:unattached-days`. NEW: the
+ * manual past-shift flow is retired, so those are removed; the automatic assignment that replaces it is tested in
+ * tests/oneShiftPerWindow.test.ts, including a shift made with its cash not counted (no figures, nothing sent to
+ * Shopify or the tax device). The column, the Z report, the correction and the open-shift tests are unchanged except
+ * as noted where they are.
  *
  * `better-sqlite3` is mocked with a recording fake, as in `tests/pastShift.test.ts`.
  */
@@ -11,10 +18,8 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import BetterSqlite3 from 'better-sqlite3'
 import { RubisDatabase } from '../src/main/services/database.js'
-import type { ShiftRow, StaffRow, UnattachedSaleRow } from '../src/main/services/database.js'
-import { findOverlappingShift } from '../src/main/lib/pastShift.js'
-import { listUnattachedOffers } from '../src/main/services/past-shifts.js'
-import { createPastShiftSchema, shiftCloseSchema, shiftOpenSchema } from '../src/main/lib/ipcValidator.js'
+import type { ShiftRow, StaffRow } from '../src/main/services/database.js'
+import { shiftCloseSchema, shiftOpenSchema } from '../src/main/lib/ipcValidator.js'
 import { generateZReport } from '../src/main/services/reports.js'
 import type { ZReport } from '../src/main/services/reports.js'
 import { renderZReport } from '../src/main/services/printer.js'
@@ -61,6 +66,8 @@ function createFakeConnection() {
         calls.push({ sql, kind: 'get', params })
         const queued = find(getResults, sql)
         if (queued && queued.length > 0) return queued.shift()
+        // ADDED (docs/phase-231): a record's time is after the shift's newest record; an aggregate always answers one row.
+        if (sql.includes('MAX(at)')) return { latest: null }
         return undefined
       },
       all: (...params: unknown[]) => {
@@ -99,183 +106,12 @@ const NOW = Date.parse('2026-10-05T12:00:00.000Z')
 const START = '2026-10-03T07:00:00.000Z'
 const END = '2026-10-03T14:59:59.999Z'
 
-const sale = (id: number, createdAt: string, total: number, method: 'cash' | 'mpesa' | 'card'): UnattachedSaleRow => ({
-  local_id: id,
-  created_at: createdAt,
-  total,
-  payment_method: method
-})
-
-const input = (overrides: Record<string, unknown> = {}) => ({
-  managerId: 2,
-  startIso: START,
-  endIso: END,
-  orderIds: [11, 12, 13],
-  startingCash: 1000,
-  endingCash: 1480,
-  mpesaOpeningBalance: null,
-  mpesaClosingBalance: null,
-  shiftType: 'day' as const,
-  reason: 'Till used without opening a shift',
-  ...overrides
-})
-
-/** A database whose period holds sales 11 (cash 500), 12 (M-Pesa 300) and 13 (card 150). */
-function dbWith() {
-  const { fake, db } = freshDb()
-  fake.setAllResult('SELECT id, clock_in, clock_out FROM shifts', [])
-  fake.setAllResult('shift_id IS NULL', [
-    sale(11, '2026-10-03T08:00:00.000Z', 500, 'cash'),
-    sale(12, '2026-10-03T09:00:00.000Z', 300, 'mpesa'),
-    sale(13, '2026-10-03T10:00:00.000Z', 150, 'card')
-  ])
-  fake.queueRunResult('INSERT INTO shifts', { lastInsertRowid: 9 })
-  return { fake, db }
-}
-
-describe('D1: one confirmation attaches every sale with no shift in the period', () => {
-  it('is one call, one shift row, and one guarded UPDATE for each of the period\'s sales', () => {
-    const { fake, db } = dbWith()
-
-    const result = db.createRetrospectiveShift(input(), NOW)
-
-    expect(result.attachedCount).toBe(3)
-    expect(fake.callsFor('run', 'INSERT INTO shifts')).toHaveLength(1)
-    expect(fake.callsFor('run', 'UPDATE orders').map((u) => u.params[1])).toEqual([11, 12, 13])
-  })
-
-  it('refuses, writing nothing, when the confirmation leaves out a sale that is in the period', () => {
-    const { fake, db } = dbWith()
-
-    expect(() => db.createRetrospectiveShift(input({ orderIds: [11, 12] }), NOW)).toThrow(/appeared in this period/)
-    expect(fake.callsFor('run', 'INSERT INTO shifts')).toHaveLength(0)
-    expect(fake.callsFor('run', 'UPDATE orders')).toHaveLength(0)
-  })
-})
-
-describe('D2: one offer per Nairobi day, cut at existing shifts', () => {
-  const offersFor = (sales: UnattachedSaleRow[], shifts: Array<{ id: number; clock_in: string; clock_out: string | null }>) =>
-    listUnattachedOffers({ listUnattachedSales: () => sales, listShiftWindows: () => shifts })
-
-  it('gives one offer for each day that has sales with no shift', () => {
-    const offers = offersFor(
-      [
-        sale(1, '2026-10-03T08:00:00.000Z', 100, 'cash'),
-        sale(2, '2026-10-03T09:00:00.000Z', 50, 'mpesa'),
-        sale(3, '2026-10-04T08:00:00.000Z', 70, 'card')
-      ],
-      []
-    )
-
-    expect(offers.map((o) => [o.localDay, o.count, o.total])).toEqual([
-      ['2026-10-03', 2, 150],
-      ['2026-10-04', 1, 70]
-    ])
-    expect(offers[0].firstAt).toBe('2026-10-03T08:00:00.000Z')
-    expect(offers[0].lastAt).toBe('2026-10-03T09:00:00.000Z')
-  })
-
-  it("stops at an existing shift: today's sales split around shift #1, and each offer's period misses it", () => {
-    // Shift #1 ran 17:43:21 to 17:43:36 Nairobi time, which is 14:43:21 to 14:43:36 UTC.
-    const shifts = [{ id: 1, clock_in: '2026-10-05T14:43:21.000Z', clock_out: '2026-10-05T14:43:36.000Z' }]
-    const offers = offersFor(
-      [
-        sale(1, '2026-10-05T05:00:00.000Z', 100, 'cash'),
-        sale(2, '2026-10-05T11:00:00.000Z', 200, 'mpesa'),
-        sale(3, '2026-10-05T15:00:00.000Z', 300, 'cash'),
-        sale(4, '2026-10-05T16:00:00.000Z', 400, 'card')
-      ],
-      shifts
-    )
-
-    // docs/phase-229: old, two offers cut only at the shift (08:00 and 14:00 together, 18:00 and 19:00 together).
-    // New, three: 08:00 is the night that began on the 4th, 14:00 is Day, 18:00 and 19:00 are Night. The shift
-    // still separates the two sides, and no offer touches it.
-    expect(offers.map((o) => [o.firstAt, o.lastAt, o.count, o.total])).toEqual([
-      ['2026-10-05T05:00:00.000Z', '2026-10-05T05:00:00.000Z', 1, 100],
-      ['2026-10-05T11:00:00.000Z', '2026-10-05T11:00:00.000Z', 1, 200],
-      ['2026-10-05T15:00:00.000Z', '2026-10-05T16:00:00.000Z', 2, 700]
-    ])
-    for (const offer of offers) {
-      expect(findOverlappingShift(shifts, Date.parse(offer.firstAt), Date.parse(offer.lastAt))).toBeUndefined()
-    }
-  })
-
-  it('never puts a sale in an offer twice, or leaves one out', () => {
-    const sales = [
-      sale(1, '2026-10-05T05:00:00.000Z', 1, 'cash'),
-      sale(2, '2026-10-05T11:00:00.000Z', 2, 'cash'),
-      sale(3, '2026-10-05T15:00:00.000Z', 4, 'cash'),
-      sale(4, '2026-10-06T01:00:00.000Z', 8, 'cash')
-    ]
-    const offers = offersFor(sales, [{ id: 1, clock_in: '2026-10-05T14:43:21.000Z', clock_out: '2026-10-05T14:43:36.000Z' }])
-
-    expect(offers.reduce((sum, o) => sum + o.count, 0)).toBe(4)
-    expect(offers.reduce((sum, o) => sum + o.total, 0)).toBe(15)
-  })
-
-  it('is empty when every sale has a shift', () => {
-    expect(offersFor([], [])).toEqual([])
-  })
-})
-
 describe('D4: "Cash not counted"', () => {
   it('adds the column to a table from before, with a default that keeps every existing shift as it was', () => {
     const { fake } = freshDb()
 
     const alters = fake.connection.exec.mock.calls.map((call) => String(call[0]))
     expect(alters.some((sql) => sql.includes('ALTER TABLE shifts ADD COLUMN cash_not_counted INTEGER NOT NULL DEFAULT 0'))).toBe(true)
-  })
-
-  it('stores no cash figures, only the flag, and returns none', () => {
-    const { fake, db } = dbWith()
-
-    const result = db.createRetrospectiveShift(input({ cashNotCounted: true, startingCash: 999, endingCash: 888 }), NOW)
-
-    expect(result).toMatchObject({ shiftId: 9, attachedCount: 3, expectedCash: null, discrepancy: null })
-    const [insert] = fake.callsFor('run', 'INSERT INTO shifts')
-    expect(insert.sql).toContain('cash_not_counted')
-    // starting 0 (meaningless), expected, ending and discrepancy NULL, whatever figures were sent.
-    expect(insert.params.slice(3, 7)).toEqual([0, null, null, null])
-  })
-
-  it('leaves a counted shift exactly as it was: no flag in its statement', () => {
-    const { fake, db } = dbWith()
-
-    db.createRetrospectiveShift(input(), NOW)
-
-    expect(fake.callsFor('run', 'INSERT INTO shifts')[0].sql).not.toContain('cash_not_counted')
-  })
-
-  it('still sends nothing to Shopify or the tax device', () => {
-    const { fake, db } = dbWith()
-
-    db.createRetrospectiveShift(input({ cashNotCounted: true }), NOW)
-
-    expect(fake.callsFor('run', 'sync_queue')).toHaveLength(0)
-  })
-
-  describe('the request', () => {
-    const base = {
-      managerId: 2,
-      managerPin: '1234',
-      startIso: START,
-      endIso: END,
-      orderIds: [11],
-      shiftType: 'day',
-      reason: 'Nobody counted'
-    }
-
-    it('accepts "not counted" with no cash figures, and counted figures with no flag', () => {
-      expect(createPastShiftSchema.safeParse({ ...base, cashNotCounted: true }).success).toBe(true)
-      expect(createPastShiftSchema.safeParse({ ...base, startingCash: 0, endingCash: 0 }).success).toBe(true)
-    })
-
-    it('refuses neither the figures nor the flag, and one figure alone', () => {
-      expect(createPastShiftSchema.safeParse(base).success).toBe(false)
-      expect(createPastShiftSchema.safeParse({ ...base, startingCash: 5 }).success).toBe(false)
-      expect(createPastShiftSchema.safeParse({ ...base, cashNotCounted: false }).success).toBe(false)
-    })
   })
 
   it('is never offered to a normal Close Shift: the close request needs a counted figure whatever else it says', () => {
@@ -315,7 +151,9 @@ describe('D4: "Cash not counted"', () => {
           getStaffById: () => staff,
           getOrdersForShift: () => orders,
           getMpesaPaymentsForShift: () => [],
-          listShiftCorrections: () => []
+          listShiftCorrections: () => [],
+          listShiftAdjustments: () => [], // ADDED (docs/phase-231)
+          listAdjustmentSales: () => []
         } as unknown as RubisDatabase,
         9,
         0.16
@@ -441,7 +279,9 @@ describe('shifts:open: only an admin opens a shift', () => {
     const result = openShiftChecked(db, { staffId: 1, startingCash: 250, shiftType: 'night' })
 
     expect(result).toEqual({ success: true, data: { shiftId: 5 } })
-    expect(openShift).toHaveBeenCalledWith(1, 250, 'night', null)
+    // CHANGED (docs/phase-231). OLD: openShift(1, 250, 'night', null), the type from the request. NEW: openShift(1, 250, null, options):
+    // a type in the request is ignored, so none reaches the database; the options carry what the form showed.
+    expect(openShift).toHaveBeenCalledWith(1, 250, null, { earlierShown: undefined, startAtZero: undefined })
   })
 
   it('refuses a cashier with no PIN, through the handler logic and not only on screen', () => {
@@ -474,7 +314,7 @@ describe('shifts:open: only an admin opens a shift', () => {
     })
 
     expect(result.success).toBe(true)
-    expect(openShift).toHaveBeenCalledWith(2, 100, 'night', 1500)
+    expect(openShift).toHaveBeenCalledWith(2, 100, 1500, { earlierShown: undefined, startAtZero: undefined })
   })
 
   it('refuses a wrong PIN, and a PIN that belongs to a cashier', () => {
@@ -524,14 +364,4 @@ describe('the handlers in main/index.ts', () => {
     expect(body).not.toContain('db.openShift(')
   })
 
-  it('shifts:create-past re-verifies the manager PIN before it writes anything (D1: nothing attached without it)', () => {
-    const body = handlerBody('shifts:create-past')
-
-    expect(body.indexOf('requireAdminPin(db, validation.data.managerId, validation.data.managerPin)')).toBeGreaterThan(-1)
-    expect(body.indexOf('requireAdminPin(')).toBeLessThan(body.indexOf('db.createRetrospectiveShift('))
-  })
-
-  it('shifts:unattached-days lists the offers, cut at shifts, not whole days', () => {
-    expect(handlerBody('shifts:unattached-days')).toContain('listUnattachedOffers(db)')
-  })
 })
