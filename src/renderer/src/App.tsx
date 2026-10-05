@@ -866,16 +866,15 @@ export default function App() {
         </main>
       ) : (
         /**
-         * The "Admin" heading sits in its own `shrink-0` row above
-         * `AdminScreen` (phase-142's "+44" finding). `overflow-hidden`,
-         * not `-auto` (docs/phase-167 Part B item 2): the card grid
-         * (Part A) replaced the old tab bar, and every section fits the
-         * design box on its own — see docs/phase-167.md for the
-         * per-section measurements that made this true.
+         * `overflow-hidden`, not `-auto` (docs/phase-167 Part B item 2):
+         * the card grid (Part A) replaced the old tab bar, and every
+         * section fits the design box on its own — see docs/phase-167.md
+         * for the per-section measurements that made this true. The
+         * plain "Admin" heading that sat above `AdminScreen` is gone
+         * (docs/phase-220): the header tab and the breadcrumb say it.
          */
         <main className="flex flex-1 flex-col overflow-hidden">
-          <h2 className="shrink-0 px-6 pt-6 pb-4 text-lg font-semibold text-slate-700">Admin</h2>
-          <div className="min-h-0 flex-1 overflow-hidden px-6 pb-6">
+          <div className="min-h-0 flex-1 overflow-hidden p-6">
             <AdminScreen requestManagerPin={requestManagerPin} initialTab={adminInitialTab} />
           </div>
         </main>

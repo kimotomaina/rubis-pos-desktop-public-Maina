@@ -3,21 +3,10 @@ import type { EndOfDayReport, ManualMpesaEntrySummary } from '../../../main/serv
 import type { DiscardedHeldSale } from '../../../main/services/database.js'
 import { formatCurrency } from '../lib/currency.js'
 import { titleCaseName } from '../lib/text.js'
-import { paginate } from '../lib/paginate.js'
+import { useMoreBelow } from '../lib/useMoreBelow.js'
 import { useAuthStore } from '../stores/authStore.js'
 import { useKeyboardStore } from '../stores/keyboardStore.js'
 import ManagerPinModal from '../components/ManagerPinModal.js'
-
-/**
- * Manual entries and carry-over rows per page — keeps a long list within
- * the design box (Phase E). Lower than a plain read-only list would need
- * (phase-152 used 8) because a pending row can now grow a second line for
- * its reason field (docs/phase-153).
- */
-const ENTRIES_PER_PAGE = 6
-
-/** Discarded held sales per page (docs/phase-217): short rows, kept to three so the list stays inside the design box. */
-const DISCARDED_PER_PAGE = 3
 
 /** A manager's in-progress tick/reason choice for one still-pending entry. */
 interface Selection {
@@ -156,19 +145,12 @@ export default function EndOfDayPage() {
   const [approving, setApproving] = useState(false)
   const [collectingPin, setCollectingPin] = useState(false)
   const [note, setNote] = useState('')
-  const [entriesPage, setEntriesPage] = useState(1)
-  const [carryOverPage, setCarryOverPage] = useState(1)
   /** Held sales discarded on the day shown (docs/phase-217). */
   const [discardedHeld, setDiscardedHeld] = useState<DiscardedHeldSale[]>([])
-  const [discardedPage, setDiscardedPage] = useState(1)
   const [discardedHeldFailed, setDiscardedHeldFailed] = useState(false)
-  /**
-   * One tick/reason choice per currently-pending entry, keyed by payment
-   * id — deliberately state that outlives which page is showing, so
-   * paging back and forth never loses a manager's in-progress choices
-   * (docs/phase-153's own "ticks and reasons survive paging" test).
-   */
+  /** One tick/reason choice per currently-pending entry, keyed by payment id. */
   const [selections, setSelections] = useState<Map<number, Selection>>(new Map())
+  const { ref: scrollRef, moreBelow, onScroll } = useMoreBelow<HTMLDivElement>()
 
   useEffect(() => {
     if (staffList.length === 0) void fetchStaffList()
@@ -181,9 +163,6 @@ export default function EndOfDayPage() {
       const result = await window.api.getEndOfDayReport(localDay)
       if (result.success && result.data) {
         setReport(result.data)
-        setEntriesPage(1)
-        setCarryOverPage(1)
-        setDiscardedPage(1)
         // A discarded held sale may be an M-Pesa payment with no sale behind it, so the
         // manager approving the day sees them here (docs/phase-217).
         try {
@@ -310,10 +289,6 @@ export default function EndOfDayPage() {
     return <p className="p-4 text-lg text-slate-500">Loading end-of-day report…</p>
   }
 
-  const entriesPageResult = paginate(report.manualEntries, entriesPage, ENTRIES_PER_PAGE)
-  const carryOverPageResult = paginate(report.carryOver, carryOverPage, ENTRIES_PER_PAGE)
-  const discardedPageResult = paginate(discardedHeld, discardedPage, DISCARDED_PER_PAGE)
-
   const allPending = [...report.manualEntries, ...report.carryOver].filter((entry) => !entry.approved)
   const tickedEntries = allPending.filter((entry) => selections.get(entry.paymentId)?.ticked ?? true)
   const approvingCount = tickedEntries.length
@@ -321,8 +296,8 @@ export default function EndOfDayPage() {
   const leftOutCount = allPending.length - approvingCount
 
   return (
-    <div className="space-y-4">
-      <section className="rounded-xl border border-slate-200 bg-white p-4">
+    <div className="flex min-h-0 flex-1 flex-col gap-4">
+      <section className="shrink-0 rounded-xl border border-slate-200 bg-white p-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <h3 className="text-xl font-semibold text-slate-900">End of Day — {report.localDay}</h3>
@@ -349,244 +324,188 @@ export default function EndOfDayPage() {
         </div>
       </section>
 
-      {(discardedHeldFailed || discardedHeld.length > 0) && (
-        <section className="overflow-x-auto rounded-xl border border-amber-300 bg-amber-50/40 p-3" data-testid="discarded-held-sales">
-          <h4 className="mb-1 text-lg font-semibold text-amber-900">Held sales discarded — {report.localDay}</h4>
-          {discardedHeldFailed ? (
-            <p className="text-base font-medium text-rose-700">Could not load the discarded held sales.</p>
-          ) : (
-            <>
-              <table className="w-full text-left text-base">
-                <thead className="text-slate-500">
-                  <tr>
-                    <th className="py-1 pr-2">Time</th>
-                    <th className="py-1 pr-2">Held sale</th>
-                    <th className="py-1 pr-2 text-right">Total</th>
-                    <th className="py-1 pr-2 text-right">Lines</th>
-                    <th className="py-1 pr-2">Held by</th>
-                    <th className="py-1 pr-2">Approved by</th>
-                    <th className="py-1">Reason</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {discardedPageResult.items.map((sale) => (
-                    <tr key={sale.id} className="border-t border-slate-200/60">
-                      <td className="py-1 pr-2 text-slate-500">{new Date(sale.discardedAt).toLocaleTimeString()}</td>
-                      <td className="py-1 pr-2 font-medium text-slate-800">{sale.label}</td>
-                      <td className="py-1 pr-2 text-right text-slate-800">{formatCurrency(sale.total)}</td>
-                      <td className="py-1 pr-2 text-right text-slate-800">{sale.lineCount}</td>
-                      <td className="py-1 pr-2 text-slate-800">{titleCaseName(sale.heldByName ?? 'Unknown')}</td>
-                      <td className="py-1 pr-2 text-slate-800">{titleCaseName(sale.managerName ?? 'Unknown')}</td>
-                      <td className="max-w-xs truncate py-1 text-slate-700">{sale.reason}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-              {discardedPageResult.pageCount > 1 && (
-                <div className="mt-2 flex items-center justify-between gap-3">
-                  <button
-                    type="button"
-                    onClick={() => setDiscardedPage(discardedPageResult.page - 1)}
-                    disabled={!discardedPageResult.hasPrev}
-                    className="h-9 rounded-lg border border-slate-300 px-3 text-base font-medium text-slate-600 disabled:cursor-not-allowed disabled:opacity-40"
-                  >
-                    Previous
-                  </button>
-                  <span className="text-base text-slate-500">
-                    Page {discardedPageResult.page} of {discardedPageResult.pageCount}
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => setDiscardedPage(discardedPageResult.page + 1)}
-                    disabled={!discardedPageResult.hasNext}
-                    className="h-9 rounded-lg border border-slate-300 px-3 text-base font-medium text-slate-600 disabled:cursor-not-allowed disabled:opacity-40"
-                  >
-                    Next
-                  </button>
-                </div>
-              )}
-            </>
-          )}
-        </section>
-      )}
-
       {error && (
-        <p className="rounded-lg bg-rose-50 px-4 py-3 text-lg font-medium text-rose-700">{error}</p>
+        <p className="shrink-0 rounded-lg bg-rose-50 px-4 py-3 text-lg font-medium text-rose-700">{error}</p>
       )}
       {notice && (
-        <p className="rounded-lg bg-emerald-50 px-4 py-3 text-lg font-medium text-emerald-800">
+        <p className="shrink-0 rounded-lg bg-emerald-50 px-4 py-3 text-lg font-medium text-emerald-800">
           {notice}
         </p>
       )}
 
-      <section className="overflow-x-auto rounded-xl border border-slate-200 bg-white p-4">
-        <h4 className="mb-3 text-lg font-semibold text-slate-800">Per cashier</h4>
-        {report.cashiers.length === 0 ? (
-          <p className="text-base text-slate-500">No sales recorded this day.</p>
-        ) : (
-          <table className="w-full text-left text-base">
-            <thead className="text-slate-500">
-              <tr>
-                <th className="py-2 pr-2">Cashier</th>
-                <th className="py-2 pr-2 text-right">Sales</th>
-                <th className="py-2 pr-2 text-right">Cash</th>
-                <th className="py-2 pr-2 text-right">Card</th>
-                <th className="py-2 pr-2 text-right">M-Pesa (manual)</th>
-                <th className="py-2 text-right">M-Pesa (Daraja)</th>
-              </tr>
-            </thead>
-            <tbody>
-              {report.cashiers.map((cashier) => (
-                <tr key={cashier.staffId} className="border-t border-slate-200/60">
-                  <td className="py-2 pr-2 text-slate-800">{titleCaseName(cashier.staffName)}</td>
-                  <td className="py-2 pr-2 text-right text-slate-800">{cashier.orderCount}</td>
-                  <td className="py-2 pr-2 text-right text-slate-800">
-                    {formatCurrency(cashier.totalsByMethod.cash)}
-                  </td>
-                  <td className="py-2 pr-2 text-right text-slate-800">
-                    {formatCurrency(cashier.totalsByMethod.card)}
-                  </td>
-                  <td className="py-2 pr-2 text-right text-slate-800">
-                    {formatCurrency(cashier.mpesaByMode.manual)}
-                  </td>
-                  <td className="py-2 text-right text-slate-800">
-                    {formatCurrency(cashier.mpesaByMode.daraja)}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-            <tfoot>
-              <tr className="border-t-2 border-slate-300 font-semibold text-slate-900">
-                <td className="py-2 pr-2">Total</td>
-                <td className="py-2 pr-2 text-right">
-                  {report.cashiers.reduce((sum, c) => sum + c.orderCount, 0)}
-                </td>
-                <td className="py-2 pr-2 text-right">{formatCurrency(report.totalsByMethod.cash)}</td>
-                <td className="py-2 pr-2 text-right">{formatCurrency(report.totalsByMethod.card)}</td>
-                <td className="py-2 pr-2 text-right" colSpan={2}>
-                  {formatCurrency(report.totalsByMethod.mpesa)}
-                </td>
-              </tr>
-            </tfoot>
-          </table>
-        )}
-      </section>
-
-      <section className="overflow-x-auto rounded-xl border border-slate-200 bg-white p-4">
-        <h4 className="mb-3 text-lg font-semibold text-slate-800">Manual M-Pesa entries — {report.localDay}</h4>
-        {report.manualEntries.length === 0 ? (
-          <p className="text-base text-slate-500">No manual M-Pesa entries this day.</p>
-        ) : (
-          <>
-            <table className="w-full text-left text-base">
-              <thead className="text-slate-500">
-                <tr>
-                  <th className="py-2 pr-2">Include</th>
-                  <th className="py-2 pr-2">Time</th>
-                  <th className="py-2 pr-2">Sale</th>
-                  <th className="py-2 pr-2">Cashier</th>
-                  <th className="py-2 pr-2">Code</th>
-                  <th className="py-2 pr-2 text-right">Amount</th>
-                  <th className="py-2 text-right">Status</th>
-                </tr>
-              </thead>
-              <tbody>
-                {entriesPageResult.items.map((entry) => (
-                  <EntryRow
-                    key={entry.paymentId}
-                    entry={entry}
-                    showDay={false}
-                    selection={selections.get(entry.paymentId)}
-                    onToggle={toggleEntry}
-                    onOpenReason={openReasonKeyboard}
-                  />
-                ))}
-              </tbody>
-            </table>
-            {entriesPageResult.pageCount > 1 && (
-              <div className="mt-3 flex items-center justify-between gap-3">
-                <button
-                  type="button"
-                  onClick={() => setEntriesPage(entriesPageResult.page - 1)}
-                  disabled={!entriesPageResult.hasPrev}
-                  className="h-10 rounded-lg border border-slate-300 px-3 text-base font-medium text-slate-600 disabled:cursor-not-allowed disabled:opacity-40"
-                >
-                  Previous
-                </button>
-                <span className="text-base text-slate-500">
-                  Page {entriesPageResult.page} of {entriesPageResult.pageCount}
-                </span>
-                <button
-                  type="button"
-                  onClick={() => setEntriesPage(entriesPageResult.page + 1)}
-                  disabled={!entriesPageResult.hasNext}
-                  className="h-10 rounded-lg border border-slate-300 px-3 text-base font-medium text-slate-600 disabled:cursor-not-allowed disabled:opacity-40"
-                >
-                  Next
-                </button>
-              </div>
-            )}
-          </>
-        )}
-      </section>
-
-      {report.carryOver.length > 0 && (
-        <section className="overflow-x-auto rounded-xl border border-amber-300 bg-amber-50/40 p-4">
-          <h4 className="mb-1 text-lg font-semibold text-amber-900">Carry-over — not yet approved</h4>
-          <table className="w-full text-left text-base">
-            <thead className="text-slate-500">
-              <tr>
-                <th className="py-2 pr-2">Include</th>
-                <th className="py-2 pr-2">Day</th>
-                <th className="py-2 pr-2">Time</th>
-                <th className="py-2 pr-2">Sale</th>
-                <th className="py-2 pr-2">Cashier</th>
-                <th className="py-2 pr-2">Code</th>
-                <th className="py-2 pr-2 text-right">Amount</th>
-                <th className="py-2 text-right">Status</th>
-              </tr>
-            </thead>
-            <tbody>
-              {carryOverPageResult.items.map((entry) => (
-                <EntryRow
-                  key={entry.paymentId}
-                  entry={entry}
-                  showDay
-                  selection={selections.get(entry.paymentId)}
-                  onToggle={toggleEntry}
-                  onOpenReason={openReasonKeyboard}
-                />
-              ))}
-            </tbody>
-          </table>
-          {carryOverPageResult.pageCount > 1 && (
-            <div className="mt-3 flex items-center justify-between gap-3">
-              <button
-                type="button"
-                onClick={() => setCarryOverPage(carryOverPageResult.page - 1)}
-                disabled={!carryOverPageResult.hasPrev}
-                className="h-10 rounded-lg border border-slate-300 px-3 text-base font-medium text-slate-600 disabled:cursor-not-allowed disabled:opacity-40"
-              >
-                Previous
-              </button>
-              <span className="text-base text-slate-500">
-                Page {carryOverPageResult.page} of {carryOverPageResult.pageCount}
-              </span>
-              <button
-                type="button"
-                onClick={() => setCarryOverPage(carryOverPageResult.page + 1)}
-                disabled={!carryOverPageResult.hasNext}
-                className="h-10 rounded-lg border border-slate-300 px-3 text-base font-medium text-slate-600 disabled:cursor-not-allowed disabled:opacity-40"
-              >
-                Next
-              </button>
-            </div>
+      <div className="relative flex min-h-0 flex-1 flex-col">
+        <div
+          ref={scrollRef}
+          onScroll={onScroll}
+          data-testid="end-of-day-scroll"
+          className="touch-scrollbar min-h-0 flex-1 space-y-4 overflow-y-auto pr-2"
+        >
+          {(discardedHeldFailed || discardedHeld.length > 0) && (
+            <section className="overflow-x-auto rounded-xl border border-amber-300 bg-amber-50/40 p-3" data-testid="discarded-held-sales">
+              <h4 className="mb-1 text-lg font-semibold text-amber-900">Held sales discarded — {report.localDay}</h4>
+              {discardedHeldFailed ? (
+                <p className="text-base font-medium text-rose-700">Could not load the discarded held sales.</p>
+              ) : (
+                <table className="w-full text-left text-base">
+                  <thead className="text-slate-500">
+                    <tr>
+                      <th className="py-1 pr-2">Time</th>
+                      <th className="py-1 pr-2">Held sale</th>
+                      <th className="py-1 pr-2 text-right">Total</th>
+                      <th className="py-1 pr-2 text-right">Lines</th>
+                      <th className="py-1 pr-2">Held by</th>
+                      <th className="py-1 pr-2">Approved by</th>
+                      <th className="py-1">Reason</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {discardedHeld.map((sale) => (
+                      <tr key={sale.id} className="border-t border-slate-200/60">
+                        <td className="py-1 pr-2 text-slate-500">{new Date(sale.discardedAt).toLocaleTimeString()}</td>
+                        <td className="py-1 pr-2 font-medium text-slate-800">{sale.label}</td>
+                        <td className="py-1 pr-2 text-right text-slate-800">{formatCurrency(sale.total)}</td>
+                        <td className="py-1 pr-2 text-right text-slate-800">{sale.lineCount}</td>
+                        <td className="py-1 pr-2 text-slate-800">{titleCaseName(sale.heldByName ?? 'Unknown')}</td>
+                        <td className="py-1 pr-2 text-slate-800">{titleCaseName(sale.managerName ?? 'Unknown')}</td>
+                        <td className="max-w-xs truncate py-1 text-slate-700">{sale.reason}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </section>
           )}
-        </section>
-      )}
 
-      <section className="rounded-xl border border-slate-200 bg-white p-4">
-        <div className="mb-3 flex items-center justify-between">
+          <section className="overflow-x-auto rounded-xl border border-slate-200 bg-white p-4">
+            <h4 className="mb-3 text-lg font-semibold text-slate-800">Per cashier</h4>
+            {report.cashiers.length === 0 ? (
+              <p className="text-base text-slate-500">No sales recorded this day.</p>
+            ) : (
+              <table className="w-full text-left text-base">
+                <thead className="text-slate-500">
+                  <tr>
+                    <th className="py-2 pr-2">Cashier</th>
+                    <th className="py-2 pr-2 text-right">Sales</th>
+                    <th className="py-2 pr-2 text-right">Cash</th>
+                    <th className="py-2 pr-2 text-right">Card</th>
+                    <th className="py-2 pr-2 text-right">M-Pesa (manual)</th>
+                    <th className="py-2 text-right">M-Pesa (Daraja)</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {report.cashiers.map((cashier) => (
+                    <tr key={cashier.staffId} className="border-t border-slate-200/60">
+                      <td className="py-2 pr-2 text-slate-800">{titleCaseName(cashier.staffName)}</td>
+                      <td className="py-2 pr-2 text-right text-slate-800">{cashier.orderCount}</td>
+                      <td className="py-2 pr-2 text-right text-slate-800">
+                        {formatCurrency(cashier.totalsByMethod.cash)}
+                      </td>
+                      <td className="py-2 pr-2 text-right text-slate-800">
+                        {formatCurrency(cashier.totalsByMethod.card)}
+                      </td>
+                      <td className="py-2 pr-2 text-right text-slate-800">
+                        {formatCurrency(cashier.mpesaByMode.manual)}
+                      </td>
+                      <td className="py-2 text-right text-slate-800">
+                        {formatCurrency(cashier.mpesaByMode.daraja)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+                <tfoot>
+                  <tr className="border-t-2 border-slate-300 font-semibold text-slate-900">
+                    <td className="py-2 pr-2">Total</td>
+                    <td className="py-2 pr-2 text-right">
+                      {report.cashiers.reduce((sum, c) => sum + c.orderCount, 0)}
+                    </td>
+                    <td className="py-2 pr-2 text-right">{formatCurrency(report.totalsByMethod.cash)}</td>
+                    <td className="py-2 pr-2 text-right">{formatCurrency(report.totalsByMethod.card)}</td>
+                    <td className="py-2 pr-2 text-right" colSpan={2}>
+                      {formatCurrency(report.totalsByMethod.mpesa)}
+                    </td>
+                  </tr>
+                </tfoot>
+              </table>
+            )}
+          </section>
+
+          <section className="overflow-x-auto rounded-xl border border-slate-200 bg-white p-4">
+            <h4 className="mb-3 text-lg font-semibold text-slate-800">Manual M-Pesa entries — {report.localDay}</h4>
+            {report.manualEntries.length === 0 ? (
+              <p className="text-base text-slate-500">No manual M-Pesa entries this day.</p>
+            ) : (
+              <table className="w-full text-left text-base">
+                <thead className="text-slate-500">
+                  <tr>
+                    <th className="py-2 pr-2">Include</th>
+                    <th className="py-2 pr-2">Time</th>
+                    <th className="py-2 pr-2">Sale</th>
+                    <th className="py-2 pr-2">Cashier</th>
+                    <th className="py-2 pr-2">Code</th>
+                    <th className="py-2 pr-2 text-right">Amount</th>
+                    <th className="py-2 text-right">Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {report.manualEntries.map((entry) => (
+                    <EntryRow
+                      key={entry.paymentId}
+                      entry={entry}
+                      showDay={false}
+                      selection={selections.get(entry.paymentId)}
+                      onToggle={toggleEntry}
+                      onOpenReason={openReasonKeyboard}
+                    />
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </section>
+
+          {report.carryOver.length > 0 && (
+            <section className="overflow-x-auto rounded-xl border border-amber-300 bg-amber-50/40 p-4">
+              <h4 className="mb-1 text-lg font-semibold text-amber-900">Carry-over — not yet approved</h4>
+              <table className="w-full text-left text-base">
+                <thead className="text-slate-500">
+                  <tr>
+                    <th className="py-2 pr-2">Include</th>
+                    <th className="py-2 pr-2">Day</th>
+                    <th className="py-2 pr-2">Time</th>
+                    <th className="py-2 pr-2">Sale</th>
+                    <th className="py-2 pr-2">Cashier</th>
+                    <th className="py-2 pr-2">Code</th>
+                    <th className="py-2 pr-2 text-right">Amount</th>
+                    <th className="py-2 text-right">Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {report.carryOver.map((entry) => (
+                    <EntryRow
+                      key={entry.paymentId}
+                      entry={entry}
+                      showDay
+                      selection={selections.get(entry.paymentId)}
+                      onToggle={toggleEntry}
+                      onOpenReason={openReasonKeyboard}
+                    />
+                  ))}
+                </tbody>
+              </table>
+            </section>
+          )}
+        </div>
+
+        {moreBelow && (
+          <div
+            aria-hidden="true"
+            data-testid="end-of-day-fade"
+            className="pointer-events-none absolute bottom-0 left-0 right-5 h-12 bg-linear-to-t from-slate-50 to-transparent"
+          />
+        )}
+      </div>
+
+      <section data-testid="end-of-day-bar" className="shrink-0 rounded-xl border border-slate-200 bg-white p-3">
+        <div className="mb-2 flex items-center justify-between gap-3">
           <span className="text-lg font-medium text-slate-700">
             Approving {approvingCount} of {allPending.length}{' '}
             {allPending.length === 1 ? 'entry' : 'entries'}. {leftOutCount} left out.
@@ -594,31 +513,30 @@ export default function EndOfDayPage() {
           <span className="text-xl font-semibold text-slate-900">{formatCurrency(approvingTotal)}</span>
         </div>
 
-        <label className="mb-1 block text-base font-medium text-slate-600">
-          Note for this review (optional)
-        </label>
-        <input
-          readOnly
-          value={note}
-          onClick={openNoteKeyboard}
-          placeholder="e.g. checked against the statement"
-          className="mb-3 h-12 w-full rounded-lg border border-slate-300 px-3 text-base focus:border-rose-400 focus:outline-none"
-        />
-
-        <button
-          type="button"
-          disabled={report.pendingIds.length === 0 || approving}
-          onClick={() => setCollectingPin(true)}
-          className="h-14 w-full rounded-xl bg-rose-600 text-lg font-semibold text-white transition active:scale-95 disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          {approving
-            ? 'Working…'
-            : report.pendingIds.length === 0
-              ? 'Nothing pending'
-              : approvingCount === 0
-                ? 'Record review'
-                : 'Approve'}
-        </button>
+        <div className="flex items-center gap-3">
+          <input
+            readOnly
+            value={note}
+            onClick={openNoteKeyboard}
+            aria-label="Note for this review (optional)"
+            placeholder="e.g. checked against the statement"
+            className="h-12 min-w-0 flex-1 rounded-lg border border-slate-300 px-3 text-base focus:border-rose-400 focus:outline-none"
+          />
+          <button
+            type="button"
+            disabled={report.pendingIds.length === 0 || approving}
+            onClick={() => setCollectingPin(true)}
+            className="h-12 w-48 shrink-0 rounded-xl bg-rose-600 text-lg font-semibold text-white transition active:scale-95 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {approving
+              ? 'Working…'
+              : report.pendingIds.length === 0
+                ? 'Nothing pending'
+                : approvingCount === 0
+                  ? 'Record review'
+                  : 'Approve'}
+          </button>
+        </div>
       </section>
 
       {collectingPin && (

@@ -764,12 +764,13 @@ describe('End of Day: held sales discarded', () => {
     expect(container.textContent).not.toContain('Held sales discarded')
   })
 
-  it("is paginated like the page's other lists, three rows a page to stay inside the design box", async () => {
+  it('lists every row in the scrolling part, with no paging (docs/phase-220)', async () => {
     await mountPage({ success: true, data: Array.from({ length: 8 }, (_, i) => sale(i + 1, `Customer ${i + 1}`)) })
 
     const section = container.querySelector('[data-testid="discarded-held-sales"]')!
-    expect(section.querySelectorAll('tbody tr')).toHaveLength(3)
-    expect(section.textContent).toContain('Page 1 of 3')
+    expect(section.querySelectorAll('tbody tr')).toHaveLength(8)
+    expect(section.textContent).not.toContain('Page 1 of')
+    expect(container.querySelector('[data-testid="end-of-day-scroll"]')!.contains(section)).toBe(true)
   })
 
   it('sits first, above the per-cashier totals, so the manager sees it before approving', async () => {

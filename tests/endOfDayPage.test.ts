@@ -62,9 +62,14 @@ function baseReport(overrides: Partial<EndOfDayReport> = {}): EndOfDayReport {
   }
 }
 
-function stubApi(report: EndOfDayReport, approveImpl?: (...args: unknown[]) => unknown): void {
+function stubApi(
+  report: EndOfDayReport,
+  approveImpl?: (...args: unknown[]) => unknown,
+  discarded: unknown[] = []
+): void {
   window.api = {
     getEndOfDayReport: vi.fn().mockResolvedValue({ success: true, data: report }),
+    getDiscardedHeldSales: vi.fn().mockResolvedValue({ success: true, data: discarded }),
     approveDayReport: vi.fn(
       approveImpl ??
         (() =>
@@ -385,7 +390,7 @@ describe('EndOfDayPage', () => {
     expect(container.textContent).toContain('Manager Mo')
   })
 
-  it('ticks and reasons survive paging back and forth', async () => {
+  it('shows all seven entries with no paging, and an untick keeps its choice', async () => {
     const entries = Array.from({ length: 7 }, (_, i) =>
       entry({ paymentId: i + 1, reference: `REF${i}000000`.slice(0, 10), amount: 10 })
     )
@@ -398,16 +403,221 @@ describe('EndOfDayPage', () => {
     )
     await mount()
 
-    // Page 1 (6 rows at ENTRIES_PER_PAGE=6): untick the first entry.
     act(() => checkbox('REF0000000').click())
     expect(container.textContent).toContain('Approving 6 of 7 entries. 1 left out.')
-
-    // Move to page 2, back to page 1 — the untick must still be there.
-    act(() => button('Next').click())
     expect(container.textContent).toContain('REF6000000')
-    act(() => button('Previous').click())
+    expect(container.textContent).not.toContain('Page 1 of')
+    expect(Array.from(container.querySelectorAll('button')).some((b) => b.textContent === 'Next')).toBe(false)
 
     expect(checkbox('REF0000000').checked).toBe(false)
-    expect(container.textContent).toContain('Approving 6 of 7 entries. 1 left out.')
+    expect(checkbox('REF6000000').checked).toBe(true)
+  })
+})
+
+/** `entry()` rows with ids from `firstId`, for a list long enough to need scrolling. */
+function entryList(count: number, firstId: number, localDay: string, prefix: string): ManualMpesaEntrySummary[] {
+  return Array.from({ length: count }, (_, i) =>
+    entry({ paymentId: firstId + i, localDay, reference: `${prefix}${String(i).padStart(7, '0')}`, amount: 10 })
+  )
+}
+
+function discardedSale(id: number): Record<string, unknown> {
+  return {
+    id,
+    label: `Customer ${id}`,
+    total: 100,
+    lineCount: 1,
+    heldAt: '2026-09-10T09:00:00.000Z',
+    discardedAt: '2026-09-10T09:20:00.000Z',
+    heldByName: 'ann',
+    discardedByName: 'ann',
+    managerName: 'mo',
+    reason: 'left'
+  }
+}
+
+/** The report of a very busy day: 50 in every list, every entry still pending. */
+function busyReport(): EndOfDayReport {
+  const manual = entryList(50, 1, '2026-09-10', 'MAN')
+  const carry = entryList(50, 101, '2026-09-08', 'CAR')
+  return baseReport({
+    cashiers: Array.from({ length: 50 }, (_, i) => ({
+      staffId: i + 1,
+      staffName: `Cashier ${i + 1}`,
+      orderCount: 1,
+      totalsByMethod: { cash: 10, mpesa: 10, card: 0 },
+      mpesaByMode: { manual: 10, daraja: 0 }
+    })),
+    manualEntries: manual,
+    carryOver: carry,
+    pendingIds: [...manual, ...carry].map((e) => e.paymentId),
+    pendingManualTotal: 1000
+  })
+}
+
+const fiftyDiscarded = (): unknown[] => Array.from({ length: 50 }, (_, i) => discardedSale(i + 1))
+const scrollRegion = (): HTMLElement => container.querySelector('[data-testid="end-of-day-scroll"]') as HTMLElement
+const actionBar = (): HTMLElement => container.querySelector('[data-testid="end-of-day-bar"]') as HTMLElement
+const VERTICAL_SCROLL = /overflow-(?:y-)?(?:auto|scroll)\b/
+
+/** The bar's one button: Approve, Record review, Nothing pending or Working. */
+const barButton = (): HTMLButtonElement => actionBar().querySelector('button') as HTMLButtonElement
+
+describe('EndOfDayPage layout (docs/phase-220)', () => {
+  const cases: Array<[string, () => EndOfDayReport, unknown[]]> = [
+    ['no entries', () => baseReport({ manualEntries: [], carryOver: [], pendingIds: [], cashiers: [] }), []],
+    ['50 in every list', busyReport, fiftyDiscarded()]
+  ]
+
+  it.each(cases)('%s: the bar follows the scrolling part and holds Approve, outside it', async (_name, make, discarded) => {
+    stubApi(make(), undefined, discarded)
+    await mount()
+
+    expect(scrollRegion()).not.toBeNull()
+    expect(actionBar().compareDocumentPosition(scrollRegion()) & Node.DOCUMENT_POSITION_PRECEDING).toBeTruthy()
+    expect(scrollRegion().contains(actionBar())).toBe(false)
+    expect(actionBar().contains(barButton())).toBe(true)
+    expect(scrollRegion().contains(barButton())).toBe(false)
+    expect(['Approve', 'Nothing pending']).toContain(barButton().textContent)
+    expect(actionBar().querySelector('input[placeholder^="e.g."]')).not.toBeNull()
+  })
+
+  it('the top card and the day buttons sit before the scrolling part, outside it', async () => {
+    stubApi(baseReport())
+    await mount()
+
+    const heading = Array.from(container.querySelectorAll('h3')).find((h) => h.textContent?.startsWith('End of Day'))!
+    expect(scrollRegion().contains(heading)).toBe(false)
+    expect(heading.compareDocumentPosition(scrollRegion()) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(scrollRegion().contains(button('← Previous day'))).toBe(false)
+    expect(scrollRegion().contains(button('Next day →'))).toBe(false)
+  })
+
+  it('the page is a flex column that fills its parent, and the scrolling part takes what is left', async () => {
+    stubApi(baseReport())
+    await mount()
+
+    const page = container.firstElementChild as HTMLElement
+    expect(page.className).toMatch(/\bflex\b/)
+    expect(page.className).toContain('flex-col')
+    expect(page.className).toContain('flex-1')
+    expect(page.className).toContain('min-h-0')
+    expect(scrollRegion().className).toContain('flex-1')
+    expect(scrollRegion().className).toContain('min-h-0')
+    expect(actionBar().className).toContain('shrink-0')
+  })
+
+  it('the scrolling part is the only element with vertical overflow set to scroll or auto', async () => {
+    stubApi(busyReport(), undefined, [discardedSale(1)])
+    await mount()
+
+    const scrollers = Array.from(container.querySelectorAll('*')).filter((el) =>
+      VERTICAL_SCROLL.test(el.getAttribute('class') ?? '')
+    )
+    expect(scrollers).toEqual([scrollRegion()])
+  })
+
+  it('shows a visible, finger-wide scrollbar on the scrolling part', async () => {
+    stubApi(baseReport())
+    await mount()
+
+    expect(scrollRegion().className).toContain('touch-scrollbar')
+    expect(scrollRegion().className).not.toMatch(/scrollbar-(none|hidden)/)
+  })
+
+  it('renders every entry in the scrolling part, with no paging, and the counts match', async () => {
+    stubApi(busyReport(), undefined, fiftyDiscarded())
+    await mount()
+
+    const region = scrollRegion()
+    expect(region.querySelectorAll('input[type="checkbox"]')).toHaveLength(100)
+    expect(region.textContent).toContain('MAN0000049')
+    expect(region.textContent).toContain('CAR0000049')
+    expect(region.querySelectorAll('[data-testid="discarded-held-sales"] tbody tr')).toHaveLength(50)
+    expect(region.querySelectorAll('tbody tr')).toHaveLength(50 + 50 + 100)
+    expect(container.textContent).not.toMatch(/Page \d+ of/)
+    expect(actionBar().textContent).toContain('Approving 100 of 100 entries. 0 left out.')
+    expect(actionBar().textContent).toContain('1,000')
+  })
+
+  it('the summary counts follow the ticks across the whole list', async () => {
+    stubApi(busyReport())
+    await mount()
+
+    act(() => checkbox('MAN0000049').click())
+    act(() => checkbox('CAR0000000').click())
+
+    expect(actionBar().textContent).toContain('Approving 98 of 100 entries. 2 left out.')
+  })
+
+  it('Approve day approves exactly the report pendingIds, from the bar', async () => {
+    const report = busyReport()
+    stubApi(report)
+    await mount()
+
+    act(() => barButton().click())
+    expect(container.textContent).toContain('Manager PIN Required')
+    await authorizeWithPin()
+
+    expect(window.api.approveDayReport).toHaveBeenCalledWith(
+      expect.objectContaining({ approvedIds: report.pendingIds, excluded: [], managerId: 9, managerPin: '9999' })
+    )
+  })
+
+  it('after approving, the reloaded day reads "Nothing pending" in the bar and the button is disabled', async () => {
+    stubApi(busyReport(), () =>
+      Promise.resolve({
+        success: true,
+        data: { approval: null, approvedCount: 100, excludedCount: 0, alreadyApproved: false }
+      })
+    )
+    await mount()
+    vi.mocked(window.api.getEndOfDayReport).mockResolvedValue({
+      success: true,
+      data: baseReport({ manualEntries: [], carryOver: [], pendingIds: [] })
+    })
+
+    act(() => barButton().click())
+    await authorizeWithPin()
+    await act(async () => {
+      await Promise.resolve()
+    })
+
+    expect(container.textContent).toContain('100 approved, 0 left out.')
+    expect(barButton().textContent).toBe('Nothing pending')
+    expect(barButton().disabled).toBe(true)
+  })
+
+  it('the note field opens the shared keyboard from the bar', async () => {
+    stubApi(baseReport())
+    await mount()
+
+    const noteInput = actionBar().querySelector('input[placeholder^="e.g."]') as HTMLInputElement
+    act(() => noteInput.click())
+
+    expect(useKeyboardStore.getState().request?.docked).toBe(true)
+  })
+
+  it('the fade appears only while more is below the visible part, and goes at the bottom', async () => {
+    stubApi(busyReport())
+    await mount()
+    const fade = (): Element | null => container.querySelector('[data-testid="end-of-day-fade"]')
+    expect(fade()).toBeNull()
+
+    const region = scrollRegion()
+    Object.defineProperty(region, 'scrollHeight', { configurable: true, value: 2000 })
+    Object.defineProperty(region, 'clientHeight', { configurable: true, value: 400 })
+    Object.defineProperty(region, 'scrollTop', { configurable: true, writable: true, value: 0 })
+    act(() => {
+      region.dispatchEvent(new Event('scroll'))
+    })
+    expect(fade()).not.toBeNull()
+    expect(fade()?.getAttribute('aria-hidden')).toBe('true')
+
+    region.scrollTop = 1600
+    act(() => {
+      region.dispatchEvent(new Event('scroll'))
+    })
+    expect(fade()).toBeNull()
   })
 })
