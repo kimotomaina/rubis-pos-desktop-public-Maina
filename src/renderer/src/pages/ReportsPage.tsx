@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import type { ShiftRow } from '../../../main/services/database.js'
+import type { UnattachedDay } from '../../../main/services/past-shifts.js'
 import type {
   ZReport,
   SalesSummary,
@@ -12,6 +13,8 @@ import { titleCaseName } from '../lib/text.js'
 import { formatVatRateLabel } from '../lib/vatLabel.js'
 import { paginate } from '../lib/paginate.js'
 import ZReportModal from '../components/ZReportModal.js'
+import PastShiftForm from '../components/PastShiftForm.js'
+import { nairobiMinuteText } from '../lib/pastShiftPeriod.js'
 import BackButton from '../components/BackButton.js'
 import SectionCardGrid, { type SectionCard } from '../components/SectionCardGrid.js'
 import {
@@ -25,6 +28,9 @@ import {
 
 /** Orders/shifts per page — matches the server-side `REPORTS_PAGE_SIZE` in `index.ts`. */
 const REPORTS_PAGE_SIZE = 10
+
+/** Days with sales that have no shift, listed per page (docs/phase-223): the screen never scrolls. */
+const UNATTACHED_DAYS_PER_PAGE = 6
 
 /** Fiscal-status rows per page — this table is paginated client-side (a month is at most 31 rows). */
 const FISCAL_ROWS_PER_PAGE = 10
@@ -127,6 +133,24 @@ function ShiftHistoryView({ staffName }: { staffName: (id: number) => string }) 
   const [error, setError] = useState<string | null>(null)
   const [openReport, setOpenReport] = useState<ZReport | null>(null)
   const [openError, setOpenError] = useState<string | null>(null)
+  // docs/phase-223: days with sales that have no shift, the one being recorded, and the last result.
+  const [unattached, setUnattached] = useState<UnattachedDay[]>([])
+  const [unattachedPage, setUnattachedPage] = useState(1)
+  const [recording, setRecording] = useState<UnattachedDay | null>(null)
+  const [showingDays, setShowingDays] = useState(false)
+  const [notice, setNotice] = useState<string | null>(null)
+  const [reloadKey, setReloadKey] = useState(0)
+
+  useEffect(() => {
+    let cancelled = false
+    void window.api.getUnattachedDays().then((result) => {
+      if (cancelled) return
+      setUnattached(result.success && result.data ? result.data : [])
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [reloadKey])
 
   useEffect(() => {
     let cancelled = false
@@ -144,7 +168,7 @@ function ShiftHistoryView({ staffName }: { staffName: (id: number) => string }) 
     return () => {
       cancelled = true
     }
-  }, [page])
+  }, [page, reloadKey])
 
   const openShift = async (shiftId: number): Promise<void> => {
     setOpenError(null)
@@ -157,10 +181,103 @@ function ShiftHistoryView({ staffName }: { staffName: (id: number) => string }) 
   }
 
   const pageCount = Math.max(1, Math.ceil((data?.total ?? 0) / REPORTS_PAGE_SIZE))
+  const days = paginate(unattached, unattachedPage, UNATTACHED_DAYS_PER_PAGE)
+
+  if (recording) {
+    return (
+      <section className="rounded-xl border border-slate-200 bg-white p-4">
+        <PastShiftForm
+          day={recording}
+          onCancel={() => setRecording(null)}
+          onRecorded={(message) => {
+            setRecording(null)
+            setShowingDays(false)
+            setNotice(message)
+            setPage(1)
+            setReloadKey((key) => key + 1)
+          }}
+        />
+      </section>
+    )
+  }
+
+  // docs/phase-223: the days list is its own view, reached from a button on the history's title row, so the
+  // history table (ten rows, no scrolling) is no taller than it was.
+  if (showingDays) {
+    return (
+      <section className="rounded-xl border border-slate-200 bg-white p-4">
+        <div className="mb-3 flex items-center justify-between gap-3">
+          <h3 className="text-2xl font-bold text-slate-800">Sales with no shift</h3>
+          <button
+            type="button"
+            onClick={() => setShowingDays(false)}
+            className="h-10 rounded-lg border border-slate-300 px-4 text-base font-medium text-slate-600 hover:bg-slate-50"
+          >
+            Back to Shift History
+          </button>
+        </div>
+        {unattached.length === 0 ? (
+          <p className="text-base text-slate-500">Every sale has a shift.</p>
+        ) : (
+          <>
+            <p className="mb-2 text-base text-slate-600">
+              These sales were made with no shift open. Choose a day to record a shift for them; nothing about the sales
+              themselves changes.
+            </p>
+            <table className="w-full text-left text-base">
+              <tbody>
+                {days.items.map((day) => (
+                  <tr key={day.localDay} className="border-t border-slate-100">
+                    <td className="py-2 pr-2 text-slate-800">{day.localDay}</td>
+                    <td className="py-2 pr-2 text-slate-600">
+                      {day.count} {day.count === 1 ? 'sale' : 'sales'}
+                    </td>
+                    <td className="py-2 pr-2 text-slate-600">
+                      {nairobiMinuteText(day.firstAt).slice(11)} to {nairobiMinuteText(day.lastAt).slice(11)}
+                    </td>
+                    <td className="py-2 pr-2 text-right text-slate-800">{formatCurrency(day.total)}</td>
+                    <td className="py-2 text-right">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setNotice(null)
+                          setRecording(day)
+                        }}
+                        className="h-10 rounded-lg bg-rose-600 px-3 text-base font-semibold text-white hover:bg-rose-700"
+                      >
+                        Create shift for these
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            <Pager page={days.page} pageCount={days.pageCount} onChange={setUnattachedPage} />
+          </>
+        )}
+      </section>
+    )
+  }
 
   return (
     <section className="rounded-xl border border-slate-200 bg-white p-4">
-      <h3 className="mb-3 text-2xl font-bold text-slate-800">Shift History</h3>
+      <div className="mb-3 flex items-center justify-between gap-3">
+        <h3 className="text-2xl font-bold text-slate-800">Shift History</h3>
+        {unattached.length > 0 && (
+          <button
+            type="button"
+            onClick={() => setShowingDays(true)}
+            className="h-10 rounded-lg bg-amber-100 px-4 text-base font-semibold text-amber-900 hover:bg-amber-200"
+          >
+            Sales with no shift: {unattached.reduce((sum, day) => sum + day.count, 0)}
+          </button>
+        )}
+      </div>
+      {notice && (
+        <p role="status" className="mb-3 rounded-lg bg-emerald-50 px-3 py-2 text-base font-medium text-emerald-700">
+          {notice}
+        </p>
+      )}
       {error && (
         <p className="mb-3 rounded-lg bg-rose-50 px-3 py-2 text-base font-medium text-rose-700">{error}</p>
       )}
@@ -207,6 +324,11 @@ function ShiftHistoryView({ staffName }: { staffName: (id: number) => string }) 
                       >
                         {shift.status}
                       </span>
+                      {shift.kind === 'retrospective' && (
+                        <span className="ml-2 rounded-full bg-amber-100 px-2 py-1 text-sm font-medium text-amber-800">
+                          Recorded later
+                        </span>
+                      )}
                     </td>
                   </tr>
                 ))}

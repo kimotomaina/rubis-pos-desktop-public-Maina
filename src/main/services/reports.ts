@@ -84,6 +84,14 @@ export interface ZReport {
   mpesaClosingBalance?: number | null
   /** Counted − expected: a prompt to check the M-Pesa statement, never a shortage. */
   mpesaDifference?: number | null
+  /**
+   * `'retrospective'` for a shift recorded after the fact (docs/phase-223); its creator, time and reason follow.
+   * Absent or `'normal'` otherwise. The Z report says so on screen and on paper.
+   */
+  kind?: 'normal' | 'retrospective'
+  createdAt?: string | null
+  createdByName?: string | null
+  reason?: string | null
 }
 
 /** Aggregate sales for a calendar day, independent of shift boundaries. */
@@ -303,7 +311,12 @@ export function generateZReport(
     discrepancy: shift.discrepancy,
     shiftType: shift.shift_type ?? null,
     shiftWindowLabel: shift.shift_type ? shiftWindowLabel(shift.shift_type) : null,
-    ...mpesaBalanceFields(shift, totalsByMethod.mpesa)
+    ...mpesaBalanceFields(shift, totalsByMethod.mpesa),
+    kind: shift.kind ?? 'normal',
+    createdAt: shift.created_at ?? null,
+    createdByName:
+      shift.created_by_staff_id != null ? (db.getStaffById(shift.created_by_staff_id)?.name ?? 'Unknown') : null,
+    reason: shift.reason ?? null
   }
 }
 

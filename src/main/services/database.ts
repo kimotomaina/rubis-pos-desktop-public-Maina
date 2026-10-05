@@ -15,6 +15,7 @@
 
 import type { VatReconcileOrderRow } from './vat-reconcile.js'
 import { SHIFT_TYPES, type ShiftType } from '../lib/shiftWindows.js'
+import { findOverlappingShift, parsePastShiftPeriod } from '../lib/pastShift.js'
 import { UNVERIFIABLE_RETRY_REASON } from './integrations/real-etims-provider.js'
 import { buildLocationTraderInvNum, nextTraderSeq } from '../lib/traderSystemInvoiceNumber.js'
 import { MAX_HELD_LABEL_LENGTH, MAX_HELD_SALES } from '../lib/heldSaleRules.js'
@@ -324,7 +325,21 @@ export interface ShiftRow {
   mpesa_expected?: number | null
   /** `mpesa_closing_balance` − `mpesa_expected`: a prompt to check the statement, not a shortage. */
   mpesa_difference?: number | null
+  /**
+   * `'retrospective'` for a shift recorded after the fact for sales that had none (docs/phase-223);
+   * `'normal'` for every other shift, including every shift from before this phase.
+   */
+  kind?: ShiftKind
+  /** The manager who recorded a retrospective shift; `NULL` on a normal shift. */
+  created_by_staff_id?: number | null
+  /** When a retrospective shift was recorded (its `clock_in` is the period start); `NULL` on a normal shift. */
+  created_at?: string | null
+  /** Why a retrospective shift was recorded; required for one, `NULL` on a normal shift. */
+  reason?: string | null
 }
+
+/** How a shift came to exist: opened and closed at the till, or recorded afterwards by a manager. */
+export type ShiftKind = 'normal' | 'retrospective'
 
 /** What closing a shift returns: the cash figures as before, plus the M-Pesa ones (docs/phase-222), `null` when not recorded. */
 export interface ShiftCloseResult {
@@ -332,6 +347,35 @@ export interface ShiftCloseResult {
   discrepancy: number
   mpesaExpected: number | null
   mpesaDifference: number | null
+}
+
+/** One sale with no shift, as the past-shift screens list it (docs/phase-223). */
+export interface UnattachedSaleRow {
+  local_id: number
+  created_at: string
+  total: number
+  payment_method: PaymentMethod | null
+}
+
+/** What recording a past shift needs (docs/phase-223). The times are instants; the caller has already checked the manager's PIN. */
+export interface CreateRetrospectiveShiftInput {
+  managerId: number
+  startIso: string
+  endIso: string
+  /** Exactly the sales the manager was shown. The shift takes these, and only these. */
+  orderIds: number[]
+  startingCash: number
+  endingCash: number
+  mpesaOpeningBalance: number | null
+  mpesaClosingBalance: number | null
+  shiftType: ShiftType
+  reason: string
+}
+
+/** What recording a past shift returns: the new shift and the figures stored on it. */
+export interface RetrospectiveShiftResult extends ShiftCloseResult {
+  shiftId: number
+  attachedCount: number
 }
 
 /** Row shape of the `sync_queue` table. */
@@ -698,6 +742,21 @@ function migrateShiftsColumns(connection: SqliteConnection): void {
       // Column already exists — table was created with the current schema.
     }
   }
+  // docs/phase-223: how a shift came to exist, and for a retrospective one who recorded it, when and why. Every
+  // shift from before reads `kind = 'normal'` (the column default) and NULL for the rest; nothing is backfilled.
+  const retrospectiveColumns = [
+    "kind TEXT NOT NULL DEFAULT 'normal' CHECK (kind IN ('normal', 'retrospective'))",
+    'created_by_staff_id INTEGER',
+    'created_at TEXT',
+    'reason TEXT'
+  ]
+  for (const definition of retrospectiveColumns) {
+    try {
+      connection.exec(`ALTER TABLE shifts ADD COLUMN ${definition}`)
+    } catch {
+      // Column already exists — table was created with the current schema.
+    }
+  }
 }
 
 /**
@@ -873,7 +932,11 @@ export const SCHEMA = {
     mpesa_opening_balance REAL,
     mpesa_closing_balance REAL,
     mpesa_expected REAL,
-    mpesa_difference REAL
+    mpesa_difference REAL,
+    kind TEXT NOT NULL DEFAULT 'normal' CHECK (kind IN ('normal', 'retrospective')),
+    created_by_staff_id INTEGER,
+    created_at TEXT,
+    reason TEXT
   )`,
   integrations: `CREATE TABLE IF NOT EXISTS integrations (
     provider TEXT PRIMARY KEY,
@@ -3659,6 +3722,178 @@ export class RubisDatabase {
     })()
 
     return { expectedCash, discrepancy, mpesaExpected: storedMpesaExpected, mpesaDifference }
+  }
+
+  /**
+   * Every sale that has no shift and was not voided, oldest first — the list the "Sales with no shift" block
+   * groups by Nairobi day (docs/phase-223). Voided sales are left out: they count in no report, so "no shift"
+   * keeps meaning "a counted sale with no shift".
+   *
+   * @returns {UnattachedSaleRow[]}
+   */
+  listUnattachedSales(): UnattachedSaleRow[] {
+    return this.conn
+      .prepare(
+        "SELECT local_id, created_at, total, payment_method FROM orders WHERE shift_id IS NULL AND status <> 'voided' ORDER BY created_at ASC"
+      )
+      .all() as UnattachedSaleRow[]
+  }
+
+  /**
+   * The sales a past shift for `[startIso, endIso]` would take: no shift, not voided, created inside the closed
+   * period. Both bounds are normalised `.000Z` instants, so the text comparison is a time comparison.
+   *
+   * @param {string} startIso
+   * @param {string} endIso
+   * @returns {UnattachedSaleRow[]}
+   */
+  listUnattachedSalesInPeriod(startIso: string, endIso: string): UnattachedSaleRow[] {
+    return this.conn
+      .prepare(
+        "SELECT local_id, created_at, total, payment_method FROM orders WHERE shift_id IS NULL AND status <> 'voided' AND created_at >= ? AND created_at <= ? ORDER BY created_at ASC"
+      )
+      .all(startIso, endIso) as UnattachedSaleRow[]
+  }
+
+  /**
+   * Every shift's window, for the overlap rule (docs/phase-223).
+   *
+   * @returns {Array<{ id: number; clock_in: string; clock_out: string | null }>}
+   */
+  listShiftWindows(): Array<{ id: number; clock_in: string; clock_out: string | null }> {
+    return this.conn.prepare('SELECT id, clock_in, clock_out FROM shifts').all() as Array<{
+      id: number
+      clock_in: string
+      clock_out: string | null
+    }>
+  }
+
+  /**
+   * Records a shift for a period that already happened and attaches to it the sales that had none (docs/phase-223).
+   * Everything happens in one write transaction, so a refusal anywhere leaves the database exactly as it was:
+   *
+   * 1. the period is valid, ends no later than now, and overlaps no shift (an open shift counts as running on
+   *    for ever, so a period wholly before it is allowed);
+   * 2. the sales the manager was shown are exactly the sales that now have no shift in the period, none more:
+   *    otherwise the preview is stale and the shift would claim a period while omitting a sale in it;
+   * 3. the shift is inserted already closed, with its cash (and M-Pesa) figures worked out the way `closeShift`
+   *    works them out, and who, when and why recorded;
+   * 4. each sale gets the new `shift_id` by one `UPDATE` that only matches while it still has no shift, is not
+   *    voided and lies inside the period. A sale that does not match throws, naming why.
+   *
+   * The only column of `orders` written is `shift_id`, and only from NULL. No amount, time, payment, fiscal or
+   * sync field, and nothing is queued, so nothing is sent to Shopify or the tax device.
+   *
+   * @param {CreateRetrospectiveShiftInput} input
+   * @param {number} [nowMs] — the clock; the main process's own
+   * @returns {RetrospectiveShiftResult}
+   * @throws {Error} with a message fit to show the manager; nothing is written when it throws
+   */
+  createRetrospectiveShift(
+    input: CreateRetrospectiveShiftInput,
+    nowMs: number = Date.now()
+  ): RetrospectiveShiftResult {
+    const reason = input.reason.trim()
+    if (reason === '') {
+      throw new Error('A reason is required to record a shift after the fact')
+    }
+    if (!SHIFT_TYPES.includes(input.shiftType)) {
+      throw new Error(`Unknown shift type: ${String(input.shiftType)}`)
+    }
+    const orderIds = Array.from(new Set(input.orderIds))
+    if (orderIds.length === 0 || orderIds.length !== input.orderIds.length) {
+      throw new Error('Choose the sales for this shift: the list was empty or repeated a sale')
+    }
+    const period = parsePastShiftPeriod(input.startIso, input.endIso, nowMs)
+
+    return this.conn.transaction((): RetrospectiveShiftResult => {
+      const overlap = findOverlappingShift(this.listShiftWindows(), period.startMs, period.endMs)
+      if (overlap) {
+        throw new Error(`This period overlaps shift #${overlap.id}`)
+      }
+
+      // The preview is stale if the period now holds a sale with no shift that the manager was not shown.
+      const requested = new Set(orderIds)
+      const now = this.listUnattachedSalesInPeriod(period.startIso, period.endIso)
+      const unseen = now.filter((sale) => !requested.has(sale.local_id))
+      if (unseen.length > 0) {
+        throw new Error(
+          `${unseen.length === 1 ? 'A sale has' : `${unseen.length} sales have`} appeared in this period since the list was shown (order #${unseen[0].local_id}). Refresh the list and check it again.`
+        )
+      }
+
+      const sales = new Map(now.map((sale) => [sale.local_id, sale]))
+      const totalFor = (method: string): number =>
+        orderIds
+          .map((id) => sales.get(id))
+          .filter((sale): sale is UnattachedSaleRow => sale !== undefined && sale.payment_method === method)
+          .reduce((sum, sale) => sum + sale.total, 0)
+
+      const expectedCash = input.startingCash + totalFor('cash')
+      const discrepancy = input.endingCash - expectedCash
+      const mpesaExpected =
+        input.mpesaOpeningBalance !== null && input.mpesaClosingBalance !== null
+          ? input.mpesaOpeningBalance + totalFor('mpesa')
+          : null
+      const mpesaDifference =
+        mpesaExpected !== null && input.mpesaClosingBalance !== null ? input.mpesaClosingBalance - mpesaExpected : null
+
+      const info = this.conn
+        .prepare(
+          `INSERT INTO shifts (staff_id, clock_in, clock_out, starting_cash, expected_cash, ending_cash, discrepancy, status, shift_type,
+                               mpesa_opening_balance, mpesa_closing_balance, mpesa_expected, mpesa_difference,
+                               kind, created_by_staff_id, created_at, reason)
+           VALUES (?, ?, ?, ?, ?, ?, ?, 'closed', ?, ?, ?, ?, ?, 'retrospective', ?, ?, ?)`
+        )
+        .run(
+          input.managerId,
+          period.startIso,
+          period.endIso,
+          input.startingCash,
+          expectedCash,
+          input.endingCash,
+          discrepancy,
+          input.shiftType,
+          input.mpesaOpeningBalance,
+          input.mpesaClosingBalance,
+          mpesaExpected,
+          mpesaDifference,
+          input.managerId,
+          new Date(nowMs).toISOString(),
+          reason
+        )
+      const shiftId = Number(info.lastInsertRowid)
+
+      const attach = this.conn.prepare(
+        "UPDATE orders SET shift_id = ? WHERE local_id = ? AND shift_id IS NULL AND status <> 'voided' AND created_at >= ? AND created_at <= ?"
+      )
+      for (const id of orderIds) {
+        if (attach.run(shiftId, id, period.startIso, period.endIso).changes !== 1) {
+          throw new Error(this.whyNotAttachable(id, period.startIso, period.endIso))
+        }
+      }
+
+      return { shiftId, attachedCount: orderIds.length, expectedCash, discrepancy, mpesaExpected, mpesaDifference }
+    }).immediate()
+  }
+
+  /**
+   * Says why one sale could not join a past shift, for the manager (docs/phase-223).
+   *
+   * @param {number} orderId
+   * @param {string} startIso
+   * @param {string} endIso
+   * @returns {string}
+   */
+  private whyNotAttachable(orderId: number, startIso: string, endIso: string): string {
+    const row = this.conn
+      .prepare('SELECT status, created_at, shift_id FROM orders WHERE local_id = ?')
+      .get(orderId) as { status: string; created_at: string; shift_id: number | null } | undefined
+    if (!row) return `Order #${orderId} does not exist`
+    if (row.shift_id !== null) return `Order #${orderId} now belongs to shift #${row.shift_id}`
+    if (row.status === 'voided') return `Order #${orderId} was voided`
+    if (row.created_at < startIso || row.created_at > endIso) return `Order #${orderId} is outside the period`
+    return `Order #${orderId} could not be added to the shift`
   }
 
   /**

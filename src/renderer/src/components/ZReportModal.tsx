@@ -2,6 +2,7 @@ import { useState } from 'react'
 import type { ZReport } from '../../../main/services/reports.js'
 import { formatCurrency } from '../lib/currency.js'
 import { zReportMpesaLines } from '../lib/zReportMpesa.js'
+import { zReportRetroLines } from '../lib/zReportRetro.js'
 import { titleCaseName } from '../lib/text.js'
 import { formatVatRateLabel } from '../lib/vatLabel.js'
 import { CloseIcon } from './icons.js'
@@ -41,6 +42,9 @@ export default function ZReportModal({ report, onClose }: ZReportModalProps) {
         : report.discrepancy > 0
           ? 'text-emerald-600'
           : 'text-rose-600'
+
+  // docs/phase-223: a shift recorded afterwards says so and names who recorded it, in place of a cashier.
+  const retroLines = zReportRetroLines(report, (iso) => new Date(iso).toLocaleString())
 
   const handlePrint = async () => {
     setPrinting(true)
@@ -95,7 +99,15 @@ export default function ZReportModal({ report, onClose }: ZReportModalProps) {
               Closed:{' '}
               {report.closedAt ? new Date(report.closedAt).toLocaleString() : 'In progress'}
             </p>
-            <p>Cashier: {titleCaseName(report.staffName)}</p>
+            {retroLines.length > 0 ? (
+              retroLines.map((line, index) => (
+                <p key={line} className={index === 0 ? 'font-semibold text-slate-800' : undefined}>
+                  {line}
+                </p>
+              ))
+            ) : (
+              <p>Cashier: {titleCaseName(report.staffName)}</p>
+            )}
           </div>
 
           <div className="mb-3 space-y-1.5 rounded-lg bg-slate-50 p-3">

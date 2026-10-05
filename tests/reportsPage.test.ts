@@ -45,6 +45,8 @@ const SAMPLE_Z_REPORT: ZReport = {
 function stubApi(overrides: Record<string, unknown> = {}): void {
   window.api = {
     getStaffList: vi.fn().mockResolvedValue(ok(STAFF)),
+    // ADDED (docs/phase-223): Shift History now also asks for the days with sales that have no shift; none here.
+    getUnattachedDays: vi.fn().mockResolvedValue(ok([])),
     getShiftsList: vi.fn().mockResolvedValue(
       ok({ shifts: [{ id: 7, staff_id: 1, clock_in: '2026-09-01T08:00:00.000Z', clock_out: '2026-09-01T16:00:00.000Z', starting_cash: 100, expected_cash: 300, ending_cash: 300, discrepancy: 0, status: 'closed' }], total: 1, page: 1 })
     ),

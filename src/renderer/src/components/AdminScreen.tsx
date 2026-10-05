@@ -60,21 +60,10 @@ import {
   validateEtimsConnection
 } from '../lib/etimsConfig.js'
 import { MPESA_SMS_PARSER_READY } from '../lib/mpesaConfig.js'
+import { MPESA_BALANCE_INVALID, parseOptionalBalance } from '../lib/optionalBalance.js'
 import type { FiscalConnectionTestResult } from '../../../main/services/integrations/fiscal-connection-test.js'
 import type { UpdateStatus } from '../../../main/services/updater.js'
 import type { LastUpdateResult } from '../../../main/services/updateBackup.js'
-
-const MPESA_BALANCE_INVALID = 'Enter a valid M-Pesa balance, or leave it blank'
-
-/**
- * Reads an optional balance field (docs/phase-222): blank is `null` ("not recorded"), a number is itself,
- * anything else is `'invalid'`. A blank is never turned into 0, which would read as "the balance was nothing".
- */
-function parseOptionalBalance(input: string): number | null | 'invalid' {
-  if (input.trim() === '') return null
-  const value = Number(input)
-  return Number.isFinite(value) && value >= 0 ? value : 'invalid'
-}
 
 /**
  * The open shift's nominal window, with a plain note once it has run past the

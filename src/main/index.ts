@@ -93,6 +93,7 @@ import type {
   ManualMpesaApproval,
   MpesaPaymentRow,
   StaffSummary,
+  RetrospectiveShiftResult,
   ShiftCloseResult,
   ShiftRow,
   OrderRow
@@ -186,6 +187,8 @@ import {
   shiftsListSchema,
   shiftOpenSchema,
   shiftCloseSchema,
+  pastShiftPreviewSchema,
+  createPastShiftSchema,
   salesSummarySchema,
   fiscalByDaySchema,
   invoiceListSchema,
@@ -256,6 +259,8 @@ import type {
 import { toWindowsPrinterInfo, markMissingWindowsPrinters } from './services/windowsPrinter.js'
 import type { WindowsPrinterInfo, PrinterWithAvailability } from './services/windowsPrinter.js'
 import { hashPin, authenticateStaff } from './services/auth.js'
+import { listUnattachedDays, previewPastShift } from './services/past-shifts.js'
+import type { UnattachedDay, PastShiftPreview } from './services/past-shifts.js'
 import {
   generateZReport,
   generateDailySummary,
@@ -3423,6 +3428,80 @@ app.whenReady().then(async () => {
         validation.data.endingCash,
         validation.data.mpesaClosingBalance ?? null
       )
+    }
+  )
+
+  /**
+   * IPC handlers for a shift recorded after the fact (docs/phase-223). The two reads are open like every
+   * `reports:*` read (see the KNOWN GAP note on `reports:end-of-day`); only the write is manager-gated, with a
+   * PIN re-verified here, and the manager recorded is the one the PIN belongs to.
+   */
+  ipcMain.handle('shifts:unattached-days', (): ServiceResult<UnattachedDay[]> => {
+    try {
+      return { success: true, data: listUnattachedDays(db) }
+    } catch (err) {
+      return {
+        success: false,
+        error: err instanceof Error ? err.message : 'Failed to list sales with no shift'
+      }
+    }
+  })
+
+  ipcMain.handle(
+    'shifts:past-preview',
+    (_event, request: unknown): ServiceResult<PastShiftPreview> => {
+      const validation = validate(pastShiftPreviewSchema, request)
+      if (!validation.success) {
+        return { success: false, error: validation.error }
+      }
+      try {
+        return {
+          success: true,
+          data: previewPastShift(db, validation.data.startIso, validation.data.endIso)
+        }
+      } catch (err) {
+        return {
+          success: false,
+          error: err instanceof Error ? err.message : 'Failed to preview this period'
+        }
+      }
+    }
+  )
+
+  ipcMain.handle(
+    'shifts:create-past',
+    (_event, request: unknown): ServiceResult<RetrospectiveShiftResult> => {
+      const validation = validate(createPastShiftSchema, request)
+      if (!validation.success) {
+        return { success: false, error: validation.error }
+      }
+      const authz = requireAdminPin(db, validation.data.managerId, validation.data.managerPin)
+      if (!authz.success) {
+        return { success: false, error: authz.error }
+      }
+      try {
+        const data = validation.data
+        return {
+          success: true,
+          data: db.createRetrospectiveShift({
+            managerId: data.managerId,
+            startIso: data.startIso,
+            endIso: data.endIso,
+            orderIds: data.orderIds,
+            startingCash: data.startingCash,
+            endingCash: data.endingCash,
+            mpesaOpeningBalance: data.mpesaOpeningBalance ?? null,
+            mpesaClosingBalance: data.mpesaClosingBalance ?? null,
+            shiftType: data.shiftType,
+            reason: data.reason
+          })
+        }
+      } catch (err) {
+        return {
+          success: false,
+          error: err instanceof Error ? err.message : 'Failed to record this shift'
+        }
+      }
     }
   )
 

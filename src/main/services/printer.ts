@@ -26,6 +26,7 @@ import { formatVatRateLabel } from './reports.js'
 import type { PrinterConfig, PrinterType, PrinterConnectionType, FiscalStatus } from './database.js'
 import { formatCurrency } from './currency.js'
 import { zReportMpesaLines } from '../lib/zReportMpesa.js'
+import { zReportRetroLines } from '../lib/zReportRetro.js'
 import { generatePdfReceipt } from './pdf-receipt.js'
 import { buildReceiptLayout, isReceiptLayoutQr, asReceiptWidth } from '../lib/receiptLayout.js'
 import { buildEnjoySlip } from '../lib/enjoySlip.js'
@@ -479,7 +480,15 @@ export function renderZReport(
   client.println(
     `Closed: ${report.closedAt ? new Date(report.closedAt).toLocaleString() : 'In progress'}`
   )
-  client.println(`Cashier: ${report.staffName}`)
+  // docs/phase-223: a shift recorded afterwards says so, and who recorded it, instead of naming a cashier.
+  const retroLines = zReportRetroLines(report, (iso) => new Date(iso).toLocaleString())
+  if (retroLines.length > 0) {
+    client.bold(true)
+    for (const line of retroLines) client.println(line)
+    client.bold(false)
+  } else {
+    client.println(`Cashier: ${report.staffName}`)
+  }
   client.drawLine()
 
   client.alignLeft()

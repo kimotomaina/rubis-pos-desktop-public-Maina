@@ -2,6 +2,7 @@ import { contextBridge, ipcRenderer } from 'electron'
 import type { VatMismatchRow } from '../main/services/vat-reconcile.js'
 import type { ShiftType } from '../main/lib/shiftWindows.js'
 import { electronAPI } from '@electron-toolkit/preload'
+import type { UnattachedDay, PastShiftPreview, CreatePastShiftRequest } from '../main/services/past-shifts.js'
 import type { ServiceResult } from '../main/services/shopify-types.js'
 import type {
   CartItem,
@@ -20,6 +21,7 @@ import type {
   OrderRow,
   StaffSummary,
   StaffRole,
+  RetrospectiveShiftResult,
   ShiftCloseResult,
   ShiftRow,
   IntegrationProviderName,
@@ -583,6 +585,33 @@ const api = {
     mpesaClosingBalance?: number
   ): Promise<ServiceResult<ShiftCloseResult>> =>
     ipcRenderer.invoke('shifts:close', { shiftId, endingCash, mpesaClosingBalance }),
+
+  /**
+   * The Nairobi days that have sales with no shift (docs/phase-223).
+   *
+   * @returns {Promise<ServiceResult<UnattachedDay[]>>}
+   */
+  getUnattachedDays: (): Promise<ServiceResult<UnattachedDay[]>> => ipcRenderer.invoke('shifts:unattached-days'),
+
+  /**
+   * What a past shift for a period would take, and whether it may be recorded (docs/phase-223). Read-only.
+   *
+   * @param {string} startIso
+   * @param {string} endIso
+   * @returns {Promise<ServiceResult<PastShiftPreview>>}
+   */
+  previewPastShift: (startIso: string, endIso: string): Promise<ServiceResult<PastShiftPreview>> =>
+    ipcRenderer.invoke('shifts:past-preview', { startIso, endIso }),
+
+  /**
+   * Records a shift for a period that already happened and attaches the sales that had none (docs/phase-223).
+   * Manager-gated: the main process re-verifies the PIN.
+   *
+   * @param {CreatePastShiftRequest} request
+   * @returns {Promise<ServiceResult<RetrospectiveShiftResult>>}
+   */
+  createPastShift: (request: CreatePastShiftRequest): Promise<ServiceResult<RetrospectiveShiftResult>> =>
+    ipcRenderer.invoke('shifts:create-past', request),
 
   /**
    * Generates the Z-report for a shift.
