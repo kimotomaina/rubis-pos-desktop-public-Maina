@@ -453,3 +453,7 @@ Measured by `check:fit` on this PC's data at 1366x768 @150%: with no held sales 
 ## A full cart page runs past the window when the offline-catalogue badge shows (phase 217)
 
 With 7 cart lines (`CART_LINES_PER_PAGE`) and the "Cached catalog (offline)" badge showing, the cart footer (Clear cart, Hold sale, the pager) ends at y 801 in a 772px window at 1366x768 @150%, so it is clipped. The held-sales strip keeps this no worse (6 lines a page while it shows: 795). Not fixed. The same blind spot as above applies: the census does not flag it.
+
+## The default Admin PIN is written to the console on first run (audit of 2026-10-05)
+
+When the till has no staff accounts, `src/main/index.ts` seeds an Admin account and `console.warn`s a line that names its PIN. A packaged build writes the console nowhere (`error.log` records crashes only), so nothing reaches disk today, but anything that later captures the console would hold the default PIN. Not changed. The mitigation is to reset the Admin PIN after setup (Admin > Overview > Staff > Reset PIN).
