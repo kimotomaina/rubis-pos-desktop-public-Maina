@@ -9,7 +9,6 @@ import { countActionableFindings } from '../lib/shopifyReconciliation.js'
 import { formatCurrency } from '../lib/currency.js'
 import { titleCaseName } from '../lib/text.js'
 import {
-  SHIFT_TYPES,
   isPastShiftEnd,
   shiftEndClock,
   shiftName,
@@ -19,6 +18,7 @@ import {
 } from '../lib/shiftWindows.js'
 import EmptyState from './EmptyState.js'
 import ZReportModal from './ZReportModal.js'
+import OpenShiftForm from './OpenShiftForm.js'
 import LocationPicker, { type ShopifyLocationOption } from './LocationPicker.js'
 import { useProductStore } from '../stores/productStore.js'
 import {
@@ -2455,75 +2455,20 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
         )}
 
         {!currentShift && showOpenForm && (
-          <div role="radiogroup" aria-label="Shift" className="mb-3 flex flex-wrap gap-2">
-            {SHIFT_TYPES.map((type) => (
-              <button
-                key={type}
-                type="button"
-                role="radio"
-                aria-checked={selectedShiftType === type}
-                onClick={() => setSelectedShiftType(type)}
-                className={`rounded-lg border px-4 py-2 text-base font-medium ${
-                  selectedShiftType === type
-                    ? 'border-rose-500 bg-rose-50 text-rose-700'
-                    : 'border-slate-300 text-slate-600 hover:bg-slate-50'
-                }`}
-              >
-                {shiftWindowLabel(type)}
-              </button>
-            ))}
-          </div>
-        )}
-
-        {!currentShift && showOpenForm && (
-          <div className="flex items-end gap-2">
-            <div>
-              <label className="mb-1 block text-lg font-medium text-slate-600">
-                Starting Cash
-              </label>
-              <input
-                type="text"
-                readOnly
-                value={startingCashInput}
-                onClick={() => openField(startingCashInput, setStartingCashInput, 'Starting Cash', { mode: 'decimal' })}
-                onFocus={() => openField(startingCashInput, setStartingCashInput, 'Starting Cash', { mode: 'decimal' })}
-                className="w-32 h-12 rounded-lg border border-slate-300 px-3 text-xl focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-100"
-                autoFocus
-              />
-            </div>
-            <div>
-              <label className="mb-1 block text-lg font-medium text-slate-600">
-                M-Pesa balance (optional)
-              </label>
-              <input
-                type="text"
-                readOnly
-                value={mpesaOpeningInput}
-                placeholder="Not recorded"
-                onClick={() => openField(mpesaOpeningInput, setMpesaOpeningInput, 'M-Pesa balance (optional)', { mode: 'decimal' })}
-                onFocus={() => openField(mpesaOpeningInput, setMpesaOpeningInput, 'M-Pesa balance (optional)', { mode: 'decimal' })}
-                className="w-40 h-12 rounded-lg border border-slate-300 px-3 text-xl focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-100"
-              />
-            </div>
-            <button
-              type="button"
-              onClick={() => void handleOpenShift()}
-              className="rounded-lg bg-rose-600 px-4 py-2 text-base font-semibold text-white hover:bg-rose-700"
-            >
-              Confirm
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                setShowOpenForm(false)
-                setStartingCashInput('')
-                setMpesaOpeningInput('')
-              }}
-              className="rounded-lg border border-slate-300 px-4 py-2 text-base text-slate-600 hover:bg-slate-50"
-            >
-              Cancel
-            </button>
-          </div>
+          <OpenShiftForm
+            shiftType={selectedShiftType}
+            onShiftTypeChange={setSelectedShiftType}
+            startingCash={startingCashInput}
+            onStartingCashChange={setStartingCashInput}
+            mpesaOpening={mpesaOpeningInput}
+            onMpesaOpeningChange={setMpesaOpeningInput}
+            onConfirm={() => void handleOpenShift()}
+            onCancel={() => {
+              setShowOpenForm(false)
+              setStartingCashInput('')
+              setMpesaOpeningInput('')
+            }}
+          />
         )}
 
         {currentShift && !showCloseForm && (
