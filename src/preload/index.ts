@@ -574,6 +574,33 @@ const api = {
     ipcRenderer.invoke('shifts:open', { staffId, startingCash, shiftType, mpesaOpeningBalance }),
 
   /**
+   * Opens a shift under a manager's PIN, from the cart's "No shift open" dialog when the person at the till is not
+   * an admin (docs/phase-227). The main process re-verifies the PIN and records the shift under that manager.
+   *
+   * @param {number} managerId
+   * @param {string} managerPin
+   * @param {number} startingCash
+   * @param {ShiftType} [shiftType]
+   * @param {number} [mpesaOpeningBalance]
+   * @returns {Promise<ServiceResult<{ shiftId: number }>>}
+   */
+  openShiftAsManager: (
+    managerId: number,
+    managerPin: string,
+    startingCash: number,
+    shiftType?: ShiftType,
+    mpesaOpeningBalance?: number
+  ): Promise<ServiceResult<{ shiftId: number }>> =>
+    ipcRenderer.invoke('shifts:open', {
+      staffId: managerId,
+      managerId,
+      managerPin,
+      startingCash,
+      shiftType,
+      mpesaOpeningBalance
+    }),
+
+  /**
    * Closes the open till shift, reconciling counted cash.
    *
    * @param {number} shiftId

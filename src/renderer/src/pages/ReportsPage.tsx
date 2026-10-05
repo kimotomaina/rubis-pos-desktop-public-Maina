@@ -126,7 +126,14 @@ function Pager({
  * Shift history: paginated, tap a row to open its Z-report (with the
  * existing, unchanged Reprint action inside `ZReportModal`).
  */
-function ShiftHistoryView({ staffName }: { staffName: (id: number) => string }) {
+function ShiftHistoryView({
+  staffName,
+  openFirstOffer = false
+}: {
+  staffName: (id: number) => string
+  /** Opens the first offered period as soon as the list loads (docs/phase-227: "Record them" from Open or Close Shift). */
+  openFirstOffer?: boolean
+}) {
   const [page, setPage] = useState(1)
   const [data, setData] = useState<{ shifts: ShiftRow[]; total: number } | null>(null)
   const [loading, setLoading] = useState(true)
@@ -140,12 +147,19 @@ function ShiftHistoryView({ staffName }: { staffName: (id: number) => string }) 
   const [showingDays, setShowingDays] = useState(false)
   const [notice, setNotice] = useState<string | null>(null)
   const [reloadKey, setReloadKey] = useState(0)
+  const [offerBanner, setOfferBanner] = useState<string | null>(null)
+  const [autoOpened, setAutoOpened] = useState(false)
 
   useEffect(() => {
     let cancelled = false
     void window.api.getUnattachedDays().then((result) => {
       if (cancelled) return
-      setUnattached(result.success && result.data ? result.data : [])
+      const offers = result.success && result.data ? result.data : []
+      setUnattached(offers)
+      if (openFirstOffer && !autoOpened) {
+        setAutoOpened(true)
+        if (offers.length > 0) setRecording(offers[0])
+      }
     })
     return () => {
       cancelled = true
@@ -188,13 +202,30 @@ function ShiftHistoryView({ staffName }: { staffName: (id: number) => string }) 
       <section className="rounded-xl border border-slate-200 bg-white p-4">
         <PastShiftForm
           day={recording}
-          onCancel={() => setRecording(null)}
-          onRecorded={(message) => {
+          banner={offerBanner}
+          onCancel={() => {
             setRecording(null)
+            setOfferBanner(null)
+          }}
+          onRecorded={(message) => {
             setShowingDays(false)
-            setNotice(message)
             setPage(1)
             setReloadKey((key) => key + 1)
+            // docs/phase-227: offer the next period that still has sales with no shift, oldest first. Each offer
+            // is its own form with its own manager PIN; Cancel stops the run.
+            void window.api.getUnattachedDays().then((result) => {
+              const rest = result.success && result.data ? result.data : []
+              setUnattached(rest)
+              if (rest.length > 0) {
+                setNotice(null)
+                setOfferBanner(`${message} ${rest.length === 1 ? 'One more period has' : `${rest.length} more periods have`} sales with no shift. Record this one, or Cancel to stop.`)
+                setRecording(rest[0])
+              } else {
+                setOfferBanner(null)
+                setNotice(message)
+                setRecording(null)
+              }
+            })
           }}
         />
       </section>
@@ -227,7 +258,7 @@ function ShiftHistoryView({ staffName }: { staffName: (id: number) => string }) 
             <table className="w-full text-left text-base">
               <tbody>
                 {days.items.map((day) => (
-                  <tr key={day.localDay} className="border-t border-slate-100">
+                  <tr key={day.firstAt} className="border-t border-slate-100">
                     <td className="py-2 pr-2 text-slate-800">{day.localDay}</td>
                     <td className="py-2 pr-2 text-slate-600">
                       {day.count} {day.count === 1 ? 'sale' : 'sales'}
@@ -327,6 +358,11 @@ function ShiftHistoryView({ staffName }: { staffName: (id: number) => string }) 
                       {shift.kind === 'retrospective' && (
                         <span className="ml-2 rounded-full bg-amber-100 px-2 py-1 text-sm font-medium text-amber-800">
                           Recorded later
+                        </span>
+                      )}
+                      {shift.cash_not_counted === 1 && (
+                        <span className="ml-2 rounded-full bg-slate-100 px-2 py-1 text-sm font-medium text-slate-600">
+                          Cash not counted
                         </span>
                       )}
                     </td>
@@ -776,8 +812,8 @@ function ExportView() {
  *
  * @returns {JSX.Element}
  */
-export default function ReportsPage() {
-  const [subView, setSubView] = useState<ReportsSubView | null>(null)
+export default function ReportsPage({ initialAction }: { initialAction?: 'recordUnattached' }) {
+  const [subView, setSubView] = useState<ReportsSubView | null>(initialAction === 'recordUnattached' ? 'shifts' : null)
   const [staffById, setStaffById] = useState<Map<number, string>>(new Map())
 
   useEffect(() => {
@@ -799,7 +835,9 @@ export default function ReportsPage() {
         <BackButton label="Back to Reports" onClick={() => setSubView(null)} />
       )}
 
-      {subView === 'shifts' && <ShiftHistoryView staffName={staffName} />}
+      {subView === 'shifts' && (
+        <ShiftHistoryView staffName={staffName} openFirstOffer={initialAction === 'recordUnattached'} />
+      )}
       {subView === 'salesSummary' && <SalesSummaryView />}
       {subView === 'fiscalByDay' && <FiscalStatusView />}
       {subView === 'fiscalReconciliation' && <FiscalReconciliationView />}

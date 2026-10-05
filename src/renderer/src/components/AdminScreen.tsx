@@ -246,7 +246,9 @@ interface AdminScreenProps {
    * away from Admin, so a fresh value here always takes effect for the
    * next visit).
    */
-  initialTab?: 'needsAttention'
+  initialTab?: 'needsAttention' | 'reports'
+  /** With `initialTab: 'reports'`: opens Shift History on the sales with no shift (docs/phase-227). */
+  initialReportsAction?: 'recordUnattached'
 }
 
 /**
@@ -264,7 +266,7 @@ interface AdminScreenProps {
  * @param {AdminScreenProps} props
  * @returns {JSX.Element}
  */
-export default function AdminScreen({ requestManagerPin, initialTab }: AdminScreenProps) {
+export default function AdminScreen({ requestManagerPin, initialTab, initialReportsAction }: AdminScreenProps) {
   const currentStaff = useAuthStore((state) => state.currentStaff)
   const unfiledCount = useUnfiledCountStore((state) => state.count)
   const shopifyActionCount = useShopifyReconciliationStore((state) => countActionableFindings(state.result))
@@ -315,6 +317,12 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
    * tab click) is new.
    */
   const [activeTab, setActiveTab] = useState<AdminTabKey | null>(initialTab ?? null)
+  // docs/phase-227: sales with no shift, the warning shown before Open or Close Shift, and the Reports hand-over.
+  const [noShiftSales, setNoShiftSales] = useState(0)
+  const [noShiftPrompt, setNoShiftPrompt] = useState<'open' | 'close' | null>(null)
+  const [reportsAction, setReportsAction] = useState<'recordUnattached' | undefined>(
+    initialTab === 'reports' ? initialReportsAction : undefined
+  )
   /**
    * Which Integrations section is on screen (Phase E2(e)) — the tab used
    * to show Shopify/Location/Fiscal device/M-Pesa/Printer all at once,
@@ -1047,6 +1055,19 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
     })()
   }
 
+  /**
+   * How many sales have no shift (docs/phase-227), for the warning on Open Shift and Close Shift. A failure, or a
+   * bridge without the call, reads as none: the warning is a courtesy and must never block a shift.
+   */
+  const loadNoShiftSales = async () => {
+    try {
+      const result = await window.api.getUnattachedDays?.()
+      setNoShiftSales(result?.success && result.data ? result.data.reduce((sum, day) => sum + day.count, 0) : 0)
+    } catch {
+      setNoShiftSales(0)
+    }
+  }
+
   const refresh = async () => {
     setLoading(true)
     const [summaryResult, shiftResult, staffResult] = await Promise.all([
@@ -1058,11 +1079,16 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
     if (shiftResult.success) setCurrentShift(shiftResult.data ?? null)
     if (staffResult.success && staffResult.data) setStaffList(staffResult.data)
     setLoading(false)
+    await loadNoShiftSales()
   }
 
   useEffect(() => {
     void refresh()
   }, [])
+
+  useEffect(() => {
+    if (activeTab !== 'reports') setReportsAction(undefined)
+  }, [activeTab])
 
   /**
    * Phase 177: a human's only way to confirm an over-the-air update landed
@@ -1131,9 +1157,17 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
   }
 
   /** Opens the form with the shift that matches the time now preselected; the operator can still change it (docs/phase-199). */
-  const handleShowOpenForm = () => {
+  const startOpenForm = () => {
     setSelectedShiftType(shiftTypeForTime(new Date().toISOString()))
     setShowOpenForm(true)
+  }
+
+  const handleShowOpenForm = () => {
+    if (noShiftSales > 0) {
+      setNoShiftPrompt('open')
+      return
+    }
+    startOpenForm()
   }
 
   /**
@@ -1149,7 +1183,26 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
       return
     }
     setShiftActionError(null)
+    if (noShiftSales > 0) {
+      setNoShiftPrompt('close')
+      return
+    }
     setShowCloseForm(true)
+  }
+
+  /** "Carry on without": the shift action goes ahead exactly as it would have. Nothing is attached. */
+  const handleCarryOnWithoutRecording = () => {
+    const which = noShiftPrompt
+    setNoShiftPrompt(null)
+    if (which === 'open') startOpenForm()
+    if (which === 'close') setShowCloseForm(true)
+  }
+
+  /** "Record them": opens Shift History on the first period offered, where the manager confirms with a PIN. */
+  const handleRecordNoShiftSales = () => {
+    setNoShiftPrompt(null)
+    setReportsAction('recordUnattached')
+    setActiveTab('reports')
   }
 
   const handleCloseShift = async () => {
@@ -1425,7 +1478,7 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
 
       {activeTab === 'endOfDay' && <EndOfDayPage />}
 
-      {activeTab === 'reports' && <ReportsPage />}
+      {activeTab === 'reports' && <ReportsPage initialAction={reportsAction} />}
 
       {activeTab === 'system' && (
         <section className="rounded-xl border border-slate-200 bg-white p-4">
@@ -2444,7 +2497,31 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
           </p>
         )}
 
-        {!currentShift && !showOpenForm && (
+        {noShiftPrompt && (
+          <div role="alert" className="mb-3 rounded-lg bg-amber-50 p-3" data-testid="no-shift-sales-prompt">
+            <p className="mb-2 text-base font-medium text-amber-900">
+              {noShiftSales} {noShiftSales === 1 ? 'sale has' : 'sales have'} no shift. Record them now?
+            </p>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={handleRecordNoShiftSales}
+                className="rounded-lg bg-rose-600 px-4 py-2 text-base font-semibold text-white hover:bg-rose-700"
+              >
+                Record them
+              </button>
+              <button
+                type="button"
+                onClick={handleCarryOnWithoutRecording}
+                className="rounded-lg border border-slate-300 px-4 py-2 text-base text-slate-600 hover:bg-slate-50"
+              >
+                Carry on without
+              </button>
+            </div>
+          </div>
+        )}
+
+        {!currentShift && !showOpenForm && !noShiftPrompt && (
           <button
             type="button"
             onClick={handleShowOpenForm}
@@ -2471,7 +2548,7 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
           />
         )}
 
-        {currentShift && !showCloseForm && (
+        {currentShift && !showCloseForm && !noShiftPrompt && (
           <button
             type="button"
             onClick={handleStartCloseShift}

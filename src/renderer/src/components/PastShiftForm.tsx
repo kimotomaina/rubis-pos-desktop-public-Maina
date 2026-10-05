@@ -18,6 +18,8 @@ interface PastShiftFormProps {
   /** The day whose sales with no shift this form starts from; the manager may widen the period. */
   day: UnattachedDay
   onCancel: () => void
+  /** A line shown above the form, such as the result of the shift just recorded (docs/phase-227). */
+  banner?: string | null
   /** Called once the shift is recorded, with the sentence to show on the history screen. */
   onRecorded: (message: string) => void
 }
@@ -33,7 +35,7 @@ interface PastShiftFormProps {
  * @param {PastShiftFormProps} props
  * @returns {JSX.Element}
  */
-export default function PastShiftForm({ day, onCancel, onRecorded }: PastShiftFormProps) {
+export default function PastShiftForm({ day, onCancel, banner, onRecorded }: PastShiftFormProps) {
   const [startText, setStartText] = useState(() => nairobiMinuteText(day.firstAt))
   const [endText, setEndText] = useState(() => nairobiMinuteText(day.lastAt))
   const [preview, setPreview] = useState<PastShiftPreview | null>(null)
@@ -43,6 +45,8 @@ export default function PastShiftForm({ day, onCancel, onRecorded }: PastShiftFo
 
   const [shiftType, setShiftType] = useState<ShiftType>('day')
   const [typeTouched, setTypeTouched] = useState(false)
+  // docs/phase-227: nobody counted the drawer for this period. The Z report then says so and works out no difference.
+  const [cashNotCounted, setCashNotCounted] = useState(false)
   const [startingCash, setStartingCash] = useState('')
   const [endingCash, setEndingCash] = useState('')
   const [mpesaOpening, setMpesaOpening] = useState('')
@@ -101,7 +105,7 @@ export default function PastShiftForm({ day, onCancel, onRecorded }: PastShiftFo
       setError(problem ?? 'Choose a period first')
       return
     }
-    if (parseRequiredAmount(startingCash) === null || parseRequiredAmount(endingCash) === null) {
+    if (!cashNotCounted && (parseRequiredAmount(startingCash) === null || parseRequiredAmount(endingCash) === null)) {
       setError('Enter the starting cash and the counted ending cash')
       return
     }
@@ -122,7 +126,8 @@ export default function PastShiftForm({ day, onCancel, onRecorded }: PastShiftFo
     const ending = parseRequiredAmount(endingCash)
     const opening = parseOptionalBalance(mpesaOpening)
     const closing = parseOptionalBalance(mpesaClosing)
-    if (!preview || !startIso || !endIso || starting === null || ending === null) return
+    if (!preview || !startIso || !endIso) return
+    if (!cashNotCounted && (starting === null || ending === null)) return
     if (opening === 'invalid' || closing === 'invalid') return
 
     void (async () => {
@@ -135,8 +140,7 @@ export default function PastShiftForm({ day, onCancel, onRecorded }: PastShiftFo
           startIso,
           endIso,
           orderIds: preview.sales.map((sale) => sale.id),
-          startingCash: starting,
-          endingCash: ending,
+          ...(cashNotCounted ? { cashNotCounted: true } : { startingCash: starting ?? 0, endingCash: ending ?? 0 }),
           mpesaOpeningBalance: opening,
           mpesaClosingBalance: closing,
           shiftType,
@@ -175,6 +179,12 @@ export default function PastShiftForm({ day, onCancel, onRecorded }: PastShiftFo
           Cancel
         </button>
       </div>
+
+      {banner && (
+        <p role="status" className="mb-3 rounded-lg bg-emerald-50 px-3 py-2 text-base font-medium text-emerald-700">
+          {banner}
+        </p>
+      )}
 
       {error && (
         <p role="alert" className="mb-3 rounded-lg bg-rose-50 px-3 py-2 text-base font-medium text-rose-700">
@@ -271,7 +281,8 @@ export default function PastShiftForm({ day, onCancel, onRecorded }: PastShiftFo
         </div>
 
         <div>
-          <div role="radiogroup" aria-label="Shift" className="mb-2 flex flex-wrap gap-2">
+          <div className="mb-2 flex flex-wrap gap-2">
+          <div role="radiogroup" aria-label="Shift" className="flex flex-wrap gap-2">
             {SHIFT_TYPES.map((type) => (
               <button
                 key={type}
@@ -292,15 +303,30 @@ export default function PastShiftForm({ day, onCancel, onRecorded }: PastShiftFo
               </button>
             ))}
           </div>
+            <button
+              type="button"
+              role="checkbox"
+              aria-checked={cashNotCounted}
+              onClick={() => setCashNotCounted((on) => !on)}
+              className={`rounded-lg border px-3 py-2 text-base font-medium ${
+                cashNotCounted
+                  ? 'border-rose-500 bg-rose-50 text-rose-700'
+                  : 'border-slate-300 text-slate-600 hover:bg-slate-50'
+              }`}
+            >
+              Cash not counted
+            </button>
+          </div>
 
           <div className="mb-2 grid grid-cols-2 gap-2">
             <div>
               <label className="mb-1 block text-base font-medium text-slate-600">Starting cash</label>
               <input
                 readOnly
-                value={startingCash}
+                value={cashNotCounted ? '' : startingCash}
+                placeholder={cashNotCounted ? 'Not counted' : undefined}
                 aria-label="Starting cash"
-                onClick={() => openField(startingCash, setStartingCash, 'Starting cash', 'decimal')}
+                onClick={() => !cashNotCounted && openField(startingCash, setStartingCash, 'Starting cash', 'decimal')}
                 className={FIELD_CLASS}
               />
             </div>
@@ -308,9 +334,10 @@ export default function PastShiftForm({ day, onCancel, onRecorded }: PastShiftFo
               <label className="mb-1 block text-base font-medium text-slate-600">Ending cash (counted)</label>
               <input
                 readOnly
-                value={endingCash}
+                value={cashNotCounted ? '' : endingCash}
+                placeholder={cashNotCounted ? 'Not counted' : undefined}
                 aria-label="Ending cash (counted)"
-                onClick={() => openField(endingCash, setEndingCash, 'Ending cash (counted)', 'decimal')}
+                onClick={() => !cashNotCounted && openField(endingCash, setEndingCash, 'Ending cash (counted)', 'decimal')}
                 className={FIELD_CLASS}
               />
             </div>

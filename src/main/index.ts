@@ -261,7 +261,8 @@ import type {
 import { toWindowsPrinterInfo, markMissingWindowsPrinters } from './services/windowsPrinter.js'
 import type { WindowsPrinterInfo, PrinterWithAvailability } from './services/windowsPrinter.js'
 import { hashPin, authenticateStaff } from './services/auth.js'
-import { listUnattachedDays, previewPastShift } from './services/past-shifts.js'
+import { listUnattachedOffers, previewPastShift } from './services/past-shifts.js'
+import { openShiftChecked } from './services/shift-open.js'
 import type { UnattachedDay, PastShiftPreview } from './services/past-shifts.js'
 import {
   generateZReport,
@@ -3400,16 +3401,7 @@ app.whenReady().then(async () => {
       if (!validation.success) {
         return { success: false, error: validation.error }
       }
-      try {
-        const { staffId, startingCash, shiftType, mpesaOpeningBalance } = validation.data
-        const data = db.openShift(staffId, startingCash, shiftType ?? null, mpesaOpeningBalance ?? null)
-        return { success: true, data }
-      } catch (err) {
-        return {
-          success: false,
-          error: err instanceof Error ? err.message : 'Failed to open shift'
-        }
-      }
+      return openShiftChecked(db, validation.data)
     }
   )
 
@@ -3440,7 +3432,7 @@ app.whenReady().then(async () => {
    */
   ipcMain.handle('shifts:unattached-days', (): ServiceResult<UnattachedDay[]> => {
     try {
-      return { success: true, data: listUnattachedDays(db) }
+      return { success: true, data: listUnattachedOffers(db) }
     } catch (err) {
       return {
         success: false,
@@ -3490,8 +3482,9 @@ app.whenReady().then(async () => {
             startIso: data.startIso,
             endIso: data.endIso,
             orderIds: data.orderIds,
-            startingCash: data.startingCash,
-            endingCash: data.endingCash,
+            startingCash: data.startingCash ?? 0,
+            endingCash: data.endingCash ?? 0,
+            cashNotCounted: data.cashNotCounted === true,
             mpesaOpeningBalance: data.mpesaOpeningBalance ?? null,
             mpesaClosingBalance: data.mpesaClosingBalance ?? null,
             shiftType: data.shiftType,

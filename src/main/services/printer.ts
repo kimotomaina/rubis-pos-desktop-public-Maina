@@ -489,12 +489,15 @@ export function renderZReport(
     for (const line of retroLines) client.println(line)
     client.bold(false)
   } else {
-    client.println(`Cashier: ${report.staffName}`)
+    client.println(`Opened by: ${report.staffName}`)
   }
   client.drawLine()
 
   client.alignLeft()
-  client.println(`Starting Cash: ${formatCurrency(report.startingCash)}`)
+  // docs/phase-227: nobody counted the drawer, so there is no starting cash to print.
+  if (!report.cashNotCounted) {
+    client.println(`Starting Cash: ${formatCurrency(report.startingCash)}`)
+  }
   client.println(`Cash Sales: ${formatCurrency(report.totalsByMethod.cash)}`)
   client.println(`M-Pesa Sales: ${formatCurrency(report.totalsByMethod.mpesa)}`)
   client.println(`Card Sales: ${formatCurrency(report.totalsByMethod.card)}`)
@@ -507,15 +510,21 @@ export function renderZReport(
   client.println(`${formatVatRateLabel(report.vatRate)}: ${formatCurrency(report.vatIncluded)}`)
   client.drawLine()
 
-  client.println(`Expected Cash: ${formatCurrency(report.expectedCash)}`)
-  client.println(
-    `Counted Cash: ${report.endingCash !== null ? formatCurrency(report.endingCash) : 'Pending'}`
-  )
-  client.bold(true)
-  client.println(
-    `Discrepancy: ${report.discrepancy !== null ? formatCurrency(report.discrepancy) : 'Pending'}`
-  )
-  client.bold(false)
+  if (report.cashNotCounted) {
+    client.bold(true)
+    client.println('Cash not counted')
+    client.bold(false)
+  } else {
+    client.println(`Expected Cash: ${formatCurrency(report.expectedCash)}`)
+    client.println(
+      `Counted Cash: ${report.endingCash !== null ? formatCurrency(report.endingCash) : 'Pending'}`
+    )
+    client.bold(true)
+    client.println(
+      `Discrepancy: ${report.discrepancy !== null ? formatCurrency(report.discrepancy) : 'Pending'}`
+    )
+    client.bold(false)
+  }
 
   // docs/phase-222: the M-Pesa balances, below the cash figures; "Not recorded" where none was entered.
   client.drawLine()

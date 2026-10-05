@@ -29,7 +29,9 @@ const asText = (value: number | null | undefined): string => (value === null || 
  */
 export default function ShiftCorrectionForm({ report, onCancel, onCorrected }: ShiftCorrectionFormProps) {
   const latest = report.corrections?.[report.corrections.length - 1]
-  const [startingCash, setStartingCash] = useState(asText(latest ? latest.startingCash : report.startingCash))
+  const [startingCash, setStartingCash] = useState(
+    asText(latest ? latest.startingCash : report.cashNotCounted ? null : report.startingCash)
+  )
   const [endingCash, setEndingCash] = useState(asText(latest ? latest.endingCash : report.endingCash))
   const [mpesaOpening, setMpesaOpening] = useState(
     asText(latest ? latest.mpesaOpeningBalance : report.mpesaOpeningBalance)

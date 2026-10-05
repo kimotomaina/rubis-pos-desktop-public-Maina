@@ -16,8 +16,10 @@ export interface CreatePastShiftRequest {
   startIso: string
   endIso: string
   orderIds: number[]
-  startingCash: number
-  endingCash: number
+  /** Both cash figures, or `cashNotCounted: true` and neither (docs/phase-227). */
+  startingCash?: number
+  endingCash?: number
+  cashNotCounted?: boolean
   mpesaOpeningBalance?: number | null
   mpesaClosingBalance?: number | null
   shiftType: ShiftType
@@ -69,6 +71,44 @@ export function listUnattachedDays(db: Pick<RubisDatabase, 'listUnattachedSales'
     }
   }
   return Array.from(days.values())
+}
+
+/**
+ * The periods the till offers a past shift for (docs/phase-227): each Nairobi day's sales with no shift, cut into
+ * runs so that no run's period, first sale to last sale, touches an existing shift. A day that has a shift in the
+ * middle of it gives one offer before the shift and one after it, never one that spans it. Oldest first.
+ *
+ * The offers are only where to start: the manager may still change a period, and the main process re-checks the
+ * overlap rule when the shift is written.
+ *
+ * @param {RubisDatabase} db
+ * @returns {UnattachedDay[]} one entry per offer; `localDay` may repeat across entries
+ */
+export function listUnattachedOffers(
+  db: Pick<RubisDatabase, 'listUnattachedSales' | 'listShiftWindows'>
+): UnattachedDay[] {
+  const shifts = db.listShiftWindows()
+  const offers: UnattachedDay[] = []
+  let current: UnattachedDay | null = null
+  let previousMs = 0
+  for (const sale of db.listUnattachedSales()) {
+    const localDay = localDayOf(sale.created_at)
+    const saleMs = Date.parse(sale.created_at)
+    const continuesRun =
+      current !== null &&
+      current.localDay === localDay &&
+      findOverlappingShift(shifts, previousMs, saleMs) === undefined
+    if (current !== null && continuesRun) {
+      current.count += 1
+      current.total += sale.total
+      current.lastAt = sale.created_at
+    } else {
+      current = { localDay, count: 1, total: sale.total, firstAt: sale.created_at, lastAt: sale.created_at }
+      offers.push(current)
+    }
+    previousMs = saleMs
+  }
+  return offers
 }
 
 /**

@@ -126,15 +126,17 @@ export default function ZReportModal({ report: initialReport, onClose }: ZReport
                   </p>
                 ))
               ) : (
-                <p>Cashier: {titleCaseName(report.staffName)}</p>
+                <p>Opened by: {titleCaseName(report.staffName)}</p>
               )}
             </div>
 
             <div className="mb-3 space-y-1.5 rounded-lg bg-slate-50 p-3">
-              <div className="flex justify-between">
-                <span className="text-slate-600">Starting Cash</span>
-                <span className="font-medium">{formatCurrency(report.startingCash)}</span>
-              </div>
+              {!report.cashNotCounted && (
+                <div className="flex justify-between">
+                  <span className="text-slate-600">Starting Cash</span>
+                  <span className="font-medium">{formatCurrency(report.startingCash)}</span>
+                </div>
+              )}
               <div className="flex justify-between">
                 <span className="text-slate-600">Cash Sales</span>
                 <span className="font-medium">{formatCurrency(report.totalsByMethod.cash)}</span>
@@ -172,6 +174,12 @@ export default function ZReportModal({ report: initialReport, onClose }: ZReport
 
             {/* docs/phase-222: beside the cash card, not under it, so the modal is no taller than before. */}
             <div className="mb-3 grid grid-cols-2 gap-3">
+              {report.cashNotCounted ? (
+                <div className="rounded-lg border border-slate-200 p-3" data-testid="cash-not-counted">
+                  <p className="text-lg font-semibold text-slate-700">Cash not counted</p>
+                  <p className="text-sm text-slate-500">Nobody counted the drawer for this shift, so no difference is worked out.</p>
+                </div>
+              ) : (
               <div className="space-y-1.5 rounded-lg border border-slate-200 p-3">
                 <div className="flex justify-between">
                   <span className="text-slate-600">Expected Cash</span>
@@ -190,6 +198,7 @@ export default function ZReportModal({ report: initialReport, onClose }: ZReport
                   </span>
                 </div>
               </div>
+              )}
 
               <div className="space-y-0.5 rounded-lg border border-slate-200 p-2 text-sm">
                 {zReportMpesaLines(report, formatCurrency).map((line) => (

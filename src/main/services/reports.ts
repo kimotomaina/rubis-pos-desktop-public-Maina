@@ -97,6 +97,12 @@ export interface ZReport {
    * always the original ones; the last correction here is the current figures. Absent or empty when none.
    */
   corrections?: ZReportCorrection[]
+  /**
+   * `true` when nobody counted the drawer for this shift (docs/phase-227). The report then shows "Cash not counted"
+   * and the cash sales, and none of starting, expected or counted cash or the difference: those fields are 0 or
+   * `null` here and mean nothing. Absent or `false` for every other shift.
+   */
+  cashNotCounted?: boolean
 }
 
 /** One correction as the Z report shows it (docs/phase-224). */
@@ -309,8 +315,10 @@ export function generateZReport(
   const staffName = db.getStaffById(shift.staff_id)?.name ?? 'Unknown'
   const mpesaByMode = sumMpesaByMode(excludeVoided(db.getMpesaPaymentsForShift(shiftId)))
 
-  const expectedCash =
-    shift.status === 'closed' && shift.expected_cash !== null
+  const cashNotCounted = shift.cash_not_counted === 1
+  const expectedCash = cashNotCounted
+    ? 0
+    : shift.status === 'closed' && shift.expected_cash !== null
       ? shift.expected_cash
       : shift.starting_cash + totalsByMethod.cash
 
@@ -338,6 +346,8 @@ export function generateZReport(
     createdByName:
       shift.created_by_staff_id != null ? (db.getStaffById(shift.created_by_staff_id)?.name ?? 'Unknown') : null,
     reason: shift.reason ?? null,
+    // Only when set, so the report of every other shift is exactly what it was before docs/phase-227.
+    ...(cashNotCounted ? { cashNotCounted: true } : {}),
     corrections: db.listShiftCorrections(shiftId).map((row) => ({
       id: row.id,
       correctedAt: row.corrected_at,

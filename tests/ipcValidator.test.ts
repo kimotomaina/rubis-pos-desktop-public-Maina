@@ -1091,8 +1091,9 @@ describe('shifts:open and shifts:close schemas (docs/phase-199)', () => {
     }
   })
 
-  it('still accepts a negative cash figure, which the handlers accepted before', () => {
-    expect(validate(shiftOpenSchema, { staffId: 1, startingCash: -5 }).success).toBe(true)
+  it('refuses a negative float (docs/phase-227) and still accepts a negative closing figure', () => {
+    // docs/phase-227: the open line was `toBe(true)` (a negative float was accepted); a float cannot be negative, so it is now `toBe(false)`. The close line is unchanged.
+    expect(validate(shiftOpenSchema, { staffId: 1, startingCash: -5 }).success).toBe(false)
     expect(validate(shiftCloseSchema, { shiftId: 1, endingCash: -5 }).success).toBe(true)
   })
 

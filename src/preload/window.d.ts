@@ -221,6 +221,14 @@ export interface PosApi {
     shiftType?: ShiftType,
     mpesaOpeningBalance?: number
   ) => Promise<ServiceResult<{ shiftId: number }>>
+  /** Opens a shift under a manager's PIN, from the cart when the person at the till is not an admin (docs/phase-227). */
+  openShiftAsManager: (
+    managerId: number,
+    managerPin: string,
+    startingCash: number,
+    shiftType?: ShiftType,
+    mpesaOpeningBalance?: number
+  ) => Promise<ServiceResult<{ shiftId: number }>>
   /** Closes the open till shift, reconciling counted cash and, if given, the M-Pesa balance (docs/phase-222). */
   closeShift: (
     shiftId: number,

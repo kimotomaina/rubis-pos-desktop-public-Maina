@@ -40,6 +40,10 @@ import ToastStack from './components/ToastStack'
 import { useToastStore } from './stores/toastStore'
 import { useHeldSalesStore } from './stores/heldSalesStore'
 import { isPaymentInProgress, usePaymentActivityStore } from './stores/paymentActivityStore'
+import { shouldShowNoShiftNotice, useShiftStore } from './stores/shiftStore'
+import NoShiftNotice from './components/NoShiftNotice'
+import OpenShiftDialog from './components/OpenShiftDialog'
+import { HOLD_PAYMENT_REASON } from './lib/heldSale'
 import { decideHold, heldAgeTone } from './lib/heldSale'
 import {
   CART_CHANGE_BLOCKED_TOAST_TIMEOUT_MS,
@@ -415,10 +419,16 @@ export default function App() {
   useEffect(() => {
     if (signedInStaff) void useHeldSalesStore.getState().load()
   }, [signedInStaff])
+  useEffect(() => {
+    if (signedInStaff) void useShiftStore.getState().load()
+  }, [signedInStaff])
   useEffect(
     () =>
       useCartStore.subscribe((state, previous) => {
-        if (state.lastReceipt !== previous.lastReceipt) void useHeldSalesStore.getState().load()
+        if (state.lastReceipt !== previous.lastReceipt) {
+          void useHeldSalesStore.getState().load()
+          void useShiftStore.getState().load()
+        }
       }),
     []
   )
@@ -480,10 +490,18 @@ export default function App() {
   const initUnfiledCount = useUnfiledCountStore((state) => state.init)
   const initShopifyReconciliation = useShopifyReconciliationStore((state) => state.init)
   const initFiscalMode = useFiscalModeStore((state) => state.init)
-  const [adminInitialTab, setAdminInitialTab] = useState<'needsAttention' | undefined>(undefined)
+  const [adminInitialTab, setAdminInitialTab] = useState<'needsAttention' | 'reports' | undefined>(undefined)
+  const [adminInitialReportsAction, setAdminInitialReportsAction] = useState<'recordUnattached' | undefined>(undefined)
+  // docs/phase-227: the cart's "No shift open" notice and its dialog.
+  const shiftPresence = useShiftStore((state) => state.presence)
+  const [openShiftDialogShown, setOpenShiftDialogShown] = useState(false)
 
   const selectedProductForModal = useUiStore((state) => state.selectedProductForModal)
   const activeView = useUiStore((state) => state.activeView)
+  // docs/phase-227: back on the cart, read the shift again: the Admin screen may have opened or closed one.
+  useEffect(() => {
+    if (activeView === 'catalog' && signedInStaff) void useShiftStore.getState().load()
+  }, [activeView, signedInStaff])
   const setSelectedProduct = useUiStore((state) => state.setSelectedProduct)
   const setActiveView = useUiStore((state) => state.setActiveView)
   const [searchInputFocused, setSearchInputFocused] = useState(false)
@@ -707,6 +725,7 @@ export default function App() {
                 onClick={() => {
                   setActiveView('admin')
                   setAdminInitialTab(undefined)
+                  setAdminInitialReportsAction(undefined)
                 }}
                 className={`flex h-14 items-center rounded-lg px-6 text-lg font-medium transition-colors ${
                   activeView === 'admin'
@@ -826,6 +845,13 @@ export default function App() {
               </span>
             )}
 
+            {shouldShowNoShiftNotice(shiftPresence) && (
+              <NoShiftNotice
+                blockedReason={isPaymentInProgress(paymentActive) ? HOLD_PAYMENT_REASON : null}
+                onOpenShift={() => setOpenShiftDialogShown(true)}
+              />
+            )}
+
             <HeldSalesStrip requestManagerPin={requestManagerPin} />
 
             <PosCartTable
@@ -836,7 +862,9 @@ export default function App() {
               flashId={flashId}
               onHold={() => void handleHold()}
               holdBlockedReason={holdDecision.allowed ? null : holdDecision.reason}
-              linesPerPage={heldInStrip.length > 0 ? CART_LINES_PER_PAGE - 1 : CART_LINES_PER_PAGE}
+              linesPerPage={
+                CART_LINES_PER_PAGE - (heldInStrip.length > 0 ? 1 : 0) - (shouldShowNoShiftNotice(shiftPresence) ? 1 : 0)
+              }
             />
           </section>
 
@@ -874,9 +902,31 @@ export default function App() {
          */
         <main className="flex flex-1 flex-col overflow-hidden">
           <div className="min-h-0 flex-1 overflow-hidden p-6">
-            <AdminScreen requestManagerPin={requestManagerPin} initialTab={adminInitialTab} />
+            <AdminScreen
+              requestManagerPin={requestManagerPin}
+              initialTab={adminInitialTab}
+              initialReportsAction={adminInitialReportsAction}
+            />
           </div>
         </main>
+      )}
+
+      {openShiftDialogShown && (
+        <OpenShiftDialog
+          staff={currentStaff}
+          requestManagerPin={requestManagerPin}
+          onClose={() => setOpenShiftDialogShown(false)}
+          onOpened={() => {
+            setOpenShiftDialogShown(false)
+            void useShiftStore.getState().load()
+          }}
+          onRecordThem={() => {
+            setOpenShiftDialogShown(false)
+            setAdminInitialTab('reports')
+            setAdminInitialReportsAction('recordUnattached')
+            setActiveView('admin')
+          }}
+        />
       )}
 
       {selectedProductForModal && (

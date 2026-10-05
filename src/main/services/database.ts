@@ -337,6 +337,12 @@ export interface ShiftRow {
   created_at?: string | null
   /** Why a retrospective shift was recorded; required for one, `NULL` on a normal shift. */
   reason?: string | null
+  /**
+   * `1` when nobody counted the drawer for a shift recorded after the fact (docs/phase-227): `starting_cash` is 0 and
+   * means nothing, and `ending_cash`, `expected_cash` and `discrepancy` are `NULL`. `0` for every other shift,
+   * including every shift from before this phase.
+   */
+  cash_not_counted?: 0 | 1
 }
 
 /** How a shift came to exist: opened and closed at the till, or recorded afterwards by a manager. */
@@ -371,12 +377,17 @@ export interface CreateRetrospectiveShiftInput {
   mpesaClosingBalance: number | null
   shiftType: ShiftType
   reason: string
+  /** Nobody counted the drawer (docs/phase-227): `startingCash` and `endingCash` are then ignored and stored as no figures. */
+  cashNotCounted?: boolean
 }
 
 /** What recording a past shift returns: the new shift and the figures stored on it. */
-export interface RetrospectiveShiftResult extends ShiftCloseResult {
+export interface RetrospectiveShiftResult extends Omit<ShiftCloseResult, 'expectedCash' | 'discrepancy'> {
   shiftId: number
   attachedCount: number
+  /** `null` when the cash was not counted (docs/phase-227): there is nothing to compare. */
+  expectedCash: number | null
+  discrepancy: number | null
 }
 
 /**
@@ -777,7 +788,9 @@ function migrateShiftsColumns(connection: SqliteConnection): void {
     "kind TEXT NOT NULL DEFAULT 'normal' CHECK (kind IN ('normal', 'retrospective'))",
     'created_by_staff_id INTEGER',
     'created_at TEXT',
-    'reason TEXT'
+    'reason TEXT',
+    // docs/phase-227: nobody counted the drawer. Defaults to 0 for every shift from before, which keeps its figures.
+    'cash_not_counted INTEGER NOT NULL DEFAULT 0 CHECK (cash_not_counted IN (0, 1))'
   ]
   for (const definition of retrospectiveColumns) {
     try {
@@ -965,7 +978,8 @@ export const SCHEMA = {
     kind TEXT NOT NULL DEFAULT 'normal' CHECK (kind IN ('normal', 'retrospective')),
     created_by_staff_id INTEGER,
     created_at TEXT,
-    reason TEXT
+    reason TEXT,
+    cash_not_counted INTEGER NOT NULL DEFAULT 0 CHECK (cash_not_counted IN (0, 1))
   )`,
   /**
    * One correction of the figures typed in for a closed shift (docs/phase-224). Append-only: the only writer is
@@ -3888,8 +3902,11 @@ export class RubisDatabase {
           .filter((sale): sale is UnattachedSaleRow => sale !== undefined && sale.payment_method === method)
           .reduce((sum, sale) => sum + sale.total, 0)
 
-      const expectedCash = input.startingCash + totalFor('cash')
-      const discrepancy = input.endingCash - expectedCash
+      const cashNotCounted = input.cashNotCounted === true
+      const startingCash = cashNotCounted ? 0 : input.startingCash
+      const expectedCash = cashNotCounted ? null : startingCash + totalFor('cash')
+      const endingCash = cashNotCounted ? null : input.endingCash
+      const discrepancy = expectedCash === null || endingCash === null ? null : endingCash - expectedCash
       const mpesaExpected =
         input.mpesaOpeningBalance !== null && input.mpesaClosingBalance !== null
           ? input.mpesaOpeningBalance + totalFor('mpesa')
@@ -3897,20 +3914,21 @@ export class RubisDatabase {
       const mpesaDifference =
         mpesaExpected !== null && input.mpesaClosingBalance !== null ? input.mpesaClosingBalance - mpesaExpected : null
 
+      // The flag is written only when set, so a counted shift's statement is exactly what it was before docs/phase-227.
       const info = this.conn
         .prepare(
           `INSERT INTO shifts (staff_id, clock_in, clock_out, starting_cash, expected_cash, ending_cash, discrepancy, status, shift_type,
                                mpesa_opening_balance, mpesa_closing_balance, mpesa_expected, mpesa_difference,
-                               kind, created_by_staff_id, created_at, reason)
-           VALUES (?, ?, ?, ?, ?, ?, ?, 'closed', ?, ?, ?, ?, ?, 'retrospective', ?, ?, ?)`
+                               kind, created_by_staff_id, created_at, reason${cashNotCounted ? ', cash_not_counted' : ''})
+           VALUES (?, ?, ?, ?, ?, ?, ?, 'closed', ?, ?, ?, ?, ?, 'retrospective', ?, ?, ?${cashNotCounted ? ', 1' : ''})`
         )
         .run(
           input.managerId,
           period.startIso,
           period.endIso,
-          input.startingCash,
+          startingCash,
           expectedCash,
-          input.endingCash,
+          endingCash,
           discrepancy,
           input.shiftType,
           input.mpesaOpeningBalance,
@@ -4022,7 +4040,9 @@ export class RubisDatabase {
         mpesaOpeningBalance: input.mpesaOpeningBalance,
         mpesaClosingBalance: input.mpesaClosingBalance
       }
-      if (sameEnteredFigures(entered, current)) {
+      // A shift whose cash was not counted (docs/phase-227) has no figures to compare with: the first correction adds them.
+      const hasNoCashFigures = !latest && shift.cash_not_counted === 1
+      if (!hasNoCashFigures && sameEnteredFigures(entered, current)) {
         throw new Error('Nothing has changed from the current figures')
       }
 

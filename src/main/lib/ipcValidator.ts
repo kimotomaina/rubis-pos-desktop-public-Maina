@@ -493,13 +493,22 @@ export const zReportRequestSchema = z.object({
  * (docs/phase-157 Part 3). `shiftType` is optional so a caller that names no
  * shift still opens one, stored as `NULL`.
  */
-export const shiftOpenSchema = z.object({
-  staffId: z.number().int(),
-  startingCash: z.number().finite(),
-  shiftType: z.enum(['day', 'night']).nullish(),
-  // docs/phase-222: optional on purpose. Absent or null is "not recorded", which a zero is not.
-  mpesaOpeningBalance: z.number().finite().nonnegative().nullish()
-})
+export const shiftOpenSchema = z
+  .object({
+    staffId: z.number().int(),
+    // docs/phase-227: a float cannot be negative. Before, only the renderer refused one.
+    startingCash: z.number().finite().nonnegative(),
+    shiftType: z.enum(['day', 'night']).nullish(),
+    // docs/phase-222: optional on purpose. Absent or null is "not recorded", which a zero is not.
+    mpesaOpeningBalance: z.number().finite().nonnegative().nullish(),
+    // docs/phase-227: a manager's PIN for a shift opened from the cart by someone who is not an admin. Both or neither.
+    managerId: z.number().int().positive().optional(),
+    managerPin: z.string().min(1, 'Manager PIN is required').optional()
+  })
+  .refine((data) => (data.managerId === undefined) === (data.managerPin === undefined), {
+    message: 'A manager id and PIN go together',
+    path: ['managerPin']
+  })
 
 /**
  * `shifts:close` request payload (docs/phase-199). `endingCash` feeds the
@@ -543,13 +552,18 @@ export const pastShiftPreviewSchema = z.object(pastShiftPeriodFields)
 export const createPastShiftSchema = managerAuthzSchema.extend({
   ...pastShiftPeriodFields,
   orderIds: z.array(z.number().int().positive()).min(1, 'Choose the sales for this shift').max(5000),
-  startingCash: z.number().finite().nonnegative(),
-  endingCash: z.number().finite().nonnegative(),
+  // docs/phase-227: both cash figures, or `cashNotCounted: true` and neither (they are ignored if sent).
+  startingCash: z.number().finite().nonnegative().optional(),
+  endingCash: z.number().finite().nonnegative().optional(),
+  cashNotCounted: z.boolean().optional(),
   mpesaOpeningBalance: z.number().finite().nonnegative().nullish(),
   mpesaClosingBalance: z.number().finite().nonnegative().nullish(),
   shiftType: z.enum(['day', 'night']),
   reason: z.string().trim().min(1, 'A reason is required').max(300, 'Keep the reason under 300 characters')
-})
+}).refine(
+  (data) => data.cashNotCounted === true || (data.startingCash !== undefined && data.endingCash !== undefined),
+  { message: 'Enter the starting cash and the counted ending cash, or choose Not counted', path: ['endingCash'] }
+)
 
 /**
  * `shifts:correct` request payload (docs/phase-224). Manager-gated. The four figures are the whole set the manager

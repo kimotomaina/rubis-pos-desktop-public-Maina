@@ -484,7 +484,8 @@ describe('the Z report of a shift recorded afterwards', () => {
     expect(retro.some((l) => l.startsWith('Cashier:'))).toBe(false)
 
     const normal = printed(reportFor({ ...row, kind: 'normal' }))
-    expect(normal.some((l) => l.startsWith('Cashier:'))).toBe(true)
+    // docs/phase-227: old `startsWith('Cashier:')`, new `startsWith('Opened by:')` — the line names the opener, not necessarily the person at the till.
+    expect(normal.some((l) => l.startsWith('Opened by:'))).toBe(true)
     expect(normal.some((l) => l.includes('RETROSPECTIVE'))).toBe(false)
   })
 })

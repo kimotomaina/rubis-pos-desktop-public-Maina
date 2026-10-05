@@ -457,3 +457,11 @@ With 7 cart lines (`CART_LINES_PER_PAGE`) and the "Cached catalog (offline)" bad
 ## The default Admin PIN is written to the console on first run (audit of 2026-10-05)
 
 When the till has no staff accounts, `src/main/index.ts` seeds an Admin account and `console.warn`s a line that names its PIN. A packaged build writes the console nowhere (`error.log` records crashes only), so nothing reaches disk today, but anything that later captures the console would hold the default PIN. Not changed. The mitigation is to reset the Admin PIN after setup (Admin > Overview > Staff > Reset PIN).
+
+## The main process does not know who is at the till, so "only an admin opens a shift" is checked on the name given (phase 227)
+
+The till keeps no session in the main process: `auth:logout` does nothing and the signed-in staff member lives in the renderer. `shifts:open` therefore checks what the request says: with a manager PIN, the PIN is re-verified and the shift is recorded under that manager; without one, the staff id named must belong to an active admin. A caller that names an admin's id passes the second check. The cart's "No shift open" dialog always sends a PIN for a cashier, so the screens cannot be used to get round it, but a hostile or broken renderer could. A real fix needs a main-process session, which phase 227 did not invent.
+
+## The renderer has no way to write to a log file (phase 227)
+
+When the cart cannot read the current shift, the "No shift open" notice stays hidden and the failure is written with `console.error`. A packaged build keeps the console nowhere, so nothing reaches `error.log`. Seeing it needs DevTools, which a packaged build does not open. A renderer-to-file log channel would settle this and every other renderer-side failure.
