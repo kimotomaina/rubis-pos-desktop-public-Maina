@@ -12,6 +12,120 @@
   - Shopify: only the read-only queries quoted in §1.5. There were no mutations and no orders, and the token was never printed.
   - Product facts come from Shopify and from a temporary copy of the 1606 database copy. The scratchpad copy checked unchanged by SHA-256 afterwards.
 - **Base:** `main` at `fd08431`.
+- **Updated 2026-10-07, on the owner's request,** with his rulings and the simplest design (next section). Where the later sections differ from that section, the next section holds.
+
+## Owner rulings (2026-10-07) and the simplest design
+
+**Rulings:**
+1. **Pairs only.** 2 loaves cost 99; an odd loaf costs 65. So 3 loaves cost 164 and 4 cost 198.
+2. **The fiscal device is sent the discounted price** (D3).
+3. **The simplest solution.**
+
+**Why the discount in Shopify has to change.** An "Amount off products" discount cannot make "pairs only" (§1.7):
+- 31 off each gives 68 for 2;
+- 31 once per order gives 164 for 3, but 229 for 4;
+- 15.50 off each gives 148.50 for 3.
+
+**"Buy X get Y" makes it exactly: buy 1 loaf, get 1 loaf at Ksh 31 off.**
+- Each pair is 65 + 34 = 99.
+- An odd loaf stays at 65.
+- The deal repeats for every pair, because "Discount usage is unlimited by default" unless "Set the maximum number of uses per order" is ticked ([help.shopify.com, Buy X get Y](https://help.shopify.com/en/manual/discounts/discount-types/buy-x-get-y), read 2026-10-07; the page shows no date).
+- Same help page: when the customer buys and gets the same product, "the lower-priced item that the customer chooses is the item that the customer gets at a discount". All loaves are 65, so this changes nothing.
+
+| Loaves | Pairs | Charged | Sent to the fiscal device |
+| --- | --- | --- | --- |
+| 1 | 0 | 65 | 1 × 65.00 |
+| 2 | 1 | **99** | 1 × 65.00, 1 × 34.00 |
+| 3 | 1 | 164 | 2 × 65.00, 1 × 34.00 |
+| 4 | 2 | 198 | 2 × 65.00, 2 × 34.00 |
+
+All whole shillings, so the device has nothing to round and the cash needs no cents.
+
+**The simplest design.** It replaces Part 4's three steps.
+
+1. **The till reads one kind of discount in version 1: an automatic Buy X get Y** (`DiscountAutomaticBxgy`) of this shape. Everything else, "Amount off products" included, is skipped and listed by title on the sync result. Field names are from the dev store's 2026-07 schema (introspection, 2026-10-07) and match the [2026-10 reference](https://shopify.dev/docs/api/admin-graphql/latest/objects/DiscountAutomaticBxgy), which adds only `rollouts`.
+
+   | Shape the till accepts | Field |
+   | --- | --- |
+   | The buy side is a quantity | `customerBuys.value` is `DiscountQuantity` (`quantity`) |
+   | Both sides name the same products or variants | `customerBuys.items` and `customerGets.items` are both `DiscountProducts` with the same list |
+   | The get side is a quantity at an amount or percentage off each | `customerGets.value` is `DiscountOnQuantity` (`quantity`, `effect` = `DiscountAmount` or `DiscountPercentage`) |
+   | A cap per order, if one is set | `usesPerOrderLimit` |
+   | Everyone, one-time purchases | `context` is `DiscountBuyerSelectionAll`; `customerBuys.isOneTimePurchase` |
+   | Live now | `startsAt` ≤ now < `endsAt` (or no end) |
+
+2. **The arithmetic, one pure function used by both the cart and the main process:**
+   - n = the units of the listed items in the cart;
+   - times = ⌊n ÷ (buys + gets)⌋, capped by `usesPerOrderLimit`;
+   - discounted units = times × gets;
+   - each discounted unit costs price − amount, or price less the percentage rounded to the cent.
+
+   For the bread, buys = gets = 1, so the number of discounted loaves is ⌊n ÷ 2⌋. A discount that would bring a unit to 0 or below is not applied (edge 9).
+
+3. **At payment, the main process turns the cart line into the lines actually sold.** Three loaves become "2 × 65.00" and "1 × 34.00", the second carrying `autoDiscount: { id, title, amountOffEach }`. It first checks that the screen's total equals its own (else "Prices changed, check the cart"). From there everything uses these lines:
+   - the stored sale;
+   - the fiscal request: **`buildFiscalRequest` does not change**, because it already sends each line's price;
+   - the receipt;
+   - the Z report's VAT by class;
+   - the fiscal reconciliation, which stays "matched";
+   - the CSV export.
+
+   Every one of these already reads `unitPrice × quantity`, so none needs new arithmetic. The discount never travels as `item.discount`, so the phase-161-1 refusal of manual discounts on a live till stays as it is.
+4. **The receipt** prints the lines that were filed, so the paper matches the KRA record behind the QR code. Under the discounted line it prints the title and the saving, for example `Probakery Bread 2 @99/= saved 31.00` (31 characters, fits 32, 42 and 48).
+5. **The Shopify order, simplest (option b of D4).** A sale with a discounted line sends Shopify the same lines the device got, each with `priceSet` = its price, and the title in the note. A sale with no discount is sent byte for byte as today.
+   - Shopify's own figures then equal what was charged.
+   - Shopify shows no separate "discount" figure; the note carries it.
+   - **Not verified:** whether `orderCreate` accepts two lines of the same variant. One test order, on your go, settles it.
+   - Shopify would not apply the discount itself anyway: "Automatic discounts won't be applied unless you replicate the logic of those discounts in your custom implementation" ([orderCreate, 2026-10](https://shopify.dev/docs/api/admin-graphql/latest/mutations/orderCreate), read 2026-10-07, same sentence as 2026-07).
+6. **Sync**, as R8 to R10: the Sync button with "Last synced", one sync at a time, off while the cart has items or a payment is in progress, a sync at start and after each login, and the last good copy kept on any failure.
+
+**The build, in two phases:**
+
+| Phase | What | Goes to a live till |
+| --- | --- | --- |
+| 253-1 | Sync, the button, the discount copy. No price changes. Needs `read_discounts` (step-by-step B below) | Alone |
+| 253-2 | The cart, the split into sold lines, the receipt title line, and the Shopify `priceSet` on discounted orders. The fiscal device gets the discounted line through the unchanged `buildFiscalRequest` | Only after one test order on your go |
+
+**Tests for 253-2 (real `:memory:` SQLite):**
+- 1, 2, 3 and 4 loaves give 65, 99, 164 and 198, with the device lines in the table above;
+- removing a loaf from a pair restores 65;
+- a cap per order is honoured;
+- every other discount kind is listed and not applied;
+- a sale with no discount stores, files, prints and pushes byte for byte as today.
+
+**Mutation checks:**
+- discount 1 loaf;
+- discount every loaf instead of one per pair;
+- let a half-failed sync replace the copy;
+- let the button sync with items in the cart;
+- send the device 65 for the discounted loaf.
+
+### Step by step A: changing the discount in Shopify (the owner, in the Shopify admin)
+
+The discount type is chosen when a discount is created, so the present "Amount off products" discount is replaced, not edited. The menu words are from the help page above; the admin may word them slightly differently.
+
+1. **Discounts** → open "Probakery Bread 2 @99/=" → **Deactivate** it. Keep it, rather than deleting it, so the record stays.
+2. **Discounts** → **Create discount** → **Buy X get Y**.
+3. **Method:** **Automatic discount**. **Title:** `Probakery Bread 2 @99/=`.
+4. **Customer buys:** **Minimum quantity of items** = `1`. **Any items from:** **Specific products** → PB WHITE BREAD 400G.
+5. **Customer gets:** **Quantity** = `1`. **Any items from:** **Specific products** → PB WHITE BREAD 400G.
+6. **At a discounted value:** **Amount off each** = `31.00`.
+7. Leave **Set the maximum number of uses per order** unticked, so every pair gets the deal.
+8. **Eligibility:** **All customers**. Not Specific customers, Segments or Markets: the till skips those.
+9. **Combinations:** none.
+10. **Active dates:** start now; no end date, or the promotion's last day.
+11. The POS options ("Point of Sale", "Apply on POS Pro locations") can stay as they are: they are about Shopify's own POS app, and the till cannot see them (§1.5).
+12. **Save.** The summary should read like "Buy 1 item, get 1 item at Ksh 31.00 off". In the Discounts list the new one shows **Active** and the old one is no longer active.
+
+Until 253-2 is installed this changes nothing on the tills: they do not read discounts yet.
+
+### Step by step B: giving the till's app `read_discounts` (the owner, before 253-1)
+
+1. **Settings** → **Apps and sales channels** → **Develop apps** → the app whose token the tills use.
+2. **Configuration** → **Admin API integration** → **Edit** → tick **`read_discounts`** → **Save**.
+3. If Shopify then offers **Install app**, **Reinstall app** or **Update**, take it.
+4. **Never delete or uninstall the app.** shopify.dev: "Don't delete the app itself. Deleting removes the app configuration from the Shopify admin permanently, and you can't create a new admin-created custom app to replace it", and "You can no longer create new admin-created custom apps" ([admin-created custom apps](https://shopify.dev/docs/apps/build/authentication-authorization/legacy/admin-custom-apps), read 2026-10-07).
+5. **Not documented by Shopify:** whether adding a scope gives a new token. If the admin shows a new token, every till needs it in Admin › Integrations, and requests with the old one stop ("Your app's requests and webhooks are disrupted until you update your code with the new token", same page, about reinstalling). I can then confirm the scope with the Q1 query, read-only.
 
 ## Part 1. How things work today
 
@@ -174,14 +288,25 @@ The main process takes the renderer's `total` and prices as given; nothing recom
 
 **The discount's title does not match its stated setting.**
 
-| | Setting as described: 31 off **each** | 31 split once per order (`appliesOnEachItem: false`) |
-| --- | --- | --- |
-| 1 loaf | 65 (below the minimum) | 65 |
-| 2 loaves | 2 × 34 = **68** | 130 − 31 = **99** |
-| 3 loaves | 3 × 34 = 102 | 195 − 31 = 164 |
-| 4 loaves | 4 × 34 = 136 | 260 − 31 = 229 |
+| | Setting as described: 31 off **each** | 31 split once per order (`appliesOnEachItem: false`) | **Buy 1 get 1 at 31 off (ruled, 2026-10-07)** |
+| --- | --- | --- | --- |
+| 1 loaf | 65 (below the minimum) | 65 | 65 |
+| 2 loaves | 2 × 34 = **68** | 130 − 31 = **99** | **99** |
+| 3 loaves | 3 × 34 = 102 | 195 − 31 = 164 | 164 |
+| 4 loaves | 4 × 34 = 136 | 260 − 31 = 229 | 198 |
 
-The title, "2 @99/=", only comes out from the split setting, and only for exactly 2 loaves. Neither setting gives "every pair for 99". The real value could not be read (Q2).
+The title, "2 @99/=", only comes out from the split setting, and only for exactly 2 loaves. Neither "amount off" setting gives "every pair for 99". The real value could not be read (Q2).
+
+**From the owner's copy of the Shopify product page (2026-10-07):**
+- price 65.00, with no compare-at price;
+- **Charge tax: No**;
+- cost per item Ksh 43.00;
+- SKU ENJ-00551;
+- available 62 at Enjoy Haile Selassie, 66 at Rubis Kisumu, 0 at HQ;
+- "Sell when out of stock: On";
+- `hs_name`, `hs_code` and `vat_class` all empty.
+
+Shopify charges no tax on it while the till files it as class A at 16%: the open phase-233 point above.
 
 ## Part 2. The proposed design, checked against the code
 
@@ -218,7 +343,7 @@ The title, "2 @99/=", only comes out from the split setting, and only for exactl
 | 12 | **Recommend:** Sales Summary and the CSV export show "Automatic discounts given" (amount and number of sales), from the stored lines. The **Z report waits** for the open ruling on its layout (233 against 234, [phase-235.md:7](phase-235.md)). Totals on every report stay the amount charged. Decision D6 |
 | 13 | Each till has its own copy. A sync never touches written sales, which carry their own discount record. Two tills can differ until each one syncs |
 
-## Part 4. The plan (not built)
+## Part 4. The plan (not built; superseded by the two phases in the rulings section, kept for the record)
 
 **Step 1: sync of discounts, and the Sync button. No price changes.** It needs `read_discounts` added to the app (D7).
 - `shopify.ts`:
@@ -286,11 +411,11 @@ The full list of tests that stub the bridge is **not verified** here; it is to b
 
 | # | Decision | Recommendation |
 | --- | --- | --- |
-| D0 | **The bread discount.** "Each item" gives 2 for 68, not 99. 99 is the split setting, and then only for exactly 2 loaves (§1.7) | Check the Shopify admin. If "2 for 99" is meant, the value should be "31 split across items". "Every pair for 99" cannot be made with this discount type |
-| D1 | R1 scope | Accept R1, with the additions in Part 2: only `context: all`, only product-class discounts, and Markets contexts skipped. Each item and percentage in version 1; "split across items" too only if D0 needs it |
+| D0 | **The bread discount.** "Each item" gives 2 for 68, not 99. 99 is the split setting, and then only for exactly 2 loaves (§1.7) | **Ruled 2026-10-07: pairs only.** Replace it with Buy 1 get 1 at 31 off (step by step A) |
+| D1 | R1 scope | **Superseded by "the simplest solution":** version 1 reads only automatic Buy X get Y of the shape in the rulings section. Everything else, "Amount off products" included, is skipped and listed. More kinds come later only if asked |
 | D2 | "POS excluded" | **The API has no such field** (§1.5), so the till cannot see the box. Your reading holds: the till applies every active in-scope discount, whatever the box says. If a discount ever must not apply on the till, use a Shopify discount `tag` (the field exists). Not built until asked |
-| D3 | R5 fiscal | **Net unit price, no `DiscAddP`.** The reasons: `DiscAddP` is a percentage only, so 31/65 = 47.6923…% is inexact and has no stated sign. A value discount (33h) is only allowed on a one-VAT-group receipt. The fiscal reconciliation flags any device total ≠ charged as "mismatch". The Z report's VAT by class reads the request's lines. Phase 160 Part B reached the same answer. **Ask VIL, with D8,** whether KRA accepts a net price with no separate discount record |
-| D4 | R6 Shopify order | **(c)** On a discounted order only: `priceSet` = the till's normal price per line, plus one `itemFixedDiscountCode` (`code` = the title, or "RUBIS-AUTO" when there are several, `amountSet` = the total discount), and the per-line breakdown in the note. Shopify then shows gross, discount and net = charged. **(b)**, the fallback: `priceSet` = the net price, plus the note. Totals right, but no discount figure in Shopify. **(a)** Today: wrong, because Shopify records 130 for a 68 sale. Either (b) or (c) needs one test order on your go. How Shopify spreads a fixed code over the lines is **not verified** |
+| D3 | R5 fiscal | **Ruled 2026-10-07: the device gets the discounted price**, as separate lines (rulings section). **Net unit price, no `DiscAddP`.** The reasons: `DiscAddP` is a percentage only, so 31/65 = 47.6923…% is inexact and has no stated sign. A value discount (33h) is only allowed on a one-VAT-group receipt. The fiscal reconciliation flags any device total ≠ charged as "mismatch". The Z report's VAT by class reads the request's lines. Phase 160 Part B reached the same answer. **Ask VIL, with D8,** whether KRA accepts a net price with no separate discount record |
+| D4 | R6 Shopify order | **Now (b), for simplicity** (rulings section, item 5): the same lines as the device, with `priceSet`. Earlier recommendation, kept for the record: **(c)** On a discounted order only: `priceSet` = the till's normal price per line, plus one `itemFixedDiscountCode` (`code` = the title, or "RUBIS-AUTO" when there are several, `amountSet` = the total discount), and the per-line breakdown in the note. Shopify then shows gross, discount and net = charged. **(b)**, the fallback: `priceSet` = the net price, plus the note. Totals right, but no discount figure in Shopify. **(a)** Today: wrong, because Shopify records 130 for a 68 sale. Either (b) or (c) needs one test order on your go. How Shopify spreads a fixed code over the lines is **not verified** |
 | D5 | Edge 7 | Recompute at payment from the current copy |
 | D6 | Edge 12 | Sales Summary and CSV yes; the Z report after its layout ruling |
 | D7 | The scope | Add `read_discounts` to the Shopify app. Whether that changes or reissues the token is **not verified** |
@@ -315,7 +440,9 @@ The full list of tests that stub the bridge is **not verified** here; it is to b
 - How Shopify spreads a fixed discount code over the lines.
 - Whether a minimum subtotal counts only the eligible items.
 - Whether `endsAt` is inclusive.
-- Whether adding a scope reissues the token.
+- Whether adding a scope reissues the token. Shopify's pages read on 2026-10-07 do not say.
+- Whether `orderCreate` accepts two lines of the same variant with different `priceSet` values.
+- The exact admin menu words, which are taken from the help page, not seen in the admin.
 - The full list of tests stubbing `fetchProducts`.
 
 ## Verification
@@ -325,3 +452,6 @@ The full list of tests that stub the bridge is **not verified** here; it is to b
 - Seven read-only GraphQL calls (§1.5); the token was never printed or written. One more body was refused by the helper's own guard before sending, because it named the `Mutation` type in an introspection query; that item was dropped, not sent.
 - The 1606 database copy was read from a temporary copy, and the scratchpad copy checked unchanged by SHA-256.
 - No tests were run: no code changed.
+- **2026-10-07 update:**
+  - one more read-only introspection call (`DiscountAutomaticBxgy`, `DiscountCustomerBuys`, `DiscountCustomerBuysValue`, `DiscountQuantity`, `DiscountOnQuantity`, `DiscountEffect`);
+  - the latest docs read the same day: shopify.dev `DiscountAutomaticBxgy` and `orderCreate` at **2026-10** (the latest), the help page "Buy X get Y", and shopify.dev "admin-created custom apps".
