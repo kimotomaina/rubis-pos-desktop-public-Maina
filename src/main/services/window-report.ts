@@ -24,6 +24,7 @@ export type WindowReportDb = Pick<
   | 'listShiftCorrections'
   | 'listShiftAdjustments'
   | 'listAdjustmentSales'
+  | 'getShiftMerge'
 >
 
 /** One shift of the window, with the difference it shows now. */

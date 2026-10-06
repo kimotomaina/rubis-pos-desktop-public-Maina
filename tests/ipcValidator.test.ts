@@ -8,7 +8,7 @@
  */
 
 import { describe, it, expect } from 'vitest'
-import { shiftOpenSchema, shiftCloseSchema } from '../src/main/lib/ipcValidator.js'
+import { shiftOpenSchema, shiftCloseSchema, mergeShiftsPreviewSchema, mergeShiftsSchema } from '../src/main/lib/ipcValidator.js'
 import { SHIFT_TYPES } from '../src/main/lib/shiftWindows.js'
 import {
   validate,
@@ -1125,5 +1125,27 @@ describe('shifts:open and shifts:close schemas (docs/phase-199)', () => {
       expect(validate(shiftOpenSchema, request).success).toBe(false)
       expect(validate(shiftCloseSchema, request).success).toBe(false)
     }
+  })
+})
+
+describe('merge shift schemas (docs/phase-239)', () => {
+  it('accepts a preview of two positive shift ids and refuses anything else', () => {
+    expect(validate(mergeShiftsPreviewSchema, { absorbedShiftId: 1, intoShiftId: 2 }).success).toBe(true)
+    for (const bad of [{ absorbedShiftId: 0, intoShiftId: 2 }, { absorbedShiftId: 1 }, { absorbedShiftId: 1.5, intoShiftId: 2 }, { absorbedShiftId: '1', intoShiftId: 2 }]) {
+      expect(validate(mergeShiftsPreviewSchema, bad).success).toBe(false)
+    }
+  })
+
+  it('a merge needs the manager credentials, both ids and a reason of 1 to 300 characters, trimmed', () => {
+    const good = { managerId: 2, managerPin: '1234', absorbedShiftId: 1, intoShiftId: 2, reason: '  Opened twice  ' }
+    const result = validate(mergeShiftsSchema, good)
+    expect(result.success).toBe(true)
+    if (result.success) expect(result.data.reason).toBe('Opened twice')
+
+    expect(validate(mergeShiftsSchema, { ...good, managerPin: undefined }).success).toBe(false)
+    expect(validate(mergeShiftsSchema, { ...good, managerId: undefined }).success).toBe(false)
+    expect(validate(mergeShiftsSchema, { ...good, reason: '   ' }).success).toBe(false)
+    expect(validate(mergeShiftsSchema, { ...good, reason: 'x'.repeat(301) }).success).toBe(false)
+    expect(validate(mergeShiftsSchema, { ...good, intoShiftId: -2 }).success).toBe(false)
   })
 })

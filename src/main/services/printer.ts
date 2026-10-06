@@ -28,7 +28,7 @@ import { formatCurrency } from './currency.js'
 import type { ConnectivityCheckResult } from './connectivityMonitor.js'
 import { zReportMpesaLines } from '../lib/zReportMpesa.js'
 import { zReportRetroLines } from '../lib/zReportRetro.js'
-import { zReportChangeBlocks, zReportLabelledLine, zReportSalesAtCloseLine } from '../lib/zReportAdjustments.js'
+import { zReportChangeBlocks, zReportLabelledLine, zReportMergedLine, zReportSalesAtCloseLine } from '../lib/zReportAdjustments.js'
 import { generatePdfReceipt } from './pdf-receipt.js'
 import { buildReceiptLayout, isReceiptLayoutQr, asReceiptWidth } from '../lib/receiptLayout.js'
 import { buildEnjoySlip } from '../lib/enjoySlip.js'
@@ -508,6 +508,13 @@ export function renderZReport(
   const labelled = zReportLabelledLine(report)
   if (labelled) {
     client.println(labelled)
+  }
+  // docs/phase-239: a shift merged into another says so first; its figures below are history.
+  const merged = zReportMergedLine(report, (iso) => new Date(iso).toLocaleString())
+  if (merged) {
+    client.bold(true)
+    client.println(merged)
+    client.bold(false)
   }
   client.println(`Opened: ${new Date(report.openedAt).toLocaleString()}`)
   client.println(

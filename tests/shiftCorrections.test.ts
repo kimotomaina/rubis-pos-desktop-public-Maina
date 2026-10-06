@@ -347,6 +347,7 @@ const reportDb = (corrections: ShiftCorrectionRow[]) =>
     getOrdersForShift: () => [],
     getMpesaPaymentsForShift: () => [],
     listShiftCorrections: () => corrections,
+    getShiftMerge: () => undefined, // ADDED (docs/phase-239): the Z report reads whether the shift was merged
     listShiftAdjustments: () => [], // ADDED (docs/phase-232)
     listAdjustmentSales: () => []
   }) as unknown as RubisDatabase

@@ -31,12 +31,14 @@ import {
   zReportAdjustmentBlocks,
   zReportChangeBlocks,
   zReportLabelledLine,
+  zReportMergedLine,
   zReportSalesAtCloseLine
 } from '../src/main/lib/zReportAdjustments.js'
 import {
   zReportAdjustmentBlocks as rendererBlocks,
   zReportChangeBlocks as rendererChangeBlocks,
   zReportLabelledLine as rendererLabelled,
+  zReportMergedLine as rendererMerged,
   zReportSalesAtCloseLine as rendererAtClose
 } from '../src/renderer/src/lib/zReportAdjustments.js'
 import { zReportRetroLines } from '../src/main/lib/zReportRetro.js'
@@ -1145,5 +1147,156 @@ describe('the handlers and triggers in main/index.ts', () => {
     for (const update of updates) {
       expect(update).toMatch(/^ WHERE local_id = \? AND (shift_id IS NULL|shift_id = \?) AND status <> 'voided'/)
     }
+  })
+})
+
+describe('merging two shifts of one window (docs/phase-239)', () => {
+  /** Two closed, counted shifts in the Night of 5 Oct: #a opened 17:43 (two sales, one voided), #b opened 20:50 (one sale). */
+  function twoNightShifts() {
+    const db = freshDb()
+    const a = insertShift(db, { clockIn: '2026-10-05T17:43:00', clockOut: '2026-10-05T17:44:00', startingCash: 0, endingCash: 500, type: 'day' })
+    const b = insertShift(db, { clockIn: '2026-10-05T20:50:00', clockOut: '2026-10-06T06:59:00', startingCash: 500, endingCash: 900, type: 'night' })
+    const s1 = sale(db, '2026-10-05T17:43:10', 300, 'cash', { shiftId: a })
+    const s2 = sale(db, '2026-10-05T17:43:20', 200, 'mpesa', { shiftId: a })
+    const voided = sale(db, '2026-10-05T17:43:30', 50, 'cash', { shiftId: a, status: 'voided' })
+    const s3 = sale(db, '2026-10-05T21:00:00', 400, 'cash', { shiftId: b })
+    return { db, a, b, s1, s2, s3, voided }
+  }
+  const merges = (db: RubisDatabase): number => count(db, 'shift_merges')
+  const shiftOfOrder = (db: RubisDatabase, id: number): number | null =>
+    (conn(db).prepare('SELECT shift_id FROM orders WHERE local_id = ?').get(id) as { shift_id: number | null }).shift_id
+
+  it('previews what moves and what the survivor would show, writing nothing', () => {
+    const { db, a, b } = twoNightShifts()
+    const before = snapshot(db)
+
+    const preview = db.previewShiftMerge(a, b)
+
+    // Two live sales (the voided one stays out); the survivor keeps its float 500 and count 900, so expected becomes
+    // 500 + 400 + 300 = 1,200 and the difference 900 - 1,200.
+    expect(preview).toMatchObject({ absorbedShiftId: a, intoShiftId: b, salesCount: 2, salesTotal: 500, problem: null })
+    expect(preview.into).toMatchObject({ expectedCash: 1200, discrepancy: -300 })
+    expect(snapshot(db)).toEqual(before)
+    expect(merges(db)).toBe(0)
+  })
+
+  it('moves every live sale with the guarded UPDATE, writes one record on each shift and one merge row, and recalculates the survivor', () => {
+    const { db, a, b, s1, s2, s3, voided } = twoNightShifts()
+    const at = ms('2026-10-06T10:00:00')
+
+    expect(db.mergeShifts({ absorbedShiftId: a, intoShiftId: b, managerId: 7, reason: 'Opened twice by mistake' }, at)).toEqual({
+      absorbedShiftId: a,
+      intoShiftId: b,
+      salesCount: 2
+    })
+
+    expect([s1, s2, s3].map((id) => shiftOfOrder(db, id))).toEqual([b, b, b])
+    expect(shiftOfOrder(db, voided)).toBe(a)
+    const out = adjustments(db, a)[0]
+    const into = adjustments(db, b)[0]
+    const reason = `Merged shift #${a} into shift #${b}: Opened twice by mistake`
+    expect(out).toMatchObject({ kind: 'reassign_out', peer_shift_id: b, by_staff_id: 7, reason, sales_count: 2, cash_total: 300, mpesa_total: 200 })
+    expect(out).toMatchObject({ starting_cash: 0, ending_cash: 500, expected_cash: 0, discrepancy: 500 })
+    expect(into).toMatchObject({ kind: 'reassign_in', peer_shift_id: a, by_staff_id: 7, reason, sales_count: 2 })
+    expect(into).toMatchObject({ starting_cash: 500, ending_cash: 900, expected_cash: 1200, discrepancy: -300 })
+    expect(db.getShiftMerge(a)).toMatchObject({ into_shift_id: b, by_staff_id: 7, reason: 'Opened twice by mistake', sales_count: 2, at: new Date(at).toISOString() })
+    expect(db.getShiftMerge(b)).toBeUndefined()
+    // The absorbed shift's own row is untouched.
+    expect(shiftOf(db, a)).toMatchObject({ status: 'closed', starting_cash: 0, ending_cash: 500 })
+    // The history names the merge; the Z reports say so.
+    const rows = db.listShifts(10, 0)
+    expect(rows.find((row) => row.id === a)?.merged_into).toBe(b)
+    expect(rows.find((row) => row.id === b)?.merged_into).toBeNull()
+    const report = generateZReport(db, a, 0.16)
+    expect(report.mergedInto).toMatchObject({ shiftId: b, reason: 'Opened twice by mistake', at: new Date(at).toISOString() })
+    expect(report.orderCount).toBe(0)
+    expect(generateZReport(db, b, 0.16).orderCount).toBe(3)
+  })
+
+  it('refuses itself, a missing shift, different windows, an open absorbed shift, a merged shift and a blank reason, and writes nothing', () => {
+    const { db, a, b } = twoNightShifts()
+    const open = insertShift(db, { clockIn: '2026-10-05T22:00:00', clockOut: null, type: 'night' })
+    const day = insertShift(db, { clockIn: '2026-10-05T10:00:00', clockOut: '2026-10-05T12:00:00', endingCash: 0, type: 'day' })
+    const before = snapshot(db)
+
+    expect(db.previewShiftMerge(a, a).problem).toMatch(/into itself/)
+    expect(db.previewShiftMerge(a, 999).problem).toMatch(/#999 does not exist/)
+    expect(db.previewShiftMerge(999, b).problem).toMatch(/#999 does not exist/)
+    expect(db.previewShiftMerge(open, b).problem).toMatch(/still open/)
+    expect(db.previewShiftMerge(day, b).problem).toMatch(/different windows/)
+    expect(() => db.mergeShifts({ absorbedShiftId: day, intoShiftId: b, managerId: 7, reason: 'x' })).toThrow(/different windows/)
+    expect(() => db.mergeShifts({ absorbedShiftId: a, intoShiftId: b, managerId: 7, reason: '   ' })).toThrow(/reason/)
+    expect(snapshot(db)).toEqual(before)
+    expect(merges(db)).toBe(0)
+
+    db.mergeShifts({ absorbedShiftId: a, intoShiftId: b, managerId: 7, reason: 'once' })
+    expect(db.previewShiftMerge(a, b).problem).toMatch(/already merged/)
+    expect(db.previewShiftMerge(b, a).problem).toMatch(/was merged into another shift/)
+    expect(() => db.mergeShifts({ absorbedShiftId: a, intoShiftId: b, managerId: 7, reason: 'twice' })).toThrow(/already merged/)
+    expect(merges(db)).toBe(1)
+  })
+
+  it('the merge table is append-only', () => {
+    const { db, a, b } = twoNightShifts()
+    db.mergeShifts({ absorbedShiftId: a, intoShiftId: b, managerId: 7, reason: 'once' })
+
+    expect(() => conn(db).prepare('UPDATE shift_merges SET reason = ? WHERE absorbed_shift_id = ?').run('x', a)).toThrow(/append-only/)
+    expect(() => conn(db).prepare('DELETE FROM shift_merges WHERE absorbed_shift_id = ?').run(a)).toThrow(/append-only/)
+  })
+
+  it('a shift with no sales can still be merged: the record says 0 sales', () => {
+    const db = freshDb()
+    const a = insertShift(db, { clockIn: '2026-10-05T17:43:00', clockOut: '2026-10-05T17:44:00', endingCash: 0, type: 'night' })
+    const b = insertShift(db, { clockIn: '2026-10-05T20:50:00', clockOut: '2026-10-06T06:59:00', endingCash: 0, type: 'night' })
+
+    expect(db.mergeShifts({ absorbedShiftId: a, intoShiftId: b, managerId: 7, reason: 'empty' }).salesCount).toBe(0)
+    expect(db.getShiftMerge(a)?.sales_count).toBe(0)
+    expect(adjustments(db, b)[0]).toMatchObject({ kind: 'reassign_in', sales_count: 0 })
+  })
+
+  it('the merged line is the same on paper and on screen, and absent for every other shift', () => {
+    const { db, a, b } = twoNightShifts()
+    db.mergeShifts({ absorbedShiftId: a, intoShiftId: b, managerId: 7, reason: 'Opened twice' }, ms('2026-10-06T10:00:00'))
+    const when = (iso: string): string => iso
+    const absorbed = generateZReport(db, a, 0.16)
+    const survivor = generateZReport(db, b, 0.16)
+
+    const line = zReportMergedLine(absorbed, when)
+    expect(line).toBe(`Merged into shift #${b} on ${absorbed.mergedInto?.at} by Unknown: Opened twice. Its sales are counted there now.`)
+    expect(rendererMerged(absorbed, when)).toBe(line)
+    expect(zReportMergedLine(survivor, when)).toBeNull()
+    expect(rendererMerged(survivor, when)).toBeNull()
+
+    const lines: string[] = []
+    const noop = (): void => {}
+    renderZReport(
+      {
+        alignCenter: noop,
+        alignLeft: noop,
+        alignRight: noop,
+        bold: noop,
+        setTextNormal: noop,
+        setTextQuadArea: noop,
+        println: (text: string) => lines.push(text),
+        drawLine: () => lines.push('---'),
+        printQR: noop,
+        cut: noop,
+        execute: async () => undefined
+      } as unknown as ThermalPrinterLike,
+      absorbed,
+      { interfaceName: 'tcp://x', storeName: 'RUBIS', taxRate: 0.16 } as PrinterSettings
+    )
+    expect(lines.some((text) => text.startsWith(`Merged into shift #${b} on `))).toBe(true)
+  })
+
+  it('the handler re-verifies the admin PIN and the preview is a plain read', () => {
+    const source = readFileSync(join(process.cwd(), 'src', 'main', 'index.ts'), 'utf8')
+    const body = (channel: string): string => {
+      const start = source.indexOf(`'${channel}',`)
+      return source.slice(start, source.indexOf('ipcMain.handle(', start))
+    }
+    expect(body('shifts:merge')).toMatch(/requireAdminPin\(db, validation\.data\.managerId, validation\.data\.managerPin\)[\s\S]*db\.mergeShifts\(/)
+    expect(body('shifts:merge-preview')).toContain('db.previewShiftMerge(')
+    expect(body('shifts:merge-preview')).not.toContain('mergeShifts(')
   })
 })

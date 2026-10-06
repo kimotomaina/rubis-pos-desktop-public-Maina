@@ -118,6 +118,8 @@ export interface ZReport {
    * more or fewer sales (docs/phase-232).
    */
   salesAtClose?: { orderCount: number; totalRevenue: number; cash: number; mpesa: number; card: number }
+  /** Set when this shift was merged into another (docs/phase-239): its sales are there now; its figures here are history. */
+  mergedInto?: { shiftId: number; at: string; byName: string; reason: string }
 }
 
 /** One adjustment as the Z report shows it (docs/phase-232). */
@@ -387,6 +389,7 @@ export function generateZReport(
     shiftWindowLabel: shownType ? shiftWindowLabel(shownType) : null,
     ...(windowed.labelled_as ? { labelledAs: windowed.labelled_as } : {}),
     ...(shift.staff_id === 0 ? { createdAutomatically: true } : {}),
+    ...mergedIntoField(db, shiftId),
     ...adjustmentFields(db, shiftId, orders),
     ...mpesaBalanceFields(shift, totalsByMethod.mpesa),
     kind: shift.kind ?? 'normal',
@@ -410,6 +413,26 @@ export function generateZReport(
       mpesaExpected: row.mpesa_expected,
       mpesaDifference: row.mpesa_difference
     }))
+  }
+}
+
+/**
+ * The merge record of a shift absorbed by another (docs/phase-239), for its Z report. Empty for every other shift.
+ *
+ * @param {RubisDatabase} db
+ * @param {number} shiftId
+ * @returns {Pick<ZReport, 'mergedInto'>}
+ */
+function mergedIntoField(db: RubisDatabase, shiftId: number): Pick<ZReport, 'mergedInto'> {
+  const merge = db.getShiftMerge(shiftId)
+  if (!merge) return {}
+  return {
+    mergedInto: {
+      shiftId: merge.into_shift_id,
+      at: merge.at,
+      byName: db.getStaffById(merge.by_staff_id)?.name ?? 'Unknown',
+      reason: merge.reason
+    }
   }
 }
 

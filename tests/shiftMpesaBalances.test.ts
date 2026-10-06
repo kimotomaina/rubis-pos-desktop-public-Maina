@@ -246,6 +246,7 @@ const dbFor = (shift: ShiftRow, orders: OrderRow[] = []): RubisDatabase =>
     getOrdersForShift: vi.fn(() => orders),
     getMpesaPaymentsForShift: vi.fn(() => []),
     listShiftCorrections: vi.fn(() => []), // ADDED (docs/phase-224)
+    getShiftMerge: () => undefined, // ADDED (docs/phase-239): the Z report reads whether the shift was merged
     listShiftAdjustments: vi.fn(() => []), // ADDED (docs/phase-232): the Z report reads the shift's adjustments
     listAdjustmentSales: vi.fn(() => []), // ADDED (docs/phase-232)
   }) as unknown as RubisDatabase

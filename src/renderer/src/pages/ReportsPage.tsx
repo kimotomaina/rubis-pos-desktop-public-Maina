@@ -14,6 +14,7 @@ import { formatVatRateLabel } from '../lib/vatLabel.js'
 import { paginate } from '../lib/paginate.js'
 import ZReportModal from '../components/ZReportModal.js'
 import MoveSaleForm from '../components/MoveSaleForm.js'
+import MergeShiftsForm from '../components/MergeShiftsForm.js'
 import WindowReportModal from '../components/WindowReportModal.js'
 import BackButton from '../components/BackButton.js'
 import SectionCardGrid, { type SectionCard } from '../components/SectionCardGrid.js'
@@ -137,6 +138,9 @@ function ShiftHistoryView({ staffName }: { staffName: (id: number) => string }) 
   const [openError, setOpenError] = useState<string | null>(null)
   const [windowReport, setWindowReport] = useState<{ type: ShiftType; startDate: string } | null>(null)
   const [moving, setMoving] = useState(false)
+  // docs/phase-239: the row actions. `merging` holds the shift being absorbed; `openCorrecting` opens the Z report on its form.
+  const [merging, setMerging] = useState<ShiftRow | null>(null)
+  const [openCorrecting, setOpenCorrecting] = useState(false)
   const [notice, setNotice] = useState<string | null>(null)
   const [reloadKey, setReloadKey] = useState(0)
 
@@ -166,8 +170,9 @@ function ShiftHistoryView({ staffName }: { staffName: (id: number) => string }) 
     }
   }, [page, reloadKey])
 
-  const openShift = async (shiftId: number): Promise<void> => {
+  const openShift = async (shiftId: number, correcting = false): Promise<void> => {
     setOpenError(null)
+    setOpenCorrecting(correcting)
     const result = await window.api.getZReport(shiftId)
     if (result.success && result.data) {
       setOpenReport(result.data)
@@ -177,6 +182,22 @@ function ShiftHistoryView({ staffName }: { staffName: (id: number) => string }) 
   }
 
   const pageCount = Math.max(1, Math.ceil((data?.total ?? 0) / REPORTS_PAGE_SIZE))
+
+  if (merging) {
+    return (
+      <section className="rounded-xl border border-slate-200 bg-white p-4">
+        <MergeShiftsForm
+          shift={merging}
+          onCancel={() => setMerging(null)}
+          onMerged={(message) => {
+            setMerging(null)
+            setNotice(message)
+            setReloadKey((key) => key + 1)
+          }}
+        />
+      </section>
+    )
+  }
 
   if (moving) {
     return (
@@ -234,6 +255,7 @@ function ShiftHistoryView({ staffName }: { staffName: (id: number) => string }) 
                   <th className="py-2">Closed</th>
                   <th className="py-2">Cashier</th>
                   <th className="py-2">Status</th>
+                  <th className="py-2">Actions</th>
                 </tr>
               </thead>
               <tbody>
@@ -281,6 +303,11 @@ function ShiftHistoryView({ staffName }: { staffName: (id: number) => string }) 
                           Cash not counted
                         </span>
                       )}
+                      {shift.merged_into != null && (
+                        <span className="ml-2 rounded-full bg-amber-100 px-2 py-1 text-sm font-medium text-amber-800">
+                          Merged into #{shift.merged_into}
+                        </span>
+                      )}
                       {(shift.window_shift_count ?? 1) > 1 && shift.window_type && shift.window_date && (
                         <button
                           type="button"
@@ -294,6 +321,46 @@ function ShiftHistoryView({ staffName }: { staffName: (id: number) => string }) 
                         </button>
                       )}
                     </td>
+                    {/* docs/phase-239: the actions of one shift. A merged shift is history: its Z report opens, nothing else. */}
+                    <td className="py-2">
+                      <div className="flex flex-wrap gap-1">
+                        <button
+                          type="button"
+                          onClick={(event) => {
+                            event.stopPropagation()
+                            void openShift(shift.id)
+                          }}
+                          className="h-9 rounded-lg border border-slate-300 px-3 text-sm font-medium text-slate-600 hover:bg-slate-50"
+                        >
+                          Z report
+                        </button>
+                        {shift.status === 'closed' && shift.merged_into == null && (
+                          <button
+                            type="button"
+                            onClick={(event) => {
+                              event.stopPropagation()
+                              void openShift(shift.id, true)
+                            }}
+                            className="h-9 rounded-lg border border-slate-300 px-3 text-sm font-medium text-slate-600 hover:bg-slate-50"
+                          >
+                            Correct figures
+                          </button>
+                        )}
+                        {shift.status === 'closed' && shift.merged_into == null && (shift.window_shift_count ?? 1) > 1 && (
+                          <button
+                            type="button"
+                            onClick={(event) => {
+                              event.stopPropagation()
+                              setNotice(null)
+                              setMerging(shift)
+                            }}
+                            className="h-9 rounded-lg border border-amber-300 px-3 text-sm font-medium text-amber-800 hover:bg-amber-50"
+                          >
+                            Merge into…
+                          </button>
+                        )}
+                      </div>
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -302,7 +369,17 @@ function ShiftHistoryView({ staffName }: { staffName: (id: number) => string }) 
           <Pager page={page} pageCount={pageCount} onChange={setPage} />
         </>
       )}
-      {openReport && <ZReportModal report={openReport} onClose={() => setOpenReport(null)} />}
+      {openReport && (
+        <ZReportModal
+          report={openReport}
+          startCorrecting={openCorrecting}
+          onClose={() => {
+            setOpenReport(null)
+            setOpenCorrecting(false)
+            setReloadKey((key) => key + 1)
+          }}
+        />
+      )}
       {windowReport && (
         <WindowReportModal
           type={windowReport.type}

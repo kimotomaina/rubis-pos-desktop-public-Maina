@@ -97,6 +97,7 @@ import type {
   StaffSummary,
   AutoAssignResult,
   SaleMovePreview,
+  ShiftMergePreview,
   ShiftCorrectionRow,
   ShiftCloseResult,
   ShiftRow,
@@ -194,6 +195,8 @@ import {
   moveSalePreviewSchema,
   windowReportSchema,
   moveSaleSchema,
+  mergeShiftsPreviewSchema,
+  mergeShiftsSchema,
   shiftCorrectionSchema,
   salesSummarySchema,
   fiscalByDaySchema,
@@ -3555,6 +3558,54 @@ app.whenReady().then(async () => {
         }
       } catch (err) {
         return { success: false, error: err instanceof Error ? err.message : 'Failed to move this sale' }
+      }
+    }
+  )
+
+  /**
+   * IPC handlers for merging one shift into another of the same window (docs/phase-239). The preview is a read. The
+   * merge is admin-gated with a PIN re-verified here, and the admin recorded is the one the PIN belongs to. Nothing is
+   * queued for Shopify or the tax device.
+   */
+  ipcMain.handle(
+    'shifts:merge-preview',
+    (_event, request: unknown): ServiceResult<ShiftMergePreview> => {
+      const validation = validate(mergeShiftsPreviewSchema, request)
+      if (!validation.success) {
+        return { success: false, error: validation.error }
+      }
+      try {
+        return { success: true, data: db.previewShiftMerge(validation.data.absorbedShiftId, validation.data.intoShiftId) }
+      } catch (err) {
+        return { success: false, error: err instanceof Error ? err.message : 'Failed to preview this merge' }
+      }
+    }
+  )
+
+  ipcMain.handle(
+    'shifts:merge',
+    (_event, request: unknown): ServiceResult<{ absorbedShiftId: number; intoShiftId: number; salesCount: number }> => {
+      const validation = validate(mergeShiftsSchema, request)
+      if (!validation.success) {
+        return { success: false, error: validation.error }
+      }
+      const authz = requireAdminPin(db, validation.data.managerId, validation.data.managerPin)
+      if (!authz.success) {
+        return { success: false, error: authz.error }
+      }
+      try {
+        const data = validation.data
+        return {
+          success: true,
+          data: db.mergeShifts({
+            absorbedShiftId: data.absorbedShiftId,
+            intoShiftId: data.intoShiftId,
+            managerId: data.managerId,
+            reason: data.reason
+          })
+        }
+      } catch (err) {
+        return { success: false, error: err instanceof Error ? err.message : 'Failed to merge these shifts' }
       }
     }
   )

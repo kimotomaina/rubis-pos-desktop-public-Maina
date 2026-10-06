@@ -367,6 +367,39 @@ export interface ShiftRow {
   labelled_as?: ShiftType
   /** How many shifts hold this shift's window (docs/phase-232); more than 1 only for older data. */
   window_shift_count?: number
+  /** The shift this one was merged into (docs/phase-239), read from `shift_merges`; absent otherwise. */
+  merged_into?: number | null
+}
+
+/** Row shape of the `shift_merges` table (docs/phase-239): one append-only record of a shift absorbed by another. */
+export interface ShiftMergeRow {
+  id: number
+  absorbed_shift_id: number
+  into_shift_id: number
+  by_staff_id: number
+  at: string
+  reason: string
+  sales_count: number
+}
+
+/** What merging one shift into another needs (docs/phase-239); the caller has already checked the admin's PIN. */
+export interface MergeShiftsInput {
+  absorbedShiftId: number
+  intoShiftId: number
+  managerId: number
+  reason: string
+}
+
+/** What a merge would do, before anything is written (docs/phase-239). */
+export interface ShiftMergePreview {
+  absorbedShiftId: number
+  intoShiftId: number
+  salesCount: number
+  salesTotal: number
+  /** The surviving shift's figures afterwards; `null` when it is open or its cash was not counted. */
+  into: ShiftWorkedFigures | null
+  /** Why the merge is refused, or `null` when it may go ahead. */
+  problem: string | null
 }
 
 /** How a shift came to exist: opened and closed at the till, or recorded afterwards by a manager. */
@@ -1187,6 +1220,24 @@ export const SCHEMA = {
   )`,
   shiftAdjustmentSalesNoUpdate: `CREATE TRIGGER IF NOT EXISTS shift_adjustment_sales_no_update BEFORE UPDATE ON shift_adjustment_sales
     BEGIN SELECT RAISE(ABORT, 'shift_adjustment_sales is append-only'); END`,
+  /**
+   * One shift absorbed by another in the same window (docs/phase-239). The sales moved through the adjustments ledger
+   * above; this row says the absorbed shift is spent. Append-only, like the ledgers, and a shift can be absorbed once.
+   * `shifts` is never touched: the absorbed shift's own figures stay as history.
+   */
+  shiftMerges: `CREATE TABLE IF NOT EXISTS shift_merges (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    absorbed_shift_id INTEGER NOT NULL UNIQUE REFERENCES shifts(id),
+    into_shift_id INTEGER NOT NULL REFERENCES shifts(id),
+    by_staff_id INTEGER NOT NULL,
+    at TEXT NOT NULL,
+    reason TEXT NOT NULL,
+    sales_count INTEGER NOT NULL
+  )`,
+  shiftMergesNoUpdate: `CREATE TRIGGER IF NOT EXISTS shift_merges_no_update BEFORE UPDATE ON shift_merges
+    BEGIN SELECT RAISE(ABORT, 'shift_merges is append-only'); END`,
+  shiftMergesNoDelete: `CREATE TRIGGER IF NOT EXISTS shift_merges_no_delete BEFORE DELETE ON shift_merges
+    BEGIN SELECT RAISE(ABORT, 'shift_merges is append-only'); END`,
   shiftAdjustmentSalesNoDelete: `CREATE TRIGGER IF NOT EXISTS shift_adjustment_sales_no_delete BEFORE DELETE ON shift_adjustment_sales
     BEGIN SELECT RAISE(ABORT, 'shift_adjustment_sales is append-only'); END`,
   integrations: `CREATE TABLE IF NOT EXISTS integrations (
@@ -2006,6 +2057,9 @@ export class RubisDatabase {
     connection.exec(SCHEMA.shiftAdjustmentSales)
     connection.exec(SCHEMA.shiftAdjustmentSalesNoUpdate)
     connection.exec(SCHEMA.shiftAdjustmentSalesNoDelete)
+    connection.exec(SCHEMA.shiftMerges)
+    connection.exec(SCHEMA.shiftMergesNoUpdate)
+    connection.exec(SCHEMA.shiftMergesNoDelete)
     connection.exec(SCHEMA.integrations)
     connection.exec(SCHEMA.printers)
     migratePrintersColumns(connection)
@@ -3864,8 +3918,13 @@ export class RubisDatabase {
    * @returns {ShiftRow[]}
    */
   listShifts(limit: number, offset: number): ShiftRow[] {
+    // docs/phase-239: `merged_into` names the shift this one was absorbed by, so the history can say so.
     return this.conn
-      .prepare('SELECT * FROM shifts ORDER BY id DESC LIMIT ? OFFSET ?')
+      .prepare(
+        `SELECT s.*, m.into_shift_id AS merged_into FROM shifts s
+         LEFT JOIN shift_merges m ON m.absorbed_shift_id = s.id
+         ORDER BY s.id DESC LIMIT ? OFFSET ?`
+      )
       .all(limit, offset) as ShiftRow[]
   }
 
@@ -4510,6 +4569,122 @@ export class RubisDatabase {
         })
       }
       return { fromShiftId, toShiftId: input.toShiftId }
+    }).immediate()
+  }
+
+  /**
+   * The merge record of a shift that was absorbed by another (docs/phase-239).
+   *
+   * @param {number} absorbedShiftId
+   * @returns {ShiftMergeRow | undefined}
+   */
+  getShiftMerge(absorbedShiftId: number): ShiftMergeRow | undefined {
+    return this.conn.prepare('SELECT * FROM shift_merges WHERE absorbed_shift_id = ?').get(absorbedShiftId) as
+      | ShiftMergeRow
+      | undefined
+  }
+
+  /**
+   * What merging one shift into another would do (docs/phase-239), and why it may not: the two must exist and differ,
+   * neither may have been merged already, the absorbed one must be closed, and both must lie in the same window. A read.
+   *
+   * @param {number} absorbedShiftId
+   * @param {number} intoShiftId
+   * @returns {ShiftMergePreview}
+   */
+  previewShiftMerge(absorbedShiftId: number, intoShiftId: number): ShiftMergePreview {
+    const absorbed = this.getShiftById(absorbedShiftId)
+    const into = this.getShiftById(intoShiftId)
+    const sales = absorbed
+      ? this.getOrdersForShift(absorbedShiftId).filter((order) => order.status !== 'voided')
+      : []
+    const base = {
+      absorbedShiftId,
+      intoShiftId,
+      salesCount: sales.length,
+      salesTotal: sales.reduce((sum, order) => sum + order.total, 0),
+      into: null
+    }
+    const refuse = (problem: string): ShiftMergePreview => ({ ...base, problem })
+    if (!absorbed) return refuse(`Shift #${absorbedShiftId} does not exist`)
+    if (!into) return refuse(`Shift #${intoShiftId} does not exist`)
+    if (absorbedShiftId === intoShiftId) return refuse('A shift cannot be merged into itself')
+    if (this.getShiftMerge(absorbedShiftId)) return refuse(`Shift #${absorbedShiftId} was already merged`)
+    if (this.getShiftMerge(intoShiftId)) return refuse(`Shift #${intoShiftId} was merged into another shift; merge into that one`)
+    if (absorbed.status !== 'closed') return refuse(`Shift #${absorbedShiftId} is still open. Close it first`)
+    try {
+      if (!sameWindow(shiftWindowOf(absorbed.clock_in), shiftWindowOf(into.clock_in))) {
+        return refuse('The two shifts are in different windows. Only shifts of one window can be merged')
+      }
+    } catch {
+      return refuse('The time of one of the shifts cannot be read')
+    }
+    const totalFor = (method: string): number =>
+      sales.filter((order) => order.payment_method === method).reduce((sum, order) => sum + order.total, 0)
+    const worked = this.workedFiguresNow(into, totalFor('cash'), totalFor('mpesa'))
+    return {
+      ...base,
+      into: worked && { expectedCash: worked.expectedCash, discrepancy: worked.discrepancy, mpesaExpected: worked.mpesaExpected, mpesaDifference: worked.mpesaDifference },
+      problem: null
+    }
+  }
+
+  /**
+   * Merges one shift into another in the same window (docs/phase-239). One write transaction: every sale of the
+   * absorbed shift moves to the surviving one through the same guarded `UPDATE` a single move uses, one adjustment
+   * record goes on each shift naming the other, and one `shift_merges` row says the absorbed shift is spent. The
+   * surviving shift keeps its own float and count and its figures recalculate from all the sales; the absorbed
+   * shift's row is never touched. No undo: a sale can be moved back with `reassignSale`. The caller has already
+   * checked the admin's PIN.
+   *
+   * @param {MergeShiftsInput} input
+   * @param {number} [nowMs]
+   * @returns {{ absorbedShiftId: number; intoShiftId: number; salesCount: number }}
+   * @throws {Error} with a message fit to show the admin; nothing is written when it throws
+   */
+  mergeShifts(input: MergeShiftsInput, nowMs: number = Date.now()): { absorbedShiftId: number; intoShiftId: number; salesCount: number } {
+    const reason = input.reason.trim()
+    if (reason === '') {
+      throw new Error('A reason is required to merge shifts')
+    }
+    return this.conn.transaction((): { absorbedShiftId: number; intoShiftId: number; salesCount: number } => {
+      const preview = this.previewShiftMerge(input.absorbedShiftId, input.intoShiftId)
+      if (preview.problem !== null) {
+        throw new Error(preview.problem)
+      }
+      const orderIds = this.getOrdersForShift(input.absorbedShiftId)
+        .filter((order) => order.status !== 'voided')
+        .map((order) => order.local_id)
+      const move = this.conn.prepare(
+        "UPDATE orders SET shift_id = ? WHERE local_id = ? AND shift_id = ? AND status <> 'voided'"
+      )
+      for (const orderId of orderIds) {
+        if (move.run(input.intoShiftId, orderId, input.absorbedShiftId).changes !== 1) {
+          throw new Error(`Order #${orderId} could not be moved: it changed while this was being done`)
+        }
+      }
+      const mergeReason = `Merged shift #${input.absorbedShiftId} into shift #${input.intoShiftId}: ${reason}`
+      for (const [shiftId, kind, peerShiftId] of [
+        [input.absorbedShiftId, 'reassign_out', input.intoShiftId],
+        [input.intoShiftId, 'reassign_in', input.absorbedShiftId]
+      ] as const) {
+        this.recordAdjustment({
+          shiftId,
+          kind,
+          nowMs,
+          byStaffId: input.managerId,
+          reason: mergeReason,
+          peerShiftId,
+          orderIds,
+          figures: this.workedFiguresNow(this.getShiftById(shiftId) as ShiftRow)
+        })
+      }
+      this.conn
+        .prepare(
+          'INSERT INTO shift_merges (absorbed_shift_id, into_shift_id, by_staff_id, at, reason, sales_count) VALUES (?, ?, ?, ?, ?, ?)'
+        )
+        .run(input.absorbedShiftId, input.intoShiftId, input.managerId, new Date(nowMs).toISOString(), reason, orderIds.length)
+      return { absorbedShiftId: input.absorbedShiftId, intoShiftId: input.intoShiftId, salesCount: orderIds.length }
     }).immediate()
   }
 

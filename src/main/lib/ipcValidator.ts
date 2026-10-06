@@ -582,6 +582,22 @@ export const moveSaleSchema = managerAuthzSchema.extend({
   acknowledgeDifferentWindow: z.boolean().optional()
 })
 
+/** `shifts:merge-preview` request payload (docs/phase-239). A read. */
+export const mergeShiftsPreviewSchema = z.object({
+  absorbedShiftId: z.number().int().positive(),
+  intoShiftId: z.number().int().positive()
+})
+
+/**
+ * `shifts:merge` request payload (docs/phase-239). Admin-gated with a PIN re-verified in the main process, like
+ * `shifts:move-sale`; the reason is required.
+ */
+export const mergeShiftsSchema = managerAuthzSchema.extend({
+  absorbedShiftId: z.number().int().positive(),
+  intoShiftId: z.number().int().positive(),
+  reason: z.string().trim().min(1, 'A reason is required').max(300, 'Keep the reason under 300 characters')
+})
+
 /**
  * `shifts:correct` request payload (docs/phase-224). Manager-gated. The four figures are the whole set the manager
  * confirms (what they now should be, not what to add), so the request is the same shape whichever one was wrong;

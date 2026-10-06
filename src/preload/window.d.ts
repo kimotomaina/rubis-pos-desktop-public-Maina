@@ -15,6 +15,7 @@ import type { ShiftWindowStatus } from '../main/services/shift-window-status.js'
 import type { WindowReport } from '../main/services/window-report.js'
 import type { ShiftCorrectionRequest } from '../main/services/shift-corrections.js'
 import type { MoveSaleRequest } from '../main/services/sale-moves.js'
+import type { MergeShiftsRequest } from '../main/services/shift-merges.js'
 import type { ServiceResult } from '../main/services/shopify-types.js'
 import type { FiscalConnectionTestResult } from '../main/services/integrations/fiscal-connection-test.js'
 import type {
@@ -37,6 +38,7 @@ import type {
   AutoAssignResult,
   OpenShiftOptions,
   SaleMovePreview,
+  ShiftMergePreview,
   ShiftCorrectionRow,
   ShiftCloseResult,
   ShiftRow,
@@ -251,6 +253,10 @@ export interface PosApi {
   previewSaleMove: (orderId: number, toShiftId: number) => Promise<ServiceResult<SaleMovePreview>>
   /** Moves one sale to another shift (docs/phase-232). Admin PIN re-checked in the main process. */
   moveSale: (request: MoveSaleRequest) => Promise<ServiceResult<{ fromShiftId: number; toShiftId: number }>>
+  /** What merging one shift into another would do (docs/phase-239). Read-only. */
+  previewShiftMerge: (absorbedShiftId: number, intoShiftId: number) => Promise<ServiceResult<ShiftMergePreview>>
+  /** Merges one closed shift into another of the same window (docs/phase-239). Admin PIN re-checked in the main process; no undo. */
+  mergeShifts: (request: MergeShiftsRequest) => Promise<ServiceResult<{ absorbedShiftId: number; intoShiftId: number; salesCount: number }>>
   /** Appends a correction to a closed shift's typed-in figures (docs/phase-224). Manager PIN re-checked in the main process; the shift's own row is never changed. */
   correctShift: (request: ShiftCorrectionRequest) => Promise<ServiceResult<ShiftCorrectionRow>>
   /** Generates the Z-report for a shift. */

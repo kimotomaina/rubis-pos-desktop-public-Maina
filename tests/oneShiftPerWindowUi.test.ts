@@ -22,7 +22,7 @@ import WindowEndBanner, { shouldShowWindowEndBanner } from '../src/renderer/src/
 import { useKeyboardStore } from '../src/renderer/src/stores/keyboardStore.js'
 import { getShiftWindowStatus } from '../src/main/services/shift-window-status.js'
 import type { ZReport } from '../src/main/services/reports.js'
-import type { SaleMovePreview, ShiftRow } from '../src/main/services/database.js'
+import type { SaleMovePreview, ShiftMergePreview, ShiftRow } from '../src/main/services/database.js'
 
 vi.mock('../src/renderer/src/components/ManagerPinModal.js', () => ({
   default: ({ onAuthorized }: { onAuthorized: (id: number, pin: string) => void }) =>
@@ -427,5 +427,152 @@ describe('the cart window-end banner', () => {
 
     expect(source).toContain('{showWindowEndBanner && windowStatus && <WindowEndBanner status={windowStatus} />}')
     expect(source).toContain('(shouldShowNoShiftNotice(shiftPresence) || showWindowEndBanner ? 1 : 0)')
+  })
+})
+
+describe('Shift History actions and merging (docs/phase-239)', () => {
+  const zReport = (overrides: Partial<ZReport> = {}): ZReport =>
+    ({
+      shiftId: 2,
+      staffName: 'manager mo',
+      openedAt: iso('2026-10-05T20:50:55'),
+      closedAt: iso('2026-10-06T06:59:00'),
+      status: 'closed',
+      startingCash: 500,
+      totalsByMethod: { cash: 400, mpesa: 0, card: 0 },
+      mpesaByMode: { manual: 0, daraja: 0 },
+      orderCount: 1,
+      totalRevenue: 400,
+      vatIncluded: 55.17,
+      vatRate: 0.16,
+      expectedCash: 900,
+      endingCash: 900,
+      discrepancy: 0,
+      ...overrides
+    }) as ZReport
+  const openHistory = async (): Promise<void> => {
+    await act(async () => {
+      root.render(createElement(ReportsPage))
+      await Promise.resolve()
+    })
+    await click('Shift History')
+    await flush()
+  }
+  const buttons = (label: string): HTMLButtonElement[] =>
+    Array.from(container.querySelectorAll('button')).filter((b) => b.textContent === label) as HTMLButtonElement[]
+
+  it('offers Correct figures on a closed shift, Merge into… only where the window has two shifts, and nothing on a merged shift', async () => {
+    stubApi({
+      getShiftsList: vi.fn().mockResolvedValue(
+        ok({
+          shifts: [
+            shiftRow({ id: 9, status: 'open', clock_out: null, window_shift_count: 1, window_date: '2026-10-04', labelled_as: undefined, shift_type: 'night' }),
+            shiftRow({ id: 2, window_shift_count: 2 }),
+            shiftRow({ id: 1, window_shift_count: 2, merged_into: 2 })
+          ],
+          total: 3,
+          page: 1
+        })
+      ),
+      getZReport: vi.fn().mockResolvedValue(ok(zReport()))
+    })
+    await openHistory()
+
+    expect(buttons('Z report')).toHaveLength(3)
+    expect(buttons('Correct figures')).toHaveLength(1)
+    expect(buttons('Merge into…')).toHaveLength(1)
+    expect(container.textContent).toContain('Merged into #2')
+
+    await click('Correct figures')
+    await flush()
+
+    expect(window.api.getZReport).toHaveBeenCalledWith(2)
+    expect(container.textContent).toContain('Correct the figures of shift #2')
+  })
+
+  it('Merge into… lists the window\'s other shifts, previews the merge, and merges with a reason and the admin\'s PIN', async () => {
+    const preview: ShiftMergePreview = {
+      absorbedShiftId: 1,
+      intoShiftId: 2,
+      salesCount: 2,
+      salesTotal: 500,
+      into: { expectedCash: 1200, discrepancy: -300, mpesaExpected: null, mpesaDifference: null },
+      problem: null
+    }
+    const windowReport = {
+      window: { type: 'night', startDate: '2026-10-05', name: 'Night shift, 5 Oct 2026' },
+      shifts: [
+        { report: zReport({ shiftId: 1, orderCount: 2 }), difference: 500 },
+        { report: zReport({ shiftId: 2, status: 'open', closedAt: null }), difference: null }
+      ],
+      totals: { orderCount: 3, totalRevenue: 900, vatIncluded: 0, byMethod: { cash: 800, mpesa: 100, card: 0 }, differenceSum: 500, notCountedShifts: 1 }
+    }
+    stubApi({
+      getShiftsList: vi.fn().mockResolvedValue(
+        ok({ shifts: [shiftRow({ id: 2, status: 'open', clock_out: null, window_shift_count: 2 }), shiftRow({ id: 1, window_shift_count: 2 })], total: 2, page: 1 })
+      ),
+      getWindowReport: vi.fn().mockResolvedValue(ok(windowReport)),
+      previewShiftMerge: vi.fn().mockResolvedValue(ok(preview)),
+      mergeShifts: vi.fn().mockResolvedValue(ok({ absorbedShiftId: 1, intoShiftId: 2, salesCount: 2 }))
+    })
+    await openHistory()
+    expect(buttons('Merge into…')).toHaveLength(1) // only the closed shift #1
+
+    await click('Merge into…')
+    await flush()
+
+    expect(container.textContent).toContain('Merge shift #1 into another shift')
+    expect(window.api.getWindowReport).toHaveBeenCalledWith('night', '2026-10-05')
+    expect(container.textContent).toContain('Shift #2 · open · 1 order')
+    expect(container.textContent).not.toContain('Shift #1 · ')
+
+    await click('Shift #2 · open')
+    await flush()
+    expect(window.api.previewShiftMerge).toHaveBeenCalledWith(1, 2)
+    const text = plain(container.querySelector('[data-testid="merge-preview"]')?.textContent)
+    expect(text).toContain('2 sales (Ksh 500.00) move from shift #1 to shift #2')
+    expect(text).toContain('Expected cash: Ksh 1,200.00')
+    expect(text).toContain('Difference: -Ksh 300.00')
+    expect(window.api.mergeShifts).not.toHaveBeenCalled()
+
+    await click('Merge shifts')
+    expect(container.textContent).toContain('Say why these shifts are being merged')
+    typeInto('Reason', 'Opened twice by mistake')
+    await click('Merge shifts')
+    await click('Authorize as admin')
+    await flush()
+
+    expect(window.api.mergeShifts).toHaveBeenCalledWith({ managerId: 2, managerPin: '1234', absorbedShiftId: 1, intoShiftId: 2, reason: 'Opened twice by mistake' })
+    expect(container.textContent).toContain('Shift #1 merged into shift #2: 2 sales moved.')
+  })
+
+  it('the Z report of a merged shift says so and offers no Correct figures', async () => {
+    stubApi()
+    const merged = zReport({
+      shiftId: 1,
+      orderCount: 0,
+      totalRevenue: 0,
+      mergedInto: { shiftId: 2, at: iso('2026-10-06T10:00:00'), byName: 'manager mo', reason: 'Opened twice' }
+    })
+    await act(async () => {
+      root.render(createElement(ZReportModal, { report: merged, onClose: vi.fn(), startCorrecting: true }))
+      await Promise.resolve()
+    })
+
+    const banner = plain(container.querySelector('[data-testid="merged-into"]')?.textContent)
+    expect(banner).toContain('Merged into shift #2 on ')
+    expect(banner).toContain('by manager mo: Opened twice. Its sales are counted there now.')
+    expect(buttons('Correct figures')).toHaveLength(0)
+    expect(container.textContent).not.toContain('Correct the figures of shift #1')
+  })
+
+  it('startCorrecting opens an ordinary closed shift\'s Z report with the correction form showing', async () => {
+    stubApi()
+    await act(async () => {
+      root.render(createElement(ZReportModal, { report: zReport(), onClose: vi.fn(), startCorrecting: true }))
+      await Promise.resolve()
+    })
+
+    expect(container.textContent).toContain('Correct the figures of shift #2')
   })
 })

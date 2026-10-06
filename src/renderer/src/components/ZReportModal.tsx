@@ -5,7 +5,7 @@ import { zReportMpesaLines } from '../lib/zReportMpesa.js'
 import { zReportRetroLines } from '../lib/zReportRetro.js'
 import { zReportCorrectionBlocks } from '../lib/zReportCorrections.js'
 import ShiftCorrectionForm from './ShiftCorrectionForm.js'
-import { zReportAdjustmentBlocks, zReportLabelledLine, zReportSalesAtCloseLine } from '../lib/zReportAdjustments.js'
+import { zReportAdjustmentBlocks, zReportLabelledLine, zReportMergedLine, zReportSalesAtCloseLine } from '../lib/zReportAdjustments.js'
 import { titleCaseName } from '../lib/text.js'
 import { formatVatRateLabel } from '../lib/vatLabel.js'
 import { CloseIcon } from './icons.js'
@@ -13,6 +13,8 @@ import { CloseIcon } from './icons.js'
 interface ZReportModalProps {
   report: ZReport
   onClose: () => void
+  /** Opens with the correction form already showing (docs/phase-239: the "Correct figures" action on Shift History). */
+  startCorrecting?: boolean
 }
 
 /**
@@ -31,10 +33,10 @@ interface ZReportModalProps {
  * @param {ZReportModalProps} props
  * @returns {JSX.Element}
  */
-export default function ZReportModal({ report: initialReport, onClose }: ZReportModalProps) {
+export default function ZReportModal({ report: initialReport, onClose, startCorrecting = false }: ZReportModalProps) {
   // docs/phase-224: the report is re-read after a correction, so the modal holds the one it shows.
   const [report, setReport] = useState(initialReport)
-  const [correcting, setCorrecting] = useState(false)
+  const [correcting, setCorrecting] = useState(startCorrecting && initialReport.status === 'closed' && !initialReport.mergedInto)
   useEffect(() => setReport(initialReport), [initialReport])
 
   const [printStatus, setPrintStatus] = useState<
@@ -63,6 +65,8 @@ export default function ZReportModal({ report: initialReport, onClose }: ZReport
   const adjustments = zReportAdjustmentBlocks(report, formatCurrency, (iso) => new Date(iso).toLocaleString())
   const latestAdjustment = adjustments[adjustments.length - 1]
   const labelledLine = zReportLabelledLine(report)
+  // docs/phase-239: a shift merged into another says so; its figures are history and are not corrected here.
+  const mergedLine = zReportMergedLine(report, (iso) => new Date(iso).toLocaleString())
   const salesAtCloseLine = zReportSalesAtCloseLine(report, formatCurrency)
   const CORRECTION_SUMMARY = ['Counted Cash', 'Discrepancy', 'M-Pesa counted', 'Check against the M-Pesa statement']
 
@@ -123,6 +127,11 @@ export default function ZReportModal({ report: initialReport, onClose }: ZReport
               <p>Shift #{report.shiftId}</p>
               {report.shiftWindowLabel && <p>{report.shiftWindowLabel}</p>}
               {labelledLine && <p className="text-slate-500">{labelledLine}</p>}
+              {mergedLine && (
+                <p className="rounded-lg bg-amber-50 px-2 py-1 font-semibold text-amber-900" data-testid="merged-into">
+                  {mergedLine}
+                </p>
+              )}
               <p>Opened: {new Date(report.openedAt).toLocaleString()}</p>
               <p>
                 Closed:{' '}
@@ -271,7 +280,7 @@ export default function ZReportModal({ report: initialReport, onClose }: ZReport
               >
                 {printing ? 'Printing…' : 'Print Z-Report'}
               </button>
-              {report.status === 'closed' && (
+              {report.status === 'closed' && !report.mergedInto && (
                 <button
                   type="button"
                   onClick={() => setCorrecting(true)}

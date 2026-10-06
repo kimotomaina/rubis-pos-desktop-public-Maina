@@ -134,3 +134,14 @@ export function zReportLabelledLine(report: Pick<ZReport, 'labelledAs'>): string
   const label: ShiftType | null | undefined = report.labelledAs
   return label ? `Labelled ${label === 'day' ? 'Day' : 'Night'} when opened` : null
 }
+
+/**
+ * @param {ZReport} report
+ * @param {(iso: string) => string} formatDateTime
+ * @returns {string | null} for example `Merged into shift #2 on 6 Oct by Manager Mo: opened twice`; `null` when not merged (docs/phase-239)
+ */
+export function zReportMergedLine(report: Pick<ZReport, 'mergedInto'>, formatDateTime: (iso: string) => string): string | null {
+  const merge = report.mergedInto
+  if (!merge) return null
+  return `Merged into shift #${merge.shiftId} on ${formatDateTime(merge.at)} by ${merge.byName}: ${merge.reason}. Its sales are counted there now.`
+}

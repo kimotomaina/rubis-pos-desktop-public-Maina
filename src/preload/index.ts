@@ -6,6 +6,7 @@ import type { ShiftWindowStatus } from '../main/services/shift-window-status.js'
 import type { WindowReport } from '../main/services/window-report.js'
 import type { ShiftCorrectionRequest } from '../main/services/shift-corrections.js'
 import type { MoveSaleRequest } from '../main/services/sale-moves.js'
+import type { MergeShiftsRequest } from '../main/services/shift-merges.js'
 import type { ServiceResult } from '../main/services/shopify-types.js'
 import type {
   CartItem,
@@ -27,6 +28,7 @@ import type {
   AutoAssignResult,
   OpenShiftOptions,
   SaleMovePreview,
+  ShiftMergePreview,
   ShiftCorrectionRow,
   ShiftCloseResult,
   ShiftRow,
@@ -676,6 +678,28 @@ const api = {
    */
   moveSale: (request: MoveSaleRequest): Promise<ServiceResult<{ fromShiftId: number; toShiftId: number }>> =>
     ipcRenderer.invoke('shifts:move-sale', request),
+
+  /**
+   * What merging one shift into another would do (docs/phase-239). Read-only.
+   *
+   * @param {number} absorbedShiftId
+   * @param {number} intoShiftId
+   * @returns {Promise<ServiceResult<ShiftMergePreview>>}
+   */
+  previewShiftMerge: (absorbedShiftId: number, intoShiftId: number): Promise<ServiceResult<ShiftMergePreview>> =>
+    ipcRenderer.invoke('shifts:merge-preview', { absorbedShiftId, intoShiftId }),
+
+  /**
+   * Merges one closed shift into another of the same window (docs/phase-239). Admin-gated: the main process
+   * re-verifies the PIN. No undo.
+   *
+   * @param {MergeShiftsRequest} request
+   * @returns {Promise<ServiceResult<{ absorbedShiftId: number; intoShiftId: number; salesCount: number }>>}
+   */
+  mergeShifts: (
+    request: MergeShiftsRequest
+  ): Promise<ServiceResult<{ absorbedShiftId: number; intoShiftId: number; salesCount: number }>> =>
+    ipcRenderer.invoke('shifts:merge', request),
 
   /**
    * Appends a correction to a closed shift's typed-in figures (docs/phase-224). Manager-gated: the main process
