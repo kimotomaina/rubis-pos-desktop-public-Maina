@@ -244,6 +244,43 @@ describe('fetchAllProducts', () => {
     expect(result.data?.[0].id).toBe('gid://shopify/Product/1')
   })
 
+  /** ADDED (docs/phase-253-1): a stock read that stops part-way fails the product read, so it cannot shrink the copy. */
+  it('fails, rather than shrinking the catalogue, when a later stock page carries no levels', async () => {
+    const post = vi
+      .fn()
+      .mockResolvedValueOnce(pageResponse([makeProduct('1', '101'), makeProduct('2', '102')], false, null))
+      .mockResolvedValueOnce(
+        inventoryLevelsResponse([{ variantId: 'gid://shopify/ProductVariant/101', available: 5 }], true, 'inv-1')
+      )
+      .mockResolvedValueOnce({ data: { data: { location: null } } })
+    const client = makeMockClient(post)
+
+    const result = await fetchAllProducts('https://rubis-pos.myshopify.com', 'shpat_test', {
+      client,
+      locationId: 'gid://shopify/Location/1'
+    })
+
+    expect(result.success).toBe(false)
+    expect(result.error).toContain('stopped part-way')
+  })
+
+  /** ADDED (docs/phase-253-1): the same for a stock page that answers with errors. */
+  it('fails when a stock page carries GraphQL errors', async () => {
+    const post = vi
+      .fn()
+      .mockResolvedValueOnce(pageResponse([makeProduct('1', '101')], false, null))
+      .mockResolvedValueOnce({ data: { errors: [{ message: 'Throttled' }] } })
+    const client = makeMockClient(post)
+
+    const result = await fetchAllProducts('https://rubis-pos.myshopify.com', 'shpat_test', {
+      client,
+      locationId: 'gid://shopify/Location/1'
+    })
+
+    expect(result.success).toBe(false)
+    expect(result.error).toContain('Throttled')
+  })
+
   it('defaults a variant with no matching inventory level to 0, not an aggregate', async () => {
     const post = vi
       .fn()

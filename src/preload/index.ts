@@ -8,6 +8,7 @@ import type { ShiftCorrectionRequest } from '../main/services/shift-corrections.
 import type { MoveSaleRequest } from '../main/services/sale-moves.js'
 import type { MergeShiftsRequest } from '../main/services/shift-merges.js'
 import type { ServiceResult } from '../main/services/shopify-types.js'
+import type { CatalogSyncResult } from '../main/services/catalog-sync.js'
 import type {
   CartItem,
   CartRemovalRequest,
@@ -147,6 +148,13 @@ const api = {
   fetchProducts: (): Promise<
     ServiceResult<ProductSummary[]>
   > => ipcRenderer.invoke('products:fetch'),
+
+  /**
+   * The catalogue sync (docs/phase-253-1): products and automatic discounts, refreshed or kept, and the copy now in use.
+   *
+   * @returns {Promise<ServiceResult<CatalogSyncResult>>}
+   */
+  catalogSync: (): Promise<ServiceResult<CatalogSyncResult>> => ipcRenderer.invoke('catalog:sync'),
 
   /**
    * Returns the last successfully cached catalog from SQLite

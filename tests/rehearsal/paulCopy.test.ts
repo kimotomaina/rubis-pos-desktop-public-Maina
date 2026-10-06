@@ -168,7 +168,9 @@ describe.skipIf(!COPY_DIR)('the repair of 5 Oct, rehearsed on the exported copy'
       shift_adjustment_sales: before.counts.shift_adjustment_sales + 2,
       shift_corrections: before.counts.shift_corrections + 2,
       // ADDED (docs/phase-252): opening the copy adds the payments table, empty; the repair writes no payment.
-      order_payments: 0
+      order_payments: 0,
+      // ADDED (docs/phase-253-1): opening the copy adds the discount copy's table, empty; the repair writes no discount.
+      auto_discounts: 0
     }
 
     expect(afterFirstRun.counts).toEqual(expected)

@@ -28,6 +28,7 @@ import ManagerPinModal from './components/ManagerPinModal'
 import type { ConnectivityIntegration } from './types/connectivity'
 import ConnectivityModal from './components/ConnectivityModal'
 import NavStatusButton from './components/NavStatusButton'
+import SyncButton from './components/SyncButton'
 import { useUnfiledCountStore } from './stores/unfiledCountStore'
 import { useShopifyReconciliationStore } from './stores/shopifyReconciliationStore'
 import { useFiscalModeStore } from './stores/fiscalModeStore'
@@ -480,7 +481,7 @@ export default function App() {
   const products = useProductStore((state) => state.products)
   const status = useProductStore((state) => state.status)
   const error = useProductStore((state) => state.error)
-  const fetchProducts = useProductStore((state) => state.fetchProducts)
+  const syncCatalog = useProductStore((state) => state.sync)
   const cached = useProductStore((state) => state.cached)
 
   const online = useNetworkStore((state) => state.online)
@@ -531,9 +532,10 @@ export default function App() {
     return () => clearInterval(id)
   }, [])
 
+  // docs/phase-253-1: the catalogue sync at start; each login syncs again (authStore).
   useEffect(() => {
-    void fetchProducts()
-  }, [fetchProducts])
+    void syncCatalog()
+  }, [syncCatalog])
 
   useEffect(() => {
     void initNetwork()
@@ -764,6 +766,7 @@ export default function App() {
               Log Out
             </button>
           </div>
+          <SyncButton />
           {/**
            * One button consolidates every status the header used to show
            * as five separate items (Online/Offline, unfiled sales, and
@@ -839,7 +842,7 @@ export default function App() {
                 />
                 <button
                   type="button"
-                  onClick={() => void fetchProducts()}
+                  onClick={() => void syncCatalog()}
                   className="h-12 rounded-lg border border-slate-300 px-6 text-lg font-medium text-slate-700 hover:bg-slate-50"
                 >
                   Try again

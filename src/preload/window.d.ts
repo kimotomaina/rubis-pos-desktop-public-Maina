@@ -17,6 +17,7 @@ import type { ShiftCorrectionRequest } from '../main/services/shift-corrections.
 import type { MoveSaleRequest } from '../main/services/sale-moves.js'
 import type { MergeShiftsRequest } from '../main/services/shift-merges.js'
 import type { ServiceResult } from '../main/services/shopify-types.js'
+import type { CatalogSyncResult } from '../main/services/catalog-sync.js'
 import type { FiscalConnectionTestResult } from '../main/services/integrations/fiscal-connection-test.js'
 import type {
   CartItem,
@@ -122,6 +123,8 @@ export interface PosApi {
   openExternal: (url: string) => void
   /** Fetches the active Shopify product catalog. */
   fetchProducts: () => Promise<ServiceResult<ProductSummary[]>>
+  /** The catalogue sync: products and automatic discounts, refreshed or kept (docs/phase-253-1). */
+  catalogSync: () => Promise<ServiceResult<CatalogSyncResult>>
   /** Reads the last cached catalog from SQLite (offline fallback). */
   getCachedProducts: () => Promise<ServiceResult<ProductSummary[]>>
   /** Persists the cart as an order; immediate sync when online. */

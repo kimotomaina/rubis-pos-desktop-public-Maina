@@ -8,6 +8,7 @@
 
 import { create } from 'zustand'
 import type { StaffSummary } from '../../../main/services/database.js'
+import { useProductStore } from './productStore.js'
 
 export interface AuthState {
   /** The currently authenticated staff member, or null when logged out. */
@@ -52,6 +53,8 @@ export const useAuthStore = create<AuthState>()((set, get) => ({
       const result = await window.api.login(staffId, pin)
       if (result.success && result.data) {
         set({ currentStaff: result.data, loggingIn: false, loginError: null })
+        // docs/phase-253-1: a sync after every login, never awaited, so login never waits on Shopify.
+        void useProductStore.getState().sync()
         return true
       }
       set({ loggingIn: false, loginError: result.error ?? 'Incorrect PIN' })

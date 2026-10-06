@@ -63,6 +63,8 @@ import {
   validateAndFetchLocations
 } from './services/shopify.js'
 import type { InventoryLevelDetail } from './services/shopify.js'
+import { fetchAutomaticDiscounts } from './services/shopify-discounts.js'
+import { createCatalogSync, type CatalogSyncResult } from './services/catalog-sync.js'
 import { pushInventoryAdjustment } from './services/inventory-adjust.js'
 import {
   abandonStockTake,
@@ -1368,6 +1370,50 @@ app.whenReady().then(async () => {
       return result
     }
   )
+
+  /**
+   * The catalogue sync (docs/phase-253-1): products and automatic discounts, read in full or kept as they were, at
+   * start, after each login and from the Sync button. One at a time; refused while a cart draft exists. Demo Mode
+   * never talks to Shopify, so it answers with the copy it already has.
+   */
+  const catalogSync = createCatalogSync({
+    db,
+    readProducts: async () => {
+      const env = shopifyEnv()
+      if (!env) return { success: false, error: 'Shopify credentials missing — set them in Admin > Integrations' }
+      return fetchAllProducts(env.storeUrl, env.token, { locationId })
+    },
+    readDiscounts: async () => {
+      const env = shopifyEnv()
+      if (!env) return { success: false, error: 'Shopify credentials missing — set them in Admin > Integrations' }
+      return fetchAutomaticDiscounts(createShopifyClient(env.storeUrl, env.token))
+    },
+    now: () => new Date()
+  })
+
+  ipcMain.handle('catalog:sync', async (): Promise<ServiceResult<CatalogSyncResult>> => {
+    try {
+      if (demoMode) {
+        return {
+          success: true,
+          data: {
+            products: db.getCachedProducts(),
+            discounts: db.getAutoDiscounts(),
+            skipped: [],
+            // Demo Mode's copy is its whole catalogue, as `products:fetch` has always answered there: no offline badge.
+            productsRefreshed: true,
+            discountsRefreshed: false,
+            refused: false,
+            messages: [],
+            lastSyncedAt: db.getCatalogSyncedAt()
+          }
+        }
+      }
+      return await catalogSync.sync()
+    } catch (err) {
+      return { success: false, error: err instanceof Error ? err.message : 'The catalogue sync failed' }
+    }
+  })
 
   /**
    * IPC handler that returns the last successfully fetched catalog

@@ -46,6 +46,9 @@ import { MAX_HELD_LABEL_LENGTH, MAX_HELD_SALES } from '../lib/heldSaleRules.js'
 
 /** The `settings` key holding the last trader sequence value this till used (docs/phase-211). */
 const TRADER_SEQ_SETTING_KEY = 'last_trader_seq'
+/** When the catalogue last synced with its products read in full (docs/phase-253-1). */
+const CATALOG_SYNCED_AT_SETTING_KEY = 'catalog_synced_at'
+import type { AutoDiscount } from '../lib/autoDiscounts.js'
 import BetterSqlite3 from 'better-sqlite3'
 import type { Database as SqliteConnection } from 'better-sqlite3'
 import type { Discount, OfflineOrderPayload } from './shopify-types.js'
@@ -1235,6 +1238,15 @@ export const SCHEMA = {
     hs_code TEXT,
     hs_name TEXT
   )`,
+  /**
+   * The read-only copy of Shopify's automatic discounts (docs/phase-253-1), one row per discount, replaced whole by a
+   * sync whose discount read completed. `discount_json` is the {@link AutoDiscount} the till applies.
+   */
+  autoDiscounts: `CREATE TABLE IF NOT EXISTS auto_discounts (
+    id TEXT PRIMARY KEY,
+    title TEXT NOT NULL,
+    discount_json TEXT NOT NULL
+  )`,
   orders: `CREATE TABLE IF NOT EXISTS orders (
     local_id INTEGER PRIMARY KEY AUTOINCREMENT,
     shopify_order_id TEXT,
@@ -2258,6 +2270,7 @@ export class RubisDatabase {
     connection.pragma('synchronous = NORMAL')
     connection.exec(SCHEMA.products)
     migrateProductsTaxColumns(connection)
+    connection.exec(SCHEMA.autoDiscounts)
     connection.exec(SCHEMA.orders)
     connection.exec(SCHEMA.syncQueue)
     connection.exec(SCHEMA.queueIndex)
@@ -2339,31 +2352,61 @@ export class RubisDatabase {
    * @param {ProductSummary[]} products
    */
   cacheProducts(products: ProductSummary[]): void {
-    const deleteAll = this.conn.prepare('DELETE FROM products')
+    this.conn.transaction((rows: ProductSummary[]) => this.writeProducts(rows))(products)
+  }
+
+  /** Deletes every cached product row and inserts `products`; the caller supplies the transaction. */
+  private writeProducts(products: ProductSummary[]): void {
+    this.conn.prepare('DELETE FROM products').run()
     const insert = this.conn.prepare(
       'INSERT OR REPLACE INTO products (id, title, variant_id, variant_title, price, inventory_quantity, image_url, barcode, vat_class, hs_code, hs_name) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
     )
-    const replace = this.conn.transaction((rows: ProductSummary[]) => {
-      deleteAll.run()
-      for (const product of rows) {
-        for (const variant of product.variants) {
-          insert.run(
-            product.id,
-            product.title,
-            variant.id,
-            variant.title,
-            variant.price,
-            variant.inventoryQuantity,
-            variant.image ?? product.featuredImage,
-            variant.barcode,
-            variant.vatClass ?? null,
-            variant.hsCode ?? null,
-            variant.hsName ?? null
-          )
-        }
+    for (const product of products) {
+      for (const variant of product.variants) {
+        insert.run(
+          product.id,
+          product.title,
+          variant.id,
+          variant.title,
+          variant.price,
+          variant.inventoryQuantity,
+          variant.image ?? product.featuredImage,
+          variant.barcode,
+          variant.vatClass ?? null,
+          variant.hsCode ?? null,
+          variant.hsName ?? null
+        )
       }
-    })
-    replace(products)
+    }
+  }
+
+  /**
+   * The catalogue sync's one write (docs/phase-253-1): each part given is replaced whole, a part left out is kept as it
+   * was, and the time of the sync is stamped, all in one transaction.
+   *
+   * @param {{ products?: ProductSummary[]; discounts?: AutoDiscount[]; syncedAt?: string }} update
+   */
+  replaceCatalogue(update: { products?: ProductSummary[]; discounts?: AutoDiscount[]; syncedAt?: string }): void {
+    this.conn.transaction(() => {
+      if (update.products) this.writeProducts(update.products)
+      if (update.discounts) {
+        this.conn.prepare('DELETE FROM auto_discounts').run()
+        const insert = this.conn.prepare('INSERT INTO auto_discounts (id, title, discount_json) VALUES (?, ?, ?)')
+        for (const discount of update.discounts) insert.run(discount.id, discount.title, JSON.stringify(discount))
+      }
+      if (update.syncedAt) this.setSetting(CATALOG_SYNCED_AT_SETTING_KEY, update.syncedAt)
+    })()
+  }
+
+  /** @returns {AutoDiscount[]} the stored copy of the automatic discounts, in id order */
+  getAutoDiscounts(): AutoDiscount[] {
+    const rows = this.conn.prepare('SELECT discount_json FROM auto_discounts ORDER BY id').all() as Array<{ discount_json: string }>
+    return rows.map((row) => JSON.parse(row.discount_json) as AutoDiscount)
+  }
+
+  /** @returns {string | null} when the catalogue last synced with its products read in full, or `null` before the first */
+  getCatalogSyncedAt(): string | null {
+    return this.getSetting(CATALOG_SYNCED_AT_SETTING_KEY) ?? null
   }
 
   /**

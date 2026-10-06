@@ -339,7 +339,7 @@ export function createShopifyClient(
  * @param {AxiosError} err
  * @returns {string}
  */
-function translateAxiosError(err: AxiosError): string {
+export function translateAxiosError(err: AxiosError): string {
   const host = (() => {
     try {
       return err.config?.baseURL ? new URL(err.config.baseURL).host : null
@@ -569,6 +569,7 @@ export interface InventoryLevelDetail {
  * @param {AxiosInstance} client
  * @param {string} locationId
  * @returns {Promise<Map<string, InventoryLevelDetail>>} variant id → level
+ * @throws {Error} when any page carries errors or no levels, so a caller never gets part of the stock
  */
 export async function fetchInventoryLevelDetails(
   client: AxiosInstance,
@@ -584,8 +585,14 @@ export async function fetchInventoryLevelDetails(
       variables: { locationId, first: 250, after: cursor }
     })
 
+    // docs/phase-253-1: a page with errors or no levels fails the whole read. Stopping there instead would hand back
+    // part of the stock, and the catalogue merge would then drop every variant not yet read.
+    const errors = response.data?.errors as Array<{ message: string }> | undefined
+    if (errors && errors.length > 0) {
+      throw new Error(`The stock read failed: ${errors.map((e) => e.message).join('; ')}`)
+    }
     const data = response.data?.data?.location?.inventoryLevels
-    if (!data) break
+    if (!data) throw new Error('The stock read stopped part-way: Shopify returned no stock levels for a page')
 
     for (const level of data.nodes ?? []) {
       const variantId = level.item?.variant?.id
