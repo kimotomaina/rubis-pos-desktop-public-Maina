@@ -489,3 +489,8 @@ A Day shift closes from 17:30:00 and a Night shift from 08:59:00, for everyone, 
 ## Sales with no shift are given one on a trigger, not on the clock (phase 232)
 
 The automatic assignment runs at start, before Open Shift, after Close Shift and when Shift History opens, not after each sale and not on a timer. Sales made in a window with no shift wait until the next of those. A report that counts "sales with no shift" can show them until then. A failed run is written to `till.log` as `auto-assign-failed` and tried again at the next trigger.
+
+
+## An automatic merge counts the earlier shift's cash twice when the survivor's float already held it (phase 242)
+
+When the till merges two shifts of one window it keeps the surviving shift's own float and count (the owner's ruling in phase 239). If the drawer count taken when the surviving shift opened already included the earlier shift's cash, that cash is in the survivor's float and again in the sales that moved in, so its expected cash is too high and a difference shows. The figures are put right afterwards with Correct figures on the survivor. Nothing is lost: the original rows and records stay.

@@ -430,7 +430,8 @@ function mergedIntoField(db: RubisDatabase, shiftId: number): Pick<ZReport, 'mer
     mergedInto: {
       shiftId: merge.into_shift_id,
       at: merge.at,
-      byName: db.getStaffById(merge.by_staff_id)?.name ?? 'Unknown',
+      // by_staff_id 0 is the till itself (docs/phase-242): an automatic merge.
+      byName: merge.by_staff_id === 0 ? 'the till' : (db.getStaffById(merge.by_staff_id)?.name ?? 'Unknown'),
       reason: merge.reason
     }
   }

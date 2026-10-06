@@ -275,6 +275,20 @@ function ShiftHistoryView({ staffName }: { staffName: (id: number) => string }) 
                           Labelled {shift.labelled_as === 'day' ? 'Day' : 'Night'} when opened
                         </span>
                       )}
+                      {/* docs/phase-242: a window shows once. The shifts merged into this one are named here, each opening its own Z report. */}
+                      {(shift.absorbed_shifts ?? []).map((absorbed) => (
+                        <button
+                          key={absorbed.id}
+                          type="button"
+                          onClick={(event) => {
+                            event.stopPropagation()
+                            void openShift(absorbed.id)
+                          }}
+                          className="ml-2 rounded-full bg-amber-100 px-2 py-1 text-sm font-medium text-amber-800 hover:bg-amber-200"
+                        >
+                          includes #{absorbed.id}
+                        </button>
+                      ))}
                     </td>
                     <td className="py-2 pr-2 text-slate-500">{new Date(shift.clock_in).toLocaleString()}</td>
                     <td className="py-2 pr-2 text-slate-500">

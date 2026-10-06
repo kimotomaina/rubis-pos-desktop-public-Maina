@@ -7,6 +7,8 @@
 import { shiftEndClock, shiftName, windowClosableFrom, type ShiftWindowInstance } from './shiftWindows.js'
 
 export const AUTO_SHIFT_REASON = 'Created automatically for sales with no shift'
+/** Why the till merged two shifts of one window by itself (docs/phase-242). */
+export const AUTO_MERGE_REASON = 'Merged automatically: a window has one shift'
 export const OPENED_WITH_EARLIER_SALES_REASON = 'Earlier sales in this window joined when the shift opened'
 export const STALE_EARLIER_SALES_MESSAGE = 'Sales were made while this form was open. Count the drawer again.'
 

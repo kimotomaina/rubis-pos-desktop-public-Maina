@@ -18,6 +18,7 @@ import { sameWindow, shiftWindowOf, type ShiftType, type ShiftWindowInstance } f
 import { findOverlappingShift } from '../lib/pastShift.js'
 import { planAutoAssignment } from '../lib/autoAssign.js'
 import {
+  AUTO_MERGE_REASON,
   AUTO_SHIFT_REASON,
   OPENED_WITH_EARLIER_SALES_REASON,
   STALE_EARLIER_SALES_MESSAGE,
@@ -369,6 +370,8 @@ export interface ShiftRow {
   window_shift_count?: number
   /** The shift this one was merged into (docs/phase-239), read from `shift_merges`; absent otherwise. */
   merged_into?: number | null
+  /** The shifts merged into this one (docs/phase-242), oldest first; added by `listVisibleShifts`. */
+  absorbed_shifts?: Array<{ id: number; clock_in: string; clock_out: string | null }>
 }
 
 /** Row shape of the `shift_merges` table (docs/phase-239): one append-only record of a shift absorbed by another. */
@@ -489,6 +492,13 @@ export interface AutoAssignTouched {
   count: number
 }
 
+/** What a run of automatic merging did (docs/phase-242): each shift absorbed into the shift that holds its window. */
+export interface AutoMergeResult {
+  merged: Array<{ absorbedShiftId: number; intoShiftId: number; salesCount: number }>
+  /** Another run was already in progress, so this one did nothing. */
+  skipped?: boolean
+}
+
 /** What a run of automatic assignment did. */
 export interface AutoAssignResult {
   touched: AutoAssignTouched[]
@@ -496,6 +506,8 @@ export interface AutoAssignResult {
   waiting: number
   /** Another run was already in progress, so this one did nothing. */
   skipped?: boolean
+  /** The shifts merged by the automatic merge that runs just before (docs/phase-242); absent when none ran. */
+  merged?: AutoMergeResult['merged']
 }
 
 /** What moving a sale to another shift needs (docs/phase-232); the caller has already checked the admin's PIN. */
@@ -2020,6 +2032,8 @@ export class RubisDatabase {
   private connection: SqliteConnection | null = null
   /** Set while {@link autoAssignUnattachedSales} runs, so a second call does nothing (docs/phase-232). */
   private autoAssigning = false
+  /** Set while {@link autoMergeSameWindowShifts} runs (docs/phase-242). */
+  private autoMerging = false
 
   constructor(options: DatabaseOptions) {
     this.dbPath = options.dbPath
@@ -3942,6 +3956,69 @@ export class RubisDatabase {
   }
 
   /**
+   * One page of shift history with one row for each window's shift (docs/phase-242): a shift that was merged into
+   * another is left out of the list and named on the shift that holds it (`absorbed_shifts`), so Shift History shows
+   * a merged window once. The absorbed shift's own row, Z report and records are untouched.
+   *
+   * @param {number} limit
+   * @param {number} offset
+   * @returns {ShiftRow[]}
+   */
+  listVisibleShifts(limit: number, offset: number): ShiftRow[] {
+    const rows = this.conn
+      .prepare(
+        `SELECT s.* FROM shifts s
+         WHERE s.id NOT IN (SELECT absorbed_shift_id FROM shift_merges)
+         ORDER BY s.id DESC LIMIT ? OFFSET ?`
+      )
+      .all(limit, offset) as ShiftRow[]
+    if (rows.length === 0) return rows
+    const absorbed = this.conn
+      .prepare(
+        `SELECT m.into_shift_id AS into_id, s.id AS id, s.clock_in AS clock_in, s.clock_out AS clock_out
+         FROM shift_merges m JOIN shifts s ON s.id = m.absorbed_shift_id
+         WHERE m.into_shift_id IN (${rows.map(() => '?').join(', ')})
+         ORDER BY s.clock_in ASC, s.id ASC`
+      )
+      .all(...rows.map((row) => row.id)) as Array<{ into_id: number; id: number; clock_in: string; clock_out: string | null }>
+    return rows.map((row) => {
+      const mine = absorbed.filter((a) => a.into_id === row.id).map(({ id, clock_in, clock_out }) => ({ id, clock_in, clock_out }))
+      return mine.length > 0 ? { ...row, absorbed_shifts: mine } : row
+    })
+  }
+
+  /**
+   * How many shifts {@link listVisibleShifts} pages through: every shift not merged into another.
+   *
+   * @returns {number}
+   */
+  countVisibleShifts(): number {
+    const row = this.conn
+      .prepare('SELECT COUNT(*) AS count FROM shifts WHERE id NOT IN (SELECT absorbed_shift_id FROM shift_merges)')
+      .get() as { count: number }
+    return row.count
+  }
+
+  /**
+   * The ids of the shifts merged into another (docs/phase-239).
+   *
+   * @returns {number[]}
+   */
+  listAbsorbedShiftIds(): number[] {
+    return (this.conn.prepare('SELECT absorbed_shift_id AS id FROM shift_merges').all() as Array<{ id: number }>).map((r) => r.id)
+  }
+
+  /**
+   * Which shift holds each absorbed shift now, absorbed id to survivor id.
+   *
+   * @returns {Map<number, number>}
+   */
+  private absorbedIntoMap(): Map<number, number> {
+    const rows = this.conn.prepare('SELECT absorbed_shift_id AS a, into_shift_id AS i FROM shift_merges').all() as Array<{ a: number; i: number }>
+    return new Map(rows.map((r) => [r.a, r.i]))
+  }
+
+  /**
    * Opens the one shift of the current window (docs/phase-232), in one write transaction so a refusal anywhere
    * writes nothing:
    *
@@ -3977,7 +4054,10 @@ export class RubisDatabase {
       const opened = new Date(nowMs).toISOString()
       const window = shiftWindowOf(opened)
       const shifts = this.listShiftWindows()
-      const holder = this.shiftOfWindow(window, shifts)
+      // The shift named is the one that holds the window now, not one merged into it (docs/phase-242).
+      const absorbed = new Set(this.listAbsorbedShiftIds())
+      const holder =
+        this.shiftOfWindow(window, shifts.filter((shift) => !absorbed.has(shift.id))) ?? this.shiftOfWindow(window, shifts)
       if (holder) {
         throw new Error(windowHasShiftMessage(window, holder.id))
       }
@@ -4364,7 +4444,7 @@ export class RubisDatabase {
       return this.conn.transaction((): AutoAssignResult => {
         const sales = this.listUnattachedSales()
         if (sales.length === 0) return { touched: [], waiting: 0 }
-        const plan = planAutoAssignment(sales, this.listShiftWindows(), nowMs)
+        const plan = planAutoAssignment(sales, this.listShiftWindows(), nowMs, this.absorbedIntoMap())
         const touched: AutoAssignTouched[] = []
 
         for (const create of plan.creates) {
@@ -4652,40 +4732,119 @@ export class RubisDatabase {
       if (preview.problem !== null) {
         throw new Error(preview.problem)
       }
-      const orderIds = this.getOrdersForShift(input.absorbedShiftId)
-        .filter((order) => order.status !== 'voided')
-        .map((order) => order.local_id)
-      const move = this.conn.prepare(
-        "UPDATE orders SET shift_id = ? WHERE local_id = ? AND shift_id = ? AND status <> 'voided'"
-      )
-      for (const orderId of orderIds) {
-        if (move.run(input.intoShiftId, orderId, input.absorbedShiftId).changes !== 1) {
-          throw new Error(`Order #${orderId} could not be moved: it changed while this was being done`)
-        }
-      }
-      const mergeReason = `Merged shift #${input.absorbedShiftId} into shift #${input.intoShiftId}: ${reason}`
-      for (const [shiftId, kind, peerShiftId] of [
-        [input.absorbedShiftId, 'reassign_out', input.intoShiftId],
-        [input.intoShiftId, 'reassign_in', input.absorbedShiftId]
-      ] as const) {
-        this.recordAdjustment({
-          shiftId,
-          kind,
-          nowMs,
-          byStaffId: input.managerId,
-          reason: mergeReason,
-          peerShiftId,
-          orderIds,
-          figures: this.workedFiguresNow(this.getShiftById(shiftId) as ShiftRow)
-        })
-      }
-      this.conn
-        .prepare(
-          'INSERT INTO shift_merges (absorbed_shift_id, into_shift_id, by_staff_id, at, reason, sales_count) VALUES (?, ?, ?, ?, ?, ?)'
-        )
-        .run(input.absorbedShiftId, input.intoShiftId, input.managerId, new Date(nowMs).toISOString(), reason, orderIds.length)
-      return { absorbedShiftId: input.absorbedShiftId, intoShiftId: input.intoShiftId, salesCount: orderIds.length }
+      return this.performMerge(input.absorbedShiftId, input.intoShiftId, input.managerId, reason, nowMs)
     }).immediate()
+  }
+
+  /**
+   * Moves a shift's live sales into another shift and records it (docs/phase-239, shared with docs/phase-242): each sale
+   * by the guarded `UPDATE` that must change exactly one row, an adjustment on each shift, and the merge row. The
+   * caller has already checked the merge is allowed ({@link previewShiftMerge}) and runs this inside a transaction.
+   * `byStaffId` 0 is the till itself: the adjustments then name nobody.
+   *
+   * @param {number} absorbedShiftId
+   * @param {number} intoShiftId
+   * @param {number} byStaffId — the admin, or 0 for an automatic merge
+   * @param {string} reason
+   * @param {number} nowMs
+   * @returns {{ absorbedShiftId: number; intoShiftId: number; salesCount: number }}
+   */
+  private performMerge(
+    absorbedShiftId: number,
+    intoShiftId: number,
+    byStaffId: number,
+    reason: string,
+    nowMs: number
+  ): { absorbedShiftId: number; intoShiftId: number; salesCount: number } {
+    const orderIds = this.getOrdersForShift(absorbedShiftId)
+      .filter((order) => order.status !== 'voided')
+      .map((order) => order.local_id)
+    const move = this.conn.prepare(
+      "UPDATE orders SET shift_id = ? WHERE local_id = ? AND shift_id = ? AND status <> 'voided'"
+    )
+    for (const orderId of orderIds) {
+      if (move.run(intoShiftId, orderId, absorbedShiftId).changes !== 1) {
+        throw new Error(`Order #${orderId} could not be moved: it changed while this was being done`)
+      }
+    }
+    const mergeReason = `Merged shift #${absorbedShiftId} into shift #${intoShiftId}: ${reason}`
+    for (const [shiftId, kind, peerShiftId] of [
+      [absorbedShiftId, 'reassign_out', intoShiftId],
+      [intoShiftId, 'reassign_in', absorbedShiftId]
+    ] as const) {
+      this.recordAdjustment({
+        shiftId,
+        kind,
+        nowMs,
+        byStaffId: byStaffId === 0 ? null : byStaffId,
+        reason: mergeReason,
+        peerShiftId,
+        orderIds,
+        figures: this.workedFiguresNow(this.getShiftById(shiftId) as ShiftRow)
+      })
+    }
+    this.conn
+      .prepare(
+        'INSERT INTO shift_merges (absorbed_shift_id, into_shift_id, by_staff_id, at, reason, sales_count) VALUES (?, ?, ?, ?, ?, ?)'
+      )
+      .run(absorbedShiftId, intoShiftId, byStaffId, new Date(nowMs).toISOString(), reason, orderIds.length)
+    return { absorbedShiftId, intoShiftId, salesCount: orderIds.length }
+  }
+
+  /**
+   * Merges every window that holds more than one shift into one (docs/phase-242), by the time frames: the shifts of
+   * a window are the ones whose `clock_in` falls in it; the shift that holds the window is the open one, or else the
+   * one opened last; the others are absorbed into it, earliest first, with the same record a person's merge leaves
+   * (made by the till, no PIN). A window with two open shifts, or one whose merge the rules refuse, is left alone.
+   * The surviving shift keeps its own float and count, as in a merge by hand.
+   *
+   * One write transaction: any refusal writes nothing. Running it again finds one shift in every window and does
+   * nothing. A run that starts during another does nothing.
+   *
+   * @param {number} [nowMs] — the clock; the main process's own
+   * @returns {AutoMergeResult}
+   */
+  autoMergeSameWindowShifts(nowMs: number = Date.now()): AutoMergeResult {
+    if (this.autoMerging) return { merged: [], skipped: true }
+    this.autoMerging = true
+    try {
+      return this.conn.transaction((): AutoMergeResult => {
+        const absorbed = new Set(this.listAbsorbedShiftIds())
+        const live = (
+          this.conn.prepare('SELECT id, clock_in, clock_out, status FROM shifts ORDER BY clock_in ASC, id ASC').all() as Array<{
+            id: number
+            clock_in: string
+            clock_out: string | null
+            status: ShiftStatus
+          }>
+        ).filter((shift) => !absorbed.has(shift.id))
+        const groups = new Map<string, typeof live>()
+        for (const shift of live) {
+          try {
+            const window = shiftWindowOf(shift.clock_in)
+            const key = `${window.type}|${window.startDate}`
+            groups.set(key, [...(groups.get(key) ?? []), shift])
+          } catch {
+            // A shift whose time cannot be read belongs to no window and is left alone.
+          }
+        }
+        const merged: AutoMergeResult['merged'] = []
+        for (const group of groups.values()) {
+          if (group.length < 2) continue
+          const open = group.filter((shift) => shift.status === 'open')
+          if (open.length > 1) continue
+          const survivor = open[0] ?? group[group.length - 1]
+          const others = group.filter((shift) => shift.id !== survivor.id)
+          if (others.some((shift) => this.previewShiftMerge(shift.id, survivor.id).problem !== null)) continue
+          for (const other of others) {
+            merged.push(this.performMerge(other.id, survivor.id, 0, AUTO_MERGE_REASON, nowMs))
+          }
+        }
+        return { merged }
+      }).immediate()
+    } finally {
+      this.autoMerging = false
+    }
   }
 
   /**

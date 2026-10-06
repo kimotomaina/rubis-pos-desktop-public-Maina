@@ -56,7 +56,8 @@ function stubApi(shift: ShiftRow | null, holder: ShiftRow | null = null): void {
     {
       getOpenShift: () => (shift && shift.status === 'open' ? shift : undefined),
       listShiftWindows: () => (known ? [{ id: known.id, clock_in: known.clock_in, clock_out: known.clock_out }] : []),
-      listUnattachedSales: () => []
+      listUnattachedSales: () => [],
+      listAbsorbedShiftIds: () => [] // ADDED (docs/phase-242): the window's shift is one that was not merged into another
     },
     Date.now()
   )

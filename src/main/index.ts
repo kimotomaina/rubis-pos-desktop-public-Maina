@@ -3827,9 +3827,12 @@ app.whenReady().then(async () => {
       try {
         const { page } = validation.data
         const offset = (page - 1) * REPORTS_PAGE_SIZE
-        const counts = countShiftsByWindow(db.listShiftWindows())
-        const shifts = db.listShifts(REPORTS_PAGE_SIZE, offset).map((shift) => withWindow(shift, counts))
-        return { success: true, data: { shifts, total: db.countShifts(), page } }
+        // docs/phase-242: one row for each window's shift; a shift merged into another is named on the one that holds it,
+        // and a window counts only the shifts that were not merged.
+        const absorbed = new Set(db.listAbsorbedShiftIds())
+        const counts = countShiftsByWindow(db.listShiftWindows().filter((shift) => !absorbed.has(shift.id)))
+        const shifts = db.listVisibleShifts(REPORTS_PAGE_SIZE, offset).map((shift) => withWindow(shift, counts))
+        return { success: true, data: { shifts, total: db.countVisibleShifts(), page } }
       } catch (err) {
         return {
           success: false,

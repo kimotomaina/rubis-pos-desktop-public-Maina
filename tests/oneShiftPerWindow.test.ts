@@ -514,7 +514,8 @@ describe('S4: automatic assignment', () => {
     const failing = {
       autoAssignUnattachedSales: () => {
         throw new Error('database is locked')
-      }
+      },
+      autoMergeSameWindowShifts: () => ({ merged: [] }) // ADDED (docs/phase-242): the run merges first
     }
 
     const result = runAutoAssign(failing, (detail) => logged.push(detail), NOW)

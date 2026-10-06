@@ -17,7 +17,10 @@ import {
 import type { EarlierSalesShown, RubisDatabase, UnattachedSaleRow } from './database.js'
 
 /** What {@link getShiftWindowStatus} needs from the database. */
-export type ShiftWindowStatusDb = Pick<RubisDatabase, 'getOpenShift' | 'listShiftWindows' | 'listUnattachedSales'>
+export type ShiftWindowStatusDb = Pick<
+  RubisDatabase,
+  'getOpenShift' | 'listShiftWindows' | 'listUnattachedSales' | 'listAbsorbedShiftIds'
+>
 
 /** The status of the shift window. */
 export interface ShiftWindowStatus {
@@ -49,13 +52,16 @@ export interface ShiftWindowStatus {
 export function getShiftWindowStatus(db: ShiftWindowStatusDb, nowMs: number = Date.now()): ShiftWindowStatus {
   const window = shiftWindowOf(new Date(nowMs).toISOString())
   const shifts = db.listShiftWindows()
-  const holder = shifts.find((shift) => {
+  // The shift that holds the window is one that was not merged into another (docs/phase-242).
+  const absorbed = new Set(db.listAbsorbedShiftIds())
+  const inWindow = (shift: { clock_in: string }): boolean => {
     try {
       return sameWindow(shiftWindowOf(shift.clock_in), window)
     } catch {
       return false
     }
-  })
+  }
+  const holder = shifts.find((shift) => !absorbed.has(shift.id) && inWindow(shift)) ?? shifts.find(inWindow)
   const sales = db.listUnattachedSales()
   const byId = new Map(sales.map((sale) => [sale.local_id, sale]))
   const waiting = holder

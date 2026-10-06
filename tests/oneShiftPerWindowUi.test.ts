@@ -401,7 +401,8 @@ describe('the cart window-end banner', () => {
       {
         getOpenShift: () => ({ id: 7, clock_in: iso('2026-10-05T10:00:00') }) as unknown as ShiftRow,
         listShiftWindows: () => [{ id: 7, clock_in: iso('2026-10-05T10:00:00'), clock_out: null }],
-        listUnattachedSales: () => []
+        listUnattachedSales: () => [],
+        listAbsorbedShiftIds: () => [] // ADDED (docs/phase-242)
       },
       Date.parse(`${t}+03:00`)
     )

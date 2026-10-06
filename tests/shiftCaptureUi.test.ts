@@ -53,7 +53,8 @@ function windowStatus(sales: Array<{ total: number; method: 'cash' | 'mpesa' }> 
           created_at: new Date(Date.now() - (index + 1) * 60_000).toISOString(),
           total: sale.total,
           payment_method: sale.method
-        }))
+        })),
+      listAbsorbedShiftIds: () => [] // ADDED (docs/phase-242)
     },
     Date.now()
   )

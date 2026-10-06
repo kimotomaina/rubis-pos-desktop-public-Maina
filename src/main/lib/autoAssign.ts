@@ -122,9 +122,17 @@ function periodFor(firstMs: number, lastMs: number, shifts: PlanShift[]): { star
  * @param {PlanSale[]} sales — sales with no shift that are not voided, oldest first
  * @param {PlanShift[]} shifts — every shift
  * @param {number} nowMs
+ * @param {Map<number, number>} [absorbedInto] — shifts merged into another (docs/phase-242), absorbed id to survivor id.
+ *   An absorbed shift still occupies its time but is never given a sale: one made inside its times, or nearest to it,
+ *   goes to the shift that holds the window now.
  * @returns {AutoAssignPlan}
  */
-export function planAutoAssignment(sales: PlanSale[], shifts: PlanShift[], nowMs: number): AutoAssignPlan {
+export function planAutoAssignment(
+  sales: PlanSale[],
+  shifts: PlanShift[],
+  nowMs: number,
+  absorbedInto: Map<number, number> = new Map()
+): AutoAssignPlan {
   const currentWindow = shiftWindowOf(new Date(nowMs).toISOString())
   const shiftWindows = shifts.flatMap((shift) => {
     try {
@@ -157,10 +165,12 @@ export function planAutoAssignment(sales: PlanSale[], shifts: PlanShift[], nowMs
     }
     const inside = findOverlappingShift(readable, saleMs, saleMs)
     if (inside) {
-      join(inside.id, JOIN_INSIDE_REASON, sale.local_id)
+      join(absorbedInto.get(inside.id) ?? inside.id, JOIN_INSIDE_REASON, sale.local_id)
       continue
     }
-    const inWindow = shiftWindows.filter((entry) => sameWindow(entry.window, window)).map((entry) => entry.shift)
+    const inWindow = shiftWindows
+      .filter((entry) => sameWindow(entry.window, window) && !absorbedInto.has(entry.shift.id))
+      .map((entry) => entry.shift)
     if (inWindow.length > 0) {
       const target = nearestShift(saleMs, inWindow)
       join(target.id, inWindow.length > 1 ? joinNearestReason(inWindow.length) : JOIN_WINDOW_REASON, sale.local_id)
