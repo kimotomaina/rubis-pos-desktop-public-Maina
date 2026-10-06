@@ -55,7 +55,15 @@ function windowStatus(sales: Array<{ total: number; method: 'cash' | 'mpesa' }> 
           total: sale.total,
           payment_method: sale.method
         })),
-      listAbsorbedShiftIds: () => [] // ADDED (docs/phase-242)
+      listAbsorbedShiftIds: () => [], // ADDED (docs/phase-242)
+      // ADDED (docs/phase-250): the window status reads how sales were paid from their legs: one leg per sale, its method and total.
+      paymentLegsFor: (ids: readonly number[]) =>
+        new Map(
+          sales
+            .map((sale, index) => ({ id: index + 1, sale }))
+            .filter(({ id }) => ids.includes(id))
+            .map(({ id, sale }) => [id, [{ orderId: id, method: sale.method, amount: sale.total, voided: false }]])
+        )
     },
     Date.now()
   )

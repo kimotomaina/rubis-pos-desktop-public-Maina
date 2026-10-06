@@ -16,6 +16,7 @@
 import type { VatReconcileOrderRow } from './vat-reconcile.js'
 import { sameWindow, shiftWindowOf, type ShiftType, type ShiftWindowInstance } from '../lib/shiftWindows.js'
 import { findOverlappingShift } from '../lib/pastShift.js'
+import { methodTotalOf, type PaymentLeg } from '../lib/paymentLegs.js'
 import { planAutoAssignment } from '../lib/autoAssign.js'
 import {
   AUTO_MERGE_REASON,
@@ -1149,12 +1150,11 @@ function roundMoney(amount: number): number {
 
 /**
  * @param {UnattachedSaleRow[]} sales
+ * @param {(method: PaymentMethod) => number} totalFor the sales' payments by method, from their legs (docs/phase-250)
  * @returns {EarlierSalesShown} how many, and the cash and M-Pesa they hold
  */
-function totalOfSales(sales: UnattachedSaleRow[]): EarlierSalesShown {
-  const totalFor = (method: string): number =>
-    roundMoney(sales.filter((sale) => sale.payment_method === method).reduce((sum, sale) => sum + sale.total, 0))
-  return { count: sales.length, cash: totalFor('cash'), mpesa: totalFor('mpesa') }
+function totalOfSales(sales: UnattachedSaleRow[], totalFor: (method: PaymentMethod) => number): EarlierSalesShown {
+  return { count: sales.length, cash: roundMoney(totalFor('cash')), mpesa: roundMoney(totalFor('mpesa')) }
 }
 
 /**
@@ -3093,6 +3093,38 @@ export class RubisDatabase {
   }
 
   /**
+   * The payment legs of the sales `orderIds` (docs/phase-250): the one place every report, shift figure, preview and
+   * export reads how a sale was paid. A sale is paid one way today, so each has one leg built from
+   * `orders.payment_method` and `orders.total`; a voided sale keeps its leg, flagged, so each reader decides as before.
+   * One query for the whole list. A sale that does not exist has no entry.
+   *
+   * @param {readonly number[]} orderIds
+   * @returns {Map<number, PaymentLeg[]>} the legs of each sale, by its local id
+   */
+  paymentLegsFor(orderIds: readonly number[]): Map<number, PaymentLeg[]> {
+    const legs = new Map<number, PaymentLeg[]>()
+    if (orderIds.length === 0) return legs
+    const rows = this.conn
+      .prepare('SELECT local_id, payment_method, total, status FROM orders WHERE local_id IN (SELECT value FROM json_each(?))')
+      .all(JSON.stringify(orderIds)) as Array<{ local_id: number; payment_method: PaymentMethod | null; total: number; status: OrderStatus }>
+    for (const row of rows) {
+      legs.set(row.local_id, [{ orderId: row.local_id, method: row.payment_method, amount: row.total, voided: row.status === 'voided' }])
+    }
+    return legs
+  }
+
+  /**
+   * The amount paid by each method on the sales `orderIds`, read from their legs and added in the order given.
+   *
+   * @param {readonly number[]} orderIds
+   * @returns {(method: PaymentMethod) => number}
+   */
+  private paidByMethod(orderIds: readonly number[]): (method: PaymentMethod) => number {
+    const legs = this.paymentLegsFor(orderIds)
+    return (method) => methodTotalOf(legs, orderIds, method)
+  }
+
+  /**
    * Whether this sale's FISCAL receipt has already been physically
    * printed once (docs/phase-164, narrowed docs/phase-164-1) — the
    * "original vs duplicate" question the `receipt:print` IPC handler asks
@@ -4250,7 +4282,7 @@ export class RubisDatabase {
       const sales = this.listUnattachedSales()
       const byId = new Map(sales.map((sale) => [sale.local_id, sale]))
       const waiting = planAutoAssignment(sales, shifts, nowMs).waiting.map((id) => byId.get(id) as UnattachedSaleRow)
-      const earlier = totalOfSales(waiting)
+      const earlier = totalOfSales(waiting, this.paidByMethod(waiting.map((sale) => sale.local_id)))
       if (options.earlierShown && !sameEarlierSales(options.earlierShown, earlier)) {
         throw new Error(STALE_EARLIER_SALES_MESSAGE)
       }
@@ -4421,8 +4453,7 @@ export class RubisDatabase {
     const entered = this.latestTypedFigures(shift)
     if (entered === null) return null
     const counted = this.getOrdersForShift(shift.id).filter((order) => order.status !== 'voided')
-    const totalFor = (method: string): number =>
-      counted.filter((order) => order.payment_method === method).reduce((sum, order) => sum + order.total, 0)
+    const totalFor = this.paidByMethod(counted.map((order) => order.local_id))
     return { ...entered, ...workShiftFigures(entered, totalFor('cash') + deltaCash, totalFor('mpesa') + deltaMpesa, totalFor('card')) }
   }
 
@@ -4444,12 +4475,9 @@ export class RubisDatabase {
     openingDrawerCash?: number | null
     figures: (ShiftEnteredFigures & ShiftWorkedFigures) | null
   }): number {
-    const find = this.conn.prepare('SELECT local_id, total, payment_method, created_at FROM orders WHERE local_id = ?')
-    const sales = input.orderIds.map(
-      (id) => find.get(id) as { local_id: number; total: number; payment_method: PaymentMethod | null; created_at: string }
-    )
-    const totalFor = (method: string): number =>
-      sales.filter((sale) => sale.payment_method === method).reduce((sum, sale) => sum + sale.total, 0)
+    const find = this.conn.prepare('SELECT local_id, total, created_at FROM orders WHERE local_id = ?')
+    const sales = input.orderIds.map((id) => find.get(id) as { local_id: number; total: number; created_at: string })
+    const totalFor = this.paidByMethod(sales.map((sale) => sale.local_id))
     const times = sales.map((sale) => sale.created_at).sort()
     const figures = input.figures
     const info = this.conn
@@ -4558,8 +4586,7 @@ export class RubisDatabase {
     }
 
     const counted = this.getOrdersForShift(shiftId).filter((order) => order.status !== 'voided')
-    const totalFor = (method: string): number =>
-      counted.filter((order) => order.payment_method === method).reduce((sum, order) => sum + order.total, 0)
+    const totalFor = this.paidByMethod(counted.map((order) => order.local_id))
 
     const expectedCash = shift.starting_cash + totalFor('cash')
     const discrepancy = endingCash - expectedCash
@@ -4796,8 +4823,9 @@ export class RubisDatabase {
           ? frozenShiftMessage(to.id, this.latestClosedShiftId())
           : null
     if (freezeProblem !== null && !override) return { ...base, problem: freezeProblem, overridable: true }
-    const cash = order.payment_method === 'cash' ? order.total : 0
-    const mpesa = order.payment_method === 'mpesa' ? order.total : 0
+    const paid = this.paidByMethod([order.local_id])
+    const cash = paid('cash')
+    const mpesa = paid('mpesa')
     const after = (shift: ShiftRow, sign: 1 | -1): MoveFigures | null => {
       const worked = this.workedFiguresNow(shift, sign * cash, sign * mpesa)
       return worked && { expectedCash: worked.expectedCash, discrepancy: worked.discrepancy, mpesaExpected: worked.mpesaExpected, mpesaDifference: worked.mpesaDifference }
@@ -4946,8 +4974,7 @@ export class RubisDatabase {
     } catch {
       return refuse('The time of one of the shifts cannot be read')
     }
-    const totalFor = (method: string): number =>
-      sales.filter((order) => order.payment_method === method).reduce((sum, order) => sum + order.total, 0)
+    const totalFor = this.paidByMethod(sales.map((order) => order.local_id))
     const worked = this.workedFiguresNow(into, totalFor('cash'), totalFor('mpesa'))
     return {
       ...base,
@@ -5183,8 +5210,7 @@ export class RubisDatabase {
       }
 
       const counted = this.getOrdersForShift(input.shiftId).filter((order) => order.status !== 'voided')
-      const totalFor = (method: string): number =>
-        counted.filter((order) => order.payment_method === method).reduce((sum, order) => sum + order.total, 0)
+      const totalFor = this.paidByMethod(counted.map((order) => order.local_id))
       const worked = workShiftFigures(entered, totalFor('cash'), totalFor('mpesa'), totalFor('card'))
 
       const correctedAt = new Date(this.nextRecordMs(input.shiftId, nowMs)).toISOString()

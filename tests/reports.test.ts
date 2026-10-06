@@ -14,9 +14,13 @@ import {
   getUtcDayRange
 } from '../src/main/services/reports.js'
 import type { RubisDatabase, OrderRow, ShiftRow, StaffRow } from '../src/main/services/database.js'
+import { legsOf } from './helpers/paymentLegs.js'
 
+// CHANGED (docs/phase-250). OLD: every order made here had local id 1 unless a test named one. NEW: each gets its own id, as
+// real orders do, because the readers now find how a sale was paid by its id.
+let nextOrderId = 1
 const order = (overrides: Partial<OrderRow> = {}): OrderRow => ({
-  local_id: 1,
+  local_id: nextOrderId++,
   shopify_order_id: null,
   total: 10,
   status: 'pending_sync',
@@ -61,7 +65,8 @@ function fakeDb(options: {
     getShiftMerge: () => undefined, // ADDED (docs/phase-239): the Z report reads whether the shift was merged
     listShiftAdjustments: vi.fn(() => []), // ADDED (docs/phase-232): the Z report reads the shift's adjustments
     listAdjustmentSales: vi.fn(() => []), // ADDED (docs/phase-232)
-    getMpesaPaymentsForDateRange: vi.fn(() => options.mpesaPaymentsForRange ?? [])
+    getMpesaPaymentsForDateRange: vi.fn(() => options.mpesaPaymentsForRange ?? []),
+    paymentLegsFor: legsOf(options.ordersForShift ?? [], options.ordersForRange ?? []) // ADDED (docs/phase-250): the readers take how each sale was paid from its legs, served here from the same rows.
   } as unknown as RubisDatabase
 }
 

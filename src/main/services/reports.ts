@@ -16,6 +16,7 @@ import type {
   ShiftRow
 } from './database.js'
 import type { FiscalVatGroupAmounts } from './integrations/etims.js'
+import { methodTotalOf } from '../lib/paymentLegs.js'
 import type { Logger } from './logger.js'
 import { resolveTraderSystemInvNum } from '../lib/traderSystemInvoiceNumber.js'
 import { shiftWindowLabel, type ShiftType } from '../lib/shiftWindows.js'
@@ -212,19 +213,22 @@ function excludeVoided<T extends { status: string }>(orders: T[]): T[] {
 }
 
 /**
- * Sums order totals into a {@link PaymentTotals} bucket by payment method.
+ * Sums the sales' payments into a {@link PaymentTotals} bucket by payment method, reading how each sale was paid from its
+ * legs (docs/phase-250, {@link RubisDatabase.paymentLegsFor}) and adding them in the order the sales are given, as before.
  *
- * @param {Array<{ payment_method: PaymentMethod | null; total: number }>} orders
+ * @param {RubisDatabase} db
+ * @param {Array<{ local_id: number }>} orders
  * @returns {PaymentTotals}
  */
-function sumByPaymentMethod(
-  orders: Array<{ payment_method: PaymentMethod | null; total: number }>
-): PaymentTotals {
+function sumByPaymentMethod(db: RubisDatabase, orders: Array<{ local_id: number }>): PaymentTotals {
+  const legs = db.paymentLegsFor(orders.map((order) => order.local_id))
   const totals: PaymentTotals = { cash: 0, mpesa: 0, card: 0 }
   for (const order of orders) {
-    if (order.payment_method === 'cash') totals.cash += order.total
-    else if (order.payment_method === 'mpesa') totals.mpesa += order.total
-    else if (order.payment_method === 'card') totals.card += order.total
+    for (const leg of legs.get(order.local_id) ?? []) {
+      if (leg.method === 'cash') totals.cash += leg.amount
+      else if (leg.method === 'mpesa') totals.mpesa += leg.amount
+      else if (leg.method === 'card') totals.card += leg.amount
+    }
   }
   return totals
 }
@@ -380,7 +384,7 @@ export function generateZReport(
   const shownType: ShiftType | null = windowed.window_type ?? shift.shift_type ?? null
 
   const orders = excludeVoided(db.getOrdersForShift(shiftId))
-  const totalsByMethod = sumByPaymentMethod(orders)
+  const totalsByMethod = sumByPaymentMethod(db, orders)
   const totalRevenue = orders.reduce((sum, order) => sum + order.total, 0)
   const staffName = db.getStaffById(shift.staff_id)?.name ?? 'Unknown'
   const mpesaByMode = sumMpesaByMode(excludeVoided(db.getMpesaPaymentsForShift(shiftId)))
@@ -510,19 +514,21 @@ function adjustmentFields(
   const sales = db.listAdjustmentSales(shiftId)
   const firstKind = new Map<number, string>()
   for (const sale of sales) if (!firstKind.has(sale.order_id)) firstKind.set(sale.order_id, sale.kind)
-  const known = new Map<number, { total: number; method: string | null; voided: boolean }>()
-  for (const order of liveOrders) known.set(order.local_id, { total: order.total, method: order.payment_method, voided: false })
+  const known = new Map<number, { total: number; voided: boolean }>()
+  for (const order of liveOrders) known.set(order.local_id, { total: order.total, voided: false })
   for (const sale of sales) {
     if (!known.has(sale.order_id)) {
-      known.set(sale.order_id, { total: sale.total, method: sale.payment_method, voided: sale.status === 'voided' })
+      known.set(sale.order_id, { total: sale.total, voided: sale.status === 'voided' })
     }
   }
   const atClose = Array.from(known.entries()).filter(([id, sale]) => {
     const kind = firstKind.get(id)
     return !sale.voided && (kind === undefined || kind === 'opening' || kind === 'reassign_out')
   })
-  const totalFor = (method: string): number =>
-    atClose.filter(([, sale]) => sale.method === method).reduce((sum, [, sale]) => sum + sale.total, 0)
+  // docs/phase-250: how each sale was paid comes from its legs, added in the same order as before.
+  const atCloseIds = atClose.map(([id]) => id)
+  const legs = db.paymentLegsFor(atCloseIds)
+  const totalFor = (method: PaymentMethod): number => methodTotalOf(legs, atCloseIds, method)
   return {
     adjustments,
     salesAtClose: {
@@ -594,7 +600,7 @@ export function generateDailySummary(
   range: { startIso: string; endIso: string } = getUtcDayRange()
 ): DailySummary {
   const orders = excludeVoided(db.getOrdersForDateRange(range.startIso, range.endIso))
-  const totalsByMethod = sumByPaymentMethod(orders)
+  const totalsByMethod = sumByPaymentMethod(db, orders)
   const totalRevenue = orders.reduce((sum, order) => sum + order.total, 0)
 
   return {
@@ -860,7 +866,7 @@ interface EndOfDayScope {
  */
 function buildEndOfDayReport(db: RubisDatabase, scope: EndOfDayScope): EndOfDayReport {
   const { localDay, shiftId, shiftsOfDay, orders, todaysPayments, carryOverPayments } = scope
-  const totalsByMethod = sumByPaymentMethod(orders)
+  const totalsByMethod = sumByPaymentMethod(db, orders)
 
   const staffNameCache = new Map<number, string>()
   const staffName = (staffId: number): string => {
@@ -891,7 +897,7 @@ function buildEndOfDayReport(db: RubisDatabase, scope: EndOfDayScope): EndOfDayR
       staffId,
       staffName: staffName(staffId),
       orderCount: staffOrders.length,
-      totalsByMethod: sumByPaymentMethod(staffOrders),
+      totalsByMethod: sumByPaymentMethod(db, staffOrders),
       mpesaByMode: sumMpesaByMode(paymentsByStaff.get(staffId) ?? [])
     })
   )
@@ -1321,7 +1327,7 @@ export function generateSalesSummary(
   range: ReportRange
 ): SalesSummary {
   const orders = excludeVoided(db.getOrdersForDateRange(range.startIso, range.endIso))
-  const totalsByMethod = sumByPaymentMethod(orders)
+  const totalsByMethod = sumByPaymentMethod(db, orders)
   const totalRevenue = orders.reduce((sum, order) => sum + order.total, 0)
   const payments = excludeVoided(db.getMpesaPaymentsForDateRange(range.startIso, range.endIso))
   const { total: vatFromDeviceGroups, ...vatFromDeviceGroupsCoverage } = sumVatFromDeviceGroups(orders)

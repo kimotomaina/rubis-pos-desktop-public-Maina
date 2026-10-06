@@ -17,6 +17,7 @@ import type { PrinterSettings, ThermalPrinterLike } from '../src/main/services/p
 import { closeShiftUnlessHeld } from '../src/main/services/held-sales.js'
 import { shiftOpenSchema, shiftCloseSchema } from '../src/main/lib/ipcValidator.js'
 import { zReportMpesaLines } from '../src/main/lib/zReportMpesa.js'
+import { legsOf } from './helpers/paymentLegs.js'
 import { zReportMpesaLines as rendererLines } from '../src/renderer/src/lib/zReportMpesa.js'
 
 vi.mock('better-sqlite3', () => ({ default: vi.fn() }))
@@ -103,9 +104,12 @@ const openShiftRow: ShiftRow = {
   status: 'open'
 }
 
+// CHANGED (docs/phase-250). OLD: every order made here had local id 1. NEW: each gets its own id, as real orders do, because
+// the readers now find how a sale was paid by its id.
+let nextOrderId = 1
 const order = (total: number, method: 'cash' | 'mpesa' | 'card', status = 'completed'): OrderRow =>
   ({
-    local_id: 1,
+    local_id: nextOrderId++,
     shopify_order_id: null,
     total,
     status,
@@ -157,7 +161,7 @@ describe('closeShift with M-Pesa balances', () => {
   const closeWith = (shift: ShiftRow, closing: number | null) => {
     const { fake, db } = freshDb()
     fake.queueGetResult('FROM shifts WHERE id', shift)
-    fake.setAllResult('FROM orders WHERE shift_id', [
+    serveShiftOrders(fake, [
       order(50, 'cash'),
       order(300, 'mpesa'),
       order(200, 'mpesa'),
@@ -250,6 +254,7 @@ const dbFor = (shift: ShiftRow, orders: OrderRow[] = []): RubisDatabase =>
     getShiftMerge: () => undefined, // ADDED (docs/phase-239): the Z report reads whether the shift was merged
     listShiftAdjustments: vi.fn(() => []), // ADDED (docs/phase-232): the Z report reads the shift's adjustments
     listAdjustmentSales: vi.fn(() => []), // ADDED (docs/phase-232)
+    paymentLegsFor: legsOf(orders) // ADDED (docs/phase-250): how each sale was paid, from its legs, served from the same rows
   }) as unknown as RubisDatabase
 
 describe('generateZReport M-Pesa balances', () => {
@@ -416,3 +421,12 @@ describe('the Z report M-Pesa lines', () => {
     ])
   })
 })
+
+/**
+ * ADDED (docs/phase-250): the readers take how each sale was paid from its legs (`paymentLegsFor`, one query over the
+ * order ids), so the same rows serve the shift's orders and their legs.
+ */
+function serveShiftOrders(fake: { setAllResult: (match: string, rows: unknown[]) => void }, rows: unknown[]): void {
+  fake.setAllResult('FROM orders WHERE shift_id', rows)
+  fake.setAllResult('json_each', rows)
+}

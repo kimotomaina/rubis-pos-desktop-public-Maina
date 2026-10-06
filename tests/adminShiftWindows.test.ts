@@ -57,7 +57,8 @@ function stubApi(shift: ShiftRow | null, holder: ShiftRow | null = null): void {
       getOpenShift: () => (shift && shift.status === 'open' ? shift : undefined),
       listShiftWindows: () => (known ? [{ id: known.id, clock_in: known.clock_in, clock_out: known.clock_out }] : []),
       listUnattachedSales: () => [],
-      listAbsorbedShiftIds: () => [] // ADDED (docs/phase-242): the window's shift is one that was not merged into another
+      listAbsorbedShiftIds: () => [], // ADDED (docs/phase-242): the window's shift is one that was not merged into another
+      paymentLegsFor: () => new Map() // ADDED (docs/phase-250): the window status reads how sales were paid from their legs; this stub has no sales.
     },
     Date.now()
   )

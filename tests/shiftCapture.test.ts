@@ -26,6 +26,7 @@ import { renderZReport } from '../src/main/services/printer.js'
 import type { PrinterSettings, ThermalPrinterLike } from '../src/main/services/printer.js'
 import { hashPin } from '../src/main/services/auth.js'
 import { openShiftChecked, OPEN_SHIFT_ADMIN_ONLY_MESSAGE } from '../src/main/services/shift-open.js'
+import { legsOf } from './helpers/paymentLegs.js'
 import type { OpenShiftDb } from '../src/main/services/shift-open.js'
 
 vi.mock('better-sqlite3', () => ({ default: vi.fn() }))
@@ -156,7 +157,8 @@ describe('D4: "Cash not counted"', () => {
           listShiftCorrections: () => [],
           getShiftMerge: () => undefined, // ADDED (docs/phase-239): the Z report reads whether the shift was merged
           listShiftAdjustments: () => [], // ADDED (docs/phase-232)
-          listAdjustmentSales: () => []
+          listAdjustmentSales: () => [],
+          paymentLegsFor: legsOf(orders as unknown as Parameters<typeof legsOf>[0]) // ADDED (docs/phase-250): how each sale was paid, from its legs
         } as unknown as RubisDatabase,
         9,
         0.16
@@ -245,7 +247,7 @@ describe('D4: "Cash not counted"', () => {
       const { fake, db } = freshDb()
       fake.queueGetResult('FROM shifts WHERE id', flagged)
       fake.setAllResult('FROM shift_corrections WHERE shift_id', [])
-      fake.setAllResult('FROM orders WHERE shift_id', [])
+      serveShiftOrders(fake, [])
       fake.queueRunResult('INSERT INTO shift_corrections', { lastInsertRowid: 3 })
 
       expect(() => db.addShiftCorrection(correction, NOW)).not.toThrow()
@@ -256,7 +258,7 @@ describe('D4: "Cash not counted"', () => {
       const { fake, db } = freshDb()
       fake.queueGetResult('FROM shifts WHERE id', { ...flagged, cash_not_counted: 0, starting_cash: 0, ending_cash: 0, expected_cash: 0, discrepancy: 0 })
       fake.setAllResult('FROM shift_corrections WHERE shift_id', [])
-      fake.setAllResult('FROM orders WHERE shift_id', [])
+      serveShiftOrders(fake, [])
 
       expect(() => db.addShiftCorrection(correction, NOW)).toThrow('Nothing has changed from the current figures')
     })
@@ -368,3 +370,12 @@ describe('the handlers in main/index.ts', () => {
   })
 
 })
+
+/**
+ * ADDED (docs/phase-250): the readers take how each sale was paid from its legs (`paymentLegsFor`, one query over the
+ * order ids), so the same rows serve the shift's orders and their legs.
+ */
+function serveShiftOrders(fake: { setAllResult: (match: string, rows: unknown[]) => void }, rows: unknown[]): void {
+  fake.setAllResult('FROM orders WHERE shift_id', rows)
+  fake.setAllResult('json_each', rows)
+}

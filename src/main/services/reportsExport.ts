@@ -56,6 +56,8 @@ function parsePayload(order: OrderRow): OfflineOrderPayload | null {
 export function buildOrdersCsv(db: RubisDatabase, range: ReportRange, taxRate: number): string {
   const orders = db.getOrdersForDateRange(range.startIso, range.endIso)
   const payments = db.getMpesaPaymentsForDateRange(range.startIso, range.endIso)
+  // docs/phase-250: the payment method column comes from the sale's legs. A sale is paid one way today: one leg.
+  const legs = db.paymentLegsFor(orders.map((order) => order.local_id))
 
   const paymentByOrder = new Map<number, MpesaPaymentRow>()
   for (const payment of payments) {
@@ -116,7 +118,7 @@ export function buildOrdersCsv(db: RubisDatabase, range: ReportRange, taxRate: n
       order.fiscal_invoice_number ?? '',
       order.fiscal_status ?? '',
       staffName(order.staff_id),
-      order.payment_method ?? '',
+      legs.get(order.local_id)?.[0]?.method ?? '',
       payment?.reference ?? '',
       payment?.mode ?? '',
       csvMoney(order.total),

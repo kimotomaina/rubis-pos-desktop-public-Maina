@@ -100,7 +100,8 @@ describe('the Z report of a shift recorded afterwards', () => {
         listShiftCorrections: () => [],
         getShiftMerge: () => undefined, // ADDED (docs/phase-239): the Z report reads whether the shift was merged
         listShiftAdjustments: () => [], // ADDED (docs/phase-232)
-        listAdjustmentSales: () => []
+        listAdjustmentSales: () => [],
+        paymentLegsFor: () => new Map() // ADDED (docs/phase-250): the readers take how each sale was paid from its legs; this fake has no sales.
       } as unknown as RubisDatabase,
       9,
       0.16

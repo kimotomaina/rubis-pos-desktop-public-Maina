@@ -40,6 +40,7 @@ const dbFor = (shift: ShiftRow): RubisDatabase =>
     getShiftMerge: () => undefined, // ADDED (docs/phase-239): the Z report reads whether the shift was merged
     listShiftAdjustments: vi.fn(() => []), // ADDED (docs/phase-232): the Z report reads the shift's adjustments
     listAdjustmentSales: vi.fn(() => []), // ADDED (docs/phase-232)
+    paymentLegsFor: () => new Map() // ADDED (docs/phase-250): the readers take how each sale was paid from its legs; this fake has no sales.
   }) as unknown as RubisDatabase
 
 describe('generateZReport shift fields', () => {

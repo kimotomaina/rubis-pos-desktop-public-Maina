@@ -126,8 +126,11 @@ const closedShift: ShiftRow = {
   mpesa_difference: -220
 }
 
+// CHANGED (docs/phase-250). OLD: every order made here had local id 1. NEW: each gets its own id, as real orders do, because
+// the readers now find how a sale was paid by its id.
+let nextOrderId = 1
 const order = (total: number, method: 'cash' | 'mpesa' | 'card', status = 'synced'): OrderRow =>
-  ({ local_id: 1, total, status, payment_method: method, shift_id: 1, created_at: '2026-10-05T07:00:00.000Z' }) as unknown as OrderRow
+  ({ local_id: nextOrderId++, total, status, payment_method: method, shift_id: 1, created_at: '2026-10-05T07:00:00.000Z' }) as unknown as OrderRow
 
 const correctionRow = (overrides: Partial<ShiftCorrectionRow> = {}): ShiftCorrectionRow => ({
   id: 1,
@@ -162,7 +165,7 @@ function dbWith(shift: ShiftRow | null = closedShift, corrections: ShiftCorrecti
   const { fake, db } = freshDb()
   if (shift) fake.queueGetResult('FROM shifts WHERE id', shift)
   fake.setAllResult('FROM shift_corrections WHERE shift_id', corrections)
-  fake.setAllResult('FROM orders WHERE shift_id', [
+  serveShiftOrders(fake, [
     order(500, 'cash'),
     order(300, 'mpesa'),
     order(200, 'mpesa'),
@@ -355,7 +358,8 @@ const reportDb = (corrections: ShiftCorrectionRow[]) =>
     listShiftCorrections: () => corrections,
     getShiftMerge: () => undefined, // ADDED (docs/phase-239): the Z report reads whether the shift was merged
     listShiftAdjustments: () => [], // ADDED (docs/phase-232)
-    listAdjustmentSales: () => []
+    listAdjustmentSales: () => [],
+    paymentLegsFor: () => new Map() // ADDED (docs/phase-250): the readers take how each sale was paid from its legs; this fake has no sales.
   }) as unknown as RubisDatabase
 
 describe('the Z report with corrections', () => {
@@ -626,3 +630,12 @@ describe('the Z report screen', () => {
     expect(onClose).not.toHaveBeenCalled()
   })
 })
+
+/**
+ * ADDED (docs/phase-250): the readers take how each sale was paid from its legs (`paymentLegsFor`, one query over the
+ * order ids), so the same rows serve the shift's orders and their legs.
+ */
+function serveShiftOrders(fake: { setAllResult: (match: string, rows: unknown[]) => void }, rows: unknown[]): void {
+  fake.setAllResult('FROM orders WHERE shift_id', rows)
+  fake.setAllResult('json_each', rows)
+}

@@ -410,7 +410,8 @@ describe('the cart window-end banner', () => {
         getOpenShift: () => ({ id: 7, clock_in: iso('2026-10-05T10:00:00') }) as unknown as ShiftRow,
         listShiftWindows: () => [{ id: 7, clock_in: iso('2026-10-05T10:00:00'), clock_out: null }],
         listUnattachedSales: () => [],
-        listAbsorbedShiftIds: () => [] // ADDED (docs/phase-242)
+        listAbsorbedShiftIds: () => [], // ADDED (docs/phase-242)
+        paymentLegsFor: () => new Map() // ADDED (docs/phase-250): the window status reads how sales were paid from their legs; this stub has no sales.
       },
       Date.parse(`${t}+03:00`)
     )

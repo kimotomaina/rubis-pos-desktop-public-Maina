@@ -14,12 +14,13 @@ import {
   shiftWindowOf,
   type ShiftType
 } from '../lib/shiftWindows.js'
-import type { EarlierSalesShown, RubisDatabase, UnattachedSaleRow } from './database.js'
+import type { EarlierSalesShown, PaymentMethod, RubisDatabase, UnattachedSaleRow } from './database.js'
+import { methodTotalOf } from '../lib/paymentLegs.js'
 
 /** What {@link getShiftWindowStatus} needs from the database. */
 export type ShiftWindowStatusDb = Pick<
   RubisDatabase,
-  'getOpenShift' | 'listShiftWindows' | 'listUnattachedSales' | 'listAbsorbedShiftIds'
+  'getOpenShift' | 'listShiftWindows' | 'listUnattachedSales' | 'listAbsorbedShiftIds' | 'paymentLegsFor'
 >
 
 /** The status of the shift window. */
@@ -67,10 +68,10 @@ export function getShiftWindowStatus(db: ShiftWindowStatusDb, nowMs: number = Da
   const waiting = holder
     ? []
     : planAutoAssignment(sales, shifts, nowMs).waiting.map((id) => byId.get(id) as UnattachedSaleRow)
-  const totalFor = (method: string): number =>
-    Math.round(
-      waiting.filter((sale) => sale.payment_method === method).reduce((sum, sale) => sum + sale.total, 0) * 100
-    ) / 100
+  // docs/phase-250: how each sale was paid comes from its legs, added in the same order as before.
+  const waitingIds = waiting.map((sale) => sale.local_id)
+  const legs = db.paymentLegsFor(waitingIds)
+  const totalFor = (method: PaymentMethod): number => Math.round(methodTotalOf(legs, waitingIds, method) * 100) / 100
 
   const open = db.getOpenShift()
   let openShift: ShiftWindowStatus['openShift'] = null

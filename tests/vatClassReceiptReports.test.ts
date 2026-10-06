@@ -22,6 +22,7 @@ import {
 import { buildOrdersCsv } from '../src/main/services/reportsExport.js'
 import type { OrderRow, RubisDatabase } from '../src/main/services/database.js'
 import { GOLDEN_SALES, makeCheckoutHarness, sellCash } from './helpers/vatClassWire.js'
+import { legsOf } from './helpers/paymentLegs.js'
 
 const SETTINGS = {
   taxRate: 0.16,
@@ -270,7 +271,8 @@ function fakeDb(orders: OrderRow[]): RubisDatabase {
     getShiftMerge: () => undefined, // ADDED (docs/phase-239): the Z report reads whether the shift was merged
     listShiftAdjustments: vi.fn(() => []), // ADDED (docs/phase-232): the Z report reads the shift's adjustments
     listAdjustmentSales: vi.fn(() => []), // ADDED (docs/phase-232)
-    getMpesaPaymentsForDateRange: vi.fn(() => [])
+    getMpesaPaymentsForDateRange: vi.fn(() => []),
+    paymentLegsFor: legsOf(orders) // ADDED (docs/phase-250): the readers take how each sale was paid from its legs, served here from the same rows.
   } as unknown as RubisDatabase
 }
 

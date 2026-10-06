@@ -11,6 +11,7 @@ import { buildOrderInput } from '../src/main/services/orders.js'
 import type { RubisDatabase, OrderRow, MpesaPaymentRow, OrderStatus, StaffRow } from '../src/main/services/database.js'
 import type { ReportRange } from '../src/main/services/reports.js'
 import type { OfflineOrderPayload } from '../src/main/services/shopify-types.js'
+import { legsOf } from './helpers/paymentLegs.js'
 
 const RANGE: ReportRange = {
   startIso: '2026-09-01T00:00:00.000Z',
@@ -57,7 +58,8 @@ function fakeDb(options: {
   return {
     getOrdersForDateRange: vi.fn(() => options.orders ?? []),
     getMpesaPaymentsForDateRange: vi.fn(() => options.payments ?? []),
-    getStaffById: vi.fn((id: number) => staffById.get(id))
+    getStaffById: vi.fn((id: number) => staffById.get(id)),
+    paymentLegsFor: legsOf(options.orders ?? []) // ADDED (docs/phase-250): the readers take how each sale was paid from its legs, served here from the same rows.
   } as unknown as RubisDatabase
 }
 

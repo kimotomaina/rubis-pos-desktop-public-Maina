@@ -25,6 +25,7 @@ import {
 import type { OrderRow, RubisDatabase as Db, StaffRow, CheckoutRequest } from '../src/main/services/database.js'
 import type { ReportRange } from '../src/main/services/reports.js'
 import type { CartItem } from '../src/renderer/src/types/shopify.js'
+import { legsOf } from './helpers/paymentLegs.js'
 
 const KISUMU = 'gid://shopify/Location/77557989479'
 const HAILE_SELASSIE = 'gid://shopify/Location/78361919591'
@@ -410,7 +411,8 @@ describe('the readers show the stored number and fall back only on NULL', () => 
     return {
       getOrdersForDateRange: vi.fn(() => orders),
       getMpesaPaymentsForDateRange: vi.fn(() => []),
-      getStaffById: vi.fn(() => staff)
+      getStaffById: vi.fn(() => staff),
+      paymentLegsFor: legsOf(orders) // ADDED (docs/phase-250): the readers take how each sale was paid from its legs, served here from the same rows.
     } as unknown as Db
   }
 

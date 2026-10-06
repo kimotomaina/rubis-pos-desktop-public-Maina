@@ -159,8 +159,11 @@ describe('RubisDatabase.getOpenShift', () => {
 })
 
 describe('RubisDatabase.closeShift', () => {
+  // CHANGED (docs/phase-250). OLD: every order made here had local id 1. NEW: each gets its own id, as real orders do, because
+  // the readers now find how a sale was paid by its id.
+  let nextOrderId = 1
   const cashOrder = (total: number): OrderRow => ({
-    local_id: 1,
+    local_id: nextOrderId++,
     shopify_order_id: null,
     total,
     status: 'pending_sync',
@@ -195,10 +198,7 @@ describe('RubisDatabase.closeShift', () => {
   it('computes expected cash from starting cash + cash-order revenue, and the discrepancy', () => {
     const { fake, db } = freshDb()
     fake.queueGetResult('FROM shifts WHERE id', openShiftRow)
-    fake.setAllResult(
-      'FROM orders WHERE shift_id',
-      [cashOrder(50), cashOrder(30), mpesaOrder(20)]
-    )
+    serveShiftOrders(fake, [cashOrder(50), cashOrder(30), mpesaOrder(20)])
 
     const result = db.closeShift(1, 175)
 
@@ -214,7 +214,7 @@ describe('RubisDatabase.closeShift', () => {
   it('reports a positive discrepancy when counted cash exceeds expected', () => {
     const { fake, db } = freshDb()
     fake.queueGetResult('FROM shifts WHERE id', openShiftRow)
-    fake.setAllResult('FROM orders WHERE shift_id', [cashOrder(50)])
+    serveShiftOrders(fake, [cashOrder(50)])
 
     const result = db.closeShift(1, 160)
 
@@ -326,3 +326,12 @@ describe('RubisDatabase shift type (docs/phase-199)', () => {
     expect(altered).not.toMatch(/NOT NULL|DEFAULT/i)
   })
 })
+
+/**
+ * ADDED (docs/phase-250): the readers take how each sale was paid from its legs (`paymentLegsFor`, one query over the
+ * order ids), so the same rows serve the shift's orders and their legs.
+ */
+function serveShiftOrders(fake: { setAllResult: (match: string, rows: unknown[]) => void }, rows: unknown[]): void {
+  fake.setAllResult('FROM orders WHERE shift_id', rows)
+  fake.setAllResult('json_each', rows)
+}
