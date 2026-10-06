@@ -348,7 +348,15 @@ function ShiftHistoryView({ staffName }: { staffName: (id: number) => string }) 
                         >
                           Z report
                         </button>
-                        {shift.status === 'closed' && shift.merged_into == null && (
+                        {shift.frozen && (
+                          <span
+                            title="Only the latest closed shift can be corrected or be given sales."
+                            className="flex h-9 items-center rounded-lg bg-slate-100 px-3 text-sm font-medium text-slate-500"
+                          >
+                            Locked
+                          </span>
+                        )}
+                        {shift.status === 'closed' && shift.merged_into == null && !shift.frozen && (
                           <button
                             type="button"
                             onClick={(event) => {

@@ -3663,10 +3663,10 @@ app.whenReady().then(async () => {
         return { success: false, error: validation.error }
       }
       try {
-        return {
-          success: true,
-          data: generateZReport(db, validation.data.shiftId, printerSettings.taxRate)
-        }
+        const report = generateZReport(db, validation.data.shiftId, printerSettings.taxRate)
+        // docs/phase-243: the screen hides Correct figures on a closed shift that is not the latest closed one.
+        const shift = db.getShiftById(validation.data.shiftId)
+        return { success: true, data: shift && db.isFrozenShift(shift) ? { ...report, frozen: true } : report }
       } catch (err) {
         return {
           success: false,
@@ -3831,7 +3831,12 @@ app.whenReady().then(async () => {
         // and a window counts only the shifts that were not merged.
         const absorbed = new Set(db.listAbsorbedShiftIds())
         const counts = countShiftsByWindow(db.listShiftWindows().filter((shift) => !absorbed.has(shift.id)))
-        const shifts = db.listVisibleShifts(REPORTS_PAGE_SIZE, offset).map((shift) => withWindow(shift, counts))
+        const latestClosed = db.latestClosedShiftId()
+        const shifts = db
+          .listVisibleShifts(REPORTS_PAGE_SIZE, offset)
+          .map((shift) => withWindow(shift, counts))
+          // docs/phase-243: a closed shift that is not the latest closed one is frozen for people.
+          .map((shift) => (shift.status === 'closed' && shift.id !== latestClosed ? { ...shift, frozen: true as const } : shift))
         return { success: true, data: { shifts, total: db.countVisibleShifts(), page } }
       } catch (err) {
         return {

@@ -72,6 +72,8 @@ function createFakeConnection() {
         if (queued && queued.length > 0) return queued.shift()
         // ADDED (docs/phase-232): a record's time is after the shift's newest record; an aggregate always answers one row.
         if (sql.includes('MAX(at)')) return { latest: null }
+        // ADDED (docs/phase-243): only the latest closed shift can be corrected; here it is shift 1, the one corrected.
+        if (sql.includes('ORDER BY clock_in DESC')) return { id: 1 }
         return undefined
       },
       all: (...params: unknown[]) => {

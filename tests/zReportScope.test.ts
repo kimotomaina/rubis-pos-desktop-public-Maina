@@ -122,12 +122,14 @@ describe('a Z report is scoped to one shift', () => {
   })
 
   it("follows a sale when an admin moves it: it leaves the first shift's report and joins the second's", () => {
-    const { db, shiftA, shiftB, a1 } = build()
+    // CHANGED (docs/phase-243). OLD: a sale was moved out of the closed shift A into B. NEW: no sale leaves a closed shift, so
+    // the sale (B's, made inside A's hours) moves out of the open shift B into the latest closed shift A.
+    const { db, shiftA, shiftB, b1 } = build()
 
-    db.reassignSale({ orderId: a1, toShiftId: shiftB, managerId: 2, reason: 'wrong shift', acknowledgeDifferentWindow: true })
+    db.reassignSale({ orderId: b1, toShiftId: shiftA, managerId: 2, reason: 'wrong shift', acknowledgeDifferentWindow: true })
 
-    expect(generateZReport(db, shiftA, 0.16).totalsByMethod.cash).toBe(0)
-    expect(generateZReport(db, shiftB, 0.16).totalsByMethod.cash).toBe(400)
+    expect(generateZReport(db, shiftB, 0.16).totalsByMethod.cash).toBe(0)
+    expect(generateZReport(db, shiftA, 0.16).totalsByMethod.cash).toBe(400)
   })
 
   it('does not move a report when sales with no shift are given one: only the shift that receives them changes', () => {

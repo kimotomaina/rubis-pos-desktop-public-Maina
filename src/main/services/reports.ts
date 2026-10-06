@@ -105,6 +105,11 @@ export interface ZReport {
    */
   cashNotCounted?: boolean
   /**
+   * `true` for a closed shift that is not the latest closed one (docs/phase-243): people cannot correct it or give it sales.
+   * Set by the `reports:z-report` handler for the screen, not by {@link generateZReport}; absent otherwise.
+   */
+  frozen?: true
+  /**
    * The stored label when it differs from the window of `clock_in` (docs/phase-232, W4): `shiftType` is always the
    * window's. The report says "Labelled Day when opened". Absent when they agree, or there was no label.
    */

@@ -280,7 +280,7 @@ export default function ZReportModal({ report: initialReport, onClose, startCorr
               >
                 {printing ? 'Printing…' : 'Print Z-Report'}
               </button>
-              {report.status === 'closed' && !report.mergedInto && (
+              {report.status === 'closed' && !report.mergedInto && !report.frozen && (
                 <button
                   type="button"
                   onClick={() => setCorrecting(true)}

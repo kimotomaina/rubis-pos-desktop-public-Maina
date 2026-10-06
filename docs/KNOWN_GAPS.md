@@ -494,3 +494,7 @@ The automatic assignment runs at start, before Open Shift, after Close Shift and
 ## An automatic merge counts the earlier shift's cash twice when the survivor's float already held it (phase 242)
 
 When the till merges two shifts of one window it keeps the surviving shift's own float and count (the owner's ruling in phase 239). If the drawer count taken when the surviving shift opened already included the earlier shift's cash, that cash is in the survivor's float and again in the sales that moved in, so its expected cash is too high and a difference shows. The figures are put right afterwards with Correct figures on the survivor. Nothing is lost: the original rows and records stay.
+
+## An older closed shift cannot be corrected, so a shift the till made for an earlier window cannot be given its counts later (phase 243)
+
+Only the latest closed shift can be corrected or be given sales by a person; every older closed shift is frozen. A shift the till makes for an earlier window (cash not counted) can therefore only be given real counts while it is the latest closed shift. Once a later shift closes it stays "Cash not counted". Nothing lets an admin lift the lock. The till's own automatic assignment and merge are not held to the rule.

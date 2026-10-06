@@ -770,11 +770,15 @@ describe('the window status the screens read', () => {
 })
 
 describe('S5: an admin moves a sale to another shift', () => {
-  /** Two closed counted shifts in different windows, one cash sale of 400 in the first. */
+  // CHANGED (docs/phase-243). OLD: both shifts closed and the sale moved out of the closed Day shift into the closed Night one.
+  // NEW: no sale leaves a closed shift and only the latest closed shift can be given one, so the sale is in the OPEN Night
+  // shift and goes into the closed Day shift (the latest closed). The Day window is a different one from the sale's, so the
+  // tick is needed; the open shift keeps no figures to recalculate.
+  /** An open Night shift holding one cash sale of 400, and a closed counted Day shift (the latest closed) it goes into. */
   function twoShifts() {
     const db = freshDb()
-    const from = insertShift(db, { clockIn: '2026-10-05T10:00:00', clockOut: '2026-10-05T17:30:00', startingCash: 100, endingCash: 700, type: 'day' })
-    const to = insertShift(db, { clockIn: '2026-10-05T18:00:00', clockOut: '2026-10-06T09:00:00', startingCash: 50, endingCash: 50, type: 'night' })
+    const to = insertShift(db, { clockIn: '2026-10-05T10:00:00', clockOut: '2026-10-05T17:30:00', startingCash: 100, endingCash: 700, type: 'day' })
+    const from = insertShift(db, { clockIn: '2026-10-05T18:00:00', clockOut: null, startingCash: 50, type: 'night' })
     const id = sale(db, '2026-10-05T18:30:00', 400, 'cash', { shiftId: from })
     return { db, from, to, id }
   }
@@ -793,9 +797,9 @@ describe('S5: an admin moves a sale to another shift', () => {
     const into = adjustments(db, to)[0]
     expect(out).toMatchObject({ kind: 'reassign_out', peer_shift_id: to, by_staff_id: 7, reason: 'Rung up on the wrong shift', sales_count: 1, cash_total: 400, at: new Date(at).toISOString() })
     expect(into).toMatchObject({ kind: 'reassign_in', peer_shift_id: from, by_staff_id: 7, reason: 'Rung up on the wrong shift', at: new Date(at).toISOString() })
-    // The "from" shift loses the sale's cash from its expected figure; the "to" shift gains it. Counted cash is kept.
-    expect(out).toMatchObject({ starting_cash: 100, ending_cash: 700, expected_cash: 100, discrepancy: 600 })
-    expect(into).toMatchObject({ starting_cash: 50, ending_cash: 50, expected_cash: 450, discrepancy: -400 })
+    // The open "from" shift has no figures to keep; the closed "to" shift gains the sale's cash, its counted cash kept.
+    expect(out).toMatchObject({ starting_cash: null, expected_cash: null })
+    expect(into).toMatchObject({ starting_cash: 100, ending_cash: 700, expected_cash: 500, discrepancy: 200 })
     expect(conn(db).prepare('SELECT order_id FROM shift_adjustment_sales WHERE adjustment_id = ?').all(out.id)).toEqual([{ order_id: id }])
   })
 
@@ -810,17 +814,18 @@ describe('S5: an admin moves a sale to another shift', () => {
       fromShiftId: from,
       toShiftId: to,
       problem: null,
-      differentWindow: false,
-      from: { expectedCash: 100, discrepancy: 600 },
-      to: { expectedCash: 450, discrepancy: -400 }
+      differentWindow: true,
+      from: null,
+      to: { expectedCash: 500, discrepancy: 200 }
     })
     expect(snapshot(db)).toEqual(before)
   })
 
   it('needs the tick when the sale was made in a different window from the shift it goes to', () => {
+    // CHANGED (docs/phase-243): the Day sale is in an open Day shift and goes into the latest closed shift, a Night one.
     const db = freshDb()
-    const day = insertShift(db, { clockIn: '2026-10-05T10:00:00', clockOut: '2026-10-05T17:30:00', endingCash: 0, type: 'day' })
-    const night = insertShift(db, { clockIn: '2026-10-05T18:00:00', clockOut: '2026-10-06T09:00:00', endingCash: 0, type: 'night' })
+    const night = insertShift(db, { clockIn: '2026-10-04T18:00:00', clockOut: '2026-10-05T09:00:00', endingCash: 0, type: 'night' })
+    const day = insertShift(db, { clockIn: '2026-10-05T10:00:00', clockOut: null, type: 'day' })
     const id = sale(db, '2026-10-05T11:00:00', 100, 'cash', { shiftId: day }) // a Day sale
     const before = snapshot(db)
 
@@ -832,7 +837,8 @@ describe('S5: an admin moves a sale to another shift', () => {
 
   it('does not need the tick for a sale inside the target shift\'s own times', () => {
     const db = freshDb()
-    const a = insertShift(db, { clockIn: '2026-10-05T10:00:00', clockOut: '2026-10-05T12:00:00', endingCash: 0, type: 'day' })
+    // CHANGED (docs/phase-243): the first shift is open (a sale cannot leave a closed one); the second is the latest closed.
+    const a = insertShift(db, { clockIn: '2026-10-05T10:00:00', clockOut: null, type: 'day' })
     const b = insertShift(db, { clockIn: '2026-10-05T16:00:00', clockOut: '2026-10-05T20:00:00', endingCash: 0, type: 'day' })
     const id = sale(db, '2026-10-05T18:30:00', 100, 'cash', { shiftId: a }) // Night window, inside shift b
 
@@ -955,17 +961,20 @@ describe('the Z report with adjustments', () => {
   })
 
   it('counts a sale moved out as part of what the shift held at close, and one moved in as not', () => {
+    // CHANGED (docs/phase-243). OLD: a sale moved by hand out of a closed Day shift into a closed Night one. NEW: no sale leaves a
+    // closed shift by hand; the only way sales leave one is the merge of two shifts of a window, so this merges a closed Night
+    // shift into the latest closed one.
     const db = freshDb()
-    const a = insertShift(db, { clockIn: '2026-10-05T10:00:00', clockOut: '2026-10-05T17:30:00', startingCash: 0, endingCash: 500, type: 'day' })
-    const b = insertShift(db, { clockIn: '2026-10-05T18:00:00', clockOut: '2026-10-06T09:00:00', startingCash: 0, endingCash: 0, type: 'night' })
-    const moved = sale(db, '2026-10-05T12:00:00', 300, 'cash', { shiftId: a })
-    sale(db, '2026-10-05T13:00:00', 200, 'cash', { shiftId: a })
-    db.reassignSale({ orderId: moved, toShiftId: b, managerId: 7, reason: 'x', acknowledgeDifferentWindow: true })
+    const a = insertShift(db, { clockIn: '2026-10-05T18:00:00', clockOut: '2026-10-05T19:00:00', startingCash: 0, endingCash: 500, type: 'night' })
+    const b = insertShift(db, { clockIn: '2026-10-05T19:30:00', clockOut: '2026-10-05T20:30:00', startingCash: 0, endingCash: 0, type: 'night' })
+    sale(db, '2026-10-05T18:10:00', 300, 'cash', { shiftId: a })
+    sale(db, '2026-10-05T18:20:00', 200, 'cash', { shiftId: a })
+    db.mergeShifts({ absorbedShiftId: a, intoShiftId: b, managerId: 7, reason: 'x' }, ms('2026-10-06T10:00:00'))
 
     expect(generateZReport(db, a, 0.16).salesAtClose).toMatchObject({ orderCount: 2, totalRevenue: 500 })
-    expect(generateZReport(db, a, 0.16).orderCount).toBe(1)
+    expect(generateZReport(db, a, 0.16).orderCount).toBe(0)
     expect(generateZReport(db, b, 0.16).salesAtClose).toMatchObject({ orderCount: 0, totalRevenue: 0 })
-    expect(generateZReport(db, b, 0.16).orderCount).toBe(1)
+    expect(generateZReport(db, b, 0.16).orderCount).toBe(2)
   })
 
   it('does not count a sale that joined at opening as added later, and omits the line when nothing changed', () => {

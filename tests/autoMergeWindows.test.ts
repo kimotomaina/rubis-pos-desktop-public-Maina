@@ -339,7 +339,9 @@ describe('the run that merges and then gives sales their shift', () => {
     const body = source.slice(start, source.indexOf('ipcMain.handle(', start + 20))
 
     expect(source).toContain("runAutoAssign(db, (detail) => tillLog.record('auto-assign-failed', detail))")
-    expect(body).toContain('db.listVisibleShifts(')
+    // CHANGED (docs/phase-243). OLD: `db.listVisibleShifts(` on one line. NEW: the handler also marks frozen shifts, so the call is
+    // written over several lines: `.listVisibleShifts(`.
+    expect(body).toContain('.listVisibleShifts(')
     expect(body).toContain('db.countVisibleShifts()')
     expect(body).toContain('!absorbed.has(shift.id)')
   })

@@ -20,6 +20,8 @@ import { planAutoAssignment } from '../lib/autoAssign.js'
 import {
   AUTO_MERGE_REASON,
   AUTO_SHIFT_REASON,
+  closedShiftKeepsSalesMessage,
+  frozenShiftMessage,
   OPENED_WITH_EARLIER_SALES_REASON,
   STALE_EARLIER_SALES_MESSAGE,
   drawerBelowEarlierMessage,
@@ -372,6 +374,11 @@ export interface ShiftRow {
   merged_into?: number | null
   /** The shifts merged into this one (docs/phase-242), oldest first; added by `listVisibleShifts`. */
   absorbed_shifts?: Array<{ id: number; clock_in: string; clock_out: string | null }>
+  /**
+   * `true` for a closed shift that is not the latest closed one (docs/phase-243): people cannot correct it or give it sales.
+   * Added when a shift is read for the screens; absent otherwise.
+   */
+  frozen?: true
 }
 
 /** Row shape of the `shift_merges` table (docs/phase-239): one append-only record of a shift absorbed by another. */
@@ -4009,6 +4016,33 @@ export class RubisDatabase {
   }
 
   /**
+   * The latest closed shift (docs/phase-243): the one most recently opened of those that are closed and were not merged
+   * into another. It is the only closed shift a person may correct or give sales to; every older one is frozen.
+   * `null` when no shift is closed.
+   *
+   * @returns {number | null}
+   */
+  latestClosedShiftId(): number | null {
+    const row = this.conn
+      .prepare(
+        `SELECT id FROM shifts WHERE status = 'closed' AND id NOT IN (SELECT absorbed_shift_id FROM shift_merges)
+         ORDER BY clock_in DESC, id DESC LIMIT 1`
+      )
+      .get() as { id: number } | undefined
+    return row?.id ?? null
+  }
+
+  /**
+   * Whether a closed shift is frozen for people (docs/phase-243): closed, and not the latest closed shift.
+   *
+   * @param {ShiftRow} shift
+   * @returns {boolean}
+   */
+  isFrozenShift(shift: ShiftRow): boolean {
+    return shift.status === 'closed' && shift.id !== this.latestClosedShiftId()
+  }
+
+  /**
    * Which shift holds each absorbed shift now, absorbed id to survivor id.
    *
    * @returns {Map<number, number>}
@@ -4573,6 +4607,9 @@ export class RubisDatabase {
     const from = this.getShiftById(order.shift_id)
     if (!to) return { ...base, problem: `Shift ${toShiftId} not found` }
     if (!from) return { ...base, problem: `Shift ${order.shift_id} not found` }
+    // docs/phase-243: no sale leaves a closed shift by hand, and only the latest closed shift can be given one.
+    if (from.status === 'closed') return { ...base, problem: closedShiftKeepsSalesMessage(from.id) }
+    if (this.isFrozenShift(to)) return { ...base, problem: frozenShiftMessage(to.id, this.latestClosedShiftId()) }
     const cash = order.payment_method === 'cash' ? order.total : 0
     const mpesa = order.payment_method === 'mpesa' ? order.total : 0
     const after = (shift: ShiftRow, sign: 1 | -1): MoveFigures | null => {
@@ -4672,7 +4709,7 @@ export class RubisDatabase {
    * @param {number} intoShiftId
    * @returns {ShiftMergePreview}
    */
-  previewShiftMerge(absorbedShiftId: number, intoShiftId: number): ShiftMergePreview {
+  previewShiftMerge(absorbedShiftId: number, intoShiftId: number, byTill = false): ShiftMergePreview {
     const absorbed = this.getShiftById(absorbedShiftId)
     const into = this.getShiftById(intoShiftId)
     const sales = absorbed
@@ -4692,6 +4729,9 @@ export class RubisDatabase {
     if (this.getShiftMerge(absorbedShiftId)) return refuse(`Shift #${absorbedShiftId} was already merged`)
     if (this.getShiftMerge(intoShiftId)) return refuse(`Shift #${intoShiftId} was merged into another shift; merge into that one`)
     if (absorbed.status !== 'closed') return refuse(`Shift #${absorbedShiftId} is still open. Close it first`)
+    // docs/phase-243: a person cannot give sales to a closed shift that is not the latest one. The till's own merge of
+    // a window's shifts is not a person's change and is not held to this.
+    if (!byTill && this.isFrozenShift(into)) return refuse(frozenShiftMessage(intoShiftId, this.latestClosedShiftId()))
     try {
       if (!sameWindow(shiftWindowOf(absorbed.clock_in), shiftWindowOf(into.clock_in))) {
         return refuse('The two shifts are in different windows. Only shifts of one window can be merged')
@@ -4835,7 +4875,7 @@ export class RubisDatabase {
           if (open.length > 1) continue
           const survivor = open[0] ?? group[group.length - 1]
           const others = group.filter((shift) => shift.id !== survivor.id)
-          if (others.some((shift) => this.previewShiftMerge(shift.id, survivor.id).problem !== null)) continue
+          if (others.some((shift) => this.previewShiftMerge(shift.id, survivor.id, true).problem !== null)) continue
           for (const other of others) {
             merged.push(this.performMerge(other.id, survivor.id, 0, AUTO_MERGE_REASON, nowMs))
           }
@@ -4891,6 +4931,10 @@ export class RubisDatabase {
       }
       if (shift.status !== 'closed') {
         throw new Error(`Shift ${input.shiftId} is still open: close it before correcting its figures`)
+      }
+      // docs/phase-243: only the latest closed shift can be corrected; an older one is frozen.
+      if (this.isFrozenShift(shift)) {
+        throw new Error(frozenShiftMessage(shift.id, this.latestClosedShiftId()))
       }
 
       const corrections = this.listShiftCorrections(input.shiftId)

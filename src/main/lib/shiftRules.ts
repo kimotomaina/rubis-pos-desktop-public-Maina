@@ -7,6 +7,28 @@
 import { shiftEndClock, shiftName, windowClosableFrom, type ShiftWindowInstance } from './shiftWindows.js'
 
 export const AUTO_SHIFT_REASON = 'Created automatically for sales with no shift'
+/**
+ * @param {number} shiftId — a closed shift a sale would be taken out of
+ * @returns {string}
+ */
+export function closedShiftKeepsSalesMessage(shiftId: number): string {
+  return `Shift #${shiftId} is closed. A sale cannot be taken out of a closed shift.`
+}
+
+/**
+ * Why a closed shift cannot be changed by a person (docs/phase-243): only the latest closed shift can be corrected or
+ * be given sales. An older one is frozen.
+ *
+ * @param {number} shiftId — the closed shift someone tried to change
+ * @param {number | null} latestClosedId — the latest closed shift, or `null` when this one was merged into another
+ * @returns {string}
+ */
+export function frozenShiftMessage(shiftId: number, latestClosedId: number | null): string {
+  return latestClosedId === null || latestClosedId === shiftId
+    ? `Shift #${shiftId} was merged into another shift and can no longer be changed.`
+    : `Shift #${shiftId} is closed and is not the latest closed shift (#${latestClosedId}). Only the latest closed shift can be corrected or be given sales.`
+}
+
 /** Why the till merged two shifts of one window by itself (docs/phase-242). */
 export const AUTO_MERGE_REASON = 'Merged automatically: a window has one shift'
 export const OPENED_WITH_EARLIER_SALES_REASON = 'Earlier sales in this window joined when the shift opened'
