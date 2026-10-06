@@ -8,11 +8,18 @@
 import type { EarlierSalesShown } from '../../../main/services/database.js'
 
 /**
- * What the Open Shift fields hold when the form opens (docs/phase-246, R4): 0, and editable. The drawer count and the
- * M-Pesa balance start at 0 instead of blank. Sales already made in the window still join and the float is still the
- * drawer less their cash, so a 0 drawer with earlier cash sales is refused until it is counted.
+ * What the Open Shift drawer count holds when the form opens (docs/phase-246, R4): 0, and editable. Sales already made in
+ * the window still join and the float is still the drawer less their cash, so a 0 drawer with earlier cash sales is
+ * refused until it is counted.
  */
 export const OPEN_SHIFT_FIGURE_DEFAULT = '0'
+
+/**
+ * What the Open Shift M-Pesa balance holds when the form opens (docs/phase-246-2): blank, read as "not recorded" unless the
+ * cashier types the balance. A 0 here would record an opening balance nobody counted and hold Confirm whenever earlier
+ * M-Pesa sales are in the window.
+ */
+export const OPEN_SHIFT_MPESA_DEFAULT = ''
 
 /** The figures the form shows. */
 export interface FloatPreview {

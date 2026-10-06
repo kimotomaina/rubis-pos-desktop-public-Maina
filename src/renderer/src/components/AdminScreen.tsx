@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { useAuthStore } from '../stores/authStore.js'
 import { useHeldSalesStore } from '../stores/heldSalesStore.js'
 import { closeShiftBlockedMessage } from '../lib/heldSale.js'
-import { OPEN_SHIFT_FIGURE_DEFAULT } from '../lib/openShiftFloat.js'
+import { OPEN_SHIFT_FIGURE_DEFAULT, OPEN_SHIFT_MPESA_DEFAULT } from '../lib/openShiftFloat.js'
 import { useUnfiledCountStore } from '../stores/unfiledCountStore.js'
 import { useUpdateStatusStore } from '../stores/updateStatusStore.js'
 import {
@@ -289,7 +289,7 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
   const [startingCashInput, setStartingCashInput] = useState(OPEN_SHIFT_FIGURE_DEFAULT)
   const [endingCashInput, setEndingCashInput] = useState('')
   // docs/phase-222: optional; blank means "not recorded", which a zero is not.
-  const [mpesaOpeningInput, setMpesaOpeningInput] = useState(OPEN_SHIFT_FIGURE_DEFAULT)
+  const [mpesaOpeningInput, setMpesaOpeningInput] = useState(OPEN_SHIFT_MPESA_DEFAULT)
   const [mpesaClosingInput, setMpesaClosingInput] = useState('')
   const [cardClosingInput, setCardClosingInput] = useState('')
   const [showOpenForm, setShowOpenForm] = useState(false)
@@ -1141,7 +1141,7 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
       return
     }
     setStartingCashInput(OPEN_SHIFT_FIGURE_DEFAULT)
-    setMpesaOpeningInput(OPEN_SHIFT_FIGURE_DEFAULT)
+    setMpesaOpeningInput(OPEN_SHIFT_MPESA_DEFAULT)
     setStartAtZero(false)
     setShowOpenForm(false)
     await refresh()
@@ -2494,7 +2494,7 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
             onCancel={() => {
               setShowOpenForm(false)
               setStartingCashInput(OPEN_SHIFT_FIGURE_DEFAULT)
-              setMpesaOpeningInput(OPEN_SHIFT_FIGURE_DEFAULT)
+              setMpesaOpeningInput(OPEN_SHIFT_MPESA_DEFAULT)
             }}
           />
         )}

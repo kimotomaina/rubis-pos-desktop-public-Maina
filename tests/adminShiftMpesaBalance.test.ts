@@ -98,8 +98,8 @@ describe('Open Shift: M-Pesa balance (optional)', () => {
 
     expect(container.textContent).toContain('M-Pesa balance (optional)')
     const field = container.querySelectorAll('input')[1]!
-    // CHANGED (docs/phase-246, R4). OLD: the field started empty. NEW: it starts at 0, editable; cleared, it is still "Not recorded".
-    expect(field.value).toBe('0')
+    // CHANGED (docs/phase-246, R4): it started at 0. CHANGED again (docs/phase-246-2, the owner's ruling): it starts blank, "Not recorded".
+    expect(field.value).toBe('')
     expect(field.placeholder).toBe('Not recorded')
   })
 

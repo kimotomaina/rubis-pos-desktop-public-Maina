@@ -367,8 +367,8 @@ describe('the cart dialog (D5, S6)', () => {
     await flush()
 
     // CHANGED (docs/phase-232). OLD: openShift(1, 250, 'night'). NEW: no type is sent; the options carry what the form showed.
-    // CHANGED (docs/phase-246, R4). OLD: the third argument was `undefined` (M-Pesa blank). NEW: the field starts at 0, so it is 0.
-    expect(window.api.openShift).toHaveBeenCalledWith(1, 250, 0, { earlierShown: NO_EARLIER, startAtZero: undefined })
+    // CHANGED (docs/phase-246, R4): the third argument was 0. CHANGED again (docs/phase-246-2): the M-Pesa field starts blank, so `undefined`.
+    expect(window.api.openShift).toHaveBeenCalledWith(1, 250, undefined, { earlierShown: NO_EARLIER, startAtZero: undefined })
     expect(requestManagerPin).not.toHaveBeenCalled()
     expect(onOpened).toHaveBeenCalledTimes(1)
   })
@@ -385,8 +385,8 @@ describe('the cart dialog (D5, S6)', () => {
     await flush()
 
     expect(requestManagerPin).toHaveBeenCalledTimes(1)
-    // CHANGED (docs/phase-246, R4). OLD: `undefined` for the M-Pesa balance. NEW: 0, the pre-filled figure.
-    expect(window.api.openShiftAsManager).toHaveBeenCalledWith(2, '2222', 250, 0, {
+    // CHANGED (docs/phase-246, R4): 0 for the M-Pesa balance. CHANGED again (docs/phase-246-2): blank, so `undefined`.
+    expect(window.api.openShiftAsManager).toHaveBeenCalledWith(2, '2222', 250, undefined, {
       earlierShown: NO_EARLIER,
       startAtZero: undefined
     })
@@ -465,34 +465,37 @@ describe('the cart dialog (D5, S6)', () => {
       await flush()
 
       // CHANGED (docs/phase-246, R4). OLD: `undefined` (M-Pesa blank). NEW: the M-Pesa field starts at 0, below the 300 of earlier M-Pesa
-      // sales, so it is cleared here; see "a pre-filled M-Pesa 0 holds Confirm" below for what 0 does.
+      // sales, so it is cleared here. docs/phase-246-2: it now starts blank; the clearing is kept and changes nothing.
       expect(window.api.openShift).toHaveBeenCalledWith(1, 4500, undefined, {
         earlierShown: { count: 3, cash: 1200, mpesa: 300 },
         startAtZero: undefined
       })
     })
 
-    // ADDED (docs/phase-246, R4): the pre-filled figures.
-    it('starts the drawer and the M-Pesa balance at 0, editable', async () => {
+    // ADDED (docs/phase-246, R4): the pre-filled figures. CHANGED (docs/phase-246-2): OLD: both at 0. NEW: the drawer at 0, the M-Pesa
+    // balance blank ("Not recorded").
+    it('starts the drawer at 0 and the M-Pesa balance blank, both editable', async () => {
       stubApi({ openShift: vi.fn() })
       await mountDialog({ id: 1, role: 'admin' })
 
       const inputs = Array.from(container.querySelectorAll<HTMLInputElement>('input[readonly]'))
 
-      expect(inputs.map((input) => input.value)).toEqual(['0', '0'])
+      expect(inputs.map((input) => input.value)).toEqual(['0', ''])
       typeCash('250')
       expect(container.querySelectorAll<HTMLInputElement>('input[readonly]')[0].value).toBe('250')
     })
 
-    it('holds Confirm while a pre-filled M-Pesa 0 is below the earlier M-Pesa sales, until it is counted or cleared', async () => {
+    // CHANGED (docs/phase-246-2). OLD: a pre-filled M-Pesa 0 held Confirm below the earlier M-Pesa sales until it was counted or cleared.
+    // NEW: the field starts blank, so nothing holds Confirm until a balance below the earlier M-Pesa sales is typed.
+    it('does not hold Confirm with the M-Pesa balance left blank, and holds it for a typed balance below the earlier M-Pesa sales', async () => {
       withEarlier()
       await mountDialog({ id: 1, role: 'admin' })
       typeCash('4500')
 
+      expect(confirm().disabled).toBe(false)
+      typeMpesa('0')
       expect(confirm().disabled).toBe(true)
       typeMpesa('500')
-      expect(confirm().disabled).toBe(false)
-      typeMpesa('')
       expect(confirm().disabled).toBe(false)
     })
 
@@ -512,7 +515,7 @@ describe('the cart dialog (D5, S6)', () => {
       withEarlier()
       await mountDialog({ id: 1, role: 'admin' })
       typeCash('800')
-      typeMpesa('') // CHANGED (docs/phase-246, R4): the M-Pesa 0 is cleared, or it would hold Confirm on its own.
+      typeMpesa('') // CHANGED (docs/phase-246, R4): the M-Pesa 0 was cleared. docs/phase-246-2: it starts blank; kept, changes nothing.
       expect(confirm().disabled).toBe(true)
 
       const tick = container.querySelector<HTMLInputElement>('input[type="checkbox"]')!

@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { MPESA_BALANCE_INVALID, parseOptionalBalance } from '../lib/optionalBalance.js'
 import { useShiftWindowStatus } from '../lib/useShiftWindowStatus.js'
-import { OPEN_SHIFT_FIGURE_DEFAULT } from '../lib/openShiftFloat.js'
+import { OPEN_SHIFT_FIGURE_DEFAULT, OPEN_SHIFT_MPESA_DEFAULT } from '../lib/openShiftFloat.js'
 import OpenShiftForm from './OpenShiftForm.js'
 
 interface OpenShiftDialogProps {
@@ -30,7 +30,7 @@ export default function OpenShiftDialog({ staff, requestManagerPin, onClose, onO
   const isAdmin = staff.role === 'admin'
   const { status } = useShiftWindowStatus()
   const [startingCash, setStartingCash] = useState(OPEN_SHIFT_FIGURE_DEFAULT)
-  const [mpesaOpening, setMpesaOpening] = useState(OPEN_SHIFT_FIGURE_DEFAULT)
+  const [mpesaOpening, setMpesaOpening] = useState(OPEN_SHIFT_MPESA_DEFAULT)
   const [startAtZero, setStartAtZero] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const earlier = status?.earlier ?? { count: 0, cash: 0, mpesa: 0 }

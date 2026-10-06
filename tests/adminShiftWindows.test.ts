@@ -165,8 +165,8 @@ describe('Open Shift: the window is shown, never chosen', () => {
     await click('Confirm')
 
     const call = vi.mocked(window.api.openShift).mock.calls[0]
-    // CHANGED (docs/phase-246, R4). OLD: `[1, 250, undefined]`, the M-Pesa field being blank. NEW: it starts at 0, so `[1, 250, 0]`.
-    expect(call.slice(0, 3)).toEqual([1, 250, 0])
+    // CHANGED (docs/phase-246, R4): `[1, 250, 0]`, the field starting at 0. CHANGED again (docs/phase-246-2): it starts blank, so `undefined`.
+    expect(call.slice(0, 3)).toEqual([1, 250, undefined])
     expect(JSON.stringify(call)).not.toMatch(/"(day|night)"/)
   })
 
