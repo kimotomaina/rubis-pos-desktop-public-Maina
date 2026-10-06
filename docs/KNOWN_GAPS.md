@@ -498,3 +498,7 @@ When the till merges two shifts of one window it keeps the surviving shift's own
 ## An older closed shift cannot be corrected, so a shift the till made for an earlier window cannot be given its counts later (phase 243)
 
 Only the latest closed shift can be corrected or be given sales by a person; every older closed shift is frozen. A shift the till makes for an earlier window (cash not counted) can therefore only be given real counts while it is the latest closed shift. Once a later shift closes it stays "Cash not counted". Nothing lets an admin lift the lock. The till's own automatic assignment and merge are not held to the rule.
+
+## The Daraja gate must be fixed before Daraja is switched on (phase 251)
+
+A Daraja STK confirmation can pay for more than one sale, the gate checks no amount, the screen can write a "success" STK record, a total with cents cannot complete by Daraja, and an unset callback address sends results to `example.com`. Daraja is not live (no consumer key on the till), so the owner parked all of it on 2026-10-06: see `docs/phase-251-audit.md`, "Ruling", for D1 to D6, F1, F2 and the callback address.

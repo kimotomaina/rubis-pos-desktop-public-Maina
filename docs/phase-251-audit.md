@@ -2,6 +2,7 @@
 
 - **Date:** 2026-10-06
 - **Asked by the owner:** the 21:10 rulings, §2. Phase 248 found that a Daraja STK confirmation can be used again on a later sale and that the gate checks no amount. Ruling D5 says fix both; audit first.
+- **Ruling (2026-10-06, 21:35):** accepted and parked. Daraja is not live and cannot run on the till today, so nothing here is built now. **D1 to D6, F1, F2 and the placeholder callback address (Observed, item 1) must be done before Daraja is switched on.** Listed in `KNOWN_GAPS.md`.
 - **Status:** audit only. No code, test or data change. No call to Safaricom; nothing sent to the device or Shopify. The 1606 copy was read through a temp copy; its three files are unchanged (SHA-256 before and after: `a3def016…`, `ee714dc4…`, `9bef3d97…`).
 
 ## Summary
