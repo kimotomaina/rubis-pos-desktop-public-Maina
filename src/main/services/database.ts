@@ -23,6 +23,10 @@ import {
   closedShiftKeepsSalesMessage,
   frozenShiftMessage,
   OPENED_WITH_EARLIER_SALES_REASON,
+  OVERRIDE_ADMIN_ONLY_MESSAGE,
+  OVERRIDE_REASON_MESSAGE,
+  OVERRIDE_REASON_MIN_LENGTH,
+  OVERRIDE_REASON_PREFIX,
   STALE_EARLIER_SALES_MESSAGE,
   drawerBelowEarlierMessage,
   mpesaBelowEarlierMessage,
@@ -525,6 +529,8 @@ export interface ReassignSaleInput {
   reason: string
   /** Required when the sale was made in a different window from the shift it goes to. */
   acknowledgeDifferentWindow?: boolean
+  /** An admin forcing the move past the closed-shift rules (docs/phase-244); needs a reason of 10 or more characters. */
+  override?: boolean
 }
 
 /** The figures one shift would show after a sale moves, `null` when it has none (open, or cash not counted). */
@@ -548,6 +554,10 @@ export interface SaleMovePreview {
   from: MoveFigures | null
   to: MoveFigures | null
   problem: string | null
+  /** `problem` is only a closed-shift rule, so an admin's override would lift it (docs/phase-244). */
+  overridable: boolean
+  /** The preview was asked with the override and a closed-shift rule had to be lifted for the move (docs/phase-244). */
+  overridden: boolean
 }
 
 /**
@@ -576,6 +586,8 @@ export interface AddShiftCorrectionInput extends ShiftEnteredFigures {
   shiftId: number
   managerId: number
   reason: string
+  /** An admin correcting a closed shift that is not the latest (docs/phase-244); needs a reason of 10 or more characters. */
+  override?: boolean
 }
 
 /** Row shape of the `sync_queue` table. */
@@ -4570,11 +4582,15 @@ export class RubisDatabase {
    * What moving one sale to another shift would do, read-only (docs/phase-232): the sale, the two shifts, and the
    * expected cash and difference each would show afterwards. Never throws: the screen shows `problem` instead.
    *
+   * With `override` (docs/phase-244) the two closed-shift rules of phase 243 are lifted for the preview, so the figures
+   * show; the sale, the shifts and every other refusal stay. Whether the caller may override is not decided here.
+   *
    * @param {number} orderId
    * @param {number} toShiftId
+   * @param {boolean} [override]
    * @returns {SaleMovePreview}
    */
-  previewSaleMove(orderId: number, toShiftId: number): SaleMovePreview {
+  previewSaleMove(orderId: number, toShiftId: number, override = false): SaleMovePreview {
     const order = this.conn
       .prepare('SELECT local_id, total, status, created_at, payment_method, shift_id FROM orders WHERE local_id = ?')
       .get(orderId) as
@@ -4590,7 +4606,9 @@ export class RubisDatabase {
       differentWindow: false,
       from: null,
       to: null,
-      problem: null
+      problem: null,
+      overridable: false,
+      overridden: false
     }
     if (!order) return { ...empty, problem: `Order #${orderId} does not exist` }
     const base = {
@@ -4608,8 +4626,14 @@ export class RubisDatabase {
     if (!to) return { ...base, problem: `Shift ${toShiftId} not found` }
     if (!from) return { ...base, problem: `Shift ${order.shift_id} not found` }
     // docs/phase-243: no sale leaves a closed shift by hand, and only the latest closed shift can be given one.
-    if (from.status === 'closed') return { ...base, problem: closedShiftKeepsSalesMessage(from.id) }
-    if (this.isFrozenShift(to)) return { ...base, problem: frozenShiftMessage(to.id, this.latestClosedShiftId()) }
+    // docs/phase-244: an admin's override lifts exactly these two rules and nothing above or below them.
+    const freezeProblem =
+      from.status === 'closed'
+        ? closedShiftKeepsSalesMessage(from.id)
+        : this.isFrozenShift(to)
+          ? frozenShiftMessage(to.id, this.latestClosedShiftId())
+          : null
+    if (freezeProblem !== null && !override) return { ...base, problem: freezeProblem, overridable: true }
     const cash = order.payment_method === 'cash' ? order.total : 0
     const mpesa = order.payment_method === 'mpesa' ? order.total : 0
     const after = (shift: ShiftRow, sign: 1 | -1): MoveFigures | null => {
@@ -4621,8 +4645,24 @@ export class RubisDatabase {
       differentWindow: this.isDifferentWindow(order.created_at, to),
       from: after(from, -1),
       to: after(to, 1),
-      problem: null
+      problem: null,
+      overridden: freezeProblem !== null
     }
+  }
+
+  /**
+   * Refuses an override request unless it comes from an active admin with a reason of 10 or more characters
+   * (docs/phase-244). The IPC handler has already verified that admin's PIN; this is the guard that does not depend
+   * on the handler.
+   *
+   * @param {number} managerId
+   * @param {string} reason — trimmed
+   * @throws {Error} with a message fit to show the admin
+   */
+  private requireOverrideAllowed(managerId: number, reason: string): void {
+    const staff = this.getStaffById(managerId)
+    if (!staff || staff.role !== 'admin' || staff.is_active !== 1) throw new Error(OVERRIDE_ADMIN_ONLY_MESSAGE)
+    if (reason.length < OVERRIDE_REASON_MIN_LENGTH) throw new Error(OVERRIDE_REASON_MESSAGE)
   }
 
   /**
@@ -4645,6 +4685,10 @@ export class RubisDatabase {
    * sale is still in the shift it was read in moves it. Two adjustment records follow, one on each shift, sharing
    * who, when and why, each with the figures its shift now shows. The caller has already checked the admin's PIN.
    *
+   * `override: true` (docs/phase-244) lifts phase 243's two closed-shift rules, for an active admin with a reason of
+   * 10 or more characters only; the stored reason then starts `OVERRIDE (closed, not latest): ` so the Z report shows
+   * it was forced. A move that needed no override is stored as it is: the prefix means a rule was lifted.
+   *
    * @param {ReassignSaleInput} input
    * @param {number} [nowMs]
    * @returns {{ fromShiftId: number; toShiftId: number }}
@@ -4656,7 +4700,8 @@ export class RubisDatabase {
       throw new Error('A reason is required to move a sale')
     }
     return this.conn.transaction((): { fromShiftId: number; toShiftId: number } => {
-      const preview = this.previewSaleMove(input.orderId, input.toShiftId)
+      if (input.override === true) this.requireOverrideAllowed(input.managerId, reason)
+      const preview = this.previewSaleMove(input.orderId, input.toShiftId, input.override === true)
       if (preview.problem !== null) {
         throw new Error(preview.problem)
       }
@@ -4679,7 +4724,7 @@ export class RubisDatabase {
           kind,
           nowMs,
           byStaffId: input.managerId,
-          reason,
+          reason: preview.overridden ? `${OVERRIDE_REASON_PREFIX}${reason}` : reason,
           peerShiftId,
           orderIds: [input.orderId],
           figures: this.workedFiguresNow(this.getShiftById(shiftId) as ShiftRow)
@@ -4909,6 +4954,10 @@ export class RubisDatabase {
    * last correction's). One write transaction, so two managers correcting at once cannot both pass the
    * "changes something" check against the same current figures.
    *
+   * `override: true` (docs/phase-244) lets an active admin with a reason of 10 or more characters correct a closed
+   * shift that is not the latest (phase 243's freeze); the stored reason then starts `OVERRIDE (closed, not latest): `.
+   * It never opens an open or missing shift, and a correction that needed no override is stored as it is.
+   *
    * @param {AddShiftCorrectionInput} input
    * @param {number} [nowMs]
    * @returns {ShiftCorrectionRow}
@@ -4925,6 +4974,7 @@ export class RubisDatabase {
     }
 
     return this.conn.transaction((): ShiftCorrectionRow => {
+      if (input.override === true) this.requireOverrideAllowed(input.managerId, reason)
       const shift = this.getShiftById(input.shiftId)
       if (!shift) {
         throw new Error(`Shift ${input.shiftId} not found`)
@@ -4933,9 +4983,12 @@ export class RubisDatabase {
         throw new Error(`Shift ${input.shiftId} is still open: close it before correcting its figures`)
       }
       // docs/phase-243: only the latest closed shift can be corrected; an older one is frozen.
-      if (this.isFrozenShift(shift)) {
+      // docs/phase-244: an admin's override is the one way past it, and the stored reason says so.
+      const overridden = this.isFrozenShift(shift)
+      if (overridden && input.override !== true) {
         throw new Error(frozenShiftMessage(shift.id, this.latestClosedShiftId()))
       }
+      const storedReason = overridden ? `${OVERRIDE_REASON_PREFIX}${reason}` : reason
 
       const corrections = this.listShiftCorrections(input.shiftId)
       const latest = corrections[corrections.length - 1]
@@ -4981,7 +5034,7 @@ export class RubisDatabase {
           input.shiftId,
           input.managerId,
           correctedAt,
-          reason,
+          storedReason,
           entered.startingCash,
           entered.endingCash,
           worked.expectedCash,
@@ -4996,7 +5049,7 @@ export class RubisDatabase {
         shift_id: input.shiftId,
         corrected_by_staff_id: input.managerId,
         corrected_at: correctedAt,
-        reason,
+        reason: storedReason,
         starting_cash: entered.startingCash,
         ending_cash: entered.endingCash,
         expected_cash: worked.expectedCash,

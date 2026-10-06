@@ -7,4 +7,6 @@ export interface MoveSaleRequest {
   reason: string
   /** Required when the sale was made in a different window from the shift it goes to. */
   acknowledgeDifferentWindow?: boolean
+  /** An admin forcing the move past the closed-shift rules (docs/phase-244). */
+  override?: boolean
 }

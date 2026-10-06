@@ -11,4 +11,6 @@ export interface ShiftCorrectionRequest {
   mpesaOpeningBalance: number | null
   mpesaClosingBalance: number | null
   reason: string
+  /** An admin correcting a closed shift that is not the latest (docs/phase-244). */
+  override?: boolean
 }

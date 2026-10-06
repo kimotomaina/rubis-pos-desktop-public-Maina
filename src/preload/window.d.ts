@@ -250,7 +250,7 @@ export interface PosApi {
   /** Gives every sale with no shift to the shift it belongs to (docs/phase-232). No input, no PIN; running it again changes nothing. */
   autoAssignSales: () => Promise<ServiceResult<AutoAssignResult>>
   /** What moving one sale to another shift would do (docs/phase-232). Read-only. */
-  previewSaleMove: (orderId: number, toShiftId: number) => Promise<ServiceResult<SaleMovePreview>>
+  previewSaleMove: (orderId: number, toShiftId: number, override?: boolean) => Promise<ServiceResult<SaleMovePreview>>
   /** Moves one sale to another shift (docs/phase-232). Admin PIN re-checked in the main process. */
   moveSale: (request: MoveSaleRequest) => Promise<ServiceResult<{ fromShiftId: number; toShiftId: number }>>
   /** What merging one shift into another would do (docs/phase-239). Read-only. */

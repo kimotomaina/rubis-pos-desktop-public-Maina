@@ -208,7 +208,10 @@ describe('Move a sale', () => {
     differentWindow: false,
     from: { expectedCash: 100, discrepancy: 600, mpesaExpected: null, mpesaDifference: null },
     to: { expectedCash: 450, discrepancy: -400, mpesaExpected: null, mpesaDifference: null },
-    problem: null
+    problem: null,
+    // ADDED (docs/phase-244): the two override fields of the preview; this fixture is an ordinary move.
+    overridable: false,
+    overridden: false
   }
   const mount = async (onMoved = vi.fn()): Promise<ReturnType<typeof vi.fn>> => {
     await act(async () => {

@@ -234,7 +234,9 @@ describe('what the screens are told', () => {
     const database = readFileSync(join(process.cwd(), 'src', 'main', 'services', 'database.ts'), 'utf8').replace(/\r\n/g, '\n')
 
     expect(database).toContain('closedShiftKeepsSalesMessage(from.id)')
-    expect(database).toContain('if (this.isFrozenShift(shift)) {\n        throw new Error(frozenShiftMessage(')
-    expect(database).toContain('if (this.isFrozenShift(to)) return')
+    // CHANGED (docs/phase-244). Old: `if (this.isFrozenShift(shift)) {` and `if (this.isFrozenShift(to)) return`. New: the same
+    // two refusals, now lifted only by an admin's override (shiftOverride.test.ts).
+    expect(database).toContain('if (overridden && input.override !== true) {\n        throw new Error(frozenShiftMessage(')
+    expect(database).toContain('this.isFrozenShift(to)\n          ? frozenShiftMessage(')
   })
 })

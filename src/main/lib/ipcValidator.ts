@@ -570,7 +570,9 @@ export const windowReportSchema = z.object({
 /** `shifts:move-sale-preview` request payload (docs/phase-232) — read-only. */
 export const moveSalePreviewSchema = z.object({
   orderId: z.number().int().positive(),
-  toShiftId: z.number().int().positive()
+  toShiftId: z.number().int().positive(),
+  /** Docs/phase-244: preview the move with phase 243's closed-shift rules lifted. */
+  override: z.boolean().optional()
 })
 
 /**
@@ -581,7 +583,9 @@ export const moveSaleSchema = managerAuthzSchema.extend({
   orderId: z.number().int().positive(),
   toShiftId: z.number().int().positive(),
   reason: z.string().trim().min(1, 'A reason is required').max(300, 'Keep the reason under 300 characters'),
-  acknowledgeDifferentWindow: z.boolean().optional()
+  acknowledgeDifferentWindow: z.boolean().optional(),
+  /** Docs/phase-244: an admin forcing the move past the closed-shift rules; the database checks admin and reason length. */
+  override: z.boolean().optional()
 })
 
 /** `shifts:merge-preview` request payload (docs/phase-239). A read. */
@@ -611,7 +615,9 @@ export const shiftCorrectionSchema = managerAuthzSchema.extend({
   endingCash: z.number().finite().nonnegative(),
   mpesaOpeningBalance: z.number().finite().nonnegative().nullable(),
   mpesaClosingBalance: z.number().finite().nonnegative().nullable(),
-  reason: z.string().trim().min(1, 'A reason is required').max(300, 'Keep the reason under 300 characters')
+  reason: z.string().trim().min(1, 'A reason is required').max(300, 'Keep the reason under 300 characters'),
+  /** Docs/phase-244: an admin correcting a closed shift that is not the latest; the database checks admin and reason length. */
+  override: z.boolean().optional()
 })
 
 /** `reports:sales-summary` request payload. */

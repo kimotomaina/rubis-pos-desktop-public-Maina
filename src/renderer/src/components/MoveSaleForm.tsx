@@ -36,6 +36,7 @@ export default function MoveSaleForm({ onCancel, onMoved }: MoveSaleFormProps) {
   const [reason, setReason] = useState('')
   const [preview, setPreview] = useState<SaleMovePreview | null>(null)
   const [acknowledged, setAcknowledged] = useState(false)
+  const [override, setOverride] = useState(false)
   const [collectingPin, setCollectingPin] = useState(false)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -52,17 +53,32 @@ export default function MoveSaleForm({ onCancel, onMoved }: MoveSaleFormProps) {
     setError(null)
     setPreview(null)
     setAcknowledged(false)
+    setOverride(false)
     if (!numbersOk) {
       setError('Enter the order number and the number of the shift it goes to')
       return
     }
+    await loadPreview(false)
+  }
+
+  const loadPreview = async (withOverride: boolean): Promise<void> => {
     try {
-      const result = await window.api.previewSaleMove(orderId, toShiftId)
+      const result = withOverride
+        ? await window.api.previewSaleMove(orderId, toShiftId, true)
+        : await window.api.previewSaleMove(orderId, toShiftId)
       if (result.success && result.data) setPreview(result.data)
       else setError(result.error ?? 'Failed to check this move')
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to check this move')
     }
+  }
+
+  // docs/phase-244: ticking the override asks the main process for the preview with phase 243's closed-shift rules lifted.
+  const handleOverrideTick = (checked: boolean): void => {
+    setError(null)
+    setAcknowledged(false)
+    setOverride(checked)
+    void loadPreview(checked)
   }
 
   const handleMove = (): void => {
@@ -93,7 +109,8 @@ export default function MoveSaleForm({ onCancel, onMoved }: MoveSaleFormProps) {
           orderId,
           toShiftId,
           reason: reason.trim(),
-          ...(preview?.differentWindow ? { acknowledgeDifferentWindow: true } : {})
+          ...(preview?.differentWindow ? { acknowledgeDifferentWindow: true } : {}),
+          ...(override ? { override: true } : {})
         })
         if (result.success && result.data) {
           onMoved(`Order #${orderId} moved from shift #${result.data.fromShiftId} to shift #${result.data.toShiftId}.`)
@@ -183,6 +200,12 @@ export default function MoveSaleForm({ onCancel, onMoved }: MoveSaleFormProps) {
         </div>
       )}
       {preview?.problem && <p className="mb-3 text-base font-medium text-rose-700">{preview.problem}</p>}
+      {(preview?.overridable || override) && (
+        <label className="mb-3 flex items-center gap-2 text-base text-amber-900">
+          <input type="checkbox" checked={override} onChange={(event) => handleOverrideTick(event.target.checked)} />
+          <span>Override: this shift is closed and not the latest</span>
+        </label>
+      )}
 
       <label className="mb-1 block text-base font-medium text-slate-600">Why is this sale being moved?</label>
       <input

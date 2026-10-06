@@ -109,6 +109,8 @@ export interface ZReport {
    * Set by the `reports:z-report` handler for the screen, not by {@link generateZReport}; absent otherwise.
    */
   frozen?: true
+  /** Why it is frozen, in the words the correction is refused with; set with `frozen` so the override form can show it (docs/phase-244). */
+  frozenMessage?: string
   /**
    * The stored label when it differs from the window of `clock_in` (docs/phase-232, W4): `shiftType` is always the
    * window's. The report says "Labelled Day when opened". Absent when they agree, or there was no label.

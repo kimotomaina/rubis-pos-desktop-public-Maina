@@ -40,6 +40,7 @@ export default function ShiftCorrectionForm({ report, onCancel, onCorrected }: S
     asText(latest ? latest.mpesaClosingBalance : report.mpesaClosingBalance)
   )
   const [reason, setReason] = useState('')
+  const [override, setOverride] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [collectingPin, setCollectingPin] = useState(false)
   const [saving, setSaving] = useState(false)
@@ -68,6 +69,10 @@ export default function ShiftCorrectionForm({ report, onCancel, onCorrected }: S
       setError('Say why the figures are being corrected')
       return
     }
+    if (report.frozen && !override) {
+      setError(report.frozenMessage ?? 'This shift is closed and is not the latest closed shift')
+      return
+    }
     setCollectingPin(true)
   }
 
@@ -91,7 +96,8 @@ export default function ShiftCorrectionForm({ report, onCancel, onCorrected }: S
           endingCash: ending,
           mpesaOpeningBalance: opening,
           mpesaClosingBalance: closing,
-          reason: reason.trim()
+          reason: reason.trim(),
+          ...(report.frozen && override ? { override: true } : {})
         })
         if (result.success) {
           onCorrected()
@@ -121,6 +127,16 @@ export default function ShiftCorrectionForm({ report, onCancel, onCorrected }: S
             <p role="alert" className="mb-3 rounded-lg bg-rose-50 px-3 py-2 text-base font-medium text-rose-700">
               {error}
             </p>
+          )}
+          {/* docs/phase-244: a frozen shift shows why, and an admin's tick is the one way past it. */}
+          {report.frozen && (
+            <div className="mb-3">
+              <p className="mb-1 text-base font-medium text-rose-700">{report.frozenMessage}</p>
+              <label className="flex items-center gap-2 text-base text-amber-900">
+                <input type="checkbox" checked={override} onChange={(event) => setOverride(event.target.checked)} />
+                <span>Override: this shift is closed and not the latest</span>
+              </label>
+            </div>
           )}
 
           <div className="mb-3 grid grid-cols-2 gap-2">
@@ -188,7 +204,7 @@ export default function ShiftCorrectionForm({ report, onCancel, onCorrected }: S
             </button>
             <button
               type="button"
-              disabled={saving}
+              disabled={saving || (report.frozen === true && !override)}
               onClick={handleSubmit}
               className="h-12 flex-1 rounded-xl bg-rose-600 text-lg font-semibold text-white transition active:scale-95 disabled:cursor-not-allowed disabled:opacity-50"
             >

@@ -665,10 +665,11 @@ const api = {
    *
    * @param {number} orderId
    * @param {number} toShiftId
+   * @param {boolean} [override] — preview with the closed-shift rules lifted (docs/phase-244)
    * @returns {Promise<ServiceResult<SaleMovePreview>>}
    */
-  previewSaleMove: (orderId: number, toShiftId: number): Promise<ServiceResult<SaleMovePreview>> =>
-    ipcRenderer.invoke('shifts:move-sale-preview', { orderId, toShiftId }),
+  previewSaleMove: (orderId: number, toShiftId: number, override?: boolean): Promise<ServiceResult<SaleMovePreview>> =>
+    ipcRenderer.invoke('shifts:move-sale-preview', { orderId, toShiftId, ...(override ? { override: true } : {}) }),
 
   /**
    * Moves one sale to another shift (docs/phase-232, S5). Admin-gated: the main process re-verifies the PIN.

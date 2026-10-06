@@ -74,7 +74,9 @@ describe('Shift History with a frozen shift', () => {
     expect(latest.textContent).not.toContain('Locked')
     for (const row of [older, oldest]) {
       expect(row.textContent).toContain('Locked')
-      expect(row.textContent).not.toContain('Correct figures')
+      // CHANGED (docs/phase-244). Old: `.not.toContain('Correct figures')`. New: the button stays, because it opens the form
+      // where an admin may override the freeze; the form refuses without the tick (shiftOverride.test.ts).
+      expect(row.textContent).toContain('Correct figures')
       expect(row.textContent).toContain('Z report')
     }
   })
@@ -112,10 +114,11 @@ describe('the Z report of a frozen shift', () => {
     expect(Array.from(container.querySelectorAll('button')).some((b) => b.textContent === 'Correct figures')).toBe(true)
   })
 
-  it('offers none on a frozen one, and still prints', async () => {
+  it('offers it on a frozen one too, for the admin override, and still prints', async () => {
     await show({ ...base, frozen: true })
 
-    expect(Array.from(container.querySelectorAll('button')).some((b) => b.textContent === 'Correct figures')).toBe(false)
+    // CHANGED (docs/phase-244). Old: offered none on a frozen shift. New: the button opens the form with the override tick.
+    expect(Array.from(container.querySelectorAll('button')).some((b) => b.textContent === 'Correct figures')).toBe(true)
     expect(Array.from(container.querySelectorAll('button')).some((b) => b.textContent === 'Print Z-Report')).toBe(true)
   })
 })

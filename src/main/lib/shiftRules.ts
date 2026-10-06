@@ -29,6 +29,12 @@ export function frozenShiftMessage(shiftId: number, latestClosedId: number | nul
     : `Shift #${shiftId} is closed and is not the latest closed shift (#${latestClosedId}). Only the latest closed shift can be corrected or be given sales.`
 }
 
+/** Starts the stored reason of a move or correction an admin forced past the closed-shift rules (docs/phase-244). */
+export const OVERRIDE_REASON_PREFIX = 'OVERRIDE (closed, not latest): '
+export const OVERRIDE_REASON_MIN_LENGTH = 10
+export const OVERRIDE_ADMIN_ONLY_MESSAGE = 'Only an admin can override the closed-shift rules'
+export const OVERRIDE_REASON_MESSAGE = `An override needs a reason of at least ${OVERRIDE_REASON_MIN_LENGTH} characters`
+
 /** Why the till merged two shifts of one window by itself (docs/phase-242). */
 export const AUTO_MERGE_REASON = 'Merged automatically: a window has one shift'
 export const OPENED_WITH_EARLIER_SALES_REASON = 'Earlier sales in this window joined when the shift opened'

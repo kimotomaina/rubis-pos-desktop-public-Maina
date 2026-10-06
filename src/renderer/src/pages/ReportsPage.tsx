@@ -356,7 +356,7 @@ function ShiftHistoryView({ staffName }: { staffName: (id: number) => string }) 
                             Locked
                           </span>
                         )}
-                        {shift.status === 'closed' && shift.merged_into == null && !shift.frozen && (
+                        {shift.status === 'closed' && shift.merged_into == null && (
                           <button
                             type="button"
                             onClick={(event) => {

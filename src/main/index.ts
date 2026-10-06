@@ -273,6 +273,7 @@ import type { WindowsPrinterInfo, PrinterWithAvailability } from './services/win
 import { hashPin, authenticateStaff } from './services/auth.js'
 import { runAutoAssign } from './services/auto-assign.js'
 import { withWindow, countShiftsByWindow } from './lib/shiftLabel.js'
+import { frozenShiftMessage } from './lib/shiftRules.js'
 import { generateWindowReport, type WindowReport } from './services/window-report.js'
 import { getShiftWindowStatus, type ShiftWindowStatus } from './services/shift-window-status.js'
 import { openShiftChecked } from './services/shift-open.js'
@@ -3526,7 +3527,7 @@ app.whenReady().then(async () => {
         return { success: false, error: validation.error }
       }
       try {
-        return { success: true, data: db.previewSaleMove(validation.data.orderId, validation.data.toShiftId) }
+        return { success: true, data: db.previewSaleMove(validation.data.orderId, validation.data.toShiftId, validation.data.override === true) }
       } catch (err) {
         return { success: false, error: err instanceof Error ? err.message : 'Failed to preview this move' }
       }
@@ -3553,7 +3554,8 @@ app.whenReady().then(async () => {
             toShiftId: data.toShiftId,
             managerId: data.managerId,
             reason: data.reason,
-            acknowledgeDifferentWindow: data.acknowledgeDifferentWindow
+            acknowledgeDifferentWindow: data.acknowledgeDifferentWindow,
+            override: data.override
           })
         }
       } catch (err) {
@@ -3637,7 +3639,8 @@ app.whenReady().then(async () => {
             startingCash: data.startingCash,
             endingCash: data.endingCash,
             mpesaOpeningBalance: data.mpesaOpeningBalance,
-            mpesaClosingBalance: data.mpesaClosingBalance
+            mpesaClosingBalance: data.mpesaClosingBalance,
+            override: data.override
           })
         }
       } catch (err) {
@@ -3664,9 +3667,16 @@ app.whenReady().then(async () => {
       }
       try {
         const report = generateZReport(db, validation.data.shiftId, printerSettings.taxRate)
-        // docs/phase-243: the screen hides Correct figures on a closed shift that is not the latest closed one.
+        // docs/phase-243: the screen marks a closed shift that is not the latest closed one; docs/phase-244: and gives
+        // the reason, so Correct figures can show the refusal an admin may override.
         const shift = db.getShiftById(validation.data.shiftId)
-        return { success: true, data: shift && db.isFrozenShift(shift) ? { ...report, frozen: true } : report }
+        return {
+          success: true,
+          data:
+            shift && db.isFrozenShift(shift)
+              ? { ...report, frozen: true, frozenMessage: frozenShiftMessage(shift.id, db.latestClosedShiftId()) }
+              : report
+        }
       } catch (err) {
         return {
           success: false,
