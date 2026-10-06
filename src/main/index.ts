@@ -88,6 +88,7 @@ import { migrateEnvConfigToDatabase } from './services/configMigration.js'
 import { DEMO_PRODUCTS } from './services/demoData.js'
 import type {
   CardApproval,
+  CheckoutPaymentLeg,
   CheckoutReceipt,
   DiscardedHeldSale,
   FiscalResendResult,
@@ -233,7 +234,7 @@ import { createSyncEngine } from './services/sync-engine.js'
 import { createReconciliationRunner } from './services/reconciliation.js'
 import type { ReconciliationResult } from './services/reconciliation.js'
 import { createFiscalEngine } from './services/fiscal-engine.js'
-import { runCheckout } from './services/checkout.js'
+import { runCheckout, SPLIT_PAYMENTS_SETTING_KEY } from './services/checkout.js'
 import { closeShiftUnlessHeld, discardHeldSaleApproved, holdCart } from './services/held-sales.js'
 import {
   correctPinAndResend,
@@ -309,11 +310,14 @@ import { resolveTraderSystemInvNum } from './lib/traderSystemInvoiceNumber.js'
 import { shouldRefuseCheckoutForDiscount } from './lib/requestHasDiscount.js'
 import { resolveCheckoutLocation, NO_LOCATION_MESSAGE } from './lib/checkoutLocation.js'
 import { resolveVatClass } from './lib/vatClass.js'
+import { describePayment } from './lib/paymentLegs.js'
 
 /** One invoice-list row (docs/phase-158): an order plus its pre-computed trader invoice number. */
 interface InvoiceListRow {
   order: OrderRow
   traderInvoiceNumber: string
+  /** How the sale was paid, in words: its method, or `split: …` with the payments (docs/phase-252). */
+  paymentText: string
 }
 import type { OfflineOrderPayload, ServiceResult } from './services/shopify-types.js'
 import type { ProductSummary } from '../renderer/src/types/shopify.js'
@@ -1461,7 +1465,7 @@ app.whenReady().then(async () => {
        * card (PDQ) sale, recorded manually per docs/phase-176.md Part 2,
        * with no confirming provider to check it against either.
        */
-      const { mpesaManual, cardManual, ...checkoutInput } = validation.data
+      const { mpesaManual, cardManual, payments, ...checkoutInput } = validation.data
       let manualApproval: ManualMpesaApproval | undefined
       if (mpesaManual) {
         manualApproval = { acknowledgedUnverified: mpesaManual.confirmUnverified }
@@ -1470,6 +1474,14 @@ app.whenReady().then(async () => {
       if (cardManual) {
         cardApproval = { reference: cardManual.reference, confirmRecorded: cardManual.confirmRecorded }
       }
+      // docs/phase-252: each payment of a split sale has its manual code or card entry stripped the same way.
+      const legs: CheckoutPaymentLeg[] | undefined = payments?.map(({ mpesaManual: legManual, cardManual: legCard, ...leg }) => ({
+        ...leg,
+        ...(legManual
+          ? { referenceNumber: legManual.code, manualApproval: { acknowledgedUnverified: legManual.confirmUnverified } }
+          : {}),
+        ...(legCard ? { cardApproval: { reference: legCard.reference, confirmRecorded: legCard.confirmRecorded } } : {})
+      }))
 
       return runCheckout(
         {
@@ -1484,12 +1496,15 @@ app.whenReady().then(async () => {
           verifyReferenceNumbers,
           claimsStoredPayments,
           manualEntryEnabled,
+          // Read for each checkout, so switching the setting in Admin needs no restart (docs/phase-252, S9).
+          splitPaymentsEnabled: db.getConfig(SPLIT_PAYMENTS_SETTING_KEY) === 'true',
           logger: console,
           debugLogging: fiscalDebugLogging
         },
         {
           ...checkoutInput,
           referenceNumber: mpesaManual ? mpesaManual.code : checkoutInput.referenceNumber,
+          ...(legs ? { payments: legs } : {}),
           manualApproval,
           cardApproval,
           locationId: saleLocation.id,
@@ -3188,6 +3203,8 @@ app.whenReady().then(async () => {
         tenderedAmount: payload.tenderedAmount,
         changeDue: payload.changeDue,
         referenceNumber: payload.referenceNumber,
+        // docs/phase-252: present only on a split sale's payload, so a sale paid one way prints exactly as before.
+        payments: payload.payments,
         customerPin: payload.customerPin,
         buyerName,
         fiscalInvoiceNumber: order.fiscal_invoice_number ?? undefined,
@@ -4021,6 +4038,7 @@ app.whenReady().then(async () => {
           REPORTS_PAGE_SIZE,
           offset
         )
+        const legs = db.paymentLegsFor(rows.map((order) => order.local_id))
         const invoices: InvoiceListRow[] = rows.map((order) => {
           let clientOrderUuid = ''
           try {
@@ -4030,7 +4048,8 @@ app.whenReady().then(async () => {
           }
           return {
             order,
-            traderInvoiceNumber: resolveTraderSystemInvNum(order.fiscal_trader_inv_num, order.local_id, clientOrderUuid)
+            traderInvoiceNumber: resolveTraderSystemInvNum(order.fiscal_trader_inv_num, order.local_id, clientOrderUuid),
+            paymentText: describePayment(legs.get(order.local_id) ?? [])
           }
         })
         return { success: true, data: { invoices, total, page } }

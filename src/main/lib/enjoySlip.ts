@@ -133,10 +133,21 @@ export function buildEnjoySlip(
   if (cartReduction > 0.005) push(...keyValueLines(text.discount, `-${money(cartReduction)}`, width))
   push(...keyValueLines(text.total, money(order.total), width, 'bold'))
 
-  const paid = order.paymentMethod === 'cash' && order.tenderedAmount > 0 ? order.tenderedAmount : order.total
-  push(...keyValueLines(`${text.paidBy} ${text.tender[order.paymentMethod]}`, money(paid), width))
-  if (order.paymentMethod === 'cash' && order.changeDue > 0) {
-    push(...keyValueLines(text.change, money(order.changeDue), width))
+  if (order.paymentMethod === 'split') {
+    // docs/phase-252: one line per payment, the cash one showing what was handed over, then the change it gave.
+    for (const payment of order.payments ?? []) {
+      const paid = payment.method === 'cash' ? (payment.tendered ?? payment.amount) : payment.amount
+      push(...keyValueLines(`${text.paidBy} ${text.tender[payment.method]}`, money(paid), width))
+      if (payment.method === 'cash' && (payment.changeDue ?? 0) > 0) {
+        push(...keyValueLines(text.change, money(payment.changeDue ?? 0), width))
+      }
+    }
+  } else {
+    const paid = order.paymentMethod === 'cash' && order.tenderedAmount > 0 ? order.tenderedAmount : order.total
+    push(...keyValueLines(`${text.paidBy} ${text.tender[order.paymentMethod]}`, money(paid), width))
+    if (order.paymentMethod === 'cash' && order.changeDue > 0) {
+      push(...keyValueLines(text.change, money(order.changeDue), width))
+    }
   }
   push(rule(width))
 

@@ -42,6 +42,36 @@ const cartItemSchema = z.object({
   hsName: z.string().optional()
 })
 
+/** A manually entered M-Pesa code, for a sale paid one way and for each M-Pesa payment of a split sale. */
+const mpesaManualSchema = z.object({
+  code: z
+    .string()
+    .regex(/^[A-Z0-9]{10}$/, 'Enter the 10-character M-Pesa code from the customer’s message'),
+  confirmUnverified: z.literal(true, {
+    message: 'A manually verified M-Pesa payment must be explicitly confirmed'
+  })
+})
+
+/** A card (PDQ) entry, for a sale paid one way and for each card payment of a split sale. */
+const cardManualSchema = z.object({
+  reference: z
+    .string()
+    .regex(/^[A-Z0-9]{1,12}$/, 'Enter the reference from the PDQ slip (letters and numbers only)'),
+  confirmRecorded: z.literal(true, {
+    message: 'A card payment must be explicitly confirmed against the PDQ slip'
+  })
+})
+
+/** One payment of a split sale (docs/phase-252). */
+const checkoutPaymentLegSchema = z.object({
+  method: z.enum(['cash', 'mpesa', 'card']),
+  amount: z.number().finite(),
+  tendered: z.number().finite().optional(),
+  referenceNumber: z.string().optional(),
+  mpesaManual: mpesaManualSchema.optional(),
+  cardManual: cardManualSchema.optional()
+})
+
 /** `orders:checkout` request payload. */
 /** Shown when a checkout arrives without the key the screen makes for it (docs/phase-249); nothing is written. */
 export const CHECKOUT_KEY_MISSING_MESSAGE =
@@ -60,7 +90,8 @@ export const checkoutRequestSchema = z.object({
   checkoutKey: z.string({ error: CHECKOUT_KEY_MISSING_MESSAGE }).regex(CHECKOUT_KEY_PATTERN, CHECKOUT_KEY_MISSING_MESSAGE),
   total: z.number().finite().nonnegative(),
   staffId: z.number().int().positive(),
-  paymentMethod: z.enum(['cash', 'mpesa', 'card']),
+  /** One method, or `split` with `payments` (docs/phase-252). */
+  paymentMethod: z.enum(['cash', 'mpesa', 'card', 'split']),
   tenderedAmount: z.number().finite(),
   changeDue: z.number().finite(),
   referenceNumber: z.string().optional(),
@@ -90,16 +121,7 @@ export const checkoutRequestSchema = z.object({
    * opening a screen — the same shape as the stock-take commit's
    * confirmation.
    */
-  mpesaManual: z
-    .object({
-      code: z
-        .string()
-        .regex(/^[A-Z0-9]{10}$/, 'Enter the 10-character M-Pesa code from the customer’s message'),
-      confirmUnverified: z.literal(true, {
-        message: 'A manually verified M-Pesa payment must be explicitly confirmed'
-      })
-    })
-    .optional(),
+  mpesaManual: mpesaManualSchema.optional(),
   /**
    * Present only when this sale is a card (PDQ) tender, recorded
    * manually the same way as manual M-Pesa above — Rubis takes cards on
@@ -114,16 +136,14 @@ export const checkoutRequestSchema = z.object({
    * control; this copy exists only to tell the cashier what is wrong
    * before they tap Complete.
    */
-  cardManual: z
-    .object({
-      reference: z
-        .string()
-        .regex(/^[A-Z0-9]{1,12}$/, 'Enter the reference from the PDQ slip (letters and numbers only)'),
-      confirmRecorded: z.literal(true, {
-        message: 'A card payment must be explicitly confirmed against the PDQ slip'
-      })
-    })
-    .optional()
+  cardManual: cardManualSchema.optional(),
+  /**
+   * A split sale's payments, in the order recorded (docs/phase-252), with `paymentMethod: 'split'`. Each M-Pesa
+   * payment carries its code, or its manual entry exactly as a sale paid one way does; each card payment its PDQ
+   * entry; the cash payment what was handed over. The rules (two to four payments, cash once and last, the amounts
+   * adding up) are checked by `runCheckout`, which is the control; the bound here only keeps a request small.
+   */
+  payments: z.array(checkoutPaymentLegSchema).max(10).optional()
 })
 
 /** `orders:void` request payload — a single local order id. */

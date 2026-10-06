@@ -6,6 +6,8 @@
  * compiler catches field renames on the Shopify side.
  */
 
+import type { SalePayment } from '../lib/paymentLegs.js'
+
 /** A Shopify product image. */
 export interface ShopifyImage {
   id: string
@@ -217,10 +219,13 @@ export interface OfflineOrderPayload {
   createdAt: string
   staffId: number
   staffName: string
-  paymentMethod: 'cash' | 'mpesa' | 'card'
+  /** One method, or `split` (docs/phase-252) with {@link OfflineOrderPayload.payments}. */
+  paymentMethod: 'cash' | 'mpesa' | 'card' | 'split'
   tenderedAmount: number
   changeDue: number
   referenceNumber?: string
+  /** A split sale's payments, in the order recorded (docs/phase-252). Absent for a sale paid one way. */
+  payments?: SalePayment[]
   /** Customer's KRA PIN, when captured for a B2B eTIMS invoice — omitted for a walk-in B2C sale. */
   customerPin?: string
   /** Cart-level discount applied on top of the line-item subtotal. */

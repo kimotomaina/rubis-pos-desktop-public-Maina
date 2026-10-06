@@ -16,7 +16,7 @@
 import type { VatReconcileOrderRow } from './vat-reconcile.js'
 import { sameWindow, shiftWindowOf, type ShiftType, type ShiftWindowInstance } from '../lib/shiftWindows.js'
 import { findOverlappingShift } from '../lib/pastShift.js'
-import { methodTotalOf, type PaymentLeg } from '../lib/paymentLegs.js'
+import { describePayment, methodTotalOf, type PaymentLeg, type SalePayment } from '../lib/paymentLegs.js'
 import { planAutoAssignment } from '../lib/autoAssign.js'
 import {
   AUTO_MERGE_REASON,
@@ -60,8 +60,11 @@ import type {
 /** Lifecycle states of a local order row. */
 export type OrderStatus = 'pending_sync' | 'synced' | 'failed' | 'voided'
 
-/** Accepted payment methods at checkout. */
+/** Accepted payment methods at checkout, and the method of each payment of a sale. */
 export type PaymentMethod = 'cash' | 'mpesa' | 'card'
+
+/** How a sale was paid, as `orders.payment_method` holds it: one method, or `split` for more than one payment (docs/phase-252). */
+export type OrderPaymentMethod = PaymentMethod | 'split'
 
 /**
  * Three-state fiscalization outcome for an order — `null`/absent means
@@ -87,7 +90,7 @@ export interface OrderRow {
   created_at: string
   payload_json: string
   staff_id: number | null
-  payment_method: PaymentMethod | null
+  payment_method: OrderPaymentMethod | null
   tendered_amount: number | null
   change_due: number | null
   reference_number: string | null
@@ -560,7 +563,8 @@ export interface MoveFigures {
 export interface SaleMovePreview {
   orderId: number
   total: number
-  paymentMethod: PaymentMethod | null
+  /** How the sale was paid, in words: the method, or `split: …` with the payments (docs/phase-252). */
+  paymentMethod: string | null
   createdAt: string | null
   fromShiftId: number | null
   toShiftId: number
@@ -639,10 +643,16 @@ export interface QueueOrderInput {
   clientOrderUuid: string
   staffId: number
   staffName: string
-  paymentMethod: PaymentMethod
+  paymentMethod: OrderPaymentMethod
   tenderedAmount: number
   changeDue: number
   referenceNumber?: string
+  /**
+   * The sale's payments (docs/phase-252), written to `order_payments` in the sale's transaction. When absent, a sale
+   * paid one way gets one payment built from `paymentMethod` and `total`. Required for `split`, and then also stored in
+   * the order payload, where the receipt and the Shopify note read the payments.
+   */
+  payments?: SalePayment[]
   shiftId?: number
   /** Customer's KRA PIN, when captured for a B2B eTIMS invoice — omitted for a walk-in B2C sale. */
   customerPin?: string
@@ -749,10 +759,13 @@ export interface CheckoutRequest {
   items: CartItem[]
   total: number
   staffId: number
-  paymentMethod: PaymentMethod
+  /** One method, or `split` with {@link CheckoutRequest.payments} (docs/phase-252). */
+  paymentMethod: OrderPaymentMethod
   tenderedAmount: number
   changeDue: number
   referenceNumber?: string
+  /** A split sale's payments, in the order recorded (docs/phase-252). Present only with `paymentMethod: 'split'`. */
+  payments?: CheckoutPaymentLeg[]
   shiftId?: number
   /** Customer's KRA PIN, when captured for a B2B eTIMS invoice — omitted for a walk-in B2C sale. */
   customerPin?: string
@@ -846,8 +859,32 @@ export interface CardManualEntry {
  */
 export type CheckoutIpcRequest = Omit<
   CheckoutRequest,
-  'manualApproval' | 'cardApproval' | 'locationId' | 'locationName'
+  'manualApproval' | 'cardApproval' | 'locationId' | 'locationName' | 'payments'
 > & {
+  mpesaManual?: ManualMpesaEntry
+  cardManual?: CardManualEntry
+  payments?: CheckoutIpcPaymentLeg[]
+}
+
+/**
+ * One payment of a split sale (docs/phase-252), as `runCheckout` checks it. `manualApproval` and `cardApproval` are set
+ * only by the `orders:checkout` handler, from the leg's `mpesaManual` and `cardManual`, exactly as for a sale paid one
+ * way.
+ */
+export interface CheckoutPaymentLeg {
+  method: PaymentMethod
+  /** The part of the total this payment covers. */
+  amount: number
+  /** Cash only: what the customer handed over. */
+  tendered?: number
+  /** M-Pesa only: the code or the STK reference. */
+  referenceNumber?: string
+  manualApproval?: ManualMpesaApproval
+  cardApproval?: CardApproval
+}
+
+/** One payment of a split sale, as the renderer sends it (docs/phase-252). */
+export type CheckoutIpcPaymentLeg = Omit<CheckoutPaymentLeg, 'manualApproval' | 'cardApproval'> & {
   mpesaManual?: ManualMpesaEntry
   cardManual?: CardManualEntry
 }
@@ -1158,6 +1195,24 @@ function totalOfSales(sales: UnattachedSaleRow[], totalFor: (method: PaymentMeth
 }
 
 /**
+ * The payments a sale writes to `order_payments` (docs/phase-252): the ones given, or, for a sale paid one way with none
+ * given, one payment of its method for its whole total, with the cash handed over and the change, or the reference, as
+ * the order row holds them.
+ *
+ * @param {QueueOrderInput} input
+ * @returns {SalePayment[]}
+ * @throws {Error} for a split sale given no payments, before anything is written: it would count in no method total
+ */
+function paymentsOfSale(input: QueueOrderInput): SalePayment[] {
+  if (input.payments && input.payments.length > 0) return input.payments
+  if (input.paymentMethod === 'split') throw new Error('A split sale must carry its payments')
+  if (input.paymentMethod === 'cash') {
+    return [{ method: 'cash', amount: input.total, tendered: input.tenderedAmount, changeDue: input.changeDue }]
+  }
+  return [{ method: input.paymentMethod, amount: input.total, ...(input.referenceNumber ? { reference: input.referenceNumber } : {}) }]
+}
+
+/**
  * @param {EarlierSalesShown} shown
  * @param {EarlierSalesShown} actual
  * @returns {boolean} whether the form showed what is there now
@@ -1239,6 +1294,29 @@ export const SCHEMA = {
    * {@link RubisDatabase.queueOrder} is what returns the earlier order; this index is the database's own guarantee.
    */
   ordersCheckoutKeyIndex: `CREATE UNIQUE INDEX IF NOT EXISTS idx_orders_checkout_key ON orders (checkout_key) WHERE checkout_key IS NOT NULL`,
+  /**
+   * Every payment of a sale (docs/phase-252), written in the sale's own transaction: one row for a sale paid one way,
+   * one per payment for a split sale. Append-only, like the shift ledgers: a payment is a fact about money that moved.
+   * A sale made before the table has no rows here and is read as one payment from `orders` (`paymentLegsFor`).
+   * `mpesa_mode` comes from the gate branch that accepted the payment, never from the screen.
+   */
+  orderPayments: `CREATE TABLE IF NOT EXISTS order_payments (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    order_local_id INTEGER NOT NULL REFERENCES orders(local_id),
+    leg_no INTEGER NOT NULL,
+    method TEXT NOT NULL CHECK (method IN ('cash', 'mpesa', 'card')),
+    mpesa_mode TEXT CHECK (mpesa_mode IN ('daraja', 'sms', 'manual')),
+    amount REAL NOT NULL,
+    reference TEXT,
+    tendered REAL,
+    change_due REAL,
+    created_at TEXT NOT NULL,
+    UNIQUE (order_local_id, leg_no)
+  )`,
+  orderPaymentsNoUpdate: `CREATE TRIGGER IF NOT EXISTS order_payments_no_update BEFORE UPDATE ON order_payments
+    BEGIN SELECT RAISE(ABORT, 'order_payments is append-only'); END`,
+  orderPaymentsNoDelete: `CREATE TRIGGER IF NOT EXISTS order_payments_no_delete BEFORE DELETE ON order_payments
+    BEGIN SELECT RAISE(ABORT, 'order_payments is append-only'); END`,
   settings: `CREATE TABLE IF NOT EXISTS settings (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
@@ -2237,6 +2315,9 @@ export class RubisDatabase {
     migrateOrdersPushColumns(connection)
     migrateOrdersCheckoutKey(connection)
     connection.exec(SCHEMA.ordersCheckoutKeyIndex)
+    connection.exec(SCHEMA.orderPayments)
+    connection.exec(SCHEMA.orderPaymentsNoUpdate)
+    connection.exec(SCHEMA.orderPaymentsNoDelete)
     connection.exec(SCHEMA.fiscalInvoiceIndex)
     connection.exec(SCHEMA.ordersCreatedAtIndex)
     this.connection = connection
@@ -2363,6 +2444,7 @@ export class RubisDatabase {
    */
   queueOrder(input: QueueOrderInput): QueuedOrder {
     const createdAt = new Date().toISOString()
+    const payments = paymentsOfSale(input)
     const payload: OfflineOrderPayload = {
       clientOrderUuid: input.clientOrderUuid,
       total: input.total,
@@ -2384,7 +2466,10 @@ export class RubisDatabase {
       customerPin: input.customerPin,
       cartDiscount: input.cartDiscount,
       locationId: input.locationId,
-      locationName: input.locationName
+      locationName: input.locationName,
+      // docs/phase-252: only a split sale carries its payments here, so the payload of a sale paid one way, and the
+      // receipt and Shopify note built from it, are exactly as before.
+      ...(input.paymentMethod === 'split' ? { payments } : {})
     }
 
     const insertOrder = this.conn.prepare(
@@ -2393,6 +2478,9 @@ export class RubisDatabase {
     const findByKey = this.conn.prepare('SELECT local_id, fiscal_trader_inv_num FROM orders WHERE checkout_key = ?')
     const insertQueue = this.conn.prepare(
       'INSERT INTO sync_queue (entity_type, entity_id, action, payload_json, attempts, created_at, next_attempt_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
+    )
+    const insertPayment = this.conn.prepare(
+      'INSERT INTO order_payments (order_local_id, leg_no, method, mpesa_mode, amount, reference, tendered, change_due, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
     )
     const enqueue = this.conn.transaction(() => {
       // docs/phase-249: the checkout's key is looked up first, inside the write transaction, before the order id, the
@@ -2418,6 +2506,19 @@ export class RubisDatabase {
         input.checkoutKey ?? null
       )
       const localId = Number(orderInfo.lastInsertRowid)
+      payments.forEach((payment, index) => {
+        insertPayment.run(
+          localId,
+          index + 1,
+          payment.method,
+          payment.mpesaMode ?? null,
+          payment.amount,
+          payment.reference ?? null,
+          payment.tendered ?? null,
+          payment.changeDue ?? null,
+          createdAt
+        )
+      })
       const traderInvNum = input.locationId ? this.allocateTraderInvNum(input.locationId) : undefined
       if (traderInvNum) {
         this.conn
@@ -3094,9 +3195,10 @@ export class RubisDatabase {
 
   /**
    * The payment legs of the sales `orderIds` (docs/phase-250): the one place every report, shift figure, preview and
-   * export reads how a sale was paid. A sale is paid one way today, so each has one leg built from
-   * `orders.payment_method` and `orders.total`; a voided sale keeps its leg, flagged, so each reader decides as before.
-   * One query for the whole list. A sale that does not exist has no entry.
+   * export reads how a sale was paid. A sale's legs are its `order_payments` rows, in the order recorded (docs/phase-252);
+   * a sale made before that table has none and gets one leg built from `orders.payment_method` and `orders.total`, as
+   * before. A voided sale keeps its legs, flagged, so each reader decides as before. One query for the whole list. A
+   * sale that does not exist has no entry.
    *
    * @param {readonly number[]} orderIds
    * @returns {Map<number, PaymentLeg[]>} the legs of each sale, by its local id
@@ -3105,10 +3207,28 @@ export class RubisDatabase {
     const legs = new Map<number, PaymentLeg[]>()
     if (orderIds.length === 0) return legs
     const rows = this.conn
-      .prepare('SELECT local_id, payment_method, total, status FROM orders WHERE local_id IN (SELECT value FROM json_each(?))')
-      .all(JSON.stringify(orderIds)) as Array<{ local_id: number; payment_method: PaymentMethod | null; total: number; status: OrderStatus }>
+      .prepare(
+        'SELECT o.local_id, o.payment_method, o.total, o.status, p.method AS leg_method, p.amount AS leg_amount FROM orders o ' +
+          'LEFT JOIN order_payments p ON p.order_local_id = o.local_id ' +
+          'WHERE o.local_id IN (SELECT value FROM json_each(?)) ORDER BY o.local_id, p.leg_no'
+      )
+      .all(JSON.stringify(orderIds)) as Array<{
+      local_id: number
+      payment_method: OrderPaymentMethod | null
+      total: number
+      status: OrderStatus
+      leg_method: PaymentMethod | null
+      leg_amount: number | null
+    }>
     for (const row of rows) {
-      legs.set(row.local_id, [{ orderId: row.local_id, method: row.payment_method, amount: row.total, voided: row.status === 'voided' }])
+      const voided = row.status === 'voided'
+      const leg: PaymentLeg =
+        typeof row.leg_amount !== 'number'
+          ?{ orderId: row.local_id, method: row.payment_method === 'split' ? null : row.payment_method, amount: row.total, voided }
+          : { orderId: row.local_id, method: row.leg_method, amount: row.leg_amount, voided }
+      const sale = legs.get(row.local_id)
+      if (sale) sale.push(leg)
+      else legs.set(row.local_id, [leg])
     }
     return legs
   }
@@ -4783,7 +4903,7 @@ export class RubisDatabase {
     const order = this.conn
       .prepare('SELECT local_id, total, status, created_at, payment_method, shift_id FROM orders WHERE local_id = ?')
       .get(orderId) as
-      | { local_id: number; total: number; status: OrderStatus; created_at: string; payment_method: PaymentMethod | null; shift_id: number | null }
+      | { local_id: number; total: number; status: OrderStatus; created_at: string; payment_method: OrderPaymentMethod | null; shift_id: number | null }
       | undefined
     const empty: SaleMovePreview = {
       orderId,
@@ -4803,7 +4923,9 @@ export class RubisDatabase {
     const base = {
       ...empty,
       total: order.total,
-      paymentMethod: order.payment_method,
+      // docs/phase-252: a split sale is shown with its payments; a sale paid one way shows its method, as before.
+      paymentMethod:
+        order.payment_method === 'split' ? describePayment(this.paymentLegsFor([order.local_id]).get(order.local_id) ?? []) : order.payment_method,
       createdAt: order.created_at,
       fromShiftId: order.shift_id
     }
@@ -5632,6 +5754,49 @@ export class RubisDatabase {
       if (queued.existing) return queued
       if (!this.insertMpesaPayment(queued.localId, payment)) {
         throw new PaymentUnavailableError()
+      }
+      return queued
+    })
+
+    try {
+      return run()
+    } catch (error) {
+      if (error instanceof PaymentUnavailableError) return null
+      throw error
+    }
+  }
+
+  /**
+   * Queues a split sale and records each of its M-Pesa payments, in one transaction (docs/phase-252). Each M-Pesa
+   * payment is written exactly as the one-payment wrappers above write theirs: a message-based payment is claimed
+   * first and the sale rolled back when it cannot be; a manual code already recorded rolls the sale back; a confirmed
+   * Daraja payment's row is tolerated as a duplicate, as today. The sale's own payments, every one, are written by
+   * {@link RubisDatabase.queueOrder} in the same transaction.
+   *
+   * @param {QueueOrderInput} input
+   * @param {Array<{ payment: RecordMpesaPaymentInput; claim?: { transactionCode: string; staffId: number } }>} mpesa one per M-Pesa payment
+   * @returns {QueuedOrder | null} `null` when one of the M-Pesa payments was already used, and nothing was written
+   */
+  queueOrderRecordingPayments(
+    input: QueueOrderInput,
+    mpesa: Array<{ payment: RecordMpesaPaymentInput; claim?: { transactionCode: string; staffId: number } }>
+  ): QueuedOrder | null {
+    const claimStatement = this.conn.prepare(
+      'UPDATE mpesa_sms_messages SET matched_order_local_id = ?, approved_by_staff_id = ?, approved_at = ? ' +
+        'WHERE transaction_code = ? COLLATE NOCASE AND (matched_order_local_id IS NULL OR matched_order_local_id = ?)'
+    )
+    const run = this.conn.transaction(() => {
+      const queued = this.queueOrder(input)
+      // docs/phase-249: a repeat of a checkout that already made its order claims and records nothing again.
+      if (queued.existing) return queued
+      for (const leg of mpesa) {
+        if (leg.claim) {
+          const info = claimStatement.run(queued.localId, leg.claim.staffId, new Date().toISOString(), leg.claim.transactionCode.trim(), queued.localId)
+          if (info.changes === 0) throw new PaymentUnavailableError()
+        }
+        if (!this.insertMpesaPayment(queued.localId, leg.payment) && leg.payment.mode === 'manual') {
+          throw new PaymentUnavailableError()
+        }
       }
       return queued
     })

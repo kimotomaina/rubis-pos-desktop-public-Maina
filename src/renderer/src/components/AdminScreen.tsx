@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { useAuthStore } from '../stores/authStore.js'
 import { useHeldSalesStore } from '../stores/heldSalesStore.js'
 import { closeShiftBlockedMessage } from '../lib/heldSale.js'
+import { SPLIT_PAYMENTS_SETTING_KEY } from '../lib/splitPayments.js'
 import { OPEN_SHIFT_FIGURE_DEFAULT, OPEN_SHIFT_MPESA_DEFAULT } from '../lib/openShiftFloat.js'
 import { useUnfiledCountStore } from '../stores/unfiledCountStore.js'
 import { useUpdateStatusStore } from '../stores/updateStatusStore.js'
@@ -462,6 +463,10 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
   const [startupConfigSaving, setStartupConfigSaving] = useState(false)
   const [startupConfigMessage, setStartupConfigMessage] = useState<string | null>(null)
   const [showRestartModal, setShowRestartModal] = useState(false)
+  /** The split-payments setting (docs/phase-252, S9): off unless the stored value is exactly `'true'`. */
+  const [splitPaymentsFlag, setSplitPaymentsFlag] = useState(false)
+  const [splitPaymentsSaving, setSplitPaymentsSaving] = useState(false)
+  const [splitPaymentsMessage, setSplitPaymentsMessage] = useState<string | null>(null)
 
   /** M-Pesa's own slice of the Integrations tab — reloaded after an M-Pesa save, never after a Fiscal or Store Details one. */
   const loadMpesaConfig = async () => {
@@ -674,8 +679,38 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
       setMockMpesaFlag(result.data.mock_mpesa_enabled !== 'false')
       // Absent row means REAL for eTIMS, so this reads the opposite way to M-Pesa.
       setMockEtimsFlag(result.data.mock_etims_enabled === 'true')
+      setSplitPaymentsFlag(result.data[SPLIT_PAYMENTS_SETTING_KEY] === 'true')
     }
     setStartupConfigLoading(false)
+  }
+
+  /**
+   * Saves the split-payments setting (docs/phase-252, S9) behind the admin PIN. No restart: the main process reads it for
+   * each checkout, and the till screen when its payment panel next opens.
+   */
+  const handleSaveSplitPayments = () => {
+    setSplitPaymentsMessage(null)
+    requestManagerPin('Save split payments', (managerId, managerPin) => {
+      void (async () => {
+        setSplitPaymentsSaving(true)
+        try {
+          const result = await window.api.setConfig(
+            SPLIT_PAYMENTS_SETTING_KEY,
+            String(splitPaymentsFlag),
+            { category: 'general' },
+            managerId,
+            managerPin
+          )
+          setSplitPaymentsMessage(
+            result.success
+              ? `Saved. Split payments are ${splitPaymentsFlag ? 'on' : 'off'}.`
+              : (result.error ?? 'Failed to save the setting')
+          )
+        } finally {
+          setSplitPaymentsSaving(false)
+        }
+      })()
+    })
   }
 
   useEffect(() => {
@@ -1496,6 +1531,36 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
               </button>
             </div>
           )}
+        </section>
+      )}
+
+      {activeTab === 'system' && (
+        <section className="rounded-xl border border-slate-200 bg-white p-4" data-testid="split-payments-setting">
+          <h3 className="mb-1 text-2xl font-bold text-slate-800">Split Payments</h3>
+          <p className="mb-4 text-base text-slate-500">
+            Lets a cashier take one sale in up to four payments (cash, M-Pesa, card). Off by default.
+          </p>
+          <div className="space-y-3">
+            <label className="flex items-center justify-between rounded-lg border border-slate-100 px-3 py-3">
+              <span className="text-lg font-medium text-slate-700">Allow split payments</span>
+              <input
+                type="checkbox"
+                checked={splitPaymentsFlag}
+                onChange={(e) => setSplitPaymentsFlag(e.target.checked)}
+                aria-label="Allow split payments"
+                className="h-6 w-6 accent-rose-600"
+              />
+            </label>
+            {splitPaymentsMessage && <p className="text-base font-medium text-slate-700">{splitPaymentsMessage}</p>}
+            <button
+              type="button"
+              disabled={splitPaymentsSaving}
+              onClick={handleSaveSplitPayments}
+              className="rounded-lg bg-rose-600 px-4 py-2 text-base font-semibold text-white hover:bg-rose-700 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {splitPaymentsSaving ? 'Saving…' : 'Save'}
+            </button>
+          </div>
         </section>
       )}
 

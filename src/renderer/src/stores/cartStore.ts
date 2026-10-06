@@ -16,10 +16,11 @@ import { create } from 'zustand'
 import type { CartItem, Discount } from '../types/shopify.js'
 import type {
   CardManualEntry,
+  CheckoutIpcPaymentLeg,
   CheckoutReceipt,
   FiscalResendResult,
   ManualMpesaEntry,
-  PaymentMethod
+  OrderPaymentMethod
 } from '../../../main/services/database.js'
 import { calculateCartTotal, calculateSubtotal, validatePriceOverride } from '../lib/checkoutMath.js'
 import { AUTO_PRINT_FAILURE_MESSAGE, getAutoPrintOfflineMessage } from '../lib/autoPrintToast.js'
@@ -97,10 +98,13 @@ export type CheckoutStatus =
 /** Payment details collected by `PosCheckoutPanel` and submitted with the sale. */
 export interface CheckoutParams {
   staffId: number
-  paymentMethod: PaymentMethod
+  /** One method, or `split` with {@link CheckoutParams.payments} (docs/phase-252). */
+  paymentMethod: OrderPaymentMethod
   tenderedAmount: number
   changeDue: number
   referenceNumber?: string
+  /** A split sale's payments, in the order recorded (docs/phase-252). */
+  payments?: CheckoutIpcPaymentLeg[]
   /** Customer's KRA PIN, when captured for a B2B eTIMS invoice — omitted for a walk-in B2C sale. */
   customerPin?: string
   /** Customer's company/trading name, when captured for a B2B eTIMS invoice. */

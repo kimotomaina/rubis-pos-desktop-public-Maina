@@ -839,7 +839,7 @@ const api = {
     page: number
   ): Promise<
     ServiceResult<{
-      invoices: Array<{ order: OrderRow; traderInvoiceNumber: string }>
+      invoices: Array<{ order: OrderRow; traderInvoiceNumber: string; paymentText: string }>
       total: number
       page: number
     }>

@@ -11,6 +11,7 @@
 
 import { AxiosError, type AxiosInstance, type AxiosResponse } from 'axios'
 import type { OfflineOrderPayload, ServiceResult } from './shopify-types.js'
+import type { SalePayment } from '../lib/paymentLegs.js'
 import { locationTag } from '../lib/locationSlug.js'
 import { resolveCheckoutLocation, type TillLocation } from '../lib/checkoutLocation.js'
 
@@ -62,6 +63,21 @@ export interface OrderCreateResult {
 }
 
 /**
+ * One payment of a split sale in the Shopify note (docs/phase-252): `mpesa 500.00 (ref QAB45GH6IJ)`, or
+ * `cash 1000.00 (tendered 1200.00, change 200.00)`.
+ *
+ * @param {SalePayment} payment
+ * @returns {string}
+ */
+function splitPaymentNote(payment: SalePayment): string {
+  const amount = `${payment.method} ${payment.amount.toFixed(2)}`
+  if (payment.method === 'cash') {
+    return `${amount} (tendered ${(payment.tendered ?? payment.amount).toFixed(2)}, change ${(payment.changeDue ?? 0).toFixed(2)})`
+  }
+  return payment.reference ? `${amount} (ref ${payment.reference})` : amount
+}
+
+/**
  * Builds the `orderCreate` variables for a queued offline order.
  *
  * The order is created as already paid (`financialStatus: PAID`) and
@@ -102,10 +118,16 @@ export function buildOrderInput(
   const tag = location ? locationTag(location.name) : null
   if (!location || !tag) throw new MissingLocationError()
 
+  // docs/phase-252 (D2, S7): a split sale is still one paid order with no transactions; its payments go in the note
+  // and as `pay:` tags. A sale paid one way keeps exactly the note and tags it had.
+  const payments = payload.paymentMethod === 'split' ? (payload.payments ?? []) : []
   const paymentNote =
-    payload.paymentMethod === 'cash'
-      ? `cash (tendered ${payload.tenderedAmount.toFixed(2)}, change ${payload.changeDue.toFixed(2)})`
-      : `${payload.paymentMethod}${payload.referenceNumber ? ` (ref ${payload.referenceNumber})` : ''}`
+    payload.paymentMethod === 'split'
+      ? `split: ${payments.map(splitPaymentNote).join(' + ')}`
+      : payload.paymentMethod === 'cash'
+        ? `cash (tendered ${payload.tenderedAmount.toFixed(2)}, change ${payload.changeDue.toFixed(2)})`
+        : `${payload.paymentMethod}${payload.referenceNumber ? ` (ref ${payload.referenceNumber})` : ''}`
+  const payTags = [...new Set(payments.map((payment) => `pay:${payment.method}`))]
 
   return {
     order: {
@@ -116,7 +138,7 @@ export function buildOrderInput(
       financialStatus: 'PAID',
       fulfillmentStatus: 'FULFILLED',
       fulfillment: { locationId: location.id, notifyCustomer: false },
-      tags: [tag],
+      tags: [tag, ...payTags],
       note: `RUBIS POS offline sale — local UUID ${payload.clientOrderUuid} (taken ${payload.createdAt}) — cashier ${payload.staffName} — payment: ${paymentNote}`,
       sourceIdentifier: payload.clientOrderUuid,
       customAttributes: [

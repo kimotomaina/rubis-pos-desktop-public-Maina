@@ -20,6 +20,8 @@ interface CardEntryPanelProps {
   onCancel: () => void
   /** Set only while the sale on screen was resumed from hold (docs/phase-217): its label and total show in large type. */
   heldLabel?: string
+  /** The button's words. "Record payment" for one payment of a split sale (docs/phase-252); "Complete Sale" otherwise. */
+  actionLabel?: string
 }
 
 /**
@@ -37,7 +39,7 @@ interface CardEntryPanelProps {
  * @param {CardEntryPanelProps} props
  * @returns {JSX.Element}
  */
-export default function CardEntryPanel({ total, onPaid, onCancel, heldLabel }: CardEntryPanelProps) {
+export default function CardEntryPanel({ total, onPaid, onCancel, heldLabel, actionLabel = 'Complete Sale' }: CardEntryPanelProps) {
   const [reference, setReference] = useState('')
   const [acknowledged, setAcknowledged] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -165,7 +167,7 @@ export default function CardEntryPanel({ total, onPaid, onCancel, heldLabel }: C
           onClick={handleContinue}
           className="mt-4 w-full rounded-xl border-2 border-amber-600 bg-white py-4 text-xl font-semibold text-amber-900 transition active:scale-95 disabled:cursor-not-allowed disabled:opacity-50"
         >
-          Complete Sale
+          {actionLabel}
         </button>
       </div>
     </div>

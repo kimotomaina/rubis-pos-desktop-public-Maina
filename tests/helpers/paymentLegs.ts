@@ -5,9 +5,11 @@
  */
 
 import type { PaymentLeg } from '../../src/main/lib/paymentLegs.js'
-import type { PaymentMethod } from '../../src/main/services/database.js'
+import type { OrderPaymentMethod } from '../../src/main/services/database.js'
 
-type OrderLike = { local_id: number; payment_method: PaymentMethod | null; total: number; status?: string }
+// CHANGED (docs/phase-252). OLD: `payment_method: PaymentMethod | null`. NEW: the order row's own type, which can also
+// say `split`; the fakes here serve only sales paid one way, so no leg is ever built from `split`.
+type OrderLike = { local_id: number; payment_method: OrderPaymentMethod | null; total: number; status?: string }
 
 /**
  * @param {...ReadonlyArray<OrderLike>} lists every order row the fake serves
@@ -20,7 +22,10 @@ export function legsOf(...lists: Array<ReadonlyArray<OrderLike>>): (orderIds: re
     const legs = new Map<number, PaymentLeg[]>()
     for (const id of orderIds) {
       const row = byId.get(id)
-      if (row) legs.set(id, [{ orderId: id, method: row.payment_method, amount: row.total, voided: row.status === 'voided' }])
+      if (row) {
+        const method = row.payment_method === 'split' ? null : row.payment_method
+        legs.set(id, [{ orderId: id, method, amount: row.total, voided: row.status === 'voided' }])
+      }
     }
     return legs
   }

@@ -173,6 +173,8 @@ describe('runCheckout — success (device accepts)', () => {
       queueOrderClaimingSmsPayment: db.queueOrderClaimingSmsPayment.bind(db),
       queueOrderRecordingMpesaPayment: db.queueOrderRecordingMpesaPayment.bind(db),
       queueOrderRecordingManualPayment: db.queueOrderRecordingManualPayment.bind(db),
+      // ADDED (docs/phase-252): the split sale's write is part of the slice runCheckout depends on.
+      queueOrderRecordingPayments: db.queueOrderRecordingPayments.bind(db),
       // docs/phase-249: the checkout-key lookup is part of the slice runCheckout depends on.
       getOrderByCheckoutKey: db.getOrderByCheckoutKey.bind(db),
       queueOrder: db.queueOrder.bind(db),
@@ -600,6 +602,8 @@ describe('runCheckout — outer-catch path (a dependency throws outside the fisc
       queueOrderClaimingSmsPayment: db.queueOrderClaimingSmsPayment.bind(db),
       queueOrderRecordingMpesaPayment: db.queueOrderRecordingMpesaPayment.bind(db),
       queueOrderRecordingManualPayment: db.queueOrderRecordingManualPayment.bind(db),
+      // ADDED (docs/phase-252): the split sale's write is part of the slice runCheckout depends on.
+      queueOrderRecordingPayments: db.queueOrderRecordingPayments.bind(db),
       // docs/phase-249: the checkout-key lookup is part of the slice runCheckout depends on.
       getOrderByCheckoutKey: db.getOrderByCheckoutKey.bind(db),
       queueOrder: () => {
@@ -638,6 +642,8 @@ describe('runCheckout — outer-catch path (a dependency throws outside the fisc
       queueOrderClaimingSmsPayment: db.queueOrderClaimingSmsPayment.bind(db),
       queueOrderRecordingMpesaPayment: db.queueOrderRecordingMpesaPayment.bind(db),
       queueOrderRecordingManualPayment: db.queueOrderRecordingManualPayment.bind(db),
+      // ADDED (docs/phase-252): the split sale's write is part of the slice runCheckout depends on.
+      queueOrderRecordingPayments: db.queueOrderRecordingPayments.bind(db),
       // docs/phase-249: the checkout-key lookup is part of the slice runCheckout depends on.
       getOrderByCheckoutKey: db.getOrderByCheckoutKey.bind(db),
       queueOrder: db.queueOrder.bind(db),

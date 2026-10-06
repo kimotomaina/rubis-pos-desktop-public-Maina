@@ -6,7 +6,7 @@
  * otherwise it compares. The copy's files are copied to a temp folder first and the copy is never written.
  */
 
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { copyFileSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -32,6 +32,8 @@ const FILES = ['rubis-pos.db', 'rubis-pos.db-shm', 'rubis-pos.db-wal']
 const TAX_RATE = 0.16
 /** A time in the night window of 6 Oct, which has no shift on the copy: the window the earlier-sales figures are read in. */
 const NIGHT_NOW = Date.parse('2026-10-06T19:30:00.000Z')
+/** When the golden files were written under the code before phase 250 (docs/phase-250, the session record): 20:34:55 Nairobi. */
+const GOLDEN_WRITTEN_AT = Date.parse('2026-10-06T17:34:55.000Z')
 
 const conn = (db: RubisDatabase): SqliteConnection => (db as unknown as { conn: SqliteConnection }).conn
 
@@ -119,7 +121,17 @@ describe.skipIf(!COPY_DIR || !GOLDEN_DIR)('payment figures on the exported copy,
       }
       const db = new RubisDatabase({ dbPath: join(work, 'rubis-pos.db') })
       db.init()
-      const { figures, csv } = collect(db)
+      // CHANGED (docs/phase-252). OLD: collected at the real time. Closing the open shift stamps it with the clock, so
+      // from 21:10 Nairobi on 6 Oct the close fell after the three night sales and took them in, and the run no longer
+      // matched its golden files. NEW: collected at the instant the golden files were written, under the old code.
+      vi.useFakeTimers({ toFake: ['Date'], now: GOLDEN_WRITTEN_AT })
+      let collected: { figures: unknown; csv: string }
+      try {
+        collected = collect(db)
+      } finally {
+        vi.useRealTimers()
+      }
+      const { figures, csv } = collected
       conn(db).close()
 
       const figuresFile = join(GOLDEN_DIR as string, 'payment-figures.golden.json')

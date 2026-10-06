@@ -23,9 +23,12 @@
  */
 
 import type {
+  CardApproval,
+  CheckoutPaymentLeg,
   CheckoutReceipt,
   CheckoutRequest,
   FiscalStatus,
+  ManualMpesaApproval,
   MpesaPaymentMode,
   MpesaVerificationStatus,
   OrderRow,
@@ -35,6 +38,7 @@ import type {
   ShiftRow,
   StaffRow
 } from './database.js'
+import type { SalePayment } from '../lib/paymentLegs.js'
 import type {
   FiscalFailureKind,
   FiscalInvoiceRequest,
@@ -70,6 +74,8 @@ export interface CheckoutDb {
   queueOrderRecordingMpesaPayment(input: QueueOrderInput, payment: RecordMpesaPaymentInput): QueuedOrder
   /** Queues the order and records a manually entered, unverified payment, in one transaction. */
   queueOrderRecordingManualPayment(input: QueueOrderInput, payment: RecordMpesaPaymentInput): QueuedOrder | null
+  /** Queues a split sale and records each of its M-Pesa payments, in one transaction (docs/phase-252). */
+  queueOrderRecordingPayments(input: QueueOrderInput, mpesa: SplitMpesaWrite[]): QueuedOrder | null
   queueOrder(input: QueueOrderInput): QueuedOrder
   getOrder(localId: number): OrderRow | undefined
   /** The order a checkout already made, by its key (docs/phase-249). */
@@ -166,6 +172,105 @@ export const CARD_REFERENCE_INVALID_MESSAGE =
 /** Shown when the cashier's attestation that the PDQ slip shows Approved is missing. */
 export const CARD_NOT_ACKNOWLEDGED_MESSAGE =
   'Confirm that the PDQ slip shows Approved for this amount before completing the sale.'
+
+/**
+ * The `app_configurations` key of the split-payments setting (docs/phase-252, S9): `'true'` turns split payments on;
+ * anything else, or no row, is off. Written only through `config:set`, which re-verifies an admin PIN.
+ */
+export const SPLIT_PAYMENTS_SETTING_KEY = 'split_payments_enabled'
+
+/** The most payments one sale may be split into (docs/phase-252, S1). */
+export const MAX_SPLIT_PAYMENTS = 4
+
+/** Shown when a split sale reaches a till whose split setting is off (docs/phase-252, S9); nothing is written. */
+export const SPLIT_PAYMENTS_OFF_MESSAGE =
+  'Split payments are switched off on this till. Take the whole payment one way, or ask an administrator.'
+
+/** Shown when a request says `split` without its payments, or carries payments without saying `split`. */
+export const SPLIT_REQUEST_INVALID_MESSAGE = 'This split payment could not be read, so nothing was recorded. Start the payment again.'
+
+/** Shown when a split sale has fewer than two payments. */
+export const SPLIT_TOO_FEW_MESSAGE = 'A split payment needs two or more payments.'
+
+/** Shown when a split sale has more than {@link MAX_SPLIT_PAYMENTS} payments. */
+export const SPLIT_TOO_MANY_MESSAGE = `A sale can be split into at most ${MAX_SPLIT_PAYMENTS} payments.`
+
+/** Shown when a split sale has a payment of zero, a negative amount or no amount. */
+export const SPLIT_AMOUNT_INVALID_MESSAGE = 'Every payment must be more than 0.'
+
+/** Shown when a split sale has two cash payments. */
+export const SPLIT_TWO_CASH_MESSAGE = 'Take cash once only, as the last payment.'
+
+/** Shown when a split sale's cash payment is not the last one. */
+export const SPLIT_CASH_NOT_LAST_MESSAGE = 'Cash must be the last payment, because only cash gives change.'
+
+/** Shown when an M-Pesa or card payment is more than what was still due when it was taken. */
+export const SPLIT_ABOVE_DUE_MESSAGE =
+  'An M-Pesa or card payment cannot be more than the amount still due. Only cash gives change.'
+
+/** Shown when the cash handed over is less than the cash payment. */
+export const SPLIT_CASH_SHORT_MESSAGE = 'The cash handed over is less than the cash still due.'
+
+/** Shown when the payments do not add up to the sale's total, to the cent. */
+export const SPLIT_NOT_ADDING_UP_MESSAGE = 'The payments do not add up to the total. Check each payment and try again.'
+
+/** Shown when one M-Pesa code is on two payments of one sale. */
+export const SPLIT_SAME_CODE_MESSAGE = 'The same M-Pesa code is on two payments. Each payment needs its own code.'
+
+/** Shown when the write found one of the split sale's M-Pesa payments already used; nothing was written. */
+export const SPLIT_MPESA_ALREADY_USED_MESSAGE =
+  'One of these M-Pesa payments was already used for another sale, so nothing was recorded. Check the codes and try again.'
+
+/** One M-Pesa payment of a split sale, as the sale's write records it (docs/phase-252). */
+export interface SplitMpesaWrite {
+  payment: RecordMpesaPaymentInput
+  /** Set on a message-based till: the stored message the payment spends. */
+  claim?: { transactionCode: string; staffId: number }
+}
+
+/** @returns {number} the amount in whole cents, the unit every split comparison is made in */
+function cents(amount: number): number {
+  return Math.round(amount * 100)
+}
+
+/**
+ * Checks a split sale's payments against its total (docs/phase-252, S1), before any payment gate or write. In whole
+ * cents: at most {@link MAX_SPLIT_PAYMENTS} payments and at least two; every amount above 0; cash at most once and
+ * last; no M-Pesa or card payment above what is still due when it is taken; the cash handed over at least the cash
+ * due; the payments adding up to the total exactly; no M-Pesa code on two payments.
+ *
+ * @param {number} total the sale's total
+ * @param {readonly CheckoutPaymentLeg[]} legs in the order recorded
+ * @returns {{ change: number } | { error: string }} the change, given on the cash payment only, or why the payments are refused
+ */
+export function checkSplitPayments(total: number, legs: readonly CheckoutPaymentLeg[]): { change: number } | { error: string } {
+  if (legs.length < 2) return { error: SPLIT_TOO_FEW_MESSAGE }
+  if (legs.length > MAX_SPLIT_PAYMENTS) return { error: SPLIT_TOO_MANY_MESSAGE }
+  const cashAt = legs.flatMap((leg, index) => (leg.method === 'cash' ? [index] : []))
+  if (cashAt.length > 1) return { error: SPLIT_TWO_CASH_MESSAGE }
+  if (cashAt.length === 1 && cashAt[0] !== legs.length - 1) return { error: SPLIT_CASH_NOT_LAST_MESSAGE }
+  const codes = legs
+    .filter((leg) => leg.method === 'mpesa')
+    .map((leg) => (leg.referenceNumber ?? '').trim().toUpperCase())
+    .filter((code) => code.length > 0)
+  if (new Set(codes).size !== codes.length) return { error: SPLIT_SAME_CODE_MESSAGE }
+
+  let due = cents(total)
+  let change = 0
+  for (const leg of legs) {
+    if (!Number.isFinite(leg.amount) || cents(leg.amount) <= 0) return { error: SPLIT_AMOUNT_INVALID_MESSAGE }
+    const amount = cents(leg.amount)
+    if (amount > due) return { error: leg.method === 'cash' ? SPLIT_NOT_ADDING_UP_MESSAGE : SPLIT_ABOVE_DUE_MESSAGE }
+    if (leg.method === 'cash') {
+      const tendered = Number.isFinite(leg.tendered) ? cents(leg.tendered as number) : 0
+      if (tendered < amount) return { error: SPLIT_CASH_SHORT_MESSAGE }
+      change = (tendered - amount) / 100
+    }
+    due -= amount
+  }
+  if (due !== 0) return { error: SPLIT_NOT_ADDING_UP_MESSAGE }
+  return { change }
+}
 
 /**
  * Shown when a checkout's key was already used by a sale of a different total (docs/phase-249). The screen keeps one
@@ -301,6 +406,12 @@ export interface RunCheckoutDeps {
    * it.
    */
   manualEntryEnabled?: boolean
+  /**
+   * Whether this till takes split payments (docs/phase-252, S9): the `split_payments_enabled` setting, changed only in
+   * Admin behind the admin PIN and read for each checkout. Optional, defaulting to off, so a caller that forgets it
+   * cannot let a split sale through.
+   */
+  splitPaymentsEnabled?: boolean
   logger: CheckoutLogger
   /**
    * Gates the per-sale, non-essential chatter (the Shopify sync-tick
@@ -340,6 +451,311 @@ function settledBy(
   enteredByStaffId: number
 ): RecordMpesaPaymentInput {
   return { mode, verificationStatus, reference, amount, enteredByStaffId, approvedByStaffId: null }
+}
+
+/**
+ * The payment gate. No M-Pesa sale reaches the ledger without a real
+ * confirmation, by any route — including a request that never came
+ * from a checkout screen, since the main process must not trust a
+ * value merely because a screen validated it.
+ *
+ * Payment inverts the fiscal rule this file follows everywhere else.
+ * An unfiled sale is recoverable and so fiscalization never blocks;
+ * goods released for a payment that never arrived are not, so every
+ * ambiguous case here resolves to NOT PAID and the sale stops.
+ *
+ * Which confirmation counts depends on what the till's provider can
+ * actually prove:
+ *
+ *   - `verifyReferenceNumbers` (the SMS reader, and the development
+ *     mock): the provider itself settles it, by matching the code
+ *     against a confirmation this till received.
+ *   - otherwise (Daraja): the provider has no receipt-lookup
+ *     endpoint, so the reference is matched against this till's own
+ *     record of Daraja's STK status responses instead. Which means
+ *     Daraja's STK path continues to work exactly as before, and a
+ *     typed reference that never went through it does not.
+ *
+ * A third outcome was added in phase-121: a **manually entered code,
+ * recorded as confirmed by nobody.** It bends this rule's letter —
+ * the gate no longer only confirms or refuses — while keeping its
+ * purpose exactly: the point was never that every sale is proven, it
+ * was that nobody is ever misled about whether a sale was proven. A
+ * manual payment is an exception an operator opens deliberately, by
+ * name, that the record describes as open for ever.
+ *
+ * As of docs/phase-150.md step 3 (the client's POC decision,
+ * consciously reversing phase-120 §7.3's "fallback flag" framing —
+ * manual is now this till's default, exclusive method, not an
+ * exception bolted onto another one), this is reached with **no
+ * manager PIN at sale time**: only the cashier's own positive
+ * attestation that they saw the confirmation message on the
+ * customer's phone. `approvedByStaffId` is always written `null`
+ * here — a manager's approval is deferred to the end-of-day report
+ * (Step 4), covering every manual entry in it at once, not
+ * re-verified per sale.
+ *
+ * `verifyTransactionCode` is **never** called on this branch. Routing
+ * manual through the provider would make an unverified payment
+ * indistinguishable from a verified one right here, which is the
+ * precise regression phase-102 exists to prevent.
+ *
+ * A function since docs/phase-252, so a split sale runs exactly this gate once for each M-Pesa payment, with that
+ * payment's amount where a sale paid one way uses its total. It answers at once, not as a promise, on every branch
+ * but the provider's check, as the inline gate did: a manual or Daraja payment is then written with no `await`
+ * between its gate and its write, so no other checkout on this till can run in between.
+ *
+ * @param {GateDeps} deps
+ * @param {number} staffId the cashier, established from the request's staff id
+ * @param {string | undefined} rawReference
+ * @param {ManualMpesaApproval | undefined} manualApproval
+ * @param {number} amount the sale's total, or the payment's amount in a split sale
+ * @returns {MpesaGate | Promise<MpesaGate>} a promise only when the provider is asked
+ */
+function gateMpesaPayment(
+  deps: GateDeps,
+  staffId: number,
+  rawReference: string | undefined,
+  manualApproval: ManualMpesaApproval | undefined,
+  amount: number
+): MpesaGate | Promise<MpesaGate> {
+  const { db, mpesaProvider, verifyReferenceNumbers, manualEntryEnabled } = deps
+  const reference = rawReference?.trim() ?? ''
+  if (!reference) {
+    return { error: UNCONFIRMED_MPESA_MESSAGE }
+  }
+
+  if (manualApproval) {
+    if (!manualEntryEnabled) {
+      return { error: MPESA_MANUAL_NOT_ENABLED_MESSAGE }
+    }
+    if (!MPESA_MANUAL_CODE_PATTERN.test(reference)) {
+      return { error: MPESA_MANUAL_CODE_INVALID_MESSAGE }
+    }
+    if (!manualApproval.acknowledgedUnverified) {
+      return { error: MPESA_MANUAL_NOT_ACKNOWLEDGED_MESSAGE }
+    }
+    // Across every mode, not just previous manual entries: the same
+    // M-Pesa code confirmed by Daraja or matched from a message is
+    // the same payment, and must not settle a second sale because
+    // somebody typed it in by hand.
+    if (db.hasRecordedMpesaPayment(reference)) {
+      return { error: MPESA_MANUAL_CODE_ALREADY_USED_MESSAGE }
+    }
+    return {
+      settlement: {
+        mode: 'manual',
+        verificationStatus: 'manual_unverified',
+        reference,
+        amount,
+        enteredByStaffId: staffId,
+        // No per-sale approval any more (docs/phase-150.md step 3) — a
+        // manager's end-of-day approval (Step 4) is what sets this.
+        approvedByStaffId: null
+      }
+    }
+  }
+  if (verifyReferenceNumbers) {
+    return verifyWithProvider(mpesaProvider, staffId, reference, amount)
+  }
+  if (!db.hasConfirmedStkPayment(reference)) {
+    return { error: UNCONFIRMED_MPESA_MESSAGE }
+  }
+  return { settlement: settledBy('daraja', 'confirmed', reference, amount, staffId) }
+}
+
+/** What the M-Pesa gate decides: the payment record to write, or why the payment is refused. */
+type MpesaGate = { settlement: RecordMpesaPaymentInput } | { error: string }
+
+/**
+ * The M-Pesa gate's provider branch (the SMS reader, and the development mock): the provider settles whether this
+ * code is a payment of `amount` this till received.
+ *
+ * @param {CheckoutMpesaProvider} mpesaProvider
+ * @param {number} staffId
+ * @param {string} reference trimmed
+ * @param {number} amount
+ * @returns {Promise<MpesaGate>}
+ */
+async function verifyWithProvider(
+  mpesaProvider: CheckoutMpesaProvider,
+  staffId: number,
+  reference: string,
+  amount: number
+): Promise<MpesaGate> {
+  const verification = await mpesaProvider.verifyTransactionCode({
+    transactionCode: reference,
+    amount
+  })
+  if (!verification.success) {
+    return { error: verification.error ?? UNCONFIRMED_MPESA_MESSAGE }
+  }
+  if (!verification.data?.verified) {
+    return { error: verification.data?.reason ?? UNCONFIRMED_MPESA_MESSAGE }
+  }
+  return { settlement: settledBy('sms', 'matched', reference, amount, staffId) }
+}
+
+/**
+ * The card (PDQ) gate. Rubis takes cards on a separate PDQ machine
+ * the till has no link to (docs/phase-176.md §4.7, VIL G03 manual
+ * Step 7: `CloseReceipt` has no payment argument at all) — there is
+ * no confirming provider to check a card reference against, the way
+ * M-Pesa's Daraja/SMS/manual routes above can. The whole record is
+ * the cashier's reference plus their attestation that the slip
+ * printed Approved, same shape as manual M-Pesa's exception (docs/
+ * phase-150.md step 3): no manager PIN at sale time, cashier
+ * attribution from `staffId` alone.
+ *
+ * `cardApproval` — never `input.referenceNumber` — is the only
+ * source for the reference, so a renderer cannot bypass this gate by
+ * setting the top-level field directly. Unlike M-Pesa there is no
+ * settlement/ledger row (Option A, docs/phase-176.md Part 2 §5):
+ * the `orders` row below is the entire record, and nothing here
+ * needs claiming or spending.
+ *
+ * A function since docs/phase-252, so each card payment of a split sale runs exactly this gate.
+ *
+ * @param {CardApproval | undefined} cardApproval
+ * @returns {{ reference: string } | { error: string }} the reference to record, or why the payment is refused
+ */
+function gateCardPayment(cardApproval: CardApproval | undefined): { reference: string } | { error: string } {
+  const reference = cardApproval?.reference.trim() ?? ''
+  if (!reference) {
+    return { error: CARD_REFERENCE_MISSING_MESSAGE }
+  }
+  if (!CARD_REFERENCE_PATTERN.test(reference)) {
+    return { error: CARD_REFERENCE_INVALID_MESSAGE }
+  }
+  if (!cardApproval?.confirmRecorded) {
+    return { error: CARD_NOT_ACKNOWLEDGED_MESSAGE }
+  }
+  return { reference }
+}
+
+/** What the payment gates read from {@link RunCheckoutDeps}. */
+type GateDeps = Pick<RunCheckoutDeps, 'db' | 'mpesaProvider' | 'verifyReferenceNumbers' | 'manualEntryEnabled'>
+
+/** A split sale that passed every check and gate (docs/phase-252), ready to write. */
+interface SplitDecision {
+  payments: SalePayment[]
+  mpesa: SplitMpesaWrite[]
+  /** Everything handed over: the M-Pesa and card payments plus the cash handed over. */
+  tendered: number
+  change: number
+}
+
+/** What deciding a split sale gives: the sale ready to write, or why it is refused. */
+type SplitOutcome = SplitDecision | { error: string }
+
+/** What deciding a split sale reads from {@link RunCheckoutDeps}. */
+type SplitDeps = GateDeps & { splitPaymentsEnabled?: boolean; claimsStoredPayments: boolean }
+
+/**
+ * Decides a split sale (docs/phase-252): refused while the setting is off, then the payments checked against the total
+ * ({@link checkSplitPayments}), then each payment through today's own gate, in the order recorded. Nothing is written
+ * here; the first refusal stops the sale. Answers at once unless a payment needs the provider's check, for the reason
+ * {@link gateMpesaPayment} gives.
+ *
+ * @param {SplitDeps} deps
+ * @param {CheckoutRequest} input
+ * @param {number} staffId
+ * @returns {SplitOutcome | Promise<SplitOutcome>}
+ */
+function decideSplit(deps: SplitDeps, input: CheckoutRequest, staffId: number): SplitOutcome | Promise<SplitOutcome> {
+  if (deps.splitPaymentsEnabled !== true) return { error: SPLIT_PAYMENTS_OFF_MESSAGE }
+  if (input.paymentMethod !== 'split' || !input.payments) return { error: SPLIT_REQUEST_INVALID_MESSAGE }
+  const checked = checkSplitPayments(input.total, input.payments)
+  if ('error' in checked) return checked
+  return gateSplitPayments(deps, staffId, input.payments, 0, { payments: [], mpesa: [], tendered: 0, change: checked.change })
+}
+
+/**
+ * Runs the payments of a split sale from `from` on through their gates, in order, adding each to `decision`. Waits only
+ * where a payment needs the provider's check, then carries on from the next payment.
+ *
+ * @param {SplitDeps} deps
+ * @param {number} staffId
+ * @param {readonly CheckoutPaymentLeg[]} legs
+ * @param {number} from
+ * @param {SplitDecision} decision filled in as the payments pass
+ * @returns {SplitOutcome | Promise<SplitOutcome>}
+ */
+function gateSplitPayments(
+  deps: SplitDeps,
+  staffId: number,
+  legs: readonly CheckoutPaymentLeg[],
+  from: number,
+  decision: SplitDecision
+): SplitOutcome | Promise<SplitOutcome> {
+  for (let index = from; index < legs.length; index++) {
+    const leg = legs[index]
+    const amount = cents(leg.amount) / 100
+    if (leg.method === 'cash') {
+      decision.payments.push({ method: 'cash', amount, tendered: cents(leg.tendered as number) / 100, changeDue: decision.change })
+      continue
+    }
+    if (leg.method === 'card') {
+      const gate = gateCardPayment(leg.cardApproval)
+      if ('error' in gate) return gate
+      decision.payments.push({ method: 'card', amount, reference: gate.reference })
+      continue
+    }
+    const gate = gateMpesaPayment(deps, staffId, leg.referenceNumber, leg.manualApproval, amount)
+    if (gate instanceof Promise) {
+      return gate.then((checked) => {
+        if ('error' in checked) return checked
+        addMpesaPayment(deps, staffId, decision, checked.settlement)
+        return gateSplitPayments(deps, staffId, legs, index + 1, decision)
+      })
+    }
+    if ('error' in gate) return gate
+    addMpesaPayment(deps, staffId, decision, gate.settlement)
+  }
+  // Everything handed over: each M-Pesa and card payment, and the cash handed over, added in whole cents.
+  const handedOver = decision.payments.reduce((sum, payment) => sum + cents(payment.tendered ?? payment.amount), 0)
+  return { ...decision, tendered: handedOver / 100 }
+}
+
+/**
+ * Adds an M-Pesa payment that passed its gate to a split sale. As for a sale paid one way, on a message-based till a
+ * confirmed payment spends its stored message; a manual code has none.
+ *
+ * @param {SplitDeps} deps
+ * @param {number} staffId
+ * @param {SplitDecision} decision
+ * @param {RecordMpesaPaymentInput} settlement
+ */
+function addMpesaPayment(deps: SplitDeps, staffId: number, decision: SplitDecision, settlement: RecordMpesaPaymentInput): void {
+  decision.payments.push({ method: 'mpesa', amount: settlement.amount, reference: settlement.reference, mpesaMode: settlement.mode })
+  const claim = deps.claimsStoredPayments && settlement.mode !== 'manual' ? { transactionCode: settlement.reference, staffId } : undefined
+  decision.mpesa.push({ payment: settlement, ...(claim ? { claim } : {}) })
+}
+
+/**
+ * The one payment of a sale paid one way (docs/phase-252), written to `order_payments` with the sale: its whole total,
+ * the cash handed over and the change for cash, the reference for card and M-Pesa, and for M-Pesa the mode from the gate
+ * branch that accepted it.
+ *
+ * @param {CheckoutRequest} input
+ * @param {number} total
+ * @param {RecordMpesaPaymentInput | null} mpesaSettlement
+ * @param {string | null} cardReference
+ * @returns {SalePayment}
+ */
+function singlePayment(
+  input: CheckoutRequest,
+  total: number,
+  mpesaSettlement: RecordMpesaPaymentInput | null,
+  cardReference: string | null
+): SalePayment {
+  if (input.paymentMethod === 'mpesa' && mpesaSettlement) {
+    return { method: 'mpesa', amount: total, reference: mpesaSettlement.reference, mpesaMode: mpesaSettlement.mode }
+  }
+  if (input.paymentMethod === 'card' && cardReference !== null) {
+    return { method: 'card', amount: total, reference: cardReference }
+  }
+  return { method: 'cash', amount: total, tendered: input.tenderedAmount, changeDue: input.changeDue }
 }
 
 /** Builds the fiscal invoice request from a checkout, identically on the happy path and the exception-fallback rebuild. */
@@ -399,16 +815,13 @@ export async function runCheckout(
 ): Promise<ServiceResult<CheckoutReceipt>> {
   const {
     db,
-    mpesaProvider,
     fiscalizationProvider,
     fiscalEngine,
     monitor,
     engineTick,
     idGen,
     taxRate,
-    verifyReferenceNumbers,
     claimsStoredPayments,
-    manualEntryEnabled,
     logger,
     debugLogging
   } = deps
@@ -459,139 +872,44 @@ export async function runCheckout(
     }
 
     /**
-     * The payment gate. No M-Pesa sale reaches the ledger without a real
-     * confirmation, by any route — including a request that never came
-     * from a checkout screen, since the main process must not trust a
-     * value merely because a screen validated it.
-     *
-     * Payment inverts the fiscal rule this file follows everywhere else.
-     * An unfiled sale is recoverable and so fiscalization never blocks;
-     * goods released for a payment that never arrived are not, so every
-     * ambiguous case here resolves to NOT PAID and the sale stops.
-     *
-     * Which confirmation counts depends on what the till's provider can
-     * actually prove:
-     *
-     *   - `verifyReferenceNumbers` (the SMS reader, and the development
-     *     mock): the provider itself settles it, by matching the code
-     *     against a confirmation this till received.
-     *   - otherwise (Daraja): the provider has no receipt-lookup
-     *     endpoint, so the reference is matched against this till's own
-     *     record of Daraja's STK status responses instead. Which means
-     *     Daraja's STK path continues to work exactly as before, and a
-     *     typed reference that never went through it does not.
-     *
-     * A third outcome was added in phase-121: a **manually entered code,
-     * recorded as confirmed by nobody.** It bends this rule's letter —
-     * the gate no longer only confirms or refuses — while keeping its
-     * purpose exactly: the point was never that every sale is proven, it
-     * was that nobody is ever misled about whether a sale was proven. A
-     * manual payment is an exception an operator opens deliberately, by
-     * name, that the record describes as open for ever.
-     *
-     * As of docs/phase-150.md step 3 (the client's POC decision,
-     * consciously reversing phase-120 §7.3's "fallback flag" framing —
-     * manual is now this till's default, exclusive method, not an
-     * exception bolted onto another one), this is reached with **no
-     * manager PIN at sale time**: only the cashier's own positive
-     * attestation that they saw the confirmation message on the
-     * customer's phone. `approvedByStaffId` is always written `null`
-     * here — a manager's approval is deferred to the end-of-day report
-     * (Step 4), covering every manual entry in it at once, not
-     * re-verified per sale.
-     *
-     * `verifyTransactionCode` is **never** called on this branch. Routing
-     * manual through the provider would make an unverified payment
-     * indistinguishable from a verified one right here, which is the
-     * precise regression phase-102 exists to prevent.
+     * docs/phase-252: a split sale is decided first, whole: the setting, the payments against the total, then each
+     * payment through the same gate a sale paid one way uses. A request that carries payments without saying `split`
+     * is refused the same way.
      */
-    if (input.paymentMethod === 'mpesa') {
-      const reference = input.referenceNumber?.trim() ?? ''
-      if (!reference) {
-        return { success: false, error: UNCONFIRMED_MPESA_MESSAGE }
+    let split: SplitDecision | null = null
+    if (input.paymentMethod === 'split' || input.payments !== undefined) {
+      const pending = decideSplit(deps, input, staff.id)
+      const decided = pending instanceof Promise ? await pending : pending
+      if ('error' in decided) {
+        return { success: false, error: decided.error }
       }
-
-      if (input.manualApproval) {
-        if (!manualEntryEnabled) {
-          return { success: false, error: MPESA_MANUAL_NOT_ENABLED_MESSAGE }
-        }
-        if (!MPESA_MANUAL_CODE_PATTERN.test(reference)) {
-          return { success: false, error: MPESA_MANUAL_CODE_INVALID_MESSAGE }
-        }
-        if (!input.manualApproval.acknowledgedUnverified) {
-          return { success: false, error: MPESA_MANUAL_NOT_ACKNOWLEDGED_MESSAGE }
-        }
-        // Across every mode, not just previous manual entries: the same
-        // M-Pesa code confirmed by Daraja or matched from a message is
-        // the same payment, and must not settle a second sale because
-        // somebody typed it in by hand.
-        if (db.hasRecordedMpesaPayment(reference)) {
-          return { success: false, error: MPESA_MANUAL_CODE_ALREADY_USED_MESSAGE }
-        }
-        mpesaSettlement = {
-          mode: 'manual',
-          verificationStatus: 'manual_unverified',
-          reference,
-          amount: total,
-          enteredByStaffId: staff.id,
-          // No per-sale approval any more (docs/phase-150.md step 3) — a
-          // manager's end-of-day approval (Step 4) is what sets this.
-          approvedByStaffId: null
-        }
-      } else if (verifyReferenceNumbers) {
-        const verification = await mpesaProvider.verifyTransactionCode({
-          transactionCode: reference,
-          amount: total
-        })
-        if (!verification.success) {
-          return { success: false, error: verification.error ?? UNCONFIRMED_MPESA_MESSAGE }
-        }
-        if (!verification.data?.verified) {
-          return { success: false, error: verification.data?.reason ?? UNCONFIRMED_MPESA_MESSAGE }
-        }
-        mpesaSettlement = settledBy('sms', 'matched', reference, total, staff.id)
-      } else if (!db.hasConfirmedStkPayment(reference)) {
-        return { success: false, error: UNCONFIRMED_MPESA_MESSAGE }
-      } else {
-        mpesaSettlement = settledBy('daraja', 'confirmed', reference, total, staff.id)
-      }
+      split = decided
     }
 
-    /**
-     * The card (PDQ) gate. Rubis takes cards on a separate PDQ machine
-     * the till has no link to (docs/phase-176.md §4.7, VIL G03 manual
-     * Step 7: `CloseReceipt` has no payment argument at all) — there is
-     * no confirming provider to check a card reference against, the way
-     * M-Pesa's Daraja/SMS/manual routes above can. The whole record is
-     * the cashier's reference plus their attestation that the slip
-     * printed Approved, same shape as manual M-Pesa's exception (docs/
-     * phase-150.md step 3): no manager PIN at sale time, cashier
-     * attribution from `staffId` alone.
-     *
-     * `cardApproval` — never `input.referenceNumber` — is the only
-     * source for the reference, so a renderer cannot bypass this gate by
-     * setting the top-level field directly. Unlike M-Pesa there is no
-     * settlement/ledger row (Option A, docs/phase-176.md Part 2 §5):
-     * the `orders` row below is the entire record, and nothing here
-     * needs claiming or spending.
-     */
+    // The payment gates: see gateMpesaPayment and gateCardPayment.
+    if (input.paymentMethod === 'mpesa') {
+      // Awaited only when the provider is asked: see gateMpesaPayment.
+      const pending = gateMpesaPayment(deps, staff.id, input.referenceNumber, input.manualApproval, total)
+      const gate = pending instanceof Promise ? await pending : pending
+      if ('error' in gate) {
+        return { success: false, error: gate.error }
+      }
+      mpesaSettlement = gate.settlement
+    }
+
     if (input.paymentMethod === 'card') {
-      const reference = input.cardApproval?.reference.trim() ?? ''
-      if (!reference) {
-        return { success: false, error: CARD_REFERENCE_MISSING_MESSAGE }
+      const gate = gateCardPayment(input.cardApproval)
+      if ('error' in gate) {
+        return { success: false, error: gate.error }
       }
-      if (!CARD_REFERENCE_PATTERN.test(reference)) {
-        return { success: false, error: CARD_REFERENCE_INVALID_MESSAGE }
-      }
-      if (!input.cardApproval?.confirmRecorded) {
-        return { success: false, error: CARD_NOT_ACKNOWLEDGED_MESSAGE }
-      }
-      cardReference = reference
+      cardReference = gate.reference
     }
 
     const openShift = db.getOpenShift()
     const clientOrderUuid = idGen()
-    const orderInput = {
+    // docs/phase-252: a split sale's tendered and change are worked out here from its payments, never the screen's.
+    const fiscalSource: CheckoutRequest = split ? { ...input, tenderedAmount: split.tendered, changeDue: split.change } : input
+    const orderInput: QueueOrderInput = {
       items,
       total,
       clientOrderUuid,
@@ -602,9 +920,10 @@ export async function runCheckout(
       // 2 §2): the PDQ terminal already took the full amount, so the
       // renderer's tenderedAmount/changeDue are not evidence of
       // anything and are ignored in favour of the cart total/zero.
-      tenderedAmount: cardReference !== null ? total : input.tenderedAmount,
-      changeDue: cardReference !== null ? 0 : input.changeDue,
-      referenceNumber: cardReference ?? input.referenceNumber,
+      tenderedAmount: cardReference !== null ? total : fiscalSource.tenderedAmount,
+      changeDue: cardReference !== null ? 0 : fiscalSource.changeDue,
+      referenceNumber: split ? undefined : (cardReference ?? input.referenceNumber),
+      payments: split ? split.payments : [singlePayment(input, total, mpesaSettlement, cardReference)],
       shiftId: openShift?.id,
       customerPin: input.customerPin,
       cartDiscount: input.cartDiscount,
@@ -615,7 +934,7 @@ export async function runCheckout(
       // Rule 3 (docs/phase-185.md §4.1): the sale is `waiting`, queued and
       // carries this exact request from the moment it exists.
       buildFiscalRequest: (id: number, traderInvNum?: string) =>
-        buildFiscalRequest(input, clientOrderUuid, id, taxRate, traderInvNum)
+        buildFiscalRequest(fiscalSource, clientOrderUuid, id, taxRate, traderInvNum)
     }
 
     /**
@@ -649,7 +968,12 @@ export async function runCheckout(
      * no payment row is the untraceable state this table exists to end.
      */
     let queued: QueuedOrder | null
-    if (mpesaSettlement?.mode === 'manual') {
+    if (split) {
+      queued = db.queueOrderRecordingPayments(orderInput, split.mpesa)
+      if (!queued) {
+        return { success: false, error: SPLIT_MPESA_ALREADY_USED_MESSAGE }
+      }
+    } else if (mpesaSettlement?.mode === 'manual') {
       queued = db.queueOrderRecordingManualPayment(orderInput, mpesaSettlement)
       if (!queued) {
         return { success: false, error: MPESA_MANUAL_CODE_ALREADY_USED_MESSAGE }
@@ -706,7 +1030,7 @@ export async function runCheckout(
     let retryInBackground = false
     fiscalEngine.claim(localId)
     try {
-      const fiscalRequest = buildFiscalRequest(input, clientOrderUuid, localId, taxRate, queued.traderInvNum)
+      const fiscalRequest = buildFiscalRequest(fiscalSource, clientOrderUuid, localId, taxRate, queued.traderInvNum)
       const invoice = await fiscalizationProvider.submitInvoice(fiscalRequest)
 
       if (invoice.ok) {

@@ -91,6 +91,8 @@ interface PaymentModalProps {
    * from), so the real capabilities call is never skipped there.
    */
   forcedCapabilities?: MpesaCapabilitiesState
+  /** The manual-entry button's words. "Record payment" for one payment of a split sale (docs/phase-252); "Complete Sale" otherwise. */
+  actionLabel?: string
 }
 
 /** `2547XXXXXXXX` — Safaricom MSISDN format expected by the mock Daraja provider. */
@@ -163,7 +165,8 @@ export default function PaymentModal({
   onPaid,
   onCancel,
   heldLabel,
-  forcedCapabilities
+  forcedCapabilities,
+  actionLabel = 'Complete Sale'
 }: PaymentModalProps) {
   const [capabilities, setCapabilities] = useState<MpesaCapabilitiesState>(
     forcedCapabilities ?? { status: 'loading' }
@@ -393,7 +396,7 @@ export default function PaymentModal({
         onClick={handleUnverifiedContinue}
         className="mt-4 w-full rounded-xl border-2 border-amber-600 bg-white py-4 text-xl font-semibold text-amber-900 transition active:scale-95 disabled:cursor-not-allowed disabled:opacity-50"
       >
-        Complete Sale
+        {actionLabel}
       </button>
     </div>
   )

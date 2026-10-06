@@ -15,10 +15,12 @@ import { useKeyboardStore } from '../stores/keyboardStore.js'
 import PaymentModal from './PaymentModal.js'
 import type { ManualMpesaEntryInput, MpesaCapabilitiesState } from './PaymentModal.js'
 import CardEntryPanel from './CardEntryPanel.js'
+import SplitPaymentPanel from './SplitPaymentPanel.js'
 import VirtualNumpad from './VirtualNumpad.js'
+import { SPLIT_PAYMENTS_SETTING_KEY } from '../lib/splitPayments.js'
 import mpesaLogo from '../assets/logo-mpesa.png'
 import cardLogo from '../assets/logo-visa-mastercard.png'
-import type { CardManualEntry, PaymentMethod } from '../../../main/services/database.js'
+import type { CardManualEntry, CheckoutIpcPaymentLeg, PaymentMethod } from '../../../main/services/database.js'
 import type { Discount } from '../types/shopify.js'
 
 interface PosCheckoutPanelProps {
@@ -101,10 +103,30 @@ export default function PosCheckoutPanel({
   const currentStaff = useAuthStore((state) => state.currentStaff)
 
   const [method, setMethod] = useState<QuickPaymentMethod>('cash')
+  /** Whether this till takes split payments (docs/phase-252, S9); off until the setting is read, and off when it cannot be. */
+  const [splitEnabled, setSplitEnabled] = useState(false)
+  const [splitMode, setSplitMode] = useState(false)
 
   useEffect(() => {
     if (forceMpesaManualKeyboard) setMethod('mpesa')
   }, [forceMpesaManualKeyboard])
+
+  useEffect(() => {
+    let cancelled = false
+    // No bridge, or one without the setting read: the split stays off.
+    if (typeof window.api?.getAllConfigs !== 'function') return
+    void window.api
+      .getAllConfigs()
+      .then((result) => {
+        if (!cancelled) setSplitEnabled(result.success === true && result.data?.[SPLIT_PAYMENTS_SETTING_KEY] === 'true')
+      })
+      .catch(() => {
+        if (!cancelled) setSplitEnabled(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
   const [tenderedInput, setTenderedInput] = useState('')
   /** The customer's company name and KRA PIN live in the cart store, so a held sale keeps them (docs/phase-217). */
   const companyName = useCartStore((state) => state.companyName)
@@ -147,6 +169,7 @@ export default function PosCheckoutPanel({
     if (checkoutStatus === 'synced' || checkoutStatus === 'queued-offline') {
       setTenderedInput('')
       setMethod('cash')
+      setSplitMode(false)
       resetCheckoutStatus()
     }
   }, [checkoutStatus, resetCheckoutStatus])
@@ -161,6 +184,7 @@ export default function PosCheckoutPanel({
   useEffect(() => {
     if (heldResetEpoch === 0) return
     setMethod('cash')
+    setSplitMode(false)
     setTenderedInput('')
     setEditingPin(false)
     setShowDiscountEditor(false)
@@ -239,6 +263,23 @@ export default function PosCheckoutPanel({
       customerPin: trimmedCustomerPin || undefined,
       companyName: trimmedCompanyName || undefined,
       cardManual: manual
+    })
+  }
+
+  /**
+   * Sends a split sale (docs/phase-252): one checkout with every payment, once they add up to the total. The tendered
+   * amount and change here are the screen's own figures; the main process works both out again from the payments.
+   */
+  const handleCompleteSplit = (payments: CheckoutIpcPaymentLeg[], change: number) => {
+    if (!currentStaff) return
+    void checkout({
+      staffId: currentStaff.id,
+      paymentMethod: 'split',
+      tenderedAmount: Math.round((cartTotal + change) * 100) / 100,
+      changeDue: change,
+      payments,
+      customerPin: trimmedCustomerPin || undefined,
+      companyName: trimmedCompanyName || undefined
     })
   }
 
@@ -401,6 +442,14 @@ export default function PosCheckoutPanel({
             This sale has a discount or price override that cannot yet be filed correctly with
             KRA. Remove it from the cart before completing this sale.
           </p>
+        ) : splitMode ? (
+          <SplitPaymentPanel
+            total={cartTotal}
+            onComplete={handleCompleteSplit}
+            onCancel={() => setSplitMode(false)}
+            submitting={checkoutStatus === 'submitting'}
+            heldLabel={resumedHeld?.label}
+          />
         ) : (
           <>
             {/**
@@ -460,6 +509,20 @@ export default function PosCheckoutPanel({
                 <span className="sr-only">CARD</span>
               </button>
             </div>
+
+            {/*
+              docs/phase-252 (S9): shown only while the till's split setting is on, so the screen is unchanged when it is
+              off; and only on the cash screen, so no M-Pesa or card payment in progress is dropped by opening it.
+            */}
+            {splitEnabled && cartCount > 0 && method === 'cash' && (
+              <button
+                type="button"
+                onClick={() => setSplitMode(true)}
+                className="mb-2 w-full text-center text-base font-medium text-rose-600 hover:text-rose-700"
+              >
+                Split payment
+              </button>
+            )}
 
             {method === 'cash' && (
               <div>

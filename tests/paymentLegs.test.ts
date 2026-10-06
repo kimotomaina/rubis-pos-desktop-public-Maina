@@ -197,7 +197,14 @@ describe('the earlier sales of a window with no shift', () => {
     sale.run(100, '2026-10-06T18:10:00.000Z', 'cash')
     sale.run(50.5, '2026-10-06T18:20:00.000Z', 'mpesa')
     sale.run(30, '2026-10-06T18:30:00.000Z', 'card')
-    db.closeShift(3, 30)
+    // CHANGED (docs/phase-252). OLD: shift 3 was closed at the real time, so from the evening of 6 Oct its close fell in
+    // the night window and the test failed. NEW: it is closed at 18:00 Nairobi on 6 Oct, before the night sales.
+    vi.useFakeTimers({ toFake: ['Date'], now: Date.parse('2026-10-06T15:00:00.000Z') })
+    try {
+      db.closeShift(3, 30)
+    } finally {
+      vi.useRealTimers()
+    }
   }
 
   it('the shift-window status shown to Open Shift', () => {
@@ -230,10 +237,21 @@ describe('no moved reader reads the column itself', () => {
   it('in the database, the one reader builds legs from it; only the Move a sale preview shows it, as text', () => {
     const db = source('services', 'database.ts')
 
-    expect(db).not.toMatch(/payment_method\s*===/)
+    // CHANGED (docs/phase-252). OLD: no `payment_method ===` at all, and the reads were the reader's, the ledger join's
+    // and the Move a sale text's, once each. NEW: the only comparisons are with `'split'`, in the reader (an older sale
+    // falls back to the column, a split one never does) and in the Move a sale text; the reader's query reads the column
+    // too. Still no figure is worked out from it anywhere but the reader.
+    expect(db.match(/payment_method\s*===\s*'[a-z]+'/g)).toEqual(["payment_method === 'split'", "payment_method === 'split'"])
     // The doc comment of the reader names `orders.payment_method`; code reads it as a row's field.
-    expect(db.match(/\b(?!orders\b)\w+\.payment_method\b/g)).toEqual(['row.payment_method', 'o.payment_method', 'order.payment_method'])
-    expect(db).toContain('method: row.payment_method, amount: row.total')
-    expect(db).toContain('paymentMethod: order.payment_method,')
+    expect(db.match(/\b(?!orders\b)\w+\.payment_method\b/g)).toEqual([
+      'o.payment_method',
+      'row.payment_method',
+      'row.payment_method',
+      'o.payment_method',
+      'order.payment_method',
+      'order.payment_method'
+    ])
+    expect(db).toContain("method: row.payment_method === 'split' ? null : row.payment_method, amount: row.total")
+    expect(db).toContain("order.payment_method === 'split' ? describePayment(")
   })
 })

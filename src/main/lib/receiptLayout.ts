@@ -28,6 +28,7 @@
  */
 
 import type { Discount } from '../services/shopify-types.js'
+import type { SalePayment } from './paymentLegs.js'
 import { computeReceiptTotals } from './receiptTotals.js'
 import { VAT_CLASSES, VAT_CLASS_RATES, expectedGroupTotals, grossToVat, resolveVatClass, type VatClass } from './vatClass.js'
 import { reconcileVatGroups } from './vatReconcile.js'
@@ -119,10 +120,12 @@ export interface ReceiptLayoutOrder {
   localId: number
   createdAt: string
   cashierName: string
-  paymentMethod: 'cash' | 'mpesa' | 'card'
+  paymentMethod: 'cash' | 'mpesa' | 'card' | 'split'
   tenderedAmount: number
   changeDue: number
   referenceNumber?: string
+  /** A split sale's payments, from its order payload (docs/phase-252). Read only when `paymentMethod` is `split`. */
+  payments?: SalePayment[]
   customerPin?: string
   /** Buyer's company/trading name, from `fiscal_request_json` — only ever known once a fiscal request was sent. */
   buyerName?: string
@@ -149,6 +152,9 @@ export interface ReceiptLayoutOrder {
 
 /** Printer widths this builder supports, in characters per line. */
 export type ReceiptWidth = 48 | 42 | 32
+
+/** The payment label each method prints after `PAID BY`. */
+const PAYMENT_LABELS: Record<SalePayment['method'], string> = { cash: 'CASH', mpesa: 'M-PESA', card: 'CARD' }
 
 const DEFAULT_WIDTH: ReceiptWidth = 48
 
@@ -490,14 +496,28 @@ export function buildReceiptLayout(
   push(rule(width))
 
   // --- (f) Payment ---
-  const paymentLabel = order.paymentMethod === 'mpesa' ? 'M-PESA' : order.paymentMethod === 'card' ? 'CARD' : 'CASH'
-  push(...keyValueLines(`PAID BY ${paymentLabel}`, formatAmount(totals.total), width))
-  if (order.paymentMethod === 'cash') {
-    push(...keyValueLines('Tendered:', formatAmount(order.tenderedAmount), width))
-    push(...keyValueLines('Change:', formatAmount(order.changeDue), width))
-  } else if (order.referenceNumber) {
-    const refLabel = order.paymentMethod === 'mpesa' ? 'M-Pesa ref:' : 'Ref:'
-    push(...keyValueLines(refLabel, order.referenceNumber, width))
+  if (order.paymentMethod === 'split') {
+    // docs/phase-252 (D6): each payment as its own block, two lines for M-Pesa and card (label and amount, then the
+    // reference) so a 32-column printer does not wrap; Tendered and Change only under the cash payment.
+    for (const payment of order.payments ?? []) {
+      push(...keyValueLines(`PAID BY ${PAYMENT_LABELS[payment.method]}`, formatAmount(payment.amount), width))
+      if (payment.method === 'cash') {
+        push(...keyValueLines('Tendered:', formatAmount(payment.tendered ?? payment.amount), width))
+        push(...keyValueLines('Change:', formatAmount(payment.changeDue ?? 0), width))
+      } else if (payment.reference) {
+        push(...keyValueLines(payment.method === 'mpesa' ? 'M-Pesa ref:' : 'Ref:', payment.reference, width))
+      }
+    }
+  } else {
+    const paymentLabel = order.paymentMethod === 'mpesa' ? 'M-PESA' : order.paymentMethod === 'card' ? 'CARD' : 'CASH'
+    push(...keyValueLines(`PAID BY ${paymentLabel}`, formatAmount(totals.total), width))
+    if (order.paymentMethod === 'cash') {
+      push(...keyValueLines('Tendered:', formatAmount(order.tenderedAmount), width))
+      push(...keyValueLines('Change:', formatAmount(order.changeDue), width))
+    } else if (order.referenceNumber) {
+      const refLabel = order.paymentMethod === 'mpesa' ? 'M-Pesa ref:' : 'Ref:'
+      push(...keyValueLines(refLabel, order.referenceNumber, width))
+    }
   }
   push(rule(width))
 

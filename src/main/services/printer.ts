@@ -26,6 +26,7 @@ import { formatVatRateLabel } from './reports.js'
 import type { PrinterConfig, PrinterType, PrinterConnectionType, FiscalStatus } from './database.js'
 import { formatCurrency } from './currency.js'
 import type { ConnectivityCheckResult } from './connectivityMonitor.js'
+import type { SalePayment } from '../lib/paymentLegs.js'
 import { zReportMpesaLines } from '../lib/zReportMpesa.js'
 import { zReportCardLines } from '../lib/zReportCard.js'
 import { zReportRetroLines } from '../lib/zReportRetro.js'
@@ -101,10 +102,12 @@ export interface ReceiptOrder {
   localId: number
   createdAt: string
   cashierName: string
-  paymentMethod: 'cash' | 'mpesa' | 'card'
+  paymentMethod: 'cash' | 'mpesa' | 'card' | 'split'
   tenderedAmount: number
   changeDue: number
   referenceNumber?: string
+  /** A split sale's payments, from its order payload (docs/phase-252). */
+  payments?: SalePayment[]
   /** Customer's KRA PIN, when captured for a B2B eTIMS invoice — omitted for a walk-in B2C sale. */
   customerPin?: string
   /** Buyer's company/trading name, read from `fiscal_request_json` (docs/phase-171, docs/phase-157) — omitted otherwise. */

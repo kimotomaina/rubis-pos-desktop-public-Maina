@@ -740,6 +740,8 @@ function InvoiceListView({ staffName, scope }: { staffName: (id: number | null) 
     invoices: Array<{
       order: { local_id: number; created_at: string; fiscal_invoice_number: string | null; fiscal_status: string | null; total: number; payment_method: string | null; staff_id: number | null }
       traderInvoiceNumber: string
+      /** The method, or `split: …` with the payments (docs/phase-252). Absent from an older main process. */
+      paymentText?: string
     }>
     total: number
   } | null>(null)
@@ -793,7 +795,7 @@ function InvoiceListView({ staffName, scope }: { staffName: (id: number | null) 
                 </tr>
               </thead>
               <tbody>
-                {data.invoices.map(({ order, traderInvoiceNumber }) => (
+                {data.invoices.map(({ order, traderInvoiceNumber, paymentText }) => (
                   <tr key={order.local_id} className="border-t border-slate-100">
                     <td className="py-2 pr-2 text-slate-500">{new Date(order.created_at).toLocaleString()}</td>
                     <td className="py-2 pr-2 font-mono text-sm text-slate-800">{traderInvoiceNumber}</td>
@@ -801,7 +803,7 @@ function InvoiceListView({ staffName, scope }: { staffName: (id: number | null) 
                       {order.fiscal_invoice_number ?? order.fiscal_status ?? 'not filed'}
                     </td>
                     <td className="py-2 text-right text-slate-800">{formatCurrency(order.total)}</td>
-                    <td className="py-2 pr-2 text-slate-500">{order.payment_method ?? ''}</td>
+                    <td className="py-2 pr-2 text-slate-500">{paymentText ?? order.payment_method ?? ''}</td>
                     <td className="py-2 text-slate-800">{staffName(order.staff_id)}</td>
                   </tr>
                 ))}

@@ -11,6 +11,7 @@ import type { RubisDatabase, MpesaPaymentRow, OrderRow } from './database.js'
 import type { OfflineOrderPayload } from './shopify-types.js'
 import type { FiscalVatGroupAmounts } from './integrations/etims.js'
 import { buildCsv, csvMoney } from '../lib/csv.js'
+import { describePayment } from '../lib/paymentLegs.js'
 import { resolveTraderSystemInvNum } from '../lib/traderSystemInvoiceNumber.js'
 import { computeVatIncluded, formatNairobiDateTime, buildReconciliationRow, orderVatBase, type ReportRange } from './reports.js'
 
@@ -56,14 +57,16 @@ function parsePayload(order: OrderRow): OfflineOrderPayload | null {
 export function buildOrdersCsv(db: RubisDatabase, range: ReportRange, taxRate: number): string {
   const orders = db.getOrdersForDateRange(range.startIso, range.endIso)
   const payments = db.getMpesaPaymentsForDateRange(range.startIso, range.endIso)
-  // docs/phase-250: the payment method column comes from the sale's legs. A sale is paid one way today: one leg.
+  // docs/phase-250: the payment method column comes from the sale's legs; a split sale shows them all (docs/phase-252).
   const legs = db.paymentLegsFor(orders.map((order) => order.local_id))
 
-  const paymentByOrder = new Map<number, MpesaPaymentRow>()
+  // docs/phase-252: a split sale can have more than one M-Pesa payment; each column lists them all, joined. A sale with
+  // one shows it alone, as before.
+  const paymentsByOrder = new Map<number, MpesaPaymentRow[]>()
   for (const payment of payments) {
-    if (!paymentByOrder.has(payment.order_local_id)) {
-      paymentByOrder.set(payment.order_local_id, payment)
-    }
+    const list = paymentsByOrder.get(payment.order_local_id)
+    if (list) list.push(payment)
+    else paymentsByOrder.set(payment.order_local_id, [payment])
   }
 
   const staffNameCache = new Map<number, string>()
@@ -107,7 +110,7 @@ export function buildOrdersCsv(db: RubisDatabase, range: ReportRange, taxRate: n
 
   const rows = orders.map((order) => {
     const payload = parsePayload(order)
-    const payment = paymentByOrder.get(order.local_id)
+    const orderPayments = paymentsByOrder.get(order.local_id) ?? []
     const reconciliation = order.fiscal_status === 'fiscalized' ? buildReconciliationRow(order, console) : null
     const rawGroups: FiscalVatGroupAmounts = order.fiscal_vat_groups_json
       ? (JSON.parse(order.fiscal_vat_groups_json) as FiscalVatGroupAmounts)
@@ -118,9 +121,9 @@ export function buildOrdersCsv(db: RubisDatabase, range: ReportRange, taxRate: n
       order.fiscal_invoice_number ?? '',
       order.fiscal_status ?? '',
       staffName(order.staff_id),
-      legs.get(order.local_id)?.[0]?.method ?? '',
-      payment?.reference ?? '',
-      payment?.mode ?? '',
+      describePayment(legs.get(order.local_id) ?? []),
+      orderPayments.map((payment) => payment.reference).join(' + '),
+      orderPayments.map((payment) => payment.mode).join(' + '),
       csvMoney(order.total),
       csvMoney(computeVatIncluded(orderVatBase(order), taxRate)),
       order.shift_id ?? '',
