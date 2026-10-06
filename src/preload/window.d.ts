@@ -264,7 +264,7 @@ export interface PosApi {
   /** Generates today's sales summary for the Admin screen. */
   getDailySummary: () => Promise<ServiceResult<DailySummary>>
   /** Generates the end-of-day report for one Africa/Nairobi calendar day (defaults to today). Read-only. */
-  getEndOfDayReport: (localDay?: string) => Promise<ServiceResult<EndOfDayReport>>
+  getEndOfDayReport: (localDay?: string, shiftId?: number) => Promise<ServiceResult<EndOfDayReport>>
   /** A manager's end-of-day review: approves `approvedIds` and records why each `excluded` entry was left pending. */
   approveDayReport: (request: {
     localDay: string

@@ -692,6 +692,20 @@ export interface ManualMpesaEntrySummary {
   lastExclusion: { localDay: string; staffName: string; reason: string | null } | null
 }
 
+/** One shift that has sales on the day an end-of-day report is for (docs/phase-241). */
+export interface EndOfDayShift {
+  shiftId: number
+  status: 'open' | 'closed'
+  openedAt: string
+  closedAt: string | null
+  /** The shift's window by its `clock_in`; `null` only if that time cannot be read. */
+  windowType: ShiftType | null
+  /** The Nairobi day that window starts on. */
+  windowDate: string | null
+  /** The shift's sales on this day, voided ones left out. A Night that runs past midnight is on two days. */
+  orderCount: number
+}
+
 /**
  * The end-of-day report (docs/phase-150.md deferred approval to this;
  * docs/phase-151/152 design it): per-cashier totals for one Africa/Nairobi
@@ -700,6 +714,13 @@ export interface ManualMpesaEntrySummary {
  */
 export interface EndOfDayReport {
   localDay: string
+  /**
+   * The shift this report is limited to (docs/phase-241), or `null` for the whole day. Absent on a report built before
+   * the filter existed. A limited report is for reading only: approving is done from the whole day.
+   */
+  shiftId?: number | null
+  /** Every shift that has sales on this day, whatever the filter, so the screen can offer them (docs/phase-241). */
+  shiftsOfDay?: EndOfDayShift[]
   cashiers: CashierDaySummary[]
   totalsByMethod: PaymentTotals
   manualEntries: ManualMpesaEntrySummary[]
@@ -725,17 +746,38 @@ export interface EndOfDayReport {
  * Voided orders are excluded exactly as {@link generateDailySummary}
  * excludes them (`excludeVoided`), reused rather than re-derived here.
  *
+ * With `shiftId` (docs/phase-241) the report is limited to that shift's sales on the day: its orders, its cashiers'
+ * totals, its manual M-Pesa entries and the carry-over entries that belong to its sales. The day and the shift are
+ * both required to match, so a Night that runs past midnight shows its part of each day. The pending list and total
+ * then cover only what is shown. `shiftsOfDay` always lists every shift that has sales on the day.
+ *
  * @param {RubisDatabase} db
  * @param {string} localDay — `YYYY-MM-DD`, defaults to today in Nairobi
+ * @param {number | null} [shiftId] — limit the report to this shift; omitted or `null` is the whole day
  * @returns {EndOfDayReport}
+ * @throws if `shiftId` names a shift that does not exist
  */
 export function generateEndOfDayReport(
   db: RubisDatabase,
-  localDay: string = todayLocalDay()
+  localDay: string = todayLocalDay(),
+  shiftId: number | null = null
 ): EndOfDayReport {
   const { startIso, endIso } = getLocalDayRange(localDay)
 
-  const orders = excludeVoided(db.getOrdersForDateRange(startIso, endIso))
+  const dayOrders = excludeVoided(db.getOrdersForDateRange(startIso, endIso))
+  const shiftsOfDay = shiftsWithSalesOn(db, dayOrders)
+
+  // The filter is the shift's own sale ids, so the day's orders, its payments and the carry-over are cut the same way.
+  let belongsToShift: (orderId: number) => boolean = () => true
+  if (shiftId !== null) {
+    if (!db.getShiftById(shiftId)) {
+      throw new Error(`Shift ${shiftId} not found`)
+    }
+    const ids = new Set(db.getOrdersForShift(shiftId).map((order) => order.local_id))
+    belongsToShift = (orderId) => ids.has(orderId)
+  }
+
+  const orders = dayOrders.filter((order) => belongsToShift(order.local_id))
   const totalsByMethod = sumByPaymentMethod(orders)
 
   const staffNameCache = new Map<number, string>()
@@ -755,7 +797,9 @@ export function generateEndOfDayReport(
     else ordersByStaff.set(order.staff_id, [order])
   }
 
-  const todaysPayments = excludeVoided(db.getMpesaPaymentsForDateRange(startIso, endIso))
+  const todaysPayments = excludeVoided(db.getMpesaPaymentsForDateRange(startIso, endIso)).filter((payment) =>
+    belongsToShift(payment.order_local_id)
+  )
 
   const paymentsByStaff = new Map<number, Array<MpesaPaymentRow & { status: OrderStatus }>>()
   for (const payment of todaysPayments) {
@@ -775,7 +819,9 @@ export function generateEndOfDayReport(
   )
 
   const todaysManualPayments = todaysPayments.filter((payment) => payment.mode === 'manual')
-  const carryOverPayments = excludeVoided(db.getUnapprovedManualPaymentsBefore(startIso))
+  const carryOverPayments = excludeVoided(db.getUnapprovedManualPaymentsBefore(startIso)).filter((payment) =>
+    belongsToShift(payment.order_local_id)
+  )
 
   const allPaymentIds = [...todaysManualPayments, ...carryOverPayments].map((payment) => payment.id)
   const lastExclusionByPaymentId = new Map(
@@ -818,6 +864,8 @@ export function generateEndOfDayReport(
 
   return {
     localDay,
+    shiftId,
+    shiftsOfDay,
     cashiers,
     totalsByMethod,
     manualEntries,
@@ -825,6 +873,38 @@ export function generateEndOfDayReport(
     pendingIds: pending.map((entry) => entry.paymentId),
     pendingManualTotal: pending.reduce((sum, entry) => sum + entry.amount, 0)
   }
+}
+
+/**
+ * The shifts that have sales among a day's orders (docs/phase-241), oldest first, each with its window and how many of
+ * the day's sales it holds. Sales with no shift are not a shift and are left out; they are in the whole-day report.
+ *
+ * @param {RubisDatabase} db
+ * @param {OrderRow[]} dayOrders — the day's orders, voided ones already left out
+ * @returns {EndOfDayShift[]}
+ */
+function shiftsWithSalesOn(db: RubisDatabase, dayOrders: OrderRow[]): EndOfDayShift[] {
+  const counts = new Map<number, number>()
+  for (const order of dayOrders) {
+    if (order.shift_id === null) continue
+    counts.set(order.shift_id, (counts.get(order.shift_id) ?? 0) + 1)
+  }
+  const shifts: EndOfDayShift[] = []
+  for (const [id, orderCount] of counts) {
+    const stored = db.getShiftById(id)
+    if (!stored) continue
+    const shift = withWindow(stored)
+    shifts.push({
+      shiftId: id,
+      status: shift.status,
+      openedAt: shift.clock_in,
+      closedAt: shift.clock_out,
+      windowType: shift.window_type ?? null,
+      windowDate: shift.window_date ?? null,
+      orderCount
+    })
+  }
+  return shifts.sort((a, b) => a.openedAt.localeCompare(b.openedAt) || a.shiftId - b.shiftId)
 }
 
 /**

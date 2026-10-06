@@ -734,10 +734,11 @@ const api = {
    * Read-only — any logged-in staff may call it.
    *
    * @param {string} [localDay] — `YYYY-MM-DD`
+   * @param {number} [shiftId] — limit the report to this shift's sales on that day (docs/phase-241)
    * @returns {Promise<ServiceResult<EndOfDayReport>>}
    */
-  getEndOfDayReport: (localDay?: string): Promise<ServiceResult<EndOfDayReport>> =>
-    ipcRenderer.invoke('reports:end-of-day', { localDay }),
+  getEndOfDayReport: (localDay?: string, shiftId?: number): Promise<ServiceResult<EndOfDayReport>> =>
+    ipcRenderer.invoke('reports:end-of-day', { localDay, shiftId }),
 
   /**
    * A manager's end-of-day review: approves exactly the manual M-Pesa

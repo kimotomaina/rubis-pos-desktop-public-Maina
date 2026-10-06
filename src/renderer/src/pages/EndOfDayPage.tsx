@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import type { EndOfDayReport, ManualMpesaEntrySummary } from '../../../main/services/reports.js'
+import type { EndOfDayReport, EndOfDayShift, ManualMpesaEntrySummary } from '../../../main/services/reports.js'
 import type { DiscardedHeldSale } from '../../../main/services/database.js'
 import { formatCurrency } from '../lib/currency.js'
 import { titleCaseName } from '../lib/text.js'
@@ -30,6 +30,20 @@ function shiftLocalDay(localDay: string, deltaDays: number): string {
 }
 
 /**
+ * The text on a shift's filter button (docs/phase-241): its number, its window, when it ran, and its sales that day.
+ *
+ * @param {EndOfDayShift} shift
+ * @returns {string} for example `#1 Night, 17:43 to 17:43 (3 sales)`
+ */
+function shiftButtonLabel(shift: EndOfDayShift): string {
+  const time = (iso: string): string =>
+    new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })
+  const kind = shift.windowType === 'day' ? 'Day' : shift.windowType === 'night' ? 'Night' : 'Shift'
+  const ran = shift.closedAt ? `${time(shift.openedAt)} to ${time(shift.closedAt)}` : `from ${time(shift.openedAt)}, open`
+  return `#${shift.shiftId} ${kind}, ${ran} (${shift.orderCount} ${shift.orderCount === 1 ? 'sale' : 'sales'})`
+}
+
+/**
  * One row shared by the "today" and "carry-over" tables. A pending entry
  * gets a tick box (ticked by default) and, once unticked, a reason field
  * beneath it; an approved entry gets a plain check mark instead — nothing
@@ -40,10 +54,13 @@ function EntryRow({
   showDay,
   selection,
   onToggle,
-  onOpenReason
+  onOpenReason,
+  readOnly = false
 }: {
   entry: ManualMpesaEntrySummary
   showDay: boolean
+  /** A report limited to one shift is for reading: nothing to tick (docs/phase-241). */
+  readOnly?: boolean
   /** Present only for a still-pending entry — an approved one has nothing to tick. */
   selection?: Selection
   onToggle?: (paymentId: number) => void
@@ -56,7 +73,7 @@ function EntryRow({
     <>
       <tr className="border-t border-slate-200/60">
         <td className="py-2 pr-2">
-          {pending ? (
+          {pending && readOnly ? null : pending ? (
             <input
               type="checkbox"
               checked={selection?.ticked ?? true}
@@ -103,7 +120,7 @@ function EntryRow({
           </td>
         </tr>
       )}
-      {pending && selection && !selection.ticked && (
+      {pending && !readOnly && selection && !selection.ticked && (
         <tr>
           <td colSpan={columns} className="pb-3 pl-9">
             <input
@@ -156,11 +173,15 @@ export default function EndOfDayPage() {
     if (staffList.length === 0) void fetchStaffList()
   }, [staffList.length, fetchStaffList])
 
-  const load = async (localDay?: string): Promise<void> => {
+  const load = async (localDay?: string, shiftId?: number): Promise<void> => {
     try {
       setLoading(true)
       setError(null)
-      const result = await window.api.getEndOfDayReport(localDay)
+      // The shift goes only when one is chosen, so the call for a whole day is the one it always was.
+      const result =
+        shiftId === undefined
+          ? await window.api.getEndOfDayReport(localDay)
+          : await window.api.getEndOfDayReport(localDay, shiftId)
       if (result.success && result.data) {
         setReport(result.data)
         // A discarded held sale may be an M-Pesa payment with no sale behind it, so the
@@ -294,15 +315,23 @@ export default function EndOfDayPage() {
   const approvingCount = tickedEntries.length
   const approvingTotal = tickedEntries.reduce((sum, entry) => sum + entry.amount, 0)
   const leftOutCount = allPending.length - approvingCount
+  // docs/phase-241: a report limited to one shift is for reading. A review is recorded for the whole day.
+  const limitedToShift = report.shiftId ?? null
+  const shiftsOfDay = report.shiftsOfDay ?? []
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-4">
       <section className="shrink-0 rounded-xl border border-slate-200 bg-white p-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
-            <h3 className="text-xl font-semibold text-slate-900">End of Day — {report.localDay}</h3>
+            <h3 className="text-xl font-semibold text-slate-900">
+              End of Day — {report.localDay}
+              {limitedToShift !== null && ` — shift #${limitedToShift}`}
+            </h3>
             <p className="mt-1 max-w-2xl text-base text-slate-500">
-              Approve entries that match the M-Pesa statement; leave out the rest with a reason.
+              {limitedToShift === null
+                ? 'Approve entries that match the M-Pesa statement; leave out the rest with a reason.'
+                : `Showing shift #${limitedToShift} only. To approve entries, choose All shifts.`}
             </p>
           </div>
           <div className="flex gap-2">
@@ -322,6 +351,39 @@ export default function EndOfDayPage() {
             </button>
           </div>
         </div>
+
+        {shiftsOfDay.length > 0 && (
+          <div data-testid="end-of-day-shifts" className="mt-3 flex flex-wrap items-center gap-2">
+            <span className="text-base font-medium text-slate-600">Shift</span>
+            <button
+              type="button"
+              aria-pressed={limitedToShift === null}
+              onClick={() => void load(report.localDay)}
+              className={`h-11 rounded-lg border px-4 text-base font-medium ${
+                limitedToShift === null
+                  ? 'border-rose-500 bg-rose-50 text-rose-700'
+                  : 'border-slate-300 text-slate-600 hover:bg-slate-50'
+              }`}
+            >
+              All shifts
+            </button>
+            {shiftsOfDay.map((shift) => (
+              <button
+                key={shift.shiftId}
+                type="button"
+                aria-pressed={limitedToShift === shift.shiftId}
+                onClick={() => void load(report.localDay, shift.shiftId)}
+                className={`h-11 rounded-lg border px-4 text-base font-medium ${
+                  limitedToShift === shift.shiftId
+                    ? 'border-rose-500 bg-rose-50 text-rose-700'
+                    : 'border-slate-300 text-slate-600 hover:bg-slate-50'
+                }`}
+              >
+                {shiftButtonLabel(shift)}
+              </button>
+            ))}
+          </div>
+        )}
       </section>
 
       {error && (
@@ -452,6 +514,7 @@ export default function EndOfDayPage() {
                       key={entry.paymentId}
                       entry={entry}
                       showDay={false}
+                      readOnly={limitedToShift !== null}
                       selection={selections.get(entry.paymentId)}
                       onToggle={toggleEntry}
                       onOpenReason={openReasonKeyboard}
@@ -484,6 +547,7 @@ export default function EndOfDayPage() {
                       key={entry.paymentId}
                       entry={entry}
                       showDay
+                      readOnly={limitedToShift !== null}
                       selection={selections.get(entry.paymentId)}
                       onToggle={toggleEntry}
                       onOpenReason={openReasonKeyboard}
@@ -506,11 +570,20 @@ export default function EndOfDayPage() {
 
       <section data-testid="end-of-day-bar" className="shrink-0 rounded-xl border border-slate-200 bg-white p-3">
         <div className="mb-2 flex items-center justify-between gap-3">
-          <span className="text-lg font-medium text-slate-700">
-            Approving {approvingCount} of {allPending.length}{' '}
-            {allPending.length === 1 ? 'entry' : 'entries'}. {leftOutCount} left out.
-          </span>
-          <span className="text-xl font-semibold text-slate-900">{formatCurrency(approvingTotal)}</span>
+          {limitedToShift === null ? (
+            <>
+              <span className="text-lg font-medium text-slate-700">
+                Approving {approvingCount} of {allPending.length}{' '}
+                {allPending.length === 1 ? 'entry' : 'entries'}. {leftOutCount} left out.
+              </span>
+              <span className="text-xl font-semibold text-slate-900">{formatCurrency(approvingTotal)}</span>
+            </>
+          ) : (
+            <span data-testid="end-of-day-limited" className="text-lg font-medium text-slate-700">
+              Shift #{limitedToShift} only: {allPending.length} pending {allPending.length === 1 ? 'entry' : 'entries'},{' '}
+              {formatCurrency(report.pendingManualTotal)}. Approving is done from All shifts.
+            </span>
+          )}
         </div>
 
         <div className="flex items-center gap-3">
@@ -524,13 +597,15 @@ export default function EndOfDayPage() {
           />
           <button
             type="button"
-            disabled={report.pendingIds.length === 0 || approving}
+            disabled={limitedToShift !== null || report.pendingIds.length === 0 || approving}
             onClick={() => setCollectingPin(true)}
             className="h-12 w-48 shrink-0 rounded-xl bg-rose-600 text-lg font-semibold text-white transition active:scale-95 disabled:cursor-not-allowed disabled:opacity-50"
           >
             {approving
               ? 'Working…'
-              : report.pendingIds.length === 0
+              : limitedToShift !== null
+                ? 'All shifts to approve'
+                : report.pendingIds.length === 0
                 ? 'Nothing pending'
                 : approvingCount === 0
                   ? 'Record review'

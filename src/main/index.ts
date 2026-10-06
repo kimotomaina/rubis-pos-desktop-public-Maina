@@ -3756,7 +3756,7 @@ app.whenReady().then(async () => {
       try {
         return {
           success: true,
-          data: generateEndOfDayReport(db, validation.data.localDay)
+          data: generateEndOfDayReport(db, validation.data.localDay, validation.data.shiftId ?? null)
         }
       } catch (err) {
         return {

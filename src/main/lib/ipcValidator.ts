@@ -429,7 +429,9 @@ const localDaySchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'localDay must be
  * `localDay` defaults to today (Nairobi) when omitted.
  */
 export const endOfDayReportSchema = z.object({
-  localDay: localDaySchema.optional()
+  localDay: localDaySchema.optional(),
+  // docs/phase-241: limit the report to one shift's sales on that day. Omitted is the whole day.
+  shiftId: z.number().int().positive().optional()
 })
 
 /** One manual entry a manager deliberately leaves pending during a day review (docs/phase-153), with why. */
