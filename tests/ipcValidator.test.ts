@@ -52,13 +52,15 @@ const validItem = {
   image: null
 }
 
+// CHANGED (docs/phase-249): every checkout payload now carries the screen's checkout key, which the schema requires.
 const validCheckoutRequest = {
   items: [validItem],
   total: 200,
   staffId: 1,
   paymentMethod: 'cash',
   tenderedAmount: 200,
-  changeDue: 0
+  changeDue: 0,
+  checkoutKey: '0b7d9c2e-4f1a-4c3b-9e8d-1a2b3c4d5e6f'
 }
 
 describe('checkoutRequestSchema', () => {

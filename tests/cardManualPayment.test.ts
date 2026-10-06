@@ -238,6 +238,7 @@ describe('a valid card sale', () => {
   })
 })
 
+// CHANGED (docs/phase-249): every checkout payload now carries the screen's checkout key, which the schema requires.
 describe('the wire contract gives a renderer nothing to forge', () => {
   it('has no cardApproval field on the checkout payload, but does have cardManual', async () => {
     const { checkoutRequestSchema } = await import('../src/main/lib/ipcValidator.js')
@@ -255,7 +256,8 @@ describe('the wire contract gives a renderer nothing to forge', () => {
       staffId: 1,
       paymentMethod: 'card',
       tenderedAmount: 139.2,
-      changeDue: 0
+      changeDue: 0,
+      checkoutKey: '0b7d9c2e-4f1a-4c3b-9e8d-1a2b3c4d5e6f'
     }
 
     expect(
@@ -280,6 +282,7 @@ describe('the wire contract gives a renderer nothing to forge', () => {
       paymentMethod: 'card',
       tenderedAmount: 139.2,
       changeDue: 0,
+      checkoutKey: '0b7d9c2e-4f1a-4c3b-9e8d-1a2b3c4d5e6f',
       cardManual: { reference, confirmRecorded: true }
     })
 
@@ -297,6 +300,7 @@ describe('the wire contract gives a renderer nothing to forge', () => {
         paymentMethod: 'card',
         tenderedAmount: 139.2,
         changeDue: 0,
+        checkoutKey: '0b7d9c2e-4f1a-4c3b-9e8d-1a2b3c4d5e6f',
         cardManual: { reference: REFERENCE, confirmRecorded: false }
       }).success
     ).toBe(false)

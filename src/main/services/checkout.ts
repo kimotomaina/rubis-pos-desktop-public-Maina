@@ -72,6 +72,8 @@ export interface CheckoutDb {
   queueOrderRecordingManualPayment(input: QueueOrderInput, payment: RecordMpesaPaymentInput): QueuedOrder | null
   queueOrder(input: QueueOrderInput): QueuedOrder
   getOrder(localId: number): OrderRow | undefined
+  /** The order a checkout already made, by its key (docs/phase-249). */
+  getOrderByCheckoutKey(checkoutKey: string): OrderRow | undefined
   /** Records the first filing and deletes the sale's fiscal row, in one transaction. Returns `false` when the CU number is refused because another sale holds it (docs/phase-208). */
   settleCheckoutFiscalSuccess(localId: number, fiscalQueueId: number, invoice: FiscalInvoiceResult): boolean | void
   /** Records a failed first filing; `needs_fixing` also deletes the fiscal row, in the same transaction. */
@@ -164,6 +166,55 @@ export const CARD_REFERENCE_INVALID_MESSAGE =
 /** Shown when the cashier's attestation that the PDQ slip shows Approved is missing. */
 export const CARD_NOT_ACKNOWLEDGED_MESSAGE =
   'Confirm that the PDQ slip shows Approved for this amount before completing the sale.'
+
+/**
+ * Shown when a checkout's key was already used by a sale of a different total (docs/phase-249). The screen keeps one
+ * key per cart until the cart is cleared, so this means the earlier submit did make a sale and the cart changed after.
+ *
+ * @param {OrderRow} earlier
+ * @returns {string}
+ */
+export function checkoutKeyReusedMessage(earlier: OrderRow): string {
+  return `This checkout was already completed as sale #${earlier.local_id} for ${earlier.total.toFixed(2)}, and the cart has changed since. Clear the cart and start a new sale.`
+}
+
+/**
+ * The receipt of the order a checkout already made (docs/phase-249), read back from the order row exactly as the first
+ * submit's receipt reads it back: a repeat of the same checkout is told about that sale, and nothing else happens.
+ *
+ * @param {OrderRow} order
+ * @returns {CheckoutReceipt}
+ */
+function receiptOfEarlierOrder(order: OrderRow): CheckoutReceipt {
+  return {
+    localId: order.local_id,
+    mode: order.status === 'synced' ? 'synced' : 'queued-offline',
+    shopifyOrderId: order.status === 'synced' ? (order.shopify_order_id ?? undefined) : undefined,
+    fiscal:
+      order.fiscal_status === 'fiscalized' && order.fiscal_invoice_number
+        ? { invoiceNumber: order.fiscal_invoice_number, qrCode: order.fiscal_qr_code ?? '' }
+        : undefined,
+    fiscalStatus: order.fiscal_status ?? null,
+    fiscalErrorReason: order.fiscal_error_reason ?? null,
+    fiscalErrorKind: order.fiscal_error_kind ?? null,
+    fiscalDataIssue: order.fiscal_data_issue ?? null
+  }
+}
+
+/**
+ * What a repeat of a checkout gets (docs/phase-249): the earlier order's receipt when the totals agree to the cent, or a
+ * refusal when they do not. Either way nothing is written, filed, queued or paid.
+ *
+ * @param {OrderRow} earlier
+ * @param {number} total the total this submit carries
+ * @returns {ServiceResult<CheckoutReceipt>}
+ */
+function repeatOfCheckout(earlier: OrderRow, total: number): ServiceResult<CheckoutReceipt> {
+  if (Math.round(earlier.total * 100) !== Math.round(total * 100)) {
+    return { success: false, error: checkoutKeyReusedMessage(earlier) }
+  }
+  return { success: true, data: receiptOfEarlierOrder(earlier) }
+}
 
 /** Structural slice of {@link MpesaProvider} `runCheckout` depends on. */
 export interface CheckoutMpesaProvider {
@@ -385,6 +436,15 @@ export async function runCheckout(
   try {
     const { items, total } = input
 
+    // docs/phase-249: a checkout already made into an order is answered with that order, before anything else: before the
+    // payment gates (a manual code would read as "already used" by the sale it made), the order write and the fiscal call.
+    // The same lookup is made again inside the order's write transaction, which is what settles two submits that pass
+    // this point together.
+    if (input.checkoutKey) {
+      const earlier = db.getOrderByCheckoutKey(input.checkoutKey)
+      if (earlier) return repeatOfCheckout(earlier, total)
+    }
+
     // Before the staff check, the payment gates and the order write: a cart
     // the fiscal device could only reject after payment is refused here,
     // so nothing is saved or paid (docs/phase-194, D2 and D4).
@@ -551,6 +611,7 @@ export async function runCheckout(
       cartToken: input.cartToken,
       locationId: input.locationId,
       locationName: input.locationName,
+      checkoutKey: input.checkoutKey,
       // Rule 3 (docs/phase-185.md §4.1): the sale is `waiting`, queued and
       // carries this exact request from the moment it exists.
       buildFiscalRequest: (id: number, traderInvNum?: string) =>
@@ -604,6 +665,12 @@ export async function runCheckout(
       queued = db.queueOrder(orderInput)
     }
     localId = queued.localId
+    // docs/phase-249: another submit of this checkout made the order while this one waited (the SMS check is the only
+    // wait before the write). Nothing was written; this submit reports that order and files nothing.
+    if (queued.existing) {
+      const earlier = db.getOrder(queued.localId)
+      return earlier ? repeatOfCheckout(earlier, total) : { success: false, error: 'Failed to record checkout' }
+    }
     // Always set: `orderInput` carries `buildFiscalRequest`.
     const fiscalQueueId = queued.fiscalQueueId as number
 

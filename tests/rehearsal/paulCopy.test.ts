@@ -122,12 +122,15 @@ describe.skipIf(!COPY_DIR)('the repair of 5 Oct, rehearsed on the exported copy'
       const forced = db.listShiftAdjustments(shiftId).filter((row) => row.reason === `${OVERRIDE_REASON_PREFIX}${MOVE_REASON}`)
       expect(forced).toHaveLength(1)
     }
+    // CHANGED (docs/phase-249). OLD: every column of every order was compared. NEW: opening the copy with this build adds
+    // `checkout_key` (NULL on every old order), so the comparison is of the columns the orders had, and the new one must read NULL.
     const changed = afterFirstRun.orders.flatMap((row, index) => {
       const old = before.orders[index] as Record<string, unknown>
       const now = row as Record<string, unknown>
-      return Object.keys(now).filter((key) => old[key] !== now[key]).map((key) => `#${now.local_id}.${key}: ${String(old[key])} -> ${String(now[key])}`)
+      return Object.keys(old).filter((key) => old[key] !== now[key]).map((key) => `#${now.local_id}.${key}: ${String(old[key])} -> ${String(now[key])}`)
     })
     expect(changed).toEqual(['#85.shift_id: 1 -> 3'])
+    expect(afterFirstRun.orders.every((row) => (row as Record<string, unknown>).checkout_key === null)).toBe(true)
   })
 
   it('keeps every order in exactly one shift: 180 in all, none counted in two Z reports', () => {

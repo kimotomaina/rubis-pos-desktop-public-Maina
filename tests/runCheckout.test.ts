@@ -173,6 +173,8 @@ describe('runCheckout — success (device accepts)', () => {
       queueOrderClaimingSmsPayment: db.queueOrderClaimingSmsPayment.bind(db),
       queueOrderRecordingMpesaPayment: db.queueOrderRecordingMpesaPayment.bind(db),
       queueOrderRecordingManualPayment: db.queueOrderRecordingManualPayment.bind(db),
+      // docs/phase-249: the checkout-key lookup is part of the slice runCheckout depends on.
+      getOrderByCheckoutKey: db.getOrderByCheckoutKey.bind(db),
       queueOrder: db.queueOrder.bind(db),
       getOrder: (localId) => ({ ...db.getOrder(localId)!, status: 'synced', shopify_order_id: 'gid://shopify/Order/9' }),
       settleCheckoutFiscalSuccess: db.settleCheckoutFiscalSuccess.bind(db),
@@ -598,6 +600,8 @@ describe('runCheckout — outer-catch path (a dependency throws outside the fisc
       queueOrderClaimingSmsPayment: db.queueOrderClaimingSmsPayment.bind(db),
       queueOrderRecordingMpesaPayment: db.queueOrderRecordingMpesaPayment.bind(db),
       queueOrderRecordingManualPayment: db.queueOrderRecordingManualPayment.bind(db),
+      // docs/phase-249: the checkout-key lookup is part of the slice runCheckout depends on.
+      getOrderByCheckoutKey: db.getOrderByCheckoutKey.bind(db),
       queueOrder: () => {
         throw new Error('disk full')
       },
@@ -634,6 +638,8 @@ describe('runCheckout — outer-catch path (a dependency throws outside the fisc
       queueOrderClaimingSmsPayment: db.queueOrderClaimingSmsPayment.bind(db),
       queueOrderRecordingMpesaPayment: db.queueOrderRecordingMpesaPayment.bind(db),
       queueOrderRecordingManualPayment: db.queueOrderRecordingManualPayment.bind(db),
+      // docs/phase-249: the checkout-key lookup is part of the slice runCheckout depends on.
+      getOrderByCheckoutKey: db.getOrderByCheckoutKey.bind(db),
       queueOrder: db.queueOrder.bind(db),
       getOrder: () => {
         throw new Error('read-back exploded')

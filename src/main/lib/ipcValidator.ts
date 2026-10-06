@@ -43,8 +43,21 @@ const cartItemSchema = z.object({
 })
 
 /** `orders:checkout` request payload. */
+/** Shown when a checkout arrives without the key the screen makes for it (docs/phase-249); nothing is written. */
+export const CHECKOUT_KEY_MISSING_MESSAGE =
+  'This sale was sent without its checkout key, so nothing was recorded. Close and reopen the till, then complete the sale again.'
+
+/** A checkout key as the screen makes it: `crypto.randomUUID()`, 36 characters. Anything else is refused. */
+export const CHECKOUT_KEY_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
 export const checkoutRequestSchema = z.object({
   items: z.array(cartItemSchema).min(1, 'Cart is empty — add items before checking out'),
+  /**
+   * The key the screen makes once for a checkout and sends with every submit of it (docs/phase-249). Required: a submit
+   * without one is refused before anything is written, paid or filed, so no sale can bypass the one-order-per-checkout
+   * rule. A repeat of the same key returns the order the first submit made.
+   */
+  checkoutKey: z.string({ error: CHECKOUT_KEY_MISSING_MESSAGE }).regex(CHECKOUT_KEY_PATTERN, CHECKOUT_KEY_MISSING_MESSAGE),
   total: z.number().finite().nonnegative(),
   staffId: z.number().int().positive(),
   paymentMethod: z.enum(['cash', 'mpesa', 'card']),

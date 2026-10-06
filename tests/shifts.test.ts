@@ -277,7 +277,10 @@ describe('recording orders against an open shift', () => {
     })
 
     const [insert] = fake.callsFor('run', 'INSERT INTO orders')
-    expect(insert.params[insert.params.length - 1]).toBe(7)
+    // CHANGED (docs/phase-249). OLD: shift_id was the last INSERT parameter. NEW: checkout_key follows it, null for a caller with no
+    // checkout; shift_id is the one before.
+    expect(insert.params[insert.params.length - 2]).toBe(7)
+    expect(insert.params[insert.params.length - 1]).toBeNull()
   })
 })
 

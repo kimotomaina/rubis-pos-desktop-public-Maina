@@ -662,6 +662,11 @@ export interface QueueOrderInput {
    */
   buildFiscalRequest?: (localId: number, traderInvNum?: string) => FiscalInvoiceRequest
   /**
+   * The key the screen made for this checkout (docs/phase-249). When an order already holds it, {@link
+   * RubisDatabase.queueOrder} returns that order and writes nothing. Absent for a caller with no checkout.
+   */
+  checkoutKey?: string
+  /**
    * The cart this sale came from (docs/phase-197). When present, the
    * sale's own transaction stamps that cart's removal rows with the new
    * order id. Absent for any caller that has no cart.
@@ -680,6 +685,11 @@ export interface QueuedOrder {
   /** The trader number allocated in the sale's transaction (docs/phase-211); absent for a sale with no location. */
   traderInvNum?: string
   fiscalQueueId?: number
+  /**
+   * `true` when an order already held this checkout's key (docs/phase-249): `localId` and `traderInvNum` are that order's,
+   * nothing was written, and `queueId` is 0 because no Shopify queue row was made.
+   */
+  existing?: boolean
 }
 
 /** Fiscal (eTIMS) details attached to a receipt once submitted for fiscalization. */
@@ -750,6 +760,12 @@ export interface CheckoutRequest {
   cartDiscount?: Discount
   /** Identifies the cart this sale came from (docs/phase-197), so its approved removals are stamped with the order. */
   cartToken?: string
+  /**
+   * The key the screen made for this checkout (docs/phase-249): every submit of the same checkout carries it, and a
+   * repeat returns the order the first one made. Required on the IPC channel (`checkoutRequestSchema`); optional here so
+   * a direct caller with no screen behind it keeps working.
+   */
+  checkoutKey?: string
   /**
    * Set **only by the `orders:checkout` IPC handler**, when this sale is
    * being completed on a manually entered M-Pesa code.
@@ -1003,6 +1019,18 @@ function localDayOfIso(iso: string): string {
 }
 
 /**
+ * Adds `checkout_key` (docs/phase-249) to an `orders` table made before the phase. Nullable with no backfill: an order
+ * from before has no key and is never looked up by one. Check then add, so it runs any number of times and a failure of
+ * the `ALTER` is a real error, not swallowed.
+ *
+ * @param {SqliteConnection} connection
+ */
+function migrateOrdersCheckoutKey(connection: SqliteConnection): void {
+  const have = (connection.prepare('PRAGMA table_info(orders)').all() as Array<{ name: string }>).map((c) => c.name)
+  if (!have.includes('checkout_key')) connection.exec('ALTER TABLE orders ADD COLUMN checkout_key TEXT')
+}
+
+/**
  * Adds `shift_id` (docs/phase-246) to a `mpesa_day_approvals` table made before the phase, so an approval can be made
  * for one shift. Nullable with no backfill: every earlier review stays a review of a day, as it was. Check then add,
  * so it runs any number of times.
@@ -1181,7 +1209,8 @@ export const SCHEMA = {
     fiscal_slip_unprinted_at TEXT,
     customer_slip_printed_at TEXT,
     shopify_push_count INTEGER NOT NULL DEFAULT 0,
-    shopify_last_push_at TEXT
+    shopify_last_push_at TEXT,
+    checkout_key TEXT
   )`,
   syncQueue: `CREATE TABLE IF NOT EXISTS sync_queue (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1204,6 +1233,12 @@ export const SCHEMA = {
    * a full table scan before (docs/phase-157 Part 2's "Indexes" finding).
    */
   ordersCreatedAtIndex: `CREATE INDEX IF NOT EXISTS idx_orders_created_at ON orders (created_at)`,
+  /**
+   * One order per checkout (docs/phase-249): the key the screen made for a checkout is unique among the orders that have
+   * one. Partial, so every order from before the phase, whose key is `NULL`, is untouched. The lookup in
+   * {@link RubisDatabase.queueOrder} is what returns the earlier order; this index is the database's own guarantee.
+   */
+  ordersCheckoutKeyIndex: `CREATE UNIQUE INDEX IF NOT EXISTS idx_orders_checkout_key ON orders (checkout_key) WHERE checkout_key IS NOT NULL`,
   settings: `CREATE TABLE IF NOT EXISTS settings (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
@@ -2200,6 +2235,8 @@ export class RubisDatabase {
     migrateOrdersFiscalColumns(connection)
     migrateOrdersReceiptColumns(connection)
     migrateOrdersPushColumns(connection)
+    migrateOrdersCheckoutKey(connection)
+    connection.exec(SCHEMA.ordersCheckoutKeyIndex)
     connection.exec(SCHEMA.fiscalInvoiceIndex)
     connection.exec(SCHEMA.ordersCreatedAtIndex)
     this.connection = connection
@@ -2351,12 +2388,22 @@ export class RubisDatabase {
     }
 
     const insertOrder = this.conn.prepare(
-      'INSERT INTO orders (total, status, created_at, payload_json, staff_id, payment_method, tendered_amount, change_due, reference_number, shift_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+      'INSERT INTO orders (total, status, created_at, payload_json, staff_id, payment_method, tendered_amount, change_due, reference_number, shift_id, checkout_key) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
     )
+    const findByKey = this.conn.prepare('SELECT local_id, fiscal_trader_inv_num FROM orders WHERE checkout_key = ?')
     const insertQueue = this.conn.prepare(
       'INSERT INTO sync_queue (entity_type, entity_id, action, payload_json, attempts, created_at, next_attempt_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
     )
     const enqueue = this.conn.transaction(() => {
+      // docs/phase-249: the checkout's key is looked up first, inside the write transaction, before the order id, the
+      // trader number, the Shopify queue row and the fiscal row are made. A repeat of the same checkout gets the order the
+      // first one made and writes nothing.
+      if (input.checkoutKey) {
+        const earlier = findByKey.get(input.checkoutKey) as { local_id: number; fiscal_trader_inv_num: string | null } | undefined
+        if (earlier) {
+          return { localId: earlier.local_id, queueId: 0, traderInvNum: earlier.fiscal_trader_inv_num ?? undefined, existing: true } as QueuedOrder
+        }
+      }
       const orderInfo = insertOrder.run(
         input.total,
         'pending_sync',
@@ -2367,7 +2414,8 @@ export class RubisDatabase {
         input.tenderedAmount,
         input.changeDue,
         input.referenceNumber ?? null,
-        input.shiftId ?? null
+        input.shiftId ?? null,
+        input.checkoutKey ?? null
       )
       const localId = Number(orderInfo.lastInsertRowid)
       const traderInvNum = input.locationId ? this.allocateTraderInvNum(input.locationId) : undefined
@@ -3031,6 +3079,17 @@ export class RubisDatabase {
         'SELECT local_id, shopify_order_id, total, status, created_at, payload_json, staff_id, payment_method, tendered_amount, change_due, reference_number, shift_id, fiscal_invoice_number, fiscal_qr_code, fiscal_fiscalized_at, fiscal_status, fiscal_error_reason, fiscal_error_kind, fiscal_request_json, fiscal_data_issue, fiscal_vat_groups_json, fiscal_fiscalized_at_source, fiscal_cu_serial, receipt_printed_at, fiscal_trader_inv_num, fiscal_slip_unprinted_at, customer_slip_printed_at FROM orders WHERE local_id = ?'
       )
       .get(localId) as OrderRow | undefined
+  }
+
+  /**
+   * The order a checkout made, by the key the screen made for it (docs/phase-249), or `undefined` when no order holds it.
+   *
+   * @param {string} checkoutKey
+   * @returns {OrderRow | undefined}
+   */
+  getOrderByCheckoutKey(checkoutKey: string): OrderRow | undefined {
+    const row = this.conn.prepare('SELECT local_id FROM orders WHERE checkout_key = ?').get(checkoutKey) as { local_id: number } | undefined
+    return row ? this.getOrder(row.local_id) : undefined
   }
 
   /**
@@ -5431,6 +5490,8 @@ export class RubisDatabase {
 
     const run = this.conn.transaction(() => {
       const queued = this.queueOrder(input)
+      // docs/phase-249: a repeat of a checkout that already made its order claims nothing and records nothing again.
+      if (queued.existing) return queued
       const info = claimStatement.run(
         queued.localId,
         claim.staffId,
@@ -5511,7 +5572,8 @@ export class RubisDatabase {
   ): QueuedOrder {
     const run = this.conn.transaction(() => {
       const queued = this.queueOrder(input)
-      this.insertMpesaPayment(queued.localId, payment)
+      // docs/phase-249: the earlier order already has its payment row.
+      if (!queued.existing) this.insertMpesaPayment(queued.localId, payment)
       return queued
     })
     return run()
@@ -5540,6 +5602,8 @@ export class RubisDatabase {
   ): QueuedOrder | null {
     const run = this.conn.transaction(() => {
       const queued = this.queueOrder(input)
+      // docs/phase-249: the earlier order already has its payment row, so its code is not "used again".
+      if (queued.existing) return queued
       if (!this.insertMpesaPayment(queued.localId, payment)) {
         throw new PaymentUnavailableError()
       }

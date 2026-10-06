@@ -212,6 +212,9 @@ describe('RubisDatabase.init', () => {
         throw new Error('SQLITE_ERROR: duplicate column name')
       }
     })
+    // CHANGED (docs/phase-249). OLD: every orders migration swallowed the duplicate-column throw. NEW: `checkout_key` is added by a
+    // check-then-add migration, which reads the table's columns first; an already-migrated database lists it, so no ALTER is sent.
+    fake.setAllResult('PRAGMA table_info(orders)', [{ name: 'checkout_key' }])
 
     expect(() => db.init()).not.toThrow()
   })

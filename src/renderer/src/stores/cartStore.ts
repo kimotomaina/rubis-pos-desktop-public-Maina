@@ -158,6 +158,12 @@ export interface CartState {
    * (docs/phase-197).
    */
   cartToken: string | null
+  /**
+   * The key of this cart's checkout (docs/phase-249): made at the cart's first submit and sent with every submit of it,
+   * so a repeat returns the sale the first one made. Cleared with the cart, and when a saved or held cart is put back, so
+   * the next sale gets a new key.
+   */
+  checkoutKey: string | null
   /** Customer's KRA PIN as typed, for a B2B invoice; part of the cart so a held sale keeps it (docs/phase-217). */
   customerPin: string
   /** Customer's company name as typed; part of the cart so a held sale keeps it (docs/phase-217). */
@@ -216,6 +222,7 @@ export const useCartStore = create<CartState>()(
   (set, get) => ({
     items: [],
     cartToken: null,
+    checkoutKey: null,
     customerPin: '',
     companyName: '',
     resumedHeld: null,
@@ -277,9 +284,9 @@ export const useCartStore = create<CartState>()(
     setCartDiscount: (discount: Discount | null) => set({ cartDiscount: discount }),
 
     clearCart: () =>
-      set({ items: [], cartToken: null, cartDiscount: null, customerPin: '', companyName: '', resumedHeld: null }),
+      set({ items: [], cartToken: null, checkoutKey: null, cartDiscount: null, customerPin: '', companyName: '', resumedHeld: null }),
 
-    restoreCart: (items, cartToken) => set({ items, cartToken, cartDiscount: null }),
+    restoreCart: (items, cartToken) => set({ items, cartToken, checkoutKey: null, cartDiscount: null }),
 
     setCustomer: (customerPin, companyName) => set({ customerPin, companyName }),
 
@@ -287,6 +294,7 @@ export const useCartStore = create<CartState>()(
       set({
         items: held.items,
         cartToken,
+        checkoutKey: null,
         cartDiscount: held.cartDiscount,
         customerPin: held.customerPin,
         companyName: held.companyName,
@@ -309,13 +317,15 @@ export const useCartStore = create<CartState>()(
         return
       }
 
-      set({ checkoutStatus: 'submitting', checkoutError: null })
+      // docs/phase-249: one key for this cart's checkout, kept across a retry until the cart is cleared.
+      const checkoutKey = get().checkoutKey ?? crypto.randomUUID()
+      set({ checkoutStatus: 'submitting', checkoutError: null, checkoutKey })
 
       try {
         const total = get().getTotal()
         const cartDiscount = params.cartDiscount ?? get().cartDiscount ?? undefined
         const cartToken = get().cartToken ?? undefined
-      const result = await window.api.checkout({ items, total, ...params, cartDiscount, cartToken })
+      const result = await window.api.checkout({ items, total, ...params, cartDiscount, cartToken, checkoutKey })
 
         if (result.success && result.data) {
           const receipt = result.data

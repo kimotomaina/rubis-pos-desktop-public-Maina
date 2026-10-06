@@ -257,6 +257,7 @@ describe('recordApprovedRemovals: written only after the manager PIN checks out'
 describe('IPC payloads', () => {
   const line = { id: 'v1', productId: 'p1', title: 'Mug', variantTitle: '', price: 60, quantity: 1, image: null }
 
+  // CHANGED (docs/phase-249): every checkout payload now carries the screen's checkout key, which the schema requires.
   it('checkout accepts a cart token and rejects an empty one', () => {
     const base = {
       items: [line],
@@ -264,7 +265,8 @@ describe('IPC payloads', () => {
       staffId: 1,
       paymentMethod: 'cash',
       tenderedAmount: 60,
-      changeDue: 0
+      changeDue: 0,
+      checkoutKey: '0b7d9c2e-4f1a-4c3b-9e8d-1a2b3c4d5e6f'
     }
     expect(checkoutRequestSchema.safeParse({ ...base, cartToken: 'abc' }).success).toBe(true)
     expect(checkoutRequestSchema.safeParse(base).success).toBe(true)
