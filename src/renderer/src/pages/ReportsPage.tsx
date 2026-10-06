@@ -440,6 +440,13 @@ function SalesSummaryCards({ summary }: { summary: SalesSummary }) {
           <p className="text-sm text-slate-500">Card</p>
           <p className="text-xl font-semibold text-slate-900">{formatCurrency(summary.totalsByMethod.card)}</p>
         </div>
+        {summary.autoDiscountsGiven && (
+          <div className="rounded-lg bg-slate-50 p-3" data-testid="auto-discounts-given">
+            <p className="text-sm text-slate-500">Automatic discounts given</p>
+            <p className="text-xl font-semibold text-slate-900">{formatCurrency(summary.autoDiscountsGiven.amount)}</p>
+            <p className="text-xs text-slate-400">on {summary.autoDiscountsGiven.saleCount} sales</p>
+          </div>
+        )}
       </div>
     </div>
   )

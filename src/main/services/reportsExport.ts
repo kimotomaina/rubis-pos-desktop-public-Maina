@@ -186,7 +186,12 @@ export function buildLinesCsv(db: RubisDatabase, range: ReportRange): string {
         line.variantTitle,
         line.quantity,
         csvMoney(line.unitPrice),
-        line.discount ? `${line.discount.type} ${line.discount.value}` : ''
+        // docs/phase-253-2 (D6): a line sold under an automatic discount says which, and what each unit saved.
+        line.discount
+          ? `${line.discount.type} ${line.discount.value}`
+          : line.autoDiscount
+            ? `automatic ${line.autoDiscount.title}: ${csvMoney(line.autoDiscount.amountOffEach)} off each`
+            : ''
       ])
     }
   }

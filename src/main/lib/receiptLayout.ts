@@ -29,6 +29,7 @@
 
 import type { Discount } from '../services/shopify-types.js'
 import type { SalePayment } from './paymentLegs.js'
+import type { AppliedAutoDiscount } from './autoDiscounts.js'
 import { computeReceiptTotals } from './receiptTotals.js'
 import { VAT_CLASSES, VAT_CLASS_RATES, expectedGroupTotals, grossToVat, resolveVatClass, type VatClass } from './vatClass.js'
 import { reconcileVatGroups } from './vatReconcile.js'
@@ -104,6 +105,8 @@ export interface ReceiptLayoutLineItem {
    * device-confirmed class exists yet).
    */
   vatClass?: string
+  /** The automatic discount this line was sold under, at `unitPrice` (docs/phase-253-2). */
+  autoDiscount?: AppliedAutoDiscount
 }
 
 /** The device's five per-VAT-group taxable (ex-VAT) subtotals, as stored. */
@@ -324,6 +327,23 @@ export function wrappedLines(
   return wrapText(text, columnsFor(style, width)).map((line) => ln(line, align, style))
 }
 
+/**
+ * The line under a line sold at an automatic discount (docs/phase-253-2): the discount's title and what the line saved,
+ * e.g. `Probakery Bread 2 @99/= saved 31.00`. When that does not fit the width, the title wraps and the saving goes on
+ * its own line, right-aligned, so neither is cut. Nothing for any other line.
+ *
+ * @param {ReceiptLayoutLineItem} item
+ * @param {number} width
+ * @returns {ReceiptLayoutLine[]}
+ */
+export function autoDiscountLines(item: ReceiptLayoutLineItem, width: number): ReceiptLayoutLine[] {
+  if (!item.autoDiscount) return []
+  const saved = `saved ${formatAmount(round2(item.autoDiscount.amountOffEach * item.quantity))}`
+  const oneLine = toAscii(`${item.autoDiscount.title} ${saved}`)
+  if (oneLine.length <= width) return [ln(oneLine)]
+  return [...wrapText(item.autoDiscount.title, width).map((text) => ln(text)), ln(saved, 'right')]
+}
+
 /** One item's printed name — variant appended only for a real variant, wrapped to at most 2 lines. */
 function itemNameLines(item: ReceiptLayoutLineItem, width: number): ReceiptLayoutLine[] {
   const hasRealVariant = item.variantTitle && item.variantTitle !== 'Default Title'
@@ -479,6 +499,7 @@ export function buildReceiptLayout(
   for (const item of order.items) {
     push(...itemNameLines(item, width))
     push(itemAmountLine(item, width))
+    push(...autoDiscountLines(item, width))
     const lineDiscount = item.discount
     if (lineDiscount && lineDiscount.value > 0) {
       const base = item.unitPrice * item.quantity

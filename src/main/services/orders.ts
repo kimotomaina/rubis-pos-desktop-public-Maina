@@ -77,6 +77,27 @@ function splitPaymentNote(payment: SalePayment): string {
   return payment.reference ? `${amount} (ref ${payment.reference})` : amount
 }
 
+/** The shop's currency, as every amount on this till is (`currency.ts`). */
+const SHOP_CURRENCY = 'KES'
+
+/**
+ * The note's discount part (docs/phase-253-2): each automatic discount's title and what it took off this sale, e.g.
+ * ` — discounts: Probakery Bread 2 @99/= -31.00`. Empty for a sale with none.
+ *
+ * @param {OfflineOrderPayload['lineItems']} lines
+ * @returns {string}
+ */
+function discountNote(lines: OfflineOrderPayload['lineItems']): string {
+  const byTitle = new Map<string, number>()
+  for (const line of lines) {
+    if (!line.autoDiscount) continue
+    const cents = Math.round(line.autoDiscount.amountOffEach * 100) * line.quantity
+    byTitle.set(line.autoDiscount.title, (byTitle.get(line.autoDiscount.title) ?? 0) + cents)
+  }
+  if (byTitle.size === 0) return ''
+  return ` — discounts: ${[...byTitle].map(([title, cents]) => `${title} -${(cents / 100).toFixed(2)}`).join(', ')}`
+}
+
 /**
  * Builds the `orderCreate` variables for a queued offline order.
  *
@@ -100,6 +121,12 @@ function splitPaymentNote(payment: SalePayment): string {
  * real order (docs/phase-210-1). The location is the sale's own (captured at
  * sale time into the payload), or `fallback` for a payload queued before
  * that phase.
+ *
+ * docs/phase-253-2 (D4, option b): a sale with an automatically discounted line sends Shopify the lines the device
+ * got, each with `priceSet` at the price it was sold at, and the discount in the note. Shopify applies no automatic
+ * discount to an order made this way ("Automatic discounts won't be applied unless you replicate the logic of those
+ * discounts in your custom implementation", shopify.dev orderCreate, 2026-10, read 2026-10-07). A sale with no
+ * automatic discount sends exactly the lines it always has.
  *
  * @param {OfflineOrderPayload} payload
  * @param {TillLocation | null} [fallback] this till's current location
@@ -128,18 +155,25 @@ export function buildOrderInput(
         ? `cash (tendered ${payload.tenderedAmount.toFixed(2)}, change ${payload.changeDue.toFixed(2)})`
         : `${payload.paymentMethod}${payload.referenceNumber ? ` (ref ${payload.referenceNumber})` : ''}`
   const payTags = [...new Set(payments.map((payment) => `pay:${payment.method}`))]
+  const discounted = payload.lineItems.some((line) => line.autoDiscount)
 
   return {
     order: {
-      lineItems: payload.lineItems.map((line) => ({
-        variantId: line.variantId,
-        quantity: line.quantity
-      })),
+      lineItems: discounted
+        ? payload.lineItems.map((line) => ({
+            variantId: line.variantId,
+            quantity: line.quantity,
+            priceSet: { shopMoney: { amount: line.unitPrice.toFixed(2), currencyCode: SHOP_CURRENCY } }
+          }))
+        : payload.lineItems.map((line) => ({
+            variantId: line.variantId,
+            quantity: line.quantity
+          })),
       financialStatus: 'PAID',
       fulfillmentStatus: 'FULFILLED',
       fulfillment: { locationId: location.id, notifyCustomer: false },
       tags: [tag, ...payTags],
-      note: `RUBIS POS offline sale — local UUID ${payload.clientOrderUuid} (taken ${payload.createdAt}) — cashier ${payload.staffName} — payment: ${paymentNote}`,
+      note: `RUBIS POS offline sale — local UUID ${payload.clientOrderUuid} (taken ${payload.createdAt}) — cashier ${payload.staffName} — payment: ${paymentNote}${discountNote(payload.lineItems)}`,
       sourceIdentifier: payload.clientOrderUuid,
       customAttributes: [
         { key: CLIENT_ORDER_UUID_KEY, value: payload.clientOrderUuid }

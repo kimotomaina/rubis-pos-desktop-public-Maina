@@ -1543,7 +1543,9 @@ app.whenReady().then(async () => {
           claimsStoredPayments,
           manualEntryEnabled,
           logger: console,
-          debugLogging: fiscalDebugLogging
+          debugLogging: fiscalDebugLogging,
+          // docs/phase-253-2: the sale is priced at payment from the till's own copy of the automatic discounts.
+          autoDiscounts: () => db.getAutoDiscounts()
         },
         {
           ...checkoutInput,
@@ -3272,7 +3274,8 @@ app.whenReady().then(async () => {
         quantity: line.quantity,
         unitPrice: line.unitPrice,
         discount: line.discount,
-        vatClass: itemVatClasses[index]
+        vatClass: itemVatClasses[index],
+        ...(line.autoDiscount ? { autoDiscount: line.autoDiscount } : {})
       })),
       printerRegistry,
       { ...printerSettings, locationName: db.getSetting('location_name') || undefined },

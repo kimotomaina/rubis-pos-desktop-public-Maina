@@ -7,6 +7,7 @@
  */
 
 import type { SalePayment } from '../lib/paymentLegs.js'
+import type { AppliedAutoDiscount } from '../lib/autoDiscounts.js'
 
 /** A Shopify product image. */
 export interface ShopifyImage {
@@ -204,6 +205,8 @@ export interface OfflineOrderLine {
   unitPrice: number
   /** Line-level discount/manual markdown, if applied. */
   discount?: Discount
+  /** The automatic discount this line's units were sold under, at `unitPrice` (docs/phase-253-2). */
+  autoDiscount?: AppliedAutoDiscount
 }
 
 /**

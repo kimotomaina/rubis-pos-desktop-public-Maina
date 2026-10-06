@@ -1308,6 +1308,42 @@ export interface SalesSummary {
    * never mistaken for covering every fiscalised sale in the range.
    */
   vatFromDeviceGroupsCoverage: VatFromDeviceGroupsCoverage
+  /**
+   * What the automatic discounts took off the range's sales, and on how many sales (docs/phase-253-2, D6). Present only
+   * when at least one sale had one, so a range without any reads exactly as before.
+   */
+  autoDiscountsGiven?: AutoDiscountsGiven
+}
+
+/** The automatic discounts given over a range (docs/phase-253-2). */
+export interface AutoDiscountsGiven {
+  amount: number
+  saleCount: number
+}
+
+/**
+ * Adds up the automatic discounts on the given orders from each sale's stored lines: per line, what each unit saved
+ * times the units (docs/phase-253-2). An order whose payload does not parse counts as none.
+ *
+ * @param {Array<Pick<OrderRow, 'payload_json'>>} orders
+ * @returns {AutoDiscountsGiven}
+ */
+export function sumAutoDiscounts(orders: Array<Pick<OrderRow, 'payload_json'>>): AutoDiscountsGiven {
+  let cents = 0
+  let saleCount = 0
+  for (const order of orders) {
+    let lines: Array<{ quantity?: number; autoDiscount?: { amountOffEach?: number } }> = []
+    try {
+      lines = (JSON.parse(order.payload_json || '{}') as { lineItems?: typeof lines }).lineItems ?? []
+    } catch {
+      continue
+    }
+    const discounted = lines.filter((line) => line.autoDiscount)
+    if (discounted.length === 0) continue
+    saleCount += 1
+    for (const line of discounted) cents += Math.round((line.autoDiscount?.amountOffEach ?? 0) * 100) * (line.quantity ?? 0)
+  }
+  return { amount: cents / 100, saleCount }
 }
 
 /**
@@ -1331,6 +1367,7 @@ export function generateSalesSummary(
   const totalRevenue = orders.reduce((sum, order) => sum + order.total, 0)
   const payments = excludeVoided(db.getMpesaPaymentsForDateRange(range.startIso, range.endIso))
   const { total: vatFromDeviceGroups, ...vatFromDeviceGroupsCoverage } = sumVatFromDeviceGroups(orders)
+  const autoDiscountsGiven = sumAutoDiscounts(orders)
 
   return {
     startIso: range.startIso,
@@ -1343,7 +1380,8 @@ export function generateSalesSummary(
     totalsByMethod,
     mpesaByMode: sumMpesaByMode(payments),
     vatFromDeviceGroups,
-    vatFromDeviceGroupsCoverage
+    vatFromDeviceGroupsCoverage,
+    ...(autoDiscountsGiven.saleCount > 0 ? { autoDiscountsGiven } : {})
   }
 }
 

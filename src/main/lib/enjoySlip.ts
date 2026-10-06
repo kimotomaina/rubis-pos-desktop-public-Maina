@@ -10,7 +10,7 @@
  */
 
 import type { ReceiptLayoutEntry, ReceiptLayoutOrder, ReceiptWidth } from './receiptLayout.js'
-import { formatAmount, keyValueLines, ln, rule, wrappedLines } from './receiptLayout.js'
+import { autoDiscountLines, formatAmount, keyValueLines, ln, rule, wrappedLines } from './receiptLayout.js'
 import { discountAmount } from './receiptTotals.js'
 import { titleCaseName } from './text.js'
 
@@ -126,6 +126,7 @@ export function buildEnjoySlip(
     linesTotal += net
     const figures = `${item.quantity} x ${formatAmount(item.unitPrice)}   ${formatAmount(net)}`
     push(...itemLines(item.title.toUpperCase(), figures, width))
+    push(...autoDiscountLines(item, width))
   }
   push(rule(width))
 

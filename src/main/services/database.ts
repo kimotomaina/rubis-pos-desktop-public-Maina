@@ -48,7 +48,7 @@ import { MAX_HELD_LABEL_LENGTH, MAX_HELD_SALES } from '../lib/heldSaleRules.js'
 const TRADER_SEQ_SETTING_KEY = 'last_trader_seq'
 /** When the catalogue last synced with its products read in full (docs/phase-253-1). */
 const CATALOG_SYNCED_AT_SETTING_KEY = 'catalog_synced_at'
-import type { AutoDiscount } from '../lib/autoDiscounts.js'
+import type { AppliedAutoDiscount, AutoDiscount } from '../lib/autoDiscounts.js'
 import BetterSqlite3 from 'better-sqlite3'
 import type { Database as SqliteConnection } from 'better-sqlite3'
 import type { Discount, OfflineOrderPayload } from './shopify-types.js'
@@ -641,7 +641,8 @@ export interface FiscalQueueItem extends Omit<SyncQueueRow, 'payload_json'> {
 
 /** Shape passed into {@link RubisDatabase.queueOrder}. */
 export interface QueueOrderInput {
-  items: CartItem[]
+  /** The lines sold; a line discounted by an automatic discount carries it (docs/phase-253-2). */
+  items: Array<CartItem & { autoDiscount?: AppliedAutoDiscount }>
   total: number
   clientOrderUuid: string
   staffId: number
@@ -2498,7 +2499,9 @@ export class RubisDatabase {
         variantTitle: item.variantTitle,
         quantity: item.quantity,
         unitPrice: item.price,
-        discount: item.discount
+        discount: item.discount,
+        // docs/phase-253-2: only a discounted line carries it, so a sale with no discount stores exactly what it did.
+        ...(item.autoDiscount ? { autoDiscount: item.autoDiscount } : {})
       })),
       staffId: input.staffId,
       staffName: input.staffName,

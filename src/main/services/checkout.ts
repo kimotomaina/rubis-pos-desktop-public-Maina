@@ -51,6 +51,8 @@ import type { Logger } from './logger.js'
 import { routeFiscalOutcome, classifyThrownFiscalError } from './fiscal-routing.js'
 import { DEFAULT_VAT_CLASS, resolveVatClass } from '../lib/vatClass.js'
 import { findVatClassRefusal } from '../lib/vatClassGate.js'
+import { applyAutoDiscounts, type AutoDiscount } from '../lib/autoDiscounts.js'
+import { requestHasDiscount } from '../lib/requestHasDiscount.js'
 
 /**
  * Structural slice of {@link RubisDatabase} `runCheckout` depends on.
@@ -405,6 +407,13 @@ export interface RunCheckoutDeps {
    * when tracing a live issue.
    */
   debugLogging: boolean
+  /**
+   * The till's copy of the automatic discounts (docs/phase-253-2), read at payment. Optional so every caller and test
+   * that omits it keeps exactly today's behaviour: no discount, every line as the cart sent it.
+   */
+  autoDiscounts?: () => AutoDiscount[]
+  /** The time of payment the discounts are judged at (`new Date()` when omitted). */
+  now?: () => Date
 }
 
 /**
@@ -741,6 +750,27 @@ function singlePayment(
   return { method: 'cash', amount: total, tendered: input.tenderedAmount, changeDue: input.changeDue }
 }
 
+/** Refused at payment when the screen's total is not the total the till's own copy of the discounts gives (docs/phase-253-2). */
+export const PRICES_CHANGED_MESSAGE = 'Prices changed, check the cart'
+
+/**
+ * The lines a checkout sells (docs/phase-253-2). With no discount in the copy, or a manual discount on the cart (mock
+ * mode only, phase 161-1), the cart's lines exactly as sent. Otherwise the cart priced by the copy at the time of
+ * payment; whenever a line is named by any discount in the copy, the screen's total must be that price to the cent.
+ *
+ * @param {RunCheckoutDeps} deps
+ * @param {CheckoutRequest} input
+ * @returns {{ items: QueueOrderInput['items'] } | { error: string }}
+ */
+function soldLinesOf(deps: RunCheckoutDeps, input: CheckoutRequest): { items: QueueOrderInput['items'] } | { error: string } {
+  const discounts = deps.autoDiscounts?.() ?? []
+  if (discounts.length === 0 || requestHasDiscount(input)) return { items: input.items }
+  const sale = applyAutoDiscounts(input.items, discounts, deps.now?.() ?? new Date())
+  if (!sale.named) return { items: input.items }
+  if (Math.round(sale.total * 100) !== Math.round(input.total * 100)) return { error: PRICES_CHANGED_MESSAGE }
+  return { items: sale.lines }
+}
+
 /** Builds the fiscal invoice request from a checkout, identically on the happy path and the exception-fallback rebuild. */
 function buildFiscalRequest(
   input: CheckoutRequest,
@@ -830,7 +860,7 @@ export async function runCheckout(
   let cardReference: string | null = null
 
   try {
-    const { items, total } = input
+    const { total } = input
 
     // docs/phase-249: a checkout already made into an order is answered with that order, before anything else: before the
     // payment gates (a manual code would read as "already used" by the sale it made), the order write and the fiscal call.
@@ -840,6 +870,12 @@ export async function runCheckout(
       const earlier = db.getOrderByCheckoutKey(input.checkoutKey)
       if (earlier) return repeatOfCheckout(earlier, total)
     }
+
+    // docs/phase-253-2: the lines actually sold, priced here from the till's own copy of the discounts at the time of
+    // payment; a screen total that differs is refused before anything is written, paid or filed.
+    const priced = soldLinesOf(deps, input)
+    if ('error' in priced) return { success: false, error: priced.error }
+    const { items } = priced
 
     // Before the staff check, the payment gates and the order write: a cart
     // the fiscal device could only reject after payment is refused here,
@@ -891,7 +927,12 @@ export async function runCheckout(
     const openShift = db.getOpenShift()
     const clientOrderUuid = idGen()
     // docs/phase-252: a split sale's tendered and change are worked out here from its payments, never the screen's.
-    const fiscalSource: CheckoutRequest = split ? { ...input, tenderedAmount: split.tendered, changeDue: split.change } : input
+    // docs/phase-253-2: the device is given the lines sold, so a discounted unit goes at its discounted price.
+    const fiscalSource: CheckoutRequest = split
+      ? { ...input, items, tenderedAmount: split.tendered, changeDue: split.change }
+      : items === input.items
+        ? input
+        : { ...input, items }
     const orderInput: QueueOrderInput = {
       items,
       total,

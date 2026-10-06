@@ -98,7 +98,8 @@ export async function generatePdfReceipt(
         quantity: item.quantity,
         unitPrice: item.unitPrice,
         discount: item.discount,
-        vatClass: item.vatClass
+        vatClass: item.vatClass,
+        ...(item.autoDiscount ? { autoDiscount: item.autoDiscount } : {})
       })
     )
   }

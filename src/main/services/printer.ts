@@ -27,6 +27,7 @@ import type { PrinterConfig, PrinterType, PrinterConnectionType, FiscalStatus } 
 import { formatCurrency } from './currency.js'
 import type { ConnectivityCheckResult } from './connectivityMonitor.js'
 import type { SalePayment } from '../lib/paymentLegs.js'
+import type { AppliedAutoDiscount } from '../lib/autoDiscounts.js'
 import { zReportMpesaLines } from '../lib/zReportMpesa.js'
 import { zReportCardLines } from '../lib/zReportCard.js'
 import { zReportRetroLines } from '../lib/zReportRetro.js'
@@ -167,6 +168,8 @@ export interface ReceiptLineItem {
   discount?: Discount
   /** KRA VAT class letter, from `fiscal_request_json` when known (docs/phase-171) — defaults to `'A'` otherwise. */
   vatClass?: string
+  /** The automatic discount this line was sold under (docs/phase-253-2). */
+  autoDiscount?: AppliedAutoDiscount
 }
 
 /** Result data on a successful print. */
@@ -418,7 +421,8 @@ export async function renderReceipt(
         quantity: item.quantity,
         unitPrice: item.unitPrice,
         discount: item.discount,
-        vatClass: item.vatClass
+        vatClass: item.vatClass,
+        ...(item.autoDiscount ? { autoDiscount: item.autoDiscount } : {})
       })
     )
   }
@@ -988,7 +992,8 @@ export function renderEnjoySlip(
       quantity: item.quantity,
       unitPrice: item.unitPrice,
       discount: item.discount,
-      vatClass: item.vatClass
+      vatClass: item.vatClass,
+      ...(item.autoDiscount ? { autoDiscount: item.autoDiscount } : {})
     }))
   }
   const entries = buildEnjoySlip(

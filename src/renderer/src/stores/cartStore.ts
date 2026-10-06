@@ -26,6 +26,8 @@ import { calculateCartTotal, calculateSubtotal, validatePriceOverride } from '..
 import { AUTO_PRINT_FAILURE_MESSAGE, getAutoPrintOfflineMessage } from '../lib/autoPrintToast.js'
 import { AUTO_PRINT_OFFLINE_TOAST_TIMEOUT_MS } from '../lib/toastTimeouts.js'
 import { useToastStore } from './toastStore.js'
+import { useProductStore } from './productStore.js'
+import { autoPricedTotal, hasManualDiscount } from '../lib/autoDiscounts.js'
 
 const AUTO_PRINT_OFFLINE_TOAST_ID = 'auto-print-offline'
 
@@ -208,9 +210,9 @@ export interface CartState {
   resumeHeldSale: (held: HeldCartContents, cartToken: string, from: ResumedHeldSale) => void
   /** Sum of `price * quantity` across all items, before any discount. */
   getRawSubtotal: () => number
-  /** Sum of line totals after line-level discounts, before the cart-level discount. */
+  /** Sum of line totals after line-level discounts, before the cart-level discount; or after automatic discounts (docs/phase-253-2). */
   getSubtotal: () => number
-  /** Final total: line discounts then the cart-level discount, floored at 0. */
+  /** Final total: line discounts then the cart-level discount, floored at 0; or after automatic discounts (docs/phase-253-2). */
   getTotal: () => number
   /** Total units in the cart (Σ quantity). */
   getItemCount: () => number
@@ -336,9 +338,21 @@ export const useCartStore = create<CartState>()(
     getRawSubtotal: () =>
       get().items.reduce((sum, item) => sum + item.price * item.quantity, 0),
 
-    getSubtotal: () => calculateSubtotal(get().items),
+    // docs/phase-253-2: with automatic discounts in the copy, a cart with no manual discount is priced by them; a cart
+    // with a manual one (mock mode only) is priced exactly as before.
+    getSubtotal: () => {
+      const { items, cartDiscount } = get()
+      const discounts = useProductStore.getState().discounts
+      if (discounts.length === 0 || hasManualDiscount(items, cartDiscount)) return calculateSubtotal(items)
+      return autoPricedTotal(items, discounts, new Date())
+    },
 
-    getTotal: () => calculateCartTotal(get().items, get().cartDiscount),
+    getTotal: () => {
+      const { items, cartDiscount } = get()
+      const discounts = useProductStore.getState().discounts
+      if (discounts.length === 0 || hasManualDiscount(items, cartDiscount)) return calculateCartTotal(items, cartDiscount)
+      return autoPricedTotal(items, discounts, new Date())
+    },
 
     getItemCount: () =>
       get().items.reduce((sum, item) => sum + item.quantity, 0),

@@ -7,6 +7,8 @@ import { pageOfIndex, paginate } from '../lib/paginate.js'
 import Pager from './Pager.js'
 import { useCartStore } from '../stores/cartStore.js'
 import { CART_LOCKED_BY_SPLIT_MESSAGE } from '../lib/splitPayments.js'
+import { useProductStore } from '../stores/productStore.js'
+import { hasManualDiscount, priceCartLines, pricedLineTotal } from '../lib/autoDiscounts.js'
 
 /** Cart lines per page (docs/phase-166 Commit E4) — replaces the table's old internal scroll. */
 export const CART_LINES_PER_PAGE = 7
@@ -57,6 +59,14 @@ export default function PosCartTable({
   const pageResult = paginate(items, page, linesPerPage)
   /** docs/phase-252-1: a split holds a recorded payment, so no line can change and the cart cannot be cleared. */
   const locked = useCartStore((state) => state.splitLocked)
+  /** docs/phase-253-2: each line priced by the automatic discounts, shown for the cashier; the main process prices it again at payment. */
+  const cartDiscount = useCartStore((state) => state.cartDiscount)
+  const discounts = useProductStore((state) => state.discounts)
+  const pricingById = new Map(
+    discounts.length === 0 || hasManualDiscount(items, cartDiscount)
+      ? []
+      : priceCartLines(items, discounts, new Date()).map((pricing, index) => [items[index].id, pricing] as const)
+  )
 
   /**
    * Jumps to the page holding the line most recently added/scanned
@@ -96,7 +106,10 @@ export default function PosCartTable({
           </tr>
         </thead>
         <tbody>
-          {pageResult.items.map((item, index) => (
+          {pageResult.items.map((item, index) => {
+            const pricing = pricingById.get(item.id)
+            const autoDiscount = pricing?.discount ?? null
+            return (
             <tr
               key={item.id}
               className={`border-b border-slate-100 transition-colors duration-700 ${
@@ -105,7 +118,13 @@ export default function PosCartTable({
             >
               <td className="max-w-0 px-4 py-3">
                 <p className="truncate text-lg font-semibold uppercase text-slate-900">{item.title}</p>
-                <p className="truncate text-sm text-slate-500">{item.variantTitle}</p>
+                {autoDiscount && pricing ? (
+                  <p data-testid="auto-discount-line" className="truncate text-sm font-medium text-emerald-700">
+                    {autoDiscount.title} -{formatCurrency(autoDiscount.amountOffEach * pricing.discountedUnits)}
+                  </p>
+                ) : (
+                  <p className="truncate text-sm text-slate-500">{item.variantTitle}</p>
+                )}
               </td>
               <td className="px-2 py-3 text-center text-2xl font-bold tabular-nums text-slate-900">
                 {item.quantity}
@@ -114,7 +133,7 @@ export default function PosCartTable({
                 {formatCurrency(item.price)}
               </td>
               <td className="px-2 py-3 text-right text-lg font-bold text-slate-900">
-                {formatCurrency(calculateLineTotal(item))}
+                {formatCurrency(autoDiscount && pricing ? pricedLineTotal(pricing, item.price) : calculateLineTotal(item))}
               </td>
               <td className="px-4 py-3">
                 <div className="flex items-center justify-end gap-2">
@@ -148,7 +167,8 @@ export default function PosCartTable({
                 </div>
               </td>
             </tr>
-          ))}
+            )
+          })}
         </tbody>
       </table>
       <div className="flex items-center justify-between gap-3 border-t border-slate-100 px-4 py-2">
