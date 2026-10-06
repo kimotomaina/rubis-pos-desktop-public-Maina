@@ -7,6 +7,13 @@
 
 import type { EarlierSalesShown } from '../../../main/services/database.js'
 
+/**
+ * What the Open Shift fields hold when the form opens (docs/phase-246, R4): 0, and editable. The drawer count and the
+ * M-Pesa balance start at 0 instead of blank. Sales already made in the window still join and the float is still the
+ * drawer less their cash, so a 0 drawer with earlier cash sales is refused until it is counted.
+ */
+export const OPEN_SHIFT_FIGURE_DEFAULT = '0'
+
 /** The figures the form shows. */
 export interface FloatPreview {
   /** The cash counted in the drawer, or `null` while it is blank or not a number. */

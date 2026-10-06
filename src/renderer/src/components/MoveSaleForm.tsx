@@ -3,6 +3,7 @@ import type { SaleMovePreview } from '../../../main/services/database.js'
 import { formatCurrency } from '../lib/currency.js'
 import { useKeyboardStore, type KeyboardMode } from '../stores/keyboardStore.js'
 import ManagerPinModal from './ManagerPinModal.js'
+import { ShellPanel } from './ModalShell.js'
 
 const FIELD_CLASS =
   'h-11 w-full rounded-lg border border-slate-300 px-3 text-lg focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-100'
@@ -125,24 +126,36 @@ export default function MoveSaleForm({ onCancel, onMoved }: MoveSaleFormProps) {
     })()
   }
 
+  // docs/phase-246, R1: the fields scroll in the body of the panel; the message and the Move sale button stay in view.
+  const footer = (
+    <>
+      {error && <p role="alert" className="mb-3 rounded-lg bg-rose-50 px-3 py-2 text-base font-medium text-rose-700">{error}</p>}
+      <button
+        type="button"
+        disabled={saving}
+        onClick={handleMove}
+        className="h-12 w-full rounded-xl bg-rose-600 text-lg font-semibold text-white transition active:scale-95 disabled:cursor-not-allowed disabled:opacity-50"
+      >
+        {saving ? 'Moving…' : 'Move sale'}
+      </button>
+    </>
+  )
+
   return (
-    <div>
-      <div className="mb-3 flex items-center justify-between gap-3">
-        <h3 className="text-2xl font-bold text-slate-800">Move a sale to another shift</h3>
-        <button
-          type="button"
-          onClick={onCancel}
-          className="h-10 rounded-lg border border-slate-300 px-4 text-base font-medium text-slate-600 hover:bg-slate-50"
-        >
-          Cancel
-        </button>
-      </div>
+    <>
+      <ShellPanel title="Move a sale to another shift" headerAction={
+          <button
+            type="button"
+            onClick={onCancel}
+            className="h-10 rounded-lg border border-slate-300 px-4 text-base font-medium text-slate-600 hover:bg-slate-50"
+          >
+            Cancel
+          </button>
+      } footer={footer}>
       <p className="mb-3 text-base text-slate-600">
         Only an admin can move a sale, with a reason and their PIN. Both shifts keep a permanent record of it. To change
         a counted figure afterwards, use Correct figures.
       </p>
-      {error && <p role="alert" className="mb-3 rounded-lg bg-rose-50 px-3 py-2 text-base font-medium text-rose-700">{error}</p>}
-
       <div className="mb-3 grid grid-cols-3 items-end gap-2">
         <div>
           <label className="mb-1 block text-base font-medium text-slate-600">Order number</label>
@@ -215,15 +228,7 @@ export default function MoveSaleForm({ onCancel, onMoved }: MoveSaleFormProps) {
         onClick={() => openField(reason, setReason, 'Reason for moving this sale', 'text', 300)}
         className={`${FIELD_CLASS} mb-3`}
       />
-      <button
-        type="button"
-        disabled={saving}
-        onClick={handleMove}
-        className="h-12 w-full rounded-xl bg-rose-600 text-lg font-semibold text-white transition active:scale-95 disabled:cursor-not-allowed disabled:opacity-50"
-      >
-        {saving ? 'Moving…' : 'Move sale'}
-      </button>
-
+      </ShellPanel>
       {collectingPin && (
         <ManagerPinModal
           title={`Move order #${orderId} to shift #${toShiftId}. It cannot be edited afterwards.`}
@@ -231,6 +236,6 @@ export default function MoveSaleForm({ onCancel, onMoved }: MoveSaleFormProps) {
           onCancel={() => setCollectingPin(false)}
         />
       )}
-    </div>
+    </>
   )
 }

@@ -57,7 +57,8 @@ const ALLOW_LIST: Record<string, number> = {
   [join('src', 'renderer', 'src', 'components', 'EtimsSetupGate.tsx')]: 1, // Pre-login; out of scope for this phase.
   [join('src', 'renderer', 'src', 'pages', 'EndOfDayPage.tsx')]: 1, // docs/phase-220: was 0 (ZERO_SCROLL_FILES), now 1. End of Day entries, owner's design, 2026-10-05.
   [join('src', 'renderer', 'src', 'components', 'OrderHistory.tsx')]: 1, // docs/phase-225: was 0 (ZERO_SCROLL_FILES), now 1. Order list scrolls, owner's request, 2026-10-05.
-  [join('src', 'renderer', 'src', 'pages', 'ReportsPage.tsx')]: 1 // docs/phase-245: was 0 (ZERO_SCROLL_FILES), now 1. Shift History rows scroll, owner's request, 2026-10-06.
+  [join('src', 'renderer', 'src', 'pages', 'ReportsPage.tsx')]: 1, // docs/phase-245: was 0 (ZERO_SCROLL_FILES), now 1. Shift History rows scroll, owner's request, 2026-10-06.
+  [join('src', 'renderer', 'src', 'components', 'ModalShell.tsx')]: 1 // docs/phase-246: new. The body of the shared window shell scrolls; the Z report, window report, correction form and Move a sale use it (R1), owner's request, 2026-10-06.
 }
 
 /** Files expected to have ZERO vertical-scroll classes — either always have, or (this commit) now do. */

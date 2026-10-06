@@ -98,13 +98,16 @@ describe('Open Shift: M-Pesa balance (optional)', () => {
 
     expect(container.textContent).toContain('M-Pesa balance (optional)')
     const field = container.querySelectorAll('input')[1]!
-    expect(field.value).toBe('')
+    // CHANGED (docs/phase-246, R4). OLD: the field started empty. NEW: it starts at 0, editable; cleared, it is still "Not recorded".
+    expect(field.value).toBe('0')
     expect(field.placeholder).toBe('Not recorded')
   })
 
   it('sends the call it always sent when the field is left blank', async () => {
     await openForm()
     type(0, '250')
+    // CHANGED (docs/phase-246, R4). OLD: the field was blank already. NEW: it starts at 0, so it is cleared here.
+    type(1, '')
     await click('Confirm')
 
     // CHANGED (docs/phase-232). OLD: openShift(1, 250, type), three arguments. NEW: openShift(1, 250, balance, options): no type is

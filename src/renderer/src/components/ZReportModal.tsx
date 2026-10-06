@@ -8,7 +8,7 @@ import ShiftCorrectionForm from './ShiftCorrectionForm.js'
 import { zReportAdjustmentBlocks, zReportLabelledLine, zReportMergedLine, zReportSalesAtCloseLine } from '../lib/zReportAdjustments.js'
 import { titleCaseName } from '../lib/text.js'
 import { formatVatRateLabel } from '../lib/vatLabel.js'
-import { CloseIcon } from './icons.js'
+import ModalShell from './ModalShell.js'
 
 interface ZReportModalProps {
   report: ZReport
@@ -22,13 +22,9 @@ interface ZReportModalProps {
  * mirroring the printed Z-report layout — with a button to send the
  * same report to the thermal printer.
  *
- * Sized to fit the 1366x772 design box with no internal scroll
- * (docs/phase-158, Phase E's own no-scroll rule — the previous
- * `min-h-[75vh]`/`overflow-y-auto` combination was never guarded by
- * `screensFitDesignBox.test.ts`, see docs/phase-157 Part 3 G15). The
- * report's own content is a fixed handful of lines, so a plain
- * `max-w-2xl` box that sizes to its content is enough — no pagination
- * needed here, unlike a list screen.
+ * Usable at any length (docs/phase-246, R1): the report scrolls in the body of a {@link ModalShell} while the header, the
+ * print message and the Print and Correct figures buttons stay in view. Before, the box sized to its content and a long
+ * report pushed its buttons off the screen (docs/phase-158 had ruled out an internal scroll).
  *
  * @param {ZReportModalProps} props
  * @returns {JSX.Element}
@@ -99,30 +95,47 @@ export default function ZReportModal({ report: initialReport, onClose, startCorr
     }
   }
 
+  // docs/phase-246, R1: the report scrolls in the body; the print message and the buttons stay in view in the footer.
+  const footer = (
+    <>
+    {printStatus && (
+      <p
+        className={`mb-3 rounded-lg px-3 py-2 text-base font-medium ${
+          printStatus.kind === 'success'
+            ? 'bg-emerald-50 text-emerald-700'
+            : 'bg-rose-50 text-rose-700'
+        }`}
+      >
+        {printStatus.message}
+      </p>
+    )}
+
+    <div className="flex gap-3">
+      <button
+        type="button"
+        disabled={printing}
+        onClick={() => void handlePrint()}
+        className="min-w-0 flex-1 rounded-xl bg-rose-600 py-3 text-lg font-semibold text-white transition active:scale-95 disabled:cursor-not-allowed disabled:opacity-50"
+      >
+        {printing ? 'Printing…' : 'Print Z-Report'}
+      </button>
+      {report.status === 'closed' && !report.mergedInto && (
+        <button
+          type="button"
+          onClick={() => setCorrecting(true)}
+          className="w-48 shrink-0 rounded-xl border border-slate-300 py-3 text-lg font-medium text-slate-700 hover:bg-slate-50"
+        >
+          Correct figures
+        </button>
+      )}
+    </div>
+    </>
+  )
+
   // The correction form is a sibling of the modal, not inside it: a click on its backdrop must not reach `onClose`.
   return (
     <>
-      <div
-        className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
-        onClick={onClose}
-      >
-        <div
-          className="flex w-full max-w-3xl flex-col rounded-2xl bg-white shadow-xl"
-          onClick={(e) => e.stopPropagation()}
-        >
-          <div className="flex shrink-0 items-center justify-between border-b border-slate-200 p-4">
-            <h3 className="text-xl font-semibold text-slate-900">Z-Report</h3>
-            <button
-              type="button"
-              onClick={onClose}
-              className="rounded-full p-2 text-slate-400 hover:bg-slate-100 hover:text-slate-600"
-              aria-label="Close"
-            >
-              <CloseIcon className="h-5 w-5" />
-            </button>
-          </div>
-
-          <div className="p-4 text-base">
+      <ModalShell title="Z-Report" onClose={onClose} footer={footer}>
             <div className="mb-3 space-y-1 text-slate-600">
               <p>Shift #{report.shiftId}</p>
               {report.shiftWindowLabel && <p>{report.shiftWindowLabel}</p>}
@@ -258,41 +271,7 @@ export default function ZReportModal({ report: initialReport, onClose, startCorr
                 )}
               </div>
             )}
-
-            {printStatus && (
-              <p
-                className={`mb-3 rounded-lg px-3 py-2 text-base font-medium ${
-                  printStatus.kind === 'success'
-                    ? 'bg-emerald-50 text-emerald-700'
-                    : 'bg-rose-50 text-rose-700'
-                }`}
-              >
-                {printStatus.message}
-              </p>
-            )}
-
-            <div className="flex gap-3">
-              <button
-                type="button"
-                disabled={printing}
-                onClick={() => void handlePrint()}
-                className="min-w-0 flex-1 rounded-xl bg-rose-600 py-3 text-lg font-semibold text-white transition active:scale-95 disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                {printing ? 'Printing…' : 'Print Z-Report'}
-              </button>
-              {report.status === 'closed' && !report.mergedInto && (
-                <button
-                  type="button"
-                  onClick={() => setCorrecting(true)}
-                  className="w-48 shrink-0 rounded-xl border border-slate-300 py-3 text-lg font-medium text-slate-700 hover:bg-slate-50"
-                >
-                  Correct figures
-                </button>
-              )}
-            </div>
-          </div>
-        </div>
-      </div>
+      </ModalShell>
       {correcting && (
         <ShiftCorrectionForm
           report={report}

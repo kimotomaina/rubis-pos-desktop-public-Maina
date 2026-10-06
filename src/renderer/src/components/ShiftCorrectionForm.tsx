@@ -3,6 +3,7 @@ import type { ZReport } from '../../../main/services/reports.js'
 import { MPESA_BALANCE_INVALID, parseOptionalBalance, parseRequiredAmount } from '../lib/optionalBalance.js'
 import { useKeyboardStore, type KeyboardMode } from '../stores/keyboardStore.js'
 import ManagerPinModal from './ManagerPinModal.js'
+import ModalShell from './ModalShell.js'
 
 const FIELD_CLASS =
   'h-11 w-full rounded-lg border border-slate-300 px-3 text-lg focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-100'
@@ -112,22 +113,50 @@ export default function ShiftCorrectionForm({ report, onCancel, onCorrected }: S
     })()
   }
 
+  // docs/phase-246, R1: the fields scroll in the body; Cancel and Record stay in view in the footer.
+  const footer = (
+    <>
+      {error && (
+        <p role="alert" className="mb-3 rounded-lg bg-rose-50 px-3 py-2 text-base font-medium text-rose-700">
+          {error}
+        </p>
+      )}
+      <div className="flex gap-3">
+        <button
+          type="button"
+          onClick={onCancel}
+          className="h-12 flex-1 rounded-xl border border-slate-300 text-lg font-medium text-slate-600 hover:bg-slate-50"
+        >
+          Cancel
+        </button>
+        <button
+          type="button"
+          disabled={saving || (report.frozen === true && !override)}
+          onClick={handleSubmit}
+          className="h-12 flex-1 rounded-xl bg-rose-600 text-lg font-semibold text-white transition active:scale-95 disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          {saving ? 'Recording…' : 'Record correction'}
+        </button>
+      </div>
+    </>
+  )
+
   // The PIN dialog is a sibling of the form, not inside it: a click on its backdrop must close only itself.
   return (
     <>
-      <div className="fixed inset-0 z-[55] flex items-center justify-center bg-black/50 p-4" onClick={onCancel}>
-        <div className="w-full max-w-xl rounded-2xl bg-white p-5 shadow-xl" onClick={(e) => e.stopPropagation()}>
-          <h3 className="mb-1 text-2xl font-semibold text-slate-900">Correct the figures of shift #{report.shiftId}</h3>
+      <ModalShell
+        title={`Correct the figures of shift #${report.shiftId}`}
+        onClose={onCancel}
+        showCloseButton={false}
+        zClass="z-[55]"
+        maxWidthClass="max-w-xl"
+        footer={footer}
+      >
           <p className="mb-3 text-base text-slate-500">
             The original figures stay on the report, and the correction is shown under them. It cannot be edited or
             removed afterwards.
           </p>
 
-          {error && (
-            <p role="alert" className="mb-3 rounded-lg bg-rose-50 px-3 py-2 text-base font-medium text-rose-700">
-              {error}
-            </p>
-          )}
           {/* docs/phase-244: a frozen shift shows why, and an admin's tick is the one way past it. */}
           {report.frozen && (
             <div className="mb-3">
@@ -193,27 +222,7 @@ export default function ShiftCorrectionForm({ report, onCancel, onCorrected }: S
             onClick={() => openField(reason, setReason, 'Reason for this correction', 'text', 300)}
             className={`${FIELD_CLASS} mb-4`}
           />
-
-          <div className="flex gap-3">
-            <button
-              type="button"
-              onClick={onCancel}
-              className="h-12 flex-1 rounded-xl border border-slate-300 text-lg font-medium text-slate-600 hover:bg-slate-50"
-            >
-              Cancel
-            </button>
-            <button
-              type="button"
-              disabled={saving || (report.frozen === true && !override)}
-              onClick={handleSubmit}
-              className="h-12 flex-1 rounded-xl bg-rose-600 text-lg font-semibold text-white transition active:scale-95 disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              {saving ? 'Recording…' : 'Record correction'}
-            </button>
-          </div>
-        </div>
-
-      </div>
+      </ModalShell>
       {collectingPin && (
         <ManagerPinModal
           title={`Correct the figures of shift #${report.shiftId}. The original stays on the report.`}

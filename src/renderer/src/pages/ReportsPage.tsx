@@ -203,8 +203,9 @@ function ShiftHistoryView({ staffName }: { staffName: (id: number) => string }) 
   }
 
   if (moving) {
+    // docs/phase-246, R1: a column of the height given, so the form's body scrolls and its buttons stay in view.
     return (
-      <section className="rounded-xl border border-slate-200 bg-white p-4">
+      <section className="flex min-h-0 flex-1 flex-col rounded-xl border border-slate-200 bg-white">
         <MoveSaleForm
           onCancel={() => setMoving(false)}
           onMoved={(message) => {

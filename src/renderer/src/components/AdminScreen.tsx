@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { useAuthStore } from '../stores/authStore.js'
 import { useHeldSalesStore } from '../stores/heldSalesStore.js'
 import { closeShiftBlockedMessage } from '../lib/heldSale.js'
+import { OPEN_SHIFT_FIGURE_DEFAULT } from '../lib/openShiftFloat.js'
 import { useUnfiledCountStore } from '../stores/unfiledCountStore.js'
 import { useUpdateStatusStore } from '../stores/updateStatusStore.js'
 import {
@@ -292,10 +293,10 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
   const [staffList, setStaffList] = useState<StaffSummary[]>([])
   const [loading, setLoading] = useState(true)
 
-  const [startingCashInput, setStartingCashInput] = useState('')
+  const [startingCashInput, setStartingCashInput] = useState(OPEN_SHIFT_FIGURE_DEFAULT)
   const [endingCashInput, setEndingCashInput] = useState('')
   // docs/phase-222: optional; blank means "not recorded", which a zero is not.
-  const [mpesaOpeningInput, setMpesaOpeningInput] = useState('')
+  const [mpesaOpeningInput, setMpesaOpeningInput] = useState(OPEN_SHIFT_FIGURE_DEFAULT)
   const [mpesaClosingInput, setMpesaClosingInput] = useState('')
   const [showOpenForm, setShowOpenForm] = useState(false)
   const [startAtZero, setStartAtZero] = useState(false)
@@ -1145,8 +1146,8 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
       setShiftActionError(result.error ?? 'Failed to open shift')
       return
     }
-    setStartingCashInput('')
-    setMpesaOpeningInput('')
+    setStartingCashInput(OPEN_SHIFT_FIGURE_DEFAULT)
+    setMpesaOpeningInput(OPEN_SHIFT_FIGURE_DEFAULT)
     setStartAtZero(false)
     setShowOpenForm(false)
     await refresh()
@@ -2495,8 +2496,8 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
             onConfirm={() => void handleOpenShift()}
             onCancel={() => {
               setShowOpenForm(false)
-              setStartingCashInput('')
-              setMpesaOpeningInput('')
+              setStartingCashInput(OPEN_SHIFT_FIGURE_DEFAULT)
+              setMpesaOpeningInput(OPEN_SHIFT_FIGURE_DEFAULT)
             }}
           />
         )}
