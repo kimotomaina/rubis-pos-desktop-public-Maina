@@ -1366,7 +1366,7 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
   }
 
   return (
-    <div className={`h-full min-h-full w-full space-y-6${activeTab === 'endOfDay' ? ' flex flex-col' : ''}`}>
+    <div className={`h-full min-h-full w-full space-y-6${activeTab === 'endOfDay' || activeTab === 'reports' ? ' flex flex-col' : ''}`}>
       {activeTab === null ? (
         <SectionCardGrid sections={adminSections(unfiledCount, shopifyActionCount)} onSelect={setActiveTab} />
       ) : (

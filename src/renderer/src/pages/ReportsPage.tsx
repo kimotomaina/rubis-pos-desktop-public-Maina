@@ -96,7 +96,7 @@ function Pager({
 }) {
   if (pageCount <= 1) return null
   return (
-    <div className="mt-3 flex items-center justify-between gap-3">
+    <div className="mt-3 flex shrink-0 items-center justify-between gap-3">
       <button
         type="button"
         onClick={() => onChange(page - 1)}
@@ -121,13 +121,16 @@ function Pager({
 }
 
 /**
- * Shift history: paginated, tap a row to open its Z-report (with the
+ * Shift history: ten shifts a page, newest first (docs/phase-245), tap a row to open its Z-report (with the
  * existing, unchanged Reprint action inside `ZReportModal`).
  *
  * Opening it gives every sale with no shift to the shift it belongs to (docs/phase-232), so there is no list of
  * sales with no shift to work through. A shift is shown by its window; an older one labelled otherwise says so. A
  * window that holds more than one shift (older data) has a combined report. An admin can move a sale to another
  * shift, with a reason and their PIN.
+ *
+ * The page always opens on page 1 and the main process returns one page and the total. The title, Move a sale and the
+ * pager stay in view while the rows scroll in their own area (the End of Day pattern, docs/phase-220).
  */
 function ShiftHistoryView({ staffName }: { staffName: (id: number) => string }) {
   const [page, setPage] = useState(1)
@@ -215,8 +218,8 @@ function ShiftHistoryView({ staffName }: { staffName: (id: number) => string }) 
   }
 
   return (
-    <section className="rounded-xl border border-slate-200 bg-white p-4">
-      <div className="mb-3 flex items-center justify-between gap-3">
+    <section className="flex min-h-0 flex-1 flex-col rounded-xl border border-slate-200 bg-white p-4">
+      <div className="mb-3 flex shrink-0 items-center justify-between gap-3">
         <h3 className="text-2xl font-bold text-slate-800">Shift History</h3>
         <button
           type="button"
@@ -246,7 +249,7 @@ function ShiftHistoryView({ staffName }: { staffName: (id: number) => string }) 
         <p className="text-base text-slate-500">No shifts recorded yet.</p>
       ) : (
         <>
-          <div className="overflow-x-auto">
+          <div data-testid="shift-history-scroll" className="touch-scrollbar min-h-0 flex-1 overflow-auto pr-2">
             <table className="w-full text-left text-base">
               <thead className="text-slate-500">
                 <tr>
@@ -865,8 +868,9 @@ export default function ReportsPage() {
   const staffName = (staffId: number | null): string =>
     staffId === null ? '' : titleCaseName(staffById.get(staffId) ?? `Staff #${staffId}`)
 
+  // docs/phase-245: Shift History fills the height it is given, so its rows scroll and its buttons stay in view.
   return (
-    <div className="space-y-4">
+    <div className={subView === 'shifts' ? 'flex min-h-0 flex-1 flex-col gap-4' : 'space-y-4'}>
       {subView === null ? (
         <SectionCardGrid sections={REPORTS_SECTIONS} onSelect={setSubView} />
       ) : (

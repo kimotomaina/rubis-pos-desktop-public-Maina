@@ -262,7 +262,9 @@ describe('after a merge the window is one shift', () => {
 
     const rows = db.listVisibleShifts(10, 0)
 
-    expect(rows.map((r) => r.id)).toEqual([3, second])
+    // CHANGED (docs/phase-245). OLD: `[3, second]`, the highest id first. NEW: `[second, 3]`: shift 3 was made last but began on
+    // 4 Oct, and Shift History is newest first by the time a shift began, never by id.
+    expect(rows.map((r) => r.id)).toEqual([second, 3])
     expect(rows.find((r) => r.id === second)?.absorbed_shifts).toEqual([
       { id: first, clock_in: iso('2026-10-05T17:43:21'), clock_out: iso('2026-10-05T17:43:36') }
     ])

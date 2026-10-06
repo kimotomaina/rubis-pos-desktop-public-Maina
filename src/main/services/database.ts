@@ -3979,6 +3979,9 @@ export class RubisDatabase {
    * another is left out of the list and named on the shift that holds it (`absorbed_shifts`), so Shift History shows
    * a merged window once. The absorbed shift's own row, Z report and records are untouched.
    *
+   * Newest first (docs/phase-245): an open shift at the top, then by `clock_in` descending, `id` only to break a tie.
+   * The order is the time the shift began, never the id, so a shift recorded later for an earlier time sits where it belongs.
+   *
    * @param {number} limit
    * @param {number} offset
    * @returns {ShiftRow[]}
@@ -3988,7 +3991,7 @@ export class RubisDatabase {
       .prepare(
         `SELECT s.* FROM shifts s
          WHERE s.id NOT IN (SELECT absorbed_shift_id FROM shift_merges)
-         ORDER BY s.id DESC LIMIT ? OFFSET ?`
+         ORDER BY (s.status = 'open') DESC, s.clock_in DESC, s.id DESC LIMIT ? OFFSET ?`
       )
       .all(limit, offset) as ShiftRow[]
     if (rows.length === 0) return rows
