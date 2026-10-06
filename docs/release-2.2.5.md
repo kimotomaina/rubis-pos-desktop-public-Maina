@@ -5,6 +5,17 @@
 - **Contains:** phase 232 (one shift per window, automatic assignment, close from the window's last minute) on top of 2.2.4's phases 227 to 230. 2.2.4 was built (`e88078e`, record `b4232f5`) and never published or installed, so its number was not reused and its contents ship here. 2.2.3 was never published either.
 - **Commits:** `126512b` (phase 232 build, committed under the label "phase 231"), `8a46c74` (restores `docs/phase-231.md`), `adf8ca1` (renumber to 232, comments only), `de297e6` (the version bump).
 
+## 0. Rebuilt on 2026-10-06 06:18 from `5e71f8b` (supersedes section 2)
+
+- **Why:** the owner deleted the 2.2.5 GitHub draft (built from `de297e6`, never published, never installed) and asked for the same number rebuilt with phase 235. No till has ever seen a 2.2.5, so one number still means one set of bytes: **the files below, not those in section 2.**
+- **Contains, in addition to the list above:** [phase 235](phase-235.md), the M-Pesa panel opens on Manual verification (`5e71f8b`). Also committed since `de297e6` but shipping no code: `915a9f3` (phase 233, the KRA-class audit, docs only).
+- **Tree at build:** `5e71f8b`, clean apart from the two `tsconfig.*.tsbuildinfo` files the typecheck rewrites.
+- **Setup:** `release/RUBIS POS Setup 2.2.5.exe`, 121,576,067 bytes, SHA-256 `107785284E002B6F5CB5596F8A114D6E296DCB1812A3E95A8297DB4B5026B84F`. **Blockmap:** `RUBIS POS Setup 2.2.5.exe.blockmap`, 128,204 bytes. **`latest.yml`:** `version: 2.2.5`, `path: RUBIS-POS-Setup-2.2.5.exe`, size 121,576,070, `releaseDate 2026-10-06T03:18:16.957Z`. All three written 06:18. (The `latest.yml` size differs from the file by 3 bytes, as electron-builder's does for every release here.)
+- **Portable:** `release/RUBIS POS 2.2.5.exe`, 121,353,355 bytes, SHA-256 `6CBE6BC99369ED399C35F0B552A2C6A8E4FC870B170CFC7579B1C5D123439F36`.
+- **Packed `app.asar`:** `package.json` inside reports 2.2.5; the renderer bundle (`index-BF8CzGUK.js`) carries `useState("unverified")` once and `useState("stk")` not at all, so the phase 235 default is in the shipped code.
+- **Checks:** `check-env` "no credentials" (the bundled `.env` is byte-identical to the root one; Shopify URL and token, M-Pesa consumer key, secret and passkey are all empty; the non-secret printer, mock flags, tax rate, shortcode and environment carry values as in section 2); typecheck and build clean; "neither mock provider is in out/main". **`verify-dist` printed "`win-unpacked/resources/.env is MISSING`" when it ran as the `postdist` step, yet the file was there (984 bytes) when the folder was listed a minute later, and `node scripts/verify-dist.cjs` run again passed ("is bundled").** I cannot explain the first verdict; both outputs are recorded as they happened. The installer is built before `postdist` runs, so it is unaffected either way, and the packaged `.env` was checked by hand.
+- **Not done:** not published (no `GH_TOKEN` or `gh` on this PC); not installed; the app was not started; check:fit not run (owner's rule). The owner uploads the three assets from this build to a new draft, checks `latest.yml` says 2.2.5, and presses Publish. **Section 3's gate 1 (the shift dry run) still stands.**
+
 ## 1. Checks on `de297e6`
 
 | Check | Result |
