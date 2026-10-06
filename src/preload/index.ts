@@ -325,7 +325,7 @@ const api = {
    * @param {{ cartToken: string, items: CartItem[] }} draft
    * @returns {Promise<ServiceResult<void>>}
    */
-  saveCartDraft: (draft: { cartToken: string; items: CartItem[] }): Promise<ServiceResult<void>> =>
+  saveCartDraft: (draft: { cartToken: string; items: CartItem[]; checkoutKey?: string }): Promise<ServiceResult<void>> =>
     ipcRenderer.invoke('cart:save-draft', draft),
 
   /**

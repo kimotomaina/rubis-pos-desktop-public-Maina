@@ -161,6 +161,8 @@ describe('restoreToastMessage', () => {
   const restored = (overrides = {}) => ({
     items: [line({ quantity: 2 }), line({ id: 'v2', quantity: 1 })],
     cartToken: 't',
+    // CHANGED (docs/phase-249-1): a restored cart now carries the checkout key it was saved with; none here.
+    checkoutKey: null,
     droppedLines: 0,
     overridesRemoved: 0,
     ...overrides

@@ -160,8 +160,8 @@ export interface CartState {
   cartToken: string | null
   /**
    * The key of this cart's checkout (docs/phase-249): made at the cart's first submit and sent with every submit of it,
-   * so a repeat returns the sale the first one made. Cleared with the cart, and when a saved or held cart is put back, so
-   * the next sale gets a new key.
+   * so a repeat returns the sale the first one made. Cleared with the cart and when a held cart is put back, so the next
+   * sale gets a new key. Saved with the cart's draft and put back with it (docs/phase-249-1).
    */
   checkoutKey: string | null
   /** Customer's KRA PIN as typed, for a B2B invoice; part of the cart so a held sale keeps it (docs/phase-217). */
@@ -184,8 +184,8 @@ export interface CartState {
   setCartDiscount: (discount: Discount | null) => void
   /** Drop every item from the cart. */
   clearCart: () => void
-  /** Puts a restored cart back (docs/phase-197). */
-  restoreCart: (items: CartItem[], cartToken: string) => void
+  /** Puts a restored cart back (docs/phase-197), with the checkout key it was saved with, if any (docs/phase-249-1). */
+  restoreCart: (items: CartItem[], cartToken: string, checkoutKey?: string | null) => void
   /** Sets the customer's KRA PIN and company name. */
   setCustomer: (customerPin: string, companyName: string) => void
   /**
@@ -286,7 +286,7 @@ export const useCartStore = create<CartState>()(
     clearCart: () =>
       set({ items: [], cartToken: null, checkoutKey: null, cartDiscount: null, customerPin: '', companyName: '', resumedHeld: null }),
 
-    restoreCart: (items, cartToken) => set({ items, cartToken, checkoutKey: null, cartDiscount: null }),
+    restoreCart: (items, cartToken, checkoutKey = null) => set({ items, cartToken, checkoutKey, cartDiscount: null }),
 
     setCustomer: (customerPin, companyName) => set({ customerPin, companyName }),
 

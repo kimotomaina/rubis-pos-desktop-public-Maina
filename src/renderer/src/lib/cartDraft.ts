@@ -4,6 +4,8 @@
  *
  * The saved cart is a draft on this till and nothing more: lines only, no
  * payment state, never pushed anywhere. Shopify stays the only stock ledger.
+ * It also keeps the cart's checkout key (docs/phase-249-1), so a cart put back
+ * after a crash is the same checkout and cannot make its sale a second time.
  */
 
 import type { CartItem, ProductSummary } from '../types/shopify.js'
@@ -16,6 +18,8 @@ export const CART_DRAFT_DEBOUNCE_MS = 300
 export interface CartDraftSnapshot {
   items: CartItem[]
   cartToken: string
+  /** The cart's checkout key, once its first submit made one (docs/phase-249-1); absent before that. */
+  checkoutKey?: string
 }
 
 /** Where the saver writes. */
@@ -28,7 +32,7 @@ export interface CartDraftSaverDeps {
 /** Handle returned by {@link createCartDraftSaver}. */
 export interface CartDraftSaver {
   /** Schedules a save (or a delete, for an empty cart) after the debounce, replacing any pending one. */
-  update: (snapshot: { items: CartItem[]; cartToken: string | null }) => void
+  update: (snapshot: { items: CartItem[]; cartToken: string | null; checkoutKey?: string | null }) => void
   /** Drops the pending write without making it. */
   cancel: () => void
   /**
@@ -50,7 +54,7 @@ export interface CartDraftSaver {
 export function createCartDraftSaver(deps: CartDraftSaverDeps): CartDraftSaver {
   const delayMs = deps.delayMs ?? CART_DRAFT_DEBOUNCE_MS
   let timer: ReturnType<typeof setTimeout> | null = null
-  let pending: { items: CartItem[]; cartToken: string | null } | null = null
+  let pending: { items: CartItem[]; cartToken: string | null; checkoutKey?: string | null } | null = null
 
   const cancel = (): void => {
     if (timer !== null) clearTimeout(timer)
@@ -59,11 +63,15 @@ export function createCartDraftSaver(deps: CartDraftSaverDeps): CartDraftSaver {
   }
 
   /** Writes `snapshot` now; a failed write is swallowed. */
-  const write = (snapshot: { items: CartItem[]; cartToken: string | null }): Promise<void> => {
+  const write = (snapshot: { items: CartItem[]; cartToken: string | null; checkoutKey?: string | null }): Promise<void> => {
     const result =
       snapshot.items.length === 0 || !snapshot.cartToken
         ? deps.clear()
-        : deps.save({ items: snapshot.items, cartToken: snapshot.cartToken })
+        : deps.save({
+            items: snapshot.items,
+            cartToken: snapshot.cartToken,
+            ...(snapshot.checkoutKey ? { checkoutKey: snapshot.checkoutKey } : {})
+          })
     return Promise.resolve(result).then(
       () => undefined,
       () => undefined
@@ -94,6 +102,8 @@ export function createCartDraftSaver(deps: CartDraftSaverDeps): CartDraftSaver {
 export interface RestoredCart {
   items: CartItem[]
   cartToken: string
+  /** The checkout key the cart had when it was saved, or `null` for a draft saved before its first submit or before phase 249-1. */
+  checkoutKey: string | null
   /** Saved lines whose variant is no longer in the catalogue. */
   droppedLines: number
   /** Restored lines that had a price override or discount, now removed. */
@@ -112,9 +122,9 @@ export interface RestoredCart {
  * @returns {RestoredCart | null} `null` when the draft is unreadable
  */
 export function restoreCartDraft(payloadJson: string, catalogue: ProductSummary[]): RestoredCart | null {
-  let saved: { cartToken?: unknown; items?: unknown }
+  let saved: { cartToken?: unknown; items?: unknown; checkoutKey?: unknown }
   try {
-    saved = JSON.parse(payloadJson) as { cartToken?: unknown; items?: unknown }
+    saved = JSON.parse(payloadJson) as { cartToken?: unknown; items?: unknown; checkoutKey?: unknown }
   } catch {
     return null
   }
@@ -138,7 +148,9 @@ export function restoreCartDraft(payloadJson: string, catalogue: ProductSummary[
     if (line.discount || (line.basePrice !== undefined && line.price !== line.basePrice)) overridesRemoved++
     items.push({ ...fresh, quantity: line.quantity, basePrice: fresh.price })
   }
-  return { items, cartToken: saved.cartToken, droppedLines, overridesRemoved }
+  // docs/phase-249-1: the key comes back with the cart, so a resubmit is answered with the sale it already made.
+  const checkoutKey = typeof saved.checkoutKey === 'string' && saved.checkoutKey ? saved.checkoutKey : null
+  return { items, cartToken: saved.cartToken, checkoutKey, droppedLines, overridesRemoved }
 }
 
 /**

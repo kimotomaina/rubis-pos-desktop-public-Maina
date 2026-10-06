@@ -356,6 +356,7 @@ export default function App() {
       if (
         state.items === previous.items &&
         state.cartToken === previous.cartToken &&
+        state.checkoutKey === previous.checkoutKey &&
         state.checkoutStatus === previous.checkoutStatus
       ) {
         return
@@ -364,7 +365,8 @@ export default function App() {
         saver.cancel()
         return
       }
-      saver.update({ items: state.items, cartToken: state.cartToken })
+      // docs/phase-249-1: the checkout key is saved with the cart, so a cart put back after a crash is the same checkout.
+      saver.update({ items: state.items, cartToken: state.cartToken, checkoutKey: state.checkoutKey })
     })
     const stopFlushListener = window.api.onCartFlushRequest(() => saver.flush())
     return () => {
@@ -401,7 +403,7 @@ export default function App() {
       }
       if (!restored) return
       if (restored.items.length > 0) {
-        useCartStore.getState().restoreCart(restored.items, restored.cartToken)
+        useCartStore.getState().restoreCart(restored.items, restored.cartToken, restored.checkoutKey)
       }
       useToastStore.getState().show({
         id: 'cart-restored',

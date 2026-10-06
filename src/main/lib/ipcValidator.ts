@@ -173,7 +173,9 @@ const managerAuthzSchema = z.object({
  */
 export const saveCartDraftSchema = z.object({
   cartToken: z.string().min(1).max(64),
-  items: z.array(cartItemSchema).min(1).max(500)
+  items: z.array(cartItemSchema).min(1).max(500),
+  /** The cart's checkout key (docs/phase-249-1), present once its first submit made one; saved so a crash restore keeps it. */
+  checkoutKey: z.string().regex(CHECKOUT_KEY_PATTERN).optional()
 })
 
 /**
