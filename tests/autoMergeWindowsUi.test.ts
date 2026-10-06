@@ -9,6 +9,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { createElement, act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import ReportsPage from '../src/renderer/src/pages/ReportsPage.js'
+import { reportsTabApi } from './helpers/reportsTabApi.js'
 import type { ShiftRow } from '../src/main/services/database.js'
 
 let container: HTMLDivElement
@@ -48,8 +49,12 @@ const plain: ShiftRow = {
   window_shift_count: 1
 }
 
+// CHANGED (docs/phase-246). OLD: the Reports page opened on a card grid and Shift History was reached by tapping its card. NEW: Shift History
+// is the last section of the one Reports tab, always there; the tab also calls the takings, the end of day and the fiscal checks, which
+// `reportsTabApi()` answers with nothing.
 function stubApi(shifts: ShiftRow[]): void {
   window.api = {
+    ...reportsTabApi(),
     getStaffList: vi.fn().mockResolvedValue(ok([{ id: 2, name: 'manager mo', role: 'admin' }])),
     getShiftsList: vi.fn().mockResolvedValue(ok({ shifts, total: shifts.length, page: 1 })),
     autoAssignSales: vi.fn().mockResolvedValue(ok({ touched: [], waiting: 0 })),
@@ -62,9 +67,7 @@ async function openHistory(): Promise<void> {
     root.render(createElement(ReportsPage))
     await Promise.resolve()
   })
-  const card = Array.from(container.querySelectorAll('button')).find((b) => b.textContent?.includes('Shift History'))!
   await act(async () => {
-    card.click()
     await Promise.resolve()
     await Promise.resolve()
     await Promise.resolve()

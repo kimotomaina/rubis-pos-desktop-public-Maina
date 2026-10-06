@@ -79,7 +79,8 @@ describe('the plain "Admin" title is gone', () => {
     expect(adminHeadings()).toEqual([])
   })
 
-  it.each(['Overview', 'Reports', 'End of Day'])(
+  // CHANGED (docs/phase-246). OLD: 'End of Day' was a card of its own. NEW: it is a section of the Reports tab, so it is no longer listed.
+  it.each(['Overview', 'Reports'])(
     '%s shows no Admin heading, and keeps the Admin crumb as the way back',
     async (section) => {
       await mount()

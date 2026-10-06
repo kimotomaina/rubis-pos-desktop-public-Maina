@@ -19,6 +19,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import ReportsPage from '../src/renderer/src/pages/ReportsPage.js'
+import { reportsTabApi } from './helpers/reportsTabApi.js'
 import ZReportModal from '../src/renderer/src/components/ZReportModal.js'
 import ShiftCorrectionForm from '../src/renderer/src/components/ShiftCorrectionForm.js'
 import NoShiftNotice from '../src/renderer/src/components/NoShiftNotice.js'
@@ -60,8 +61,12 @@ function windowStatus(sales: Array<{ total: number; method: 'cash' | 'mpesa' }> 
   )
 }
 
+// CHANGED (docs/phase-246). OLD: the Reports page opened on a card grid and Shift History was reached by tapping its card. NEW: Shift History
+// is the last section of the one Reports tab, always there; the tab also calls the takings, the end of day and the fiscal checks, which
+// `reportsTabApi()` answers with nothing.
 function stubApi(overrides: Record<string, unknown> = {}): void {
   window.api = {
+    ...reportsTabApi(),
     getStaffList: vi.fn().mockResolvedValue(ok([])),
     getShiftsList: vi.fn().mockResolvedValue(ok({ shifts: [], total: 0, page: 1 })),
     autoAssignSales: vi.fn().mockResolvedValue(ok({ touched: [], waiting: 0 })),
@@ -105,7 +110,6 @@ describe('Shift History (D4)', () => {
       root.render(createElement(ReportsPage))
       await Promise.resolve()
     })
-    await click('Shift History')
     await flush()
   }
 

@@ -56,8 +56,10 @@ import type {
   SalesSummary,
   FiscalStatusDayCount,
   FiscalReconciliationReport,
-  ReportRangePreset
+  ShiftEndOfDayReport,
+  ShiftApprovalRow
 } from '../main/services/reports.js'
+import { toScopeRequest, type ReportScope } from '../main/lib/reportScope.js'
 import type { UpdateStatus } from '../main/services/updater.js'
 import type { LastUpdateResult } from '../main/services/updateBackup.js'
 import type { FiscalConnectionTestResult } from '../main/services/integrations/fiscal-connection-test.js'
@@ -744,30 +746,40 @@ const api = {
     ipcRenderer.invoke('reports:end-of-day', { localDay, shiftId }),
 
   /**
-   * A manager's end-of-day review: approves exactly the manual M-Pesa
-   * entries named by `approvedIds`, and records why each id in
-   * `excluded` was deliberately left pending (docs/phase-153) — both are
-   * the ids/reasons the caller's own report displayed. Requires a
-   * re-verified admin Manager PIN.
+   * One shift's end-of-day report (docs/phase-246): its own sales and manual M-Pesa entries, its carry-over from earlier
+   * shifts, and whether it has been approved.
+   *
+   * @param {number} shiftId
+   * @returns {Promise<ServiceResult<ShiftEndOfDayReport>>}
+   */
+  getShiftEndOfDayReport: (shiftId: number): Promise<ServiceResult<ShiftEndOfDayReport>> =>
+    ipcRenderer.invoke('reports:shift-end-of-day', { shiftId }),
+
+  /**
+   * The shifts that have sales in a scope, each with where its approval stands (docs/phase-246). Read only.
+   *
+   * @param {ReportScope} scope
+   * @returns {Promise<ServiceResult<ShiftApprovalRow[]>>}
+   */
+  getEndOfDayShifts: (scope: ReportScope): Promise<ServiceResult<ShiftApprovalRow[]>> =>
+    ipcRenderer.invoke('reports:end-of-day-shifts', toScopeRequest(scope)),
+
+  /**
+   * A manager's review of one shift's manual M-Pesa entries (docs/phase-246): approves exactly the entries named by
+   * `approvedIds` and records why each id in `excluded` was left pending. The ids are those of the shift's own report,
+   * its own entries and its carry-over. Requires a re-verified admin Manager PIN.
    *
    * @param {object} request
-   * @param {string} request.localDay
-   * @param {number[]} request.approvedIds
-   * @param {Array<{ paymentId: number; reason?: string }>} request.excluded
-   * @param {number} request.managerId
-   * @param {string} request.managerPin
-   * @param {string} [request.note]
    * @returns {Promise<ServiceResult<ApproveMpesaEntriesResult>>}
    */
-  approveDayReport: (request: {
-    localDay: string
+  approveShiftReport: (request: {
+    shiftId: number
     approvedIds: number[]
     excluded: Array<{ paymentId: number; reason?: string }>
     managerId: number
     managerPin: string
     note?: string
-  }): Promise<ServiceResult<ApproveMpesaEntriesResult>> =>
-    ipcRenderer.invoke('reports:approve-day', request),
+  }): Promise<ServiceResult<ApproveMpesaEntriesResult>> => ipcRenderer.invoke('reports:approve-shift', request),
 
   /**
    * One page of shift history, most recently opened first (docs/phase-158).
@@ -786,8 +798,8 @@ const api = {
    * @param {ReportRangePreset} preset
    * @returns {Promise<ServiceResult<SalesSummary>>}
    */
-  getSalesSummary: (preset: ReportRangePreset): Promise<ServiceResult<SalesSummary>> =>
-    ipcRenderer.invoke('reports:sales-summary', { preset }),
+  getSalesSummary: (scope: ReportScope): Promise<ServiceResult<SalesSummary>> =>
+    ipcRenderer.invoke('reports:sales-summary', toScopeRequest(scope)),
 
   /**
    * Order counts by fiscal status, one row per Nairobi calendar day
@@ -797,9 +809,9 @@ const api = {
    * @returns {Promise<ServiceResult<FiscalStatusDayCount[]>>}
    */
   getFiscalStatusByDay: (
-    preset: ReportRangePreset
+    scope: ReportScope
   ): Promise<ServiceResult<FiscalStatusDayCount[]>> =>
-    ipcRenderer.invoke('reports:fiscal-by-day', { preset }),
+    ipcRenderer.invoke('reports:fiscal-by-day', toScopeRequest(scope)),
 
   /**
    * The fiscal reconciliation report (docs/phase-163, Commit 2) for one
@@ -810,9 +822,9 @@ const api = {
    * @returns {Promise<ServiceResult<FiscalReconciliationReport>>}
    */
   getFiscalReconciliation: (
-    preset: ReportRangePreset
+    scope: ReportScope
   ): Promise<ServiceResult<FiscalReconciliationReport>> =>
-    ipcRenderer.invoke('reports:fiscal-reconciliation', { preset }),
+    ipcRenderer.invoke('reports:fiscal-reconciliation', toScopeRequest(scope)),
 
   /**
    * One page of orders (CU and trader invoice numbers included) for the
@@ -823,7 +835,7 @@ const api = {
    * @returns {Promise<ServiceResult<{ orders: OrderRow[]; total: number; page: number }>>}
    */
   getInvoiceList: (
-    preset: ReportRangePreset,
+    scope: ReportScope,
     page: number
   ): Promise<
     ServiceResult<{
@@ -831,7 +843,7 @@ const api = {
       total: number
       page: number
     }>
-  > => ipcRenderer.invoke('reports:invoice-list', { preset, page }),
+  > => ipcRenderer.invoke('reports:invoice-list', { ...toScopeRequest(scope), page }),
 
   /**
    * Exports orders or line items for a preset as CSV, via the OS save
@@ -843,10 +855,10 @@ const api = {
    * @returns {Promise<ServiceResult<{ saved: boolean; filePath?: string }>>}
    */
   exportReportsCsv: (
-    preset: ReportRangePreset,
+    scope: ReportScope,
     kind: 'orders' | 'lines'
   ): Promise<ServiceResult<{ saved: boolean; filePath?: string }>> =>
-    ipcRenderer.invoke('reports:export-csv', { preset, kind }),
+    ipcRenderer.invoke('reports:export-csv', { ...toScopeRequest(scope), kind }),
 
   /**
    * Triggers an update check against the configured GitHub Releases feed.

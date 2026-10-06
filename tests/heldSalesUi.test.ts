@@ -22,7 +22,7 @@ import PaymentModal from '../src/renderer/src/components/PaymentModal.js'
 import CardEntryPanel from '../src/renderer/src/components/CardEntryPanel.js'
 import PosCheckoutPanel from '../src/renderer/src/components/PosCheckoutPanel.js'
 import PosCartTable from '../src/renderer/src/components/PosCartTable.js'
-import EndOfDayPage from '../src/renderer/src/pages/EndOfDayPage.js'
+import ShiftEndOfDay from '../src/renderer/src/components/ShiftEndOfDay.js'
 import { useCartStore } from '../src/renderer/src/stores/cartStore.js'
 import { useAuthStore } from '../src/renderer/src/stores/authStore.js'
 import { useHeldSalesStore } from '../src/renderer/src/stores/heldSalesStore.js'
@@ -44,7 +44,7 @@ import {
   parseHeldPayload
 } from '../src/renderer/src/lib/heldSale.js'
 import type { CartItem } from '../src/renderer/src/types/shopify.js'
-import type { EndOfDayReport } from '../src/main/services/reports.js'
+import type { ShiftEndOfDayReport } from '../src/main/services/reports.js'
 
 const mug: CartItem = {
   id: 'v1',
@@ -706,10 +706,21 @@ describe('Log Out with sales held', () => {
   })
 })
 
+// CHANGED (docs/phase-246). OLD: these mounted the day's `EndOfDayPage`. NEW: the page is gone; the same block is on the end of
+// one shift (`ShiftEndOfDay`), read for the day the shift began. The block itself is unchanged.
 describe('End of Day: held sales discarded', () => {
-  function report(): EndOfDayReport {
+  function report(): ShiftEndOfDayReport {
     return {
       localDay: '2026-10-03',
+      shiftId: 1,
+      shiftStatus: 'closed',
+      openedAt: '2026-10-03T06:00:00.000Z',
+      closedAt: '2026-10-03T14:00:00.000Z',
+      windowType: 'day',
+      mergedInto: null,
+      approval: null,
+      canApprove: false,
+      cannotApproveBecause: 'There is nothing waiting to be approved.',
       cashiers: [],
       totalsByMethod: { cash: 0, mpesa: 0, card: 0 },
       manualEntries: [],
@@ -722,11 +733,11 @@ describe('End of Day: held sales discarded', () => {
   async function mountPage(discarded: unknown): Promise<void> {
     installApi({
       getStaffList: vi.fn().mockResolvedValue({ success: true, data: [] }),
-      getEndOfDayReport: vi.fn().mockResolvedValue({ success: true, data: report() }),
+      getShiftEndOfDayReport: vi.fn().mockResolvedValue({ success: true, data: report() }),
       getDiscardedHeldSales: vi.fn().mockResolvedValue(discarded)
     })
     await act(async () => {
-      root.render(createElement(EndOfDayPage))
+      root.render(createElement(ShiftEndOfDay, { shiftId: 1 }))
       await Promise.resolve()
     })
     await flush()
@@ -764,13 +775,15 @@ describe('End of Day: held sales discarded', () => {
     expect(container.textContent).not.toContain('Held sales discarded')
   })
 
-  it('lists every row in the scrolling part, with no paging (docs/phase-220)', async () => {
+  it('lists every row, with no paging (docs/phase-220)', async () => {
     await mountPage({ success: true, data: Array.from({ length: 8 }, (_, i) => sale(i + 1, `Customer ${i + 1}`)) })
 
     const section = container.querySelector('[data-testid="discarded-held-sales"]')!
     expect(section.querySelectorAll('tbody tr')).toHaveLength(8)
     expect(section.textContent).not.toContain('Page 1 of')
-    expect(container.querySelector('[data-testid="end-of-day-scroll"]')!.contains(section)).toBe(true)
+    // CHANGED (docs/phase-246). OLD: the rows were inside the End of Day page's own scrolling part. NEW: the Reports tab scrolls as a
+    // whole, so the block has no scroll of its own.
+    expect(container.querySelector('[data-testid="end-of-day-scroll"]')).toBeNull()
   })
 
   it('sits first, above the per-cashier totals, so the manager sees it before approving', async () => {

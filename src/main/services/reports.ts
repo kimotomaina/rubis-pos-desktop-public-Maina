@@ -826,6 +826,40 @@ export function generateEndOfDayReport(
   }
 
   const orders = dayOrders.filter((order) => belongsToShift(order.local_id))
+  const todaysPayments = excludeVoided(db.getMpesaPaymentsForDateRange(startIso, endIso)).filter((payment) =>
+    belongsToShift(payment.order_local_id)
+  )
+
+  const carryOverPayments = excludeVoided(db.getUnapprovedManualPaymentsBefore(startIso)).filter((payment) =>
+    belongsToShift(payment.order_local_id)
+  )
+
+  return buildEndOfDayReport(db, { localDay, shiftId, shiftsOfDay, orders, todaysPayments, carryOverPayments })
+}
+
+/** What {@link buildEndOfDayReport} is given: the scope's sales and manual M-Pesa entries, already cut to the scope. */
+interface EndOfDayScope {
+  localDay: string
+  shiftId: number | null
+  shiftsOfDay: EndOfDayShift[]
+  orders: OrderRow[]
+  /** Every M-Pesa payment of the scope's sales, voided ones already left out. */
+  todaysPayments: Array<MpesaPaymentRow & { status: OrderStatus }>
+  /** Manual entries still unapproved from before the scope, voided ones already left out. */
+  carryOverPayments: Array<MpesaPaymentRow & { status: OrderStatus }>
+}
+
+/**
+ * The body of an end-of-day report, shared by the day report and the shift report (docs/phase-246): cashier totals,
+ * the manual entries, the carry-over and what is still pending. Only the scope's sales and entries differ between
+ * the two; none of this arithmetic changed when it moved here, and the day report's tests pin its output.
+ *
+ * @param {RubisDatabase} db
+ * @param {EndOfDayScope} scope
+ * @returns {EndOfDayReport}
+ */
+function buildEndOfDayReport(db: RubisDatabase, scope: EndOfDayScope): EndOfDayReport {
+  const { localDay, shiftId, shiftsOfDay, orders, todaysPayments, carryOverPayments } = scope
   const totalsByMethod = sumByPaymentMethod(orders)
 
   const staffNameCache = new Map<number, string>()
@@ -845,10 +879,6 @@ export function generateEndOfDayReport(
     else ordersByStaff.set(order.staff_id, [order])
   }
 
-  const todaysPayments = excludeVoided(db.getMpesaPaymentsForDateRange(startIso, endIso)).filter((payment) =>
-    belongsToShift(payment.order_local_id)
-  )
-
   const paymentsByStaff = new Map<number, Array<MpesaPaymentRow & { status: OrderStatus }>>()
   for (const payment of todaysPayments) {
     const list = paymentsByStaff.get(payment.entered_by_staff_id)
@@ -867,10 +897,6 @@ export function generateEndOfDayReport(
   )
 
   const todaysManualPayments = todaysPayments.filter((payment) => payment.mode === 'manual')
-  const carryOverPayments = excludeVoided(db.getUnapprovedManualPaymentsBefore(startIso)).filter((payment) =>
-    belongsToShift(payment.order_local_id)
-  )
-
   const allPaymentIds = [...todaysManualPayments, ...carryOverPayments].map((payment) => payment.id)
   const lastExclusionByPaymentId = new Map(
     db.getLatestExclusionsForPayments(allPaymentIds).map((exclusion) => [
@@ -921,6 +947,164 @@ export function generateEndOfDayReport(
     pendingIds: pending.map((entry) => entry.paymentId),
     pendingManualTotal: pending.reduce((sum, entry) => sum + entry.amount, 0)
   }
+}
+
+/** One shift's end-of-day report (docs/phase-246): its own sales and manual M-Pesa entries, its carry-over, and whether it was approved. */
+export interface ShiftEndOfDayReport extends EndOfDayReport {
+  shiftId: number
+  shiftStatus: 'open' | 'closed'
+  openedAt: string
+  closedAt: string | null
+  windowType: ShiftType | null
+  /** The shift this one was merged into, when it was: its sales are counted there and it has nothing to approve. */
+  mergedInto: number | null
+  /** The review made for this shift, once there is one. */
+  approval: {
+    approvalId: number
+    approvedAt: string
+    approvedByName: string
+    entryCount: number
+    excludedCount: number
+    totalAmount: number
+  } | null
+  canApprove: boolean
+  /** Why Approve is not offered, when it is not. */
+  cannotApproveBecause: string | null
+}
+
+/**
+ * The end-of-day report of one shift (docs/phase-246, the per-shift approval). The body is {@link buildEndOfDayReport}, the
+ * one the day report uses; only what it is given differs: the shift's own sales and M-Pesa payments, and as carry-over the
+ * unapproved manual entries of earlier shifts, whatever the time of the sale. Approving covers exactly those two sets.
+ *
+ * @param {RubisDatabase} db
+ * @param {number} shiftId
+ * @returns {ShiftEndOfDayReport}
+ * @throws if the shift does not exist
+ */
+export function generateShiftEndOfDay(db: RubisDatabase, shiftId: number): ShiftEndOfDayReport {
+  const shift = db.getShiftById(shiftId)
+  if (!shift) {
+    throw new Error(`Shift ${shiftId} not found`)
+  }
+  const body = buildEndOfDayReport(db, {
+    localDay: localDayOf(shift.clock_in),
+    shiftId,
+    shiftsOfDay: [],
+    orders: excludeVoided(db.getOrdersForShift(shiftId)),
+    todaysPayments: excludeVoided(db.getMpesaPaymentsForShift(shiftId)),
+    carryOverPayments: excludeVoided(db.getUnapprovedManualPaymentsOfEarlierShifts(shiftId))
+  })
+  const stored = db.getShiftMpesaApproval(shiftId)
+  const approval = stored
+    ? {
+        approvalId: stored.id,
+        approvedAt: stored.approved_at,
+        approvedByName: db.getStaffById(stored.approved_by_staff_id)?.name ?? 'Unknown',
+        entryCount: stored.entry_count,
+        excludedCount: stored.excluded_count,
+        totalAmount: stored.total_amount
+      }
+    : null
+  const merge = db.getShiftMerge(shiftId)
+  const cannotApproveBecause =
+    shift.status !== 'closed'
+      ? 'The shift is still open. Close it before approving its M-Pesa entries.'
+      : merge
+        ? `This shift was merged into shift #${merge.into_shift_id}. Approve that shift.`
+        : approval
+          ? `Approved by ${approval.approvedByName} on ${approval.approvedAt}.`
+          : body.pendingIds.length === 0
+            ? 'There is nothing waiting to be approved.'
+            : null
+  return {
+    ...body,
+    shiftId,
+    shiftStatus: shift.status,
+    openedAt: shift.clock_in,
+    closedAt: shift.clock_out,
+    windowType: withWindow(shift).window_type ?? null,
+    mergedInto: merge?.into_shift_id ?? null,
+    approval,
+    canApprove: cannotApproveBecause === null,
+    cannotApproveBecause
+  }
+}
+
+/** Where one shift's manual M-Pesa entries stand (docs/phase-246). */
+export type ShiftApprovalState = 'approved' | 'approved-earlier' | 'not-approved' | 'nothing-to-approve' | 'open'
+
+/** One shift of a range with the state of its approval, for the list a day or custom scope shows. */
+export interface ShiftApprovalRow {
+  shiftId: number
+  status: 'open' | 'closed'
+  openedAt: string
+  closedAt: string | null
+  windowType: ShiftType | null
+  windowDate: string | null
+  /** The shift's sales that fall in the range. */
+  orderCount: number
+  state: ShiftApprovalState
+  manualCount: number
+  pendingCount: number
+  pendingAmount: number
+  approvedAt: string | null
+  approvedByName: string | null
+}
+
+/**
+ * The shifts that have sales in a range, newest first with the open one on top, each with its approval state
+ * (docs/phase-246). `approved` is a review made for the shift; `approved-earlier` is a shift whose every manual entry was
+ * settled by a per-day review or the old per-payment page before shifts were approved one by one; the rest are what they
+ * say. Read only, and no approval happens from the list.
+ *
+ * @param {RubisDatabase} db
+ * @param {ReportRange} range
+ * @returns {ShiftApprovalRow[]}
+ */
+export function listShiftApprovalRows(db: RubisDatabase, range: ReportRange): ShiftApprovalRow[] {
+  const counts = new Map<number, number>()
+  for (const order of excludeVoided(db.getOrdersForDateRange(range.startIso, range.endIso))) {
+    if (order.shift_id === null) continue
+    counts.set(order.shift_id, (counts.get(order.shift_id) ?? 0) + 1)
+  }
+  const rows: ShiftApprovalRow[] = []
+  for (const [id, orderCount] of counts) {
+    const stored = db.getShiftById(id)
+    if (!stored) continue
+    const shift = withWindow(stored)
+    const manual = excludeVoided(db.getMpesaPaymentsForShift(id)).filter((payment) => payment.mode === 'manual')
+    const pending = manual.filter((payment) => payment.reconciled_at === null)
+    const approval = db.getShiftMpesaApproval(id)
+    const state: ShiftApprovalState =
+      shift.status === 'open'
+        ? 'open'
+        : approval
+          ? 'approved'
+          : manual.length === 0
+            ? 'nothing-to-approve'
+            : pending.length === 0
+              ? 'approved-earlier'
+              : 'not-approved'
+    rows.push({
+      shiftId: id,
+      status: shift.status,
+      openedAt: shift.clock_in,
+      closedAt: shift.clock_out,
+      windowType: shift.window_type ?? null,
+      windowDate: shift.window_date ?? null,
+      orderCount,
+      state,
+      manualCount: manual.length,
+      pendingCount: pending.length,
+      pendingAmount: pending.reduce((sum, payment) => sum + payment.amount, 0),
+      approvedAt: approval?.approved_at ?? null,
+      approvedByName: approval ? (db.getStaffById(approval.approved_by_staff_id)?.name ?? 'Unknown') : null
+    })
+  }
+  return rows.sort(
+    (a, b) => Number(b.status === 'open') - Number(a.status === 'open') || b.openedAt.localeCompare(a.openedAt) || b.shiftId - a.shiftId
+  )
 }
 
 /**

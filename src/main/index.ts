@@ -178,7 +178,9 @@ import {
   recordCartRemovalsSchema,
   reconcileMpesaPaymentSchema,
   endOfDayReportSchema,
-  approveDayReportSchema,
+  approveShiftReportSchema,
+  shiftEndOfDaySchema,
+  reportScopeSchema,
   stockTakeOpenSchema,
   stockTakeSessionIdSchema,
   stockTakeCountSchema,
@@ -277,10 +279,13 @@ import { frozenShiftMessage } from './lib/shiftRules.js'
 import { generateWindowReport, type WindowReport } from './services/window-report.js'
 import { getShiftWindowStatus, type ShiftWindowStatus } from './services/shift-window-status.js'
 import { openShiftChecked } from './services/shift-open.js'
+import { resolveReportRange } from './services/report-scope.js'
 import {
   generateZReport,
   generateDailySummary,
   generateEndOfDayReport,
+  generateShiftEndOfDay,
+  listShiftApprovalRows,
   generateSalesSummary,
   generateFiscalStatusByDay,
   generateFiscalReconciliation,
@@ -293,6 +298,8 @@ import type {
   ZReport,
   DailySummary,
   EndOfDayReport,
+  ShiftEndOfDayReport,
+  ShiftApprovalRow,
   SalesSummary,
   FiscalStatusDayCount,
   FiscalReconciliationReport
@@ -3793,8 +3800,54 @@ app.whenReady().then(async () => {
    */
   ipcMain.handle(
     'reports:approve-day',
+    (): ServiceResult<ApproveMpesaEntriesResult> => ({
+      // docs/phase-246: approval is for a shift and only a shift. The channel stays so an older screen gets an answer, not silence.
+      success: false,
+      error: 'Approve a shift, not a day. Open the shift on the Reports tab and approve it there.'
+    })
+  )
+
+  /**
+   * IPC handlers for the end of day of one shift (docs/phase-246, replacing the day's). `reports:shift-end-of-day` and
+   * `reports:end-of-day-shifts` are reads like every `reports:*` read. `reports:approve-shift` requires a re-verified
+   * admin PIN, as the day review did, and the admin recorded is the PIN's owner; the database refuses an open shift, a
+   * second review, and any entry that is not the shift's own or its carry-over. Nothing is queued for Shopify or the tax
+   * device.
+   */
+  ipcMain.handle(
+    'reports:shift-end-of-day',
+    (_event, request: unknown): ServiceResult<ShiftEndOfDayReport> => {
+      const validation = validate(shiftEndOfDaySchema, request)
+      if (!validation.success) {
+        return { success: false, error: validation.error }
+      }
+      try {
+        return { success: true, data: generateShiftEndOfDay(db, validation.data.shiftId) }
+      } catch (err) {
+        return { success: false, error: err instanceof Error ? err.message : 'Failed to generate the shift report' }
+      }
+    }
+  )
+
+  ipcMain.handle(
+    'reports:end-of-day-shifts',
+    (_event, request: unknown): ServiceResult<ShiftApprovalRow[]> => {
+      const validation = validate(reportScopeSchema, request)
+      if (!validation.success) {
+        return { success: false, error: validation.error }
+      }
+      try {
+        return { success: true, data: listShiftApprovalRows(db, resolveReportRange(db, validation.data)) }
+      } catch (err) {
+        return { success: false, error: err instanceof Error ? err.message : 'Failed to list the shifts' }
+      }
+    }
+  )
+
+  ipcMain.handle(
+    'reports:approve-shift',
     (_event, request: unknown): ServiceResult<ApproveMpesaEntriesResult> => {
-      const validation = validate(approveDayReportSchema, request)
+      const validation = validate(approveShiftReportSchema, request)
       if (!validation.success) {
         return { success: false, error: validation.error }
       }
@@ -3803,20 +3856,19 @@ app.whenReady().then(async () => {
         return { success: false, error: authz.error }
       }
       try {
-        const { localDay, approvedIds, excluded, managerId, note } = validation.data
-        const result = db.approveMpesaEntries(
-          approvedIds,
-          excluded.map((entry) => ({ paymentId: entry.paymentId, reason: entry.reason?.trim() || null })),
-          managerId,
-          localDay,
-          note?.trim() || null
-        )
-        return { success: true, data: result }
-      } catch (err) {
+        const { shiftId, approvedIds, excluded, managerId, note } = validation.data
         return {
-          success: false,
-          error: err instanceof Error ? err.message : 'Failed to record this review'
+          success: true,
+          data: db.approveShiftMpesa({
+            shiftId,
+            approvedIds,
+            excluded: excluded.map((entry) => ({ paymentId: entry.paymentId, reason: entry.reason?.trim() || null })),
+            managerId,
+            note: note?.trim() || null
+          })
         }
+      } catch (err) {
+        return { success: false, error: err instanceof Error ? err.message : 'Failed to record this review' }
       }
     }
   )
@@ -3873,7 +3925,7 @@ app.whenReady().then(async () => {
         return { success: false, error: validation.error }
       }
       try {
-        const range = getReportRange(validation.data.preset)
+        const range = resolveReportRange(db, validation.data)
         return { success: true, data: generateSalesSummary(db, printerSettings.taxRate, range) }
       } catch (err) {
         return {
@@ -3898,7 +3950,7 @@ app.whenReady().then(async () => {
         return { success: false, error: validation.error }
       }
       try {
-        const range = getReportRange(validation.data.preset)
+        const range = resolveReportRange(db, validation.data)
         return { success: true, data: generateFiscalStatusByDay(db, range) }
       } catch (err) {
         return {
@@ -3927,7 +3979,7 @@ app.whenReady().then(async () => {
         return { success: false, error: validation.error }
       }
       try {
-        const range = getReportRange(validation.data.preset)
+        const range = resolveReportRange(db, validation.data)
         return { success: true, data: generateFiscalReconciliation(db, range) }
       } catch (err) {
         return {
@@ -3960,8 +4012,8 @@ app.whenReady().then(async () => {
         return { success: false, error: validation.error }
       }
       try {
-        const { preset, page } = validation.data
-        const range = getReportRange(preset)
+        const { page } = validation.data
+        const range = resolveReportRange(db, validation.data)
         const offset = (page - 1) * REPORTS_PAGE_SIZE
         const { rows, total } = db.getOrderRowsForRange(
           range.startIso,
@@ -4010,8 +4062,8 @@ app.whenReady().then(async () => {
         return { success: false, error: validation.error }
       }
       try {
-        const { preset, kind } = validation.data
-        const range = getReportRange(preset)
+        const { kind } = validation.data
+        const range = resolveReportRange(db, validation.data)
         const csv = kind === 'orders'
           ? buildOrdersCsv(db, range, printerSettings.taxRate)
           : buildLinesCsv(db, range)
@@ -4020,7 +4072,8 @@ app.whenReady().then(async () => {
         // slices the UTC instant, which for a Nairobi midnight boundary
         // (UTC+3) names the *previous* day (docs/phase-158-1, same class
         // of bug as docs/phase-157 Part 3 G3).
-        const fileName = `rubis-${kind}-${preset}-${localDayOf(range.startIso)}.csv`
+        const scopeName = validation.data.preset ?? (validation.data.shiftId !== undefined ? `shift-${validation.data.shiftId}` : 'range')
+        const fileName = `rubis-${kind}-${scopeName}-${localDayOf(range.startIso)}.csv`
         // `BrowserWindow.fromWebContents` ties the native save dialog to
         // the window that invoked it (sheet on macOS, modal on Windows)
         // instead of a windowless dialog; it returns null only if the

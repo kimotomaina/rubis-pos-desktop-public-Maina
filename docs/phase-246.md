@@ -3,7 +3,7 @@
 - **Date:** 2026-10-06
 - **Asked by the owner:** the rules R1 to R7 of the order of 2026-10-06 17:50 Nairobi, with the amendment that End of Day approval is per shift, not per day.
 - **Built in three commits**, each with the full suite green: **(a)** the shared window shell, the four windows moved onto it, Open Shift at 0 (R1, R4); **(b)** card counted at close, on the Z report and in corrections (R5); **(c)** the one Reports tab, scoped by shift or range, with End of Day approval per shift (R2, R3 and the amendment).
-- **Status:** built and tested. Not released: no installer built. `package.json` stays at 2.2.9.
+- **Status:** built and tested, all three parts. Not released: no installer built. `package.json` stays at 2.2.9.
 - **Layout: not checked by check:fit (owner's rule). For the owner to check on the till.**
 - **First rule of the phase, kept:** every report keeps calling the function it calls today. No calculation moved or was rewritten.
 - **Rulings applied** (the eight decisions of the audit, as the owner left them standing): both Open Shift figures pre-filled with 0; a shift scope is the span of the shift's own sales, with a count note; End of Day per shift (amendment); M-Pesa logs unscoped (latest 50); Export in the Detail section; a custom range typed as two date-times; the End of Day and M-Pesa Logs cards leave the Admin grid; card columns also on the adjustment ledger.
@@ -127,3 +127,96 @@ Every other test, including all the Z report, correction, Move a sale and window
 | --- | --- |
 | `npm run typecheck` | clean |
 | Full suite | 228 files passed, 1 skipped (the rehearsal); 3,744 tests passed, 9 skipped (8 rehearsal, 1 build-freshness) |
+
+---
+
+## Part (c): one Reports tab scoped by shift or range, End of Day approved per shift
+
+### Audit (the findings of the audit stop, as built on)
+
+- **Every report except two takes a range.** The sales summary, fiscal status, fiscal reconciliation, invoice list and CSV export each take `{startIso, endIso, label}` and were given one by a fixed preset. The Z report takes a shift id and End of Day took one Nairobi day. So a new scope needs no change to any report function, only to how the range is made.
+- **A shift's clock times are not its sales.** On the 1606 copy shift #1 (closed after 14 seconds) holds 60 sales and its clock range holds 0; merged-away shift #2 held 59 by clock and 0 by shift. The scope of a shift is therefore the span of its own sales (the earlier of its start and its first sale to the later of its end and its last sale), made in `report-scope.ts`. It reads times; it adds nothing.
+- **Approval was already by payment id,** not by day: `approveMpesaEntries` acted on exactly the ids a report showed, the `local_day` being only a label. A per-shift approval is therefore the same call with a shift's ids and one more column.
+- **M-Pesa logs read the latest 50 transactions with no range,** so they cannot follow a scope without a new query.
+
+### Rulings applied
+
+Shift scope = the span of the shift's sales, with a note when the summary and the Z disagree on the number of sales. End of Day approval is per shift (the amendment): approving needs the admin PIN, records who and when, is refused for an open shift, refused a second time, and covers the shift's own manual entries and its carry-over from earlier shifts (ticked entry by entry) and nothing else. Old per-day reviews stay as history ("Approved earlier"). `reports:approve-day` refuses with "approve a shift". The freeze rules of phases 243 and 244 do not apply to approval. M-Pesa logs are unscoped (latest 50, said so on screen). Export is in the Detail section. A custom range is two typed date-times. The End of Day and M-Pesa Logs cards leave the Admin grid.
+
+### What changed
+
+| Where | What |
+| --- | --- |
+| [report-scope.ts](../src/main/services/report-scope.ts) (new) | `resolveReportRange(db, scope)`: a preset gives `getReportRange` as before; a shift gives `shiftScopeRange`; two typed `YYYY-MM-DD HH:MM` (Nairobi) give `customRange`, which refuses a text that is not a real date and time, an end not after the start, and more than 62 days. |
+| [ipcValidator.ts](../src/main/lib/ipcValidator.ts), [index.ts](../src/main/index.ts) | The five report requests take exactly one of `preset`, `shiftId` or `from` and `to` (a plain preset is accepted as before); each handler calls `resolveReportRange` and then the report's own function with the range. New: `reports:shift-end-of-day`, `reports:end-of-day-shifts` (reads), `reports:approve-shift` (admin PIN re-verified before the write). `reports:approve-day` refuses and writes nothing. |
+| [reports.ts](../src/main/services/reports.ts) | The body of the day report (cashier totals, entries, carry-over, pending) moved into one private function, `buildEndOfDayReport`, now called by the day report and the shift report; the arithmetic did not change and the day report's tests pin its output. New: `generateShiftEndOfDay` (the shift's own sales and entries, carry-over from earlier shifts, the approval, whether Approve is offered and why not) and `listShiftApprovalRows` (the shifts of a range with their approval state). |
+| [database.ts](../src/main/services/database.ts) | `mpesa_day_approvals.shift_id`, nullable, with a partial unique index (a shift is approved once, in the database as well as in the code); a migration that checks before it adds and runs any number of times. `approveMpesaEntries` takes an optional shift id; `getUnapprovedManualPaymentsOfEarlierShifts` (carry-over by the shift's `clock_in`); `getShiftMpesaApproval`; `approveShiftMpesa`: one write transaction that refuses a missing, open or merged shift, a shift already approved, an empty call, and any id that is not a pending manual entry of the shift's own sales or its carry-over, then writes through the same code a day review used. |
+| [preload](../src/preload/index.ts), [window.d.ts](../src/preload/window.d.ts), [reportScope.ts](../src/main/lib/reportScope.ts) (new) | The report calls take a scope: a preset string, `{ shiftId }` or `{ from, to }`. `getShiftEndOfDayReport`, `getEndOfDayShifts`, `approveShiftReport` added; `approveDayReport` removed. |
+| [ReportsPage.tsx](../src/renderer/src/pages/ReportsPage.tsx) | One tab, five numbered sections (Scope, Takings, Checks, Detail, Shifts), scrolling as a whole. Takings: the sales summary and, for a shift, its Z report beside it with Print. Checks: End of Day, fiscal status, fiscal reconciliation. Detail: invoice list, M-Pesa logs and CSV export, shut until opened. Shifts: Shift History as in phase 245 in a box of its own height. Every section gets the one scope; none works anything out. |
+| [ScopePicker.tsx](../src/renderer/src/components/ScopePicker.tsx), [reportScopeChoice.ts](../src/renderer/src/lib/reportScopeChoice.ts) (new) | One picker: the shifts first, ten at a time, newest first, the open one on top ("Shift #8, Day, 6 Oct 11:35 to now"), then the six periods, then a typed range; Back to Today. |
+| [ZReportBlock.tsx](../src/renderer/src/components/ZReportBlock.tsx) (new), [ZReportModal.tsx](../src/renderer/src/components/ZReportModal.tsx) | The Z report's state and markup, handed out as body, footer and correction form, so the same report sits in the window (unchanged to look at) and beside the summary. |
+| [ShiftEndOfDay.tsx](../src/renderer/src/components/ShiftEndOfDay.tsx), [ShiftApprovalList.tsx](../src/renderer/src/components/ShiftApprovalList.tsx) (new) | The shift's end of day with its ticks, reasons, note and PIN, and the list of a range's shifts with their state and one "Open shift" button each; no approve button on the list. |
+| [AdminScreen.tsx](../src/renderer/src/components/AdminScreen.tsx) | The End of Day and M-Pesa Logs cards and tabs are gone. `EndOfDayPage.tsx` is deleted. |
+
+### Not changed
+
+Fiscal code, checkout, the payment gate, Shopify, automatic assignment, merges, the override (244), the pager of Shift History (245) and the arithmetic of every report. `reports:end-of-day` and `generateEndOfDayReport` are still there, unused by any screen, so the day report keeps its tests and the way back is a revert.
+
+### Tests
+
+- [shiftApproval.test.ts](../tests/shiftApproval.test.ts), 21 tests on real SQLite: the migration and the unique index; the shift report (own entries, carry-over from earlier shifts only, voided, approved and non-manual entries left out, why Approve is not offered, the day report's own body); approving (ticked entries, who, when, which shift, exclusions with reasons, a second approval refused naming who and when with no row changed, an open, missing or merged shift refused, every outside id refused with the whole call, all or nothing, not held to the freeze, a day review still records no shift); the list of a range (open first then newest, the five states, only the sales in the range); the handlers (PIN before the write; `approve-day` refuses and touches nothing; the request shape).
+- [reportScope.test.ts](../tests/reportScope.test.ts), 13 tests: a shift's range covers its own sales so the summary and the Z report agree (and would be 0 on clock times alone); an open shift runs to now; a typed range is read in Nairobi time and refused when it is not a real date, not after its start, or over 62 days; every report request names exactly one scope; each handler gives its own function the range the scope makes; the Z report stays on the shift id.
+- [reportsPage.test.ts](../tests/reportsPage.test.ts), 25 tests: the five sections; every report asked with the scope as the plain preset string, `{ shiftId }` or `{ from, to }`; the shifts before the periods in the picker; the Detail shut until opened; the takings as the main process returned them, the Z block and Print for a shift, the count note; the fiscal views; the approval list with no approve button; one tap from a list to the shift's end of day; the detail; the Admin menu; the page scrolling as a whole and summing nothing.
+- [shiftEndOfDayUi.test.ts](../tests/shiftEndOfDayUi.test.ts), 16 tests: the old page's ticking, reasons, note, PIN, notices and the held-sales block, ported to one shift; approving only when the shift can be approved, and why not when it cannot; the list of a range.
+
+### Mutation checks (each restored; the file compared byte for byte afterwards)
+
+| # | Mutation | Failing test |
+| --- | --- | --- |
+| a | Approve an open shift (the open check removed) | `approving a shift > is refused for an open shift, a missing shift and a shift merged into another…` |
+| b | Approve twice (the already-approved check removed) | `approving a shift > is refused a second time, naming who and when, and changes no row` |
+| c | Approval that reaches outside the shift's sales (the allowed set not checked) | `approving a shift > refuses every entry outside the shift and its carry-over…` |
+| d | A report recomputed on screen instead of calling its function (revenue added from the method totals) | `the takings > shows the sales summary the main process returned… worked out nowhere on screen` |
+| e | A shift scope that passes the wrong range (the shift's clock times only) | 2: `a shift scope > covers the shift's own sales when its clock times do not…` and `goes to every other report as the same kind of range` |
+
+### Existing tests changed (each with an old/new note in the file)
+
+| Test | Old | New |
+| --- | --- | --- |
+| `reportsPage.test.ts` | six sub-views reached from cards, each with its own preset buttons | the one tab and its five sections (rewritten, 25 tests) |
+| `endOfDayPage.test.ts`, `endOfDayShiftFilterUi.test.ts` | the day's page, its day buttons, its shift filter and its scroll | removed with the page; ported to `shiftEndOfDayUi.test.ts` |
+| `heldSalesUi.test.ts` (End of Day block) | mounted the day's page; the rows in its scrolling part | mounts the shift's end of day; the tab scrolls as a whole |
+| `autoMergeWindowsUi`, `frozenShiftsUi`, `oneShiftPerWindowUi`, `shiftCaptureUi`, `shiftHistoryPagingUi` | Shift History reached by tapping its card | it is the last section of the tab; the stubs answer the tab's other calls (`tests/helpers/reportsTabApi.ts`) |
+| `shiftHistoryPagingUi` | the section filled a column | the section is a box of its own height inside the tab's scroll; "opens on page 1 again" is a new mount of the tab |
+| `adminTitleRemoved.test.ts` | End of Day was a card | not listed |
+| `noUnexpectedScroll.test.ts` | `EndOfDayPage.tsx` 1; `ReportsPage.tsx` 1 | `EndOfDayPage.tsx` gone; `ReportsPage.tsx` 2 (the tab and the history) |
+| `tests/rehearsal/paulCopy.test.ts` | shift #8's whole row identical | the columns it had are identical and the three new card columns read NULL |
+
+### For the owner to check on the till after install
+
+1. A long Z report: scroll the body, Print stays in view.
+2. Pick shift #1 in the scope: Takings show its Z report with the shift's orders and the sales summary agreeing; pick Yesterday: the same sales are in the summary, no Z block, and the End of Day lists the shifts with their state.
+3. Open a closed shift: End of Day shows its entries and Approve; an open shift says why it cannot be approved.
+4. Open Shift shows 0 and 0 pre-filled; Close Shift shows three counted fields, and a blank card prints "Not recorded".
+
+### Observed but not changed
+
+- **M-Pesa logs are the latest 50,** not the scope's: they have no range. Said so on the tab.
+- **A shift's range can hold another shift's sales** where two shifts overlap in time; the Takings block then says so instead of staying silent.
+- **`reports:end-of-day`, `generateEndOfDayReport` and `getEndOfDayReport`** are no longer reached by any screen. They are kept so the day report and its tests stand; removing them is a separate change.
+- **A sale auto-assigned into an already-approved shift** leaves entries that shift cannot approve again; they appear as carry-over on the next shifts, which is why carry-over is approvable.
+- **Nothing was run on a till or in the app:** the layout, the scroll box of Shift History inside the scrolling tab, and the picker are for the owner to check.
+
+### Rollback
+
+Revert the three commits of the phase. The columns they add (`card_*`, `mpesa_day_approvals.shift_id`) stay as unused nullable columns; the approvals, corrections and adjustments already written stay in their ledgers.
+
+### Verification (c) and of the phase
+
+| Check | Result |
+| --- | --- |
+| `npm run typecheck` | clean |
+| Full suite | 229 files passed, 1 skipped (the rehearsal); 3,769 tests passed, 9 skipped (8 rehearsal, 1 build-freshness) |
+| Rehearsal on the 1606 copy (`RUBIS_COPY_DIR` set) | 8 of 8 passed, with the card and approval migrations run on the real database |
+| `npm run build` | passed, `verify-no-mock-provider` confirmed |
+| Installer | not built, by instruction |

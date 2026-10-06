@@ -12,6 +12,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import ReportsPage from '../src/renderer/src/pages/ReportsPage.js'
 import type { ShiftRow } from '../src/main/services/database.js'
+import { reportsTabApi } from './helpers/reportsTabApi.js'
 
 let container: HTMLDivElement
 let root: Root
@@ -38,6 +39,7 @@ function stubApi(total: number, pageSize = 10): ReturnType<typeof vi.fn> {
     return Promise.resolve(ok({ shifts: ids.slice((page - 1) * pageSize, page * pageSize).map(shiftRow), total, page }))
   })
   window.api = {
+    ...reportsTabApi(),
     getStaffList: vi.fn().mockResolvedValue(ok([{ id: 2, name: 'manager mo', role: 'admin' }])),
     getShiftsList,
     autoAssignSales: vi.fn().mockResolvedValue(ok({ touched: [], waiting: 0 })),
@@ -76,7 +78,7 @@ async function openHistory(total: number, pageSize?: number): Promise<ReturnType
     root.render(createElement(ReportsPage))
     await Promise.resolve()
   })
-  await click('Shift History')
+  await flush()
   return getShiftsList
 }
 
@@ -127,8 +129,15 @@ describe('Shift History pages', () => {
     await click('Next')
     expect(container.textContent).toContain('Page 2 of 3')
 
-    await click('Back to Reports')
-    await click('Shift History')
+    // CHANGED (docs/phase-246). OLD: the history was left with "Back to Reports" and opened again from its card. NEW: it is a section of the
+    // tab, so leaving and coming back is a new mount of the tab.
+    act(() => root.unmount())
+    root = createRoot(container)
+    await act(async () => {
+      root.render(createElement(ReportsPage))
+      await Promise.resolve()
+    })
+    await flush()
 
     expect(getShiftsList).toHaveBeenLastCalledWith(1)
     expect(container.textContent).toContain('Page 1 of 3')
@@ -166,8 +175,10 @@ describe('Shift History scroll area', () => {
     expect(scroll.className).toEqual(expect.stringContaining('overflow-auto'))
     expect(scroll.className).toEqual(expect.stringContaining('min-h-0'))
     expect(scroll.className).toEqual(expect.stringContaining('flex-1'))
-    expect(section.className).toEqual(expect.stringContaining('flex min-h-0 flex-1 flex-col'))
-    expect((section.parentElement as HTMLElement).className).toEqual(expect.stringContaining('flex min-h-0 flex-1 flex-col'))
+    // CHANGED (docs/phase-246). OLD: the section filled the height of a column and its parent was that column. NEW: the Reports tab scrolls as
+    // a whole, so the history is a column of a height of its own, and the tab's scroll is the one above it.
+    expect(section.className).toEqual(expect.stringContaining('flex h-[34rem] flex-col'))
+    expect(container.querySelector('[data-testid="reports-scroll"]')!.contains(section)).toBe(true)
   })
 
   it('keeps the buttons in the document and outside the scroll area when 200 rows are rendered', async () => {
@@ -182,9 +193,10 @@ describe('Shift History scroll area', () => {
     }
   })
 
-  it('has the Admin screen give the Reports tab a column to fill, as End of Day has', () => {
+  it('has the Admin screen give the Reports tab a column to fill', () => {
     const admin = readFileSync(join(process.cwd(), 'src', 'renderer', 'src', 'components', 'AdminScreen.tsx'), 'utf8')
 
-    expect(admin).toContain("activeTab === 'endOfDay' || activeTab === 'reports' ? ' flex flex-col'")
+    // CHANGED (docs/phase-246). OLD: `activeTab === 'endOfDay' || activeTab === 'reports'`. NEW: End of Day is a section of the Reports tab.
+    expect(admin).toContain("activeTab === 'reports' ? ' flex flex-col'")
   })
 })

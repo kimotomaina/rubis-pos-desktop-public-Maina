@@ -28,7 +28,6 @@ import {
   LinkIcon,
   PrinterIcon,
   SearchIcon,
-  CalendarIcon,
   DocumentChartIcon,
   WarningIcon,
   InboxIcon,
@@ -36,10 +35,8 @@ import {
 } from './icons.js'
 import Breadcrumbs, { type BreadcrumbItem } from './Breadcrumbs.js'
 import SectionCardGrid, { type SectionCard } from './SectionCardGrid.js'
-import MpesaLogsPage from '../pages/MpesaLogsPage.js'
 import NeedsAttentionPage from '../pages/NeedsAttentionPage.js'
 import StockTakePage from '../pages/StockTakePage.js'
-import EndOfDayPage from '../pages/EndOfDayPage.js'
 import ReportsPage from '../pages/ReportsPage.js'
 import RestartCountdownModal from './RestartCountdownModal.js'
 import { useKeyboardStore, type KeyboardMode } from '../stores/keyboardStore.js'
@@ -179,10 +176,8 @@ type AdminTabKey =
   | 'overview'
   | 'integrations'
   | 'peripherals'
-  | 'mpesaLogs'
   | 'needsAttention'
   | 'stockTake'
-  | 'endOfDay'
   | 'reports'
   | 'system'
 
@@ -213,7 +208,6 @@ function adminSections(unfiledCount: number | null, shopifyActionCount: number):
     { key: 'overview', label: 'Overview', icon: <ChartBarIcon className="h-8 w-8" /> },
     { key: 'integrations', label: 'Integrations', icon: <LinkIcon className="h-8 w-8" /> },
     { key: 'peripherals', label: 'Peripherals', icon: <PrinterIcon className="h-8 w-8" /> },
-    { key: 'mpesaLogs', label: 'M-Pesa Logs', icon: <InboxIcon className="h-8 w-8" /> },
     {
       key: 'needsAttention',
       label: 'Needs Attention',
@@ -221,7 +215,6 @@ function adminSections(unfiledCount: number | null, shopifyActionCount: number):
       badge: needsAttentionBadge
     },
     { key: 'stockTake', label: 'Stock Take', icon: <PackageIcon className="h-8 w-8" /> },
-    { key: 'endOfDay', label: 'End of Day', icon: <CalendarIcon className="h-8 w-8" /> },
     { key: 'reports', label: 'Reports', icon: <DocumentChartIcon className="h-8 w-8" /> },
     { key: 'system', label: 'System', icon: <LockIcon className="h-8 w-8" /> }
   ]
@@ -1375,7 +1368,7 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
   }
 
   return (
-    <div className={`h-full min-h-full w-full space-y-6${activeTab === 'endOfDay' || activeTab === 'reports' ? ' flex flex-col' : ''}`}>
+    <div className={`h-full min-h-full w-full space-y-6${activeTab === 'reports' ? ' flex flex-col' : ''}`}>
       {activeTab === null ? (
         <SectionCardGrid sections={adminSections(unfiledCount, shopifyActionCount)} onSelect={setActiveTab} />
       ) : (
@@ -1449,13 +1442,9 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
         </section>
       )}
 
-      {activeTab === 'mpesaLogs' && <MpesaLogsPage />}
-
       {activeTab === 'needsAttention' && <NeedsAttentionPage />}
 
       {activeTab === 'stockTake' && <StockTakePage />}
-
-      {activeTab === 'endOfDay' && <EndOfDayPage />}
 
       {activeTab === 'reports' && <ReportsPage />}
 

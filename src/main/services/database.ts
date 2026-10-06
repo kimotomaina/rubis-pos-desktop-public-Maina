@@ -992,6 +992,29 @@ function migrateShiftsColumns(connection: SqliteConnection): void {
 }
 
 /**
+ * The Africa/Nairobi calendar day of an instant (Kenya keeps UTC+3 all year, as `reports.ts` explains), as `YYYY-MM-DD`:
+ * the label a shift's review carries in `local_day`.
+ *
+ * @param {string} iso
+ * @returns {string}
+ */
+function localDayOfIso(iso: string): string {
+  return new Date(Date.parse(iso) + 3 * 60 * 60 * 1000).toISOString().slice(0, 10)
+}
+
+/**
+ * Adds `shift_id` (docs/phase-246) to a `mpesa_day_approvals` table made before the phase, so an approval can be made
+ * for one shift. Nullable with no backfill: every earlier review stays a review of a day, as it was. Check then add,
+ * so it runs any number of times.
+ *
+ * @param {SqliteConnection} connection
+ */
+function migrateMpesaApprovalShiftColumn(connection: SqliteConnection): void {
+  const have = (connection.prepare('PRAGMA table_info(mpesa_day_approvals)').all() as Array<{ name: string }>).map((c) => c.name)
+  if (!have.includes('shift_id')) connection.exec('ALTER TABLE mpesa_day_approvals ADD COLUMN shift_id INTEGER')
+}
+
+/**
  * Adds the card settlement columns (docs/phase-246, R5) to the three tables that hold a shift's counted figures: the
  * shift itself, its corrections and its adjustment ledger. Nullable with no default and no backfill, so every row from
  * before reads `NULL`, "Not recorded", which is not 0. Check then add, so it runs any number of times and a failure of
@@ -1511,9 +1534,16 @@ export const SCHEMA = {
     entry_count INTEGER NOT NULL,
     excluded_count INTEGER NOT NULL DEFAULT 0,
     total_amount REAL NOT NULL,
-    note TEXT
+    note TEXT,
+    shift_id INTEGER
   )`,
   mpesaDayApprovalsLocalDayIndex: `CREATE INDEX IF NOT EXISTS idx_mpesa_day_approvals_local_day ON mpesa_day_approvals (local_day)`,
+  /**
+   * A shift is approved once (docs/phase-246): a review made for a shift names it in `shift_id`, and this index makes a
+   * second one for the same shift impossible whatever the code does. A review made before the phase, for a day, has no
+   * `shift_id` and is history that is never rewritten.
+   */
+  mpesaDayApprovalsShiftIndex: `CREATE UNIQUE INDEX IF NOT EXISTS idx_mpesa_day_approvals_shift ON mpesa_day_approvals (shift_id) WHERE shift_id IS NOT NULL`,
   /**
    * One manual entry a manager reviewed and deliberately left out of an
    * approval (docs/phase-153) — e.g. a code not on the M-Pesa statement.
@@ -1914,6 +1944,8 @@ export interface MpesaDayApprovalRow {
   excluded_count: number
   total_amount: number
   note: string | null
+  /** The shift this review was made for (docs/phase-246); `NULL` for a review of a day made before then. */
+  shift_id?: number | null
 }
 
 /**
@@ -2152,6 +2184,8 @@ export class RubisDatabase {
     connection.exec(SCHEMA.mpesaDayApprovals)
     connection.exec(SCHEMA.mpesaDayApprovalsLocalDayIndex)
     migrateMpesaDayApprovalsColumns(connection)
+    migrateMpesaApprovalShiftColumn(connection)
+    connection.exec(SCHEMA.mpesaDayApprovalsShiftIndex)
     connection.exec(SCHEMA.mpesaDayExclusions)
     connection.exec(SCHEMA.mpesaDayExclusionsPaymentIndex)
     connection.exec(SCHEMA.fiscalDuplicatePrints)
@@ -5673,6 +5707,86 @@ export class RubisDatabase {
   }
 
   /**
+   * Manual M-Pesa entries nobody has approved, whose sale belongs to a shift that began before this one (docs/phase-246):
+   * the shift's carry-over. "Earlier" is by the shift's `clock_in`, the id breaking a tie, whatever time the sale itself
+   * was made, and entries of this shift's own sales are not included (they are the shift's own). Voided sales are
+   * included here and left out by the caller, as `getUnapprovedManualPaymentsBefore` leaves them.
+   *
+   * @param {number} shiftId
+   * @returns {Array<MpesaPaymentRow & { status: OrderStatus }>}
+   */
+  getUnapprovedManualPaymentsOfEarlierShifts(shiftId: number): Array<MpesaPaymentRow & { status: OrderStatus }> {
+    return this.conn
+      .prepare(
+        `SELECT mp.*, o.status as status FROM mpesa_payments mp
+         JOIN orders o ON o.local_id = mp.order_local_id
+         JOIN shifts s ON s.id = o.shift_id
+         JOIN shifts me ON me.id = ?
+         WHERE mp.mode = 'manual' AND mp.reconciled_at IS NULL AND s.id <> me.id
+           AND (s.clock_in < me.clock_in OR (s.clock_in = me.clock_in AND s.id < me.id))
+         ORDER BY o.created_at ASC`
+      )
+      .all(shiftId) as Array<MpesaPaymentRow & { status: OrderStatus }>
+  }
+
+  /**
+   * The review made for one shift (docs/phase-246), if any.
+   *
+   * @param {number} shiftId
+   * @returns {MpesaDayApprovalRow | undefined}
+   */
+  getShiftMpesaApproval(shiftId: number): MpesaDayApprovalRow | undefined {
+    return this.conn.prepare('SELECT * FROM mpesa_day_approvals WHERE shift_id = ?').get(shiftId) as MpesaDayApprovalRow | undefined
+  }
+
+  /**
+   * A manager's review of one shift's manual M-Pesa entries (docs/phase-246): the only way an entry is approved from
+   * the Reports tab. One write transaction. The shift must exist, be closed and not merged into another, and must not
+   * have been reviewed already: a second review is refused and writes nothing (the unique index on `shift_id` would
+   * refuse it too). Every id given must be a still-pending manual entry of the shift's own sales or of its carry-over,
+   * the entries of earlier shifts, as {@link getUnapprovedManualPaymentsOfEarlierShifts} computes them here: anything
+   * else, a later shift's entry or a voided sale's, is refused. The writing itself is {@link approveMpesaEntries}, the
+   * same code a day review used, so ticking, leaving an entry out with a reason, and the all-or-nothing rollback behave
+   * as before. The caller has already verified the admin's PIN.
+   *
+   * @param {{ shiftId: number; approvedIds: number[]; excluded: Array<{ paymentId: number; reason: string | null }>; managerId: number; note: string | null }} input
+   * @returns {ApproveMpesaEntriesResult}
+   * @throws {Error} with a message fit to show the admin; nothing is written when it throws
+   */
+  approveShiftMpesa(input: {
+    shiftId: number
+    approvedIds: number[]
+    excluded: Array<{ paymentId: number; reason: string | null }>
+    managerId: number
+    note: string | null
+  }): ApproveMpesaEntriesResult {
+    return this.conn.transaction((): ApproveMpesaEntriesResult => {
+      const shift = this.getShiftById(input.shiftId)
+      if (!shift) throw new Error(`Shift ${input.shiftId} not found`)
+      if (shift.status !== 'closed') throw new Error(`Shift #${shift.id} is still open. Close it before approving its M-Pesa entries`)
+      const merge = this.getShiftMerge(shift.id)
+      if (merge) throw new Error(`Shift #${shift.id} was merged into shift #${merge.into_shift_id}. Approve that shift`)
+      const done = this.getShiftMpesaApproval(shift.id)
+      if (done) {
+        const who = this.getStaffById(done.approved_by_staff_id)?.name ?? 'Unknown'
+        throw new Error(`Shift #${shift.id} was already approved by ${who} on ${done.approved_at}`)
+      }
+      const pendingManual = (rows: Array<MpesaPaymentRow & { status: OrderStatus }>): number[] =>
+        rows.filter((row) => row.mode === 'manual' && row.reconciled_at === null && row.status !== 'voided').map((row) => row.id)
+      const allowed = new Set([
+        ...pendingManual(this.getMpesaPaymentsForShift(shift.id)),
+        ...pendingManual(this.getUnapprovedManualPaymentsOfEarlierShifts(shift.id))
+      ])
+      const given = [...input.approvedIds, ...input.excluded.map((entry) => entry.paymentId)]
+      if (given.length === 0) throw new Error('No entries given to record')
+      if (!given.every((id) => allowed.has(id))) {
+        throw new Error("One or more entries are not pending manual entries of this shift or its carry-over. Refresh the report and try again")
+      }
+      return this.approveMpesaEntries(input.approvedIds, input.excluded, input.managerId, localDayOfIso(shift.clock_in), input.note, shift.id)
+    }).immediate()
+  }
+
+  /**
    * @param {number} id
    * @returns {MpesaDayApprovalRow | undefined}
    */
@@ -5807,6 +5921,7 @@ export class RubisDatabase {
    * @param {number} managerId — the re-verified admin's id
    * @param {string} localDay — which day's report this review is for
    * @param {string | null} note — optional manager note, stored once on the approval, not repeated per row
+   * @param {number | null} [shiftId] — the shift this review is for (docs/phase-246); `null`, the default, is a review of a day
    * @returns {ApproveMpesaEntriesResult}
    * @throws if both `approvedIds` and `excluded` are empty, or if any
    *   given id is not a currently-pending manual entry (outside the
@@ -5817,7 +5932,8 @@ export class RubisDatabase {
     excluded: Array<{ paymentId: number; reason: string | null }>,
     managerId: number,
     localDay: string,
-    note: string | null
+    note: string | null,
+    shiftId: number | null = null
   ): ApproveMpesaEntriesResult {
     const uniqueApprovedIds = Array.from(new Set(approvedIds))
     const uniqueExcludedIds = Array.from(new Set(excluded.map((entry) => entry.paymentId)))
@@ -5866,7 +5982,7 @@ export class RubisDatabase {
 
       const insert = this.conn
         .prepare(
-          'INSERT INTO mpesa_day_approvals (local_day, approved_by_staff_id, approved_at, entry_count, excluded_count, total_amount, note) VALUES (?, ?, ?, ?, ?, ?, ?)'
+          'INSERT INTO mpesa_day_approvals (local_day, approved_by_staff_id, approved_at, entry_count, excluded_count, total_amount, note, shift_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
         )
         .run(
           localDay,
@@ -5875,7 +5991,8 @@ export class RubisDatabase {
           uniqueApprovedIds.length,
           uniqueExcludedIds.length,
           totalAmount,
-          note
+          note,
+          shiftId
         )
       const approvalId = Number(insert.lastInsertRowid)
 

@@ -16,6 +16,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import ReportsPage from '../src/renderer/src/pages/ReportsPage.js'
+import { reportsTabApi } from './helpers/reportsTabApi.js'
 import ZReportModal from '../src/renderer/src/components/ZReportModal.js'
 import MoveSaleForm from '../src/renderer/src/components/MoveSaleForm.js'
 import WindowEndBanner, { shouldShowWindowEndBanner } from '../src/renderer/src/components/WindowEndBanner.js'
@@ -53,8 +54,12 @@ const shiftRow = (overrides: Partial<ShiftRow> = {}): ShiftRow => ({
   ...overrides
 })
 
+// CHANGED (docs/phase-246). OLD: the Reports page opened on a card grid and Shift History was reached by tapping its card. NEW: Shift History
+// is the last section of the one Reports tab, always there; the tab also calls the takings, the end of day and the fiscal checks, which
+// `reportsTabApi()` answers with nothing.
 function stubApi(overrides: Record<string, unknown> = {}): void {
   window.api = {
+    ...reportsTabApi(),
     getStaffList: vi.fn().mockResolvedValue(ok([{ id: 2, name: 'manager mo', role: 'admin' }])),
     getShiftsList: vi.fn().mockResolvedValue(ok({ shifts: [shiftRow()], total: 1, page: 1 })),
     autoAssignSales: vi.fn().mockResolvedValue(ok({ touched: [], waiting: 0 })),
@@ -106,7 +111,6 @@ describe('Shift History', () => {
       root.render(createElement(ReportsPage))
       await Promise.resolve()
     })
-    await click('Shift History')
     await flush()
   }
 
@@ -459,7 +463,6 @@ describe('Shift History actions and merging (docs/phase-239)', () => {
       root.render(createElement(ReportsPage))
       await Promise.resolve()
     })
-    await click('Shift History')
     await flush()
   }
   const buttons = (label: string): HTMLButtonElement[] =>

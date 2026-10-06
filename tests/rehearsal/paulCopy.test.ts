@@ -148,9 +148,13 @@ describe.skipIf(!COPY_DIR)('the repair of 5 Oct, rehearsed on the exported copy'
   })
 
   it('leaves shift #8 byte-identical and open', () => {
-    const now = conn(db).prepare('SELECT * FROM shifts WHERE id = 8').get()
+    const now = conn(db).prepare('SELECT * FROM shifts WHERE id = 8').get() as Record<string, unknown>
+    // CHANGED (docs/phase-246, R5). OLD: the whole row was compared. NEW: opening the copy with this build adds the three card columns
+    // (NULL), so the comparison is of the columns the shift had, and the new ones must read NULL.
+    const hadColumns = Object.fromEntries(Object.entries(now).filter(([key]) => !key.startsWith('card_')))
+    expect(['card_closing_balance', 'card_expected', 'card_difference'].map((key) => now[key])).toEqual([null, null, null])
 
-    expect(JSON.stringify(now)).toBe(JSON.stringify(before.shift8))
+    expect(JSON.stringify(hadColumns)).toBe(JSON.stringify(before.shift8))
     expect(now).toMatchObject({ status: 'open', clock_out: null })
   })
 

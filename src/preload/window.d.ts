@@ -66,8 +66,10 @@ import type {
   SalesSummary,
   FiscalStatusDayCount,
   FiscalReconciliationReport,
-  ReportRangePreset
+  ShiftEndOfDayReport,
+  ShiftApprovalRow
 } from '../main/services/reports.js'
+import type { ReportScope } from '../main/lib/reportScope.js'
 import type { UpdateStatus } from '../main/services/updater.js'
 import type { LastUpdateResult } from '../main/services/updateBackup.js'
 import type {
@@ -266,9 +268,13 @@ export interface PosApi {
   getDailySummary: () => Promise<ServiceResult<DailySummary>>
   /** Generates the end-of-day report for one Africa/Nairobi calendar day (defaults to today). Read-only. */
   getEndOfDayReport: (localDay?: string, shiftId?: number) => Promise<ServiceResult<EndOfDayReport>>
-  /** A manager's end-of-day review: approves `approvedIds` and records why each `excluded` entry was left pending. */
-  approveDayReport: (request: {
-    localDay: string
+  /** One shift's end-of-day report: its entries, its carry-over from earlier shifts and its approval (docs/phase-246). Read-only. */
+  getShiftEndOfDayReport: (shiftId: number) => Promise<ServiceResult<ShiftEndOfDayReport>>
+  /** The shifts that have sales in a scope, each with where its approval stands (docs/phase-246). Read-only. */
+  getEndOfDayShifts: (scope: ReportScope) => Promise<ServiceResult<ShiftApprovalRow[]>>
+  /** A manager's review of one shift's manual M-Pesa entries; the admin PIN is re-verified in the main process (docs/phase-246). */
+  approveShiftReport: (request: {
+    shiftId: number
     approvedIds: number[]
     excluded: Array<{ paymentId: number; reason?: string }>
     managerId: number
@@ -279,19 +285,19 @@ export interface PosApi {
   getShiftsList: (
     page: number
   ) => Promise<ServiceResult<{ shifts: ShiftRow[]; total: number; page: number }>>
-  /** A sales summary for one of the fixed Nairobi date-range presets. */
-  getSalesSummary: (preset: ReportRangePreset) => Promise<ServiceResult<SalesSummary>>
+  /** A sales summary for a scope: a fixed preset, one shift, or a typed range (docs/phase-246). */
+  getSalesSummary: (scope: ReportScope) => Promise<ServiceResult<SalesSummary>>
   /** Order counts by fiscal status, one row per Nairobi calendar day within the preset. */
   getFiscalStatusByDay: (
-    preset: ReportRangePreset
+    scope: ReportScope
   ) => Promise<ServiceResult<FiscalStatusDayCount[]>>
   /** The fiscal reconciliation report for one of the fixed Nairobi date-range presets (docs/phase-163). */
   getFiscalReconciliation: (
-    preset: ReportRangePreset
+    scope: ReportScope
   ) => Promise<ServiceResult<FiscalReconciliationReport>>
   /** One page of orders (CU and trader invoice numbers included) for the invoice list. */
   getInvoiceList: (
-    preset: ReportRangePreset,
+    scope: ReportScope,
     page: number
   ) => Promise<
     ServiceResult<{
@@ -302,7 +308,7 @@ export interface PosApi {
   >
   /** Exports orders or line items for a preset as CSV, via the OS save dialog. */
   exportReportsCsv: (
-    preset: ReportRangePreset,
+    scope: ReportScope,
     kind: 'orders' | 'lines'
   ) => Promise<ServiceResult<{ saved: boolean; filePath?: string }>>
   /** Triggers an update check against the configured update feed. */

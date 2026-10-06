@@ -9,6 +9,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { createElement, act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import ReportsPage from '../src/renderer/src/pages/ReportsPage.js'
+import { reportsTabApi } from './helpers/reportsTabApi.js'
 import ZReportModal from '../src/renderer/src/components/ZReportModal.js'
 import type { ShiftRow } from '../src/main/services/database.js'
 import type { ZReport } from '../src/main/services/reports.js'
@@ -51,7 +52,11 @@ describe('Shift History with a frozen shift', () => {
   const rows = (): HTMLTableRowElement[] => Array.from(container.querySelectorAll('tbody tr'))
 
   it('marks an older closed shift Locked and gives it no Correct figures, while the latest closed one keeps it', async () => {
+// CHANGED (docs/phase-246). OLD: the Reports page opened on a card grid and Shift History was reached by tapping its card. NEW: Shift History
+// is the last section of the one Reports tab, always there; the tab also calls the takings, the end of day and the fiscal checks, which
+// `reportsTabApi()` answers with nothing.
     window.api = {
+      ...reportsTabApi(),
       getStaffList: vi.fn().mockResolvedValue(ok([{ id: 2, name: 'manager mo', role: 'admin' }])),
       getShiftsList: vi.fn().mockResolvedValue(ok({ shifts: [closedShift(3), closedShift(2, { frozen: true }), closedShift(1, { frozen: true })], total: 3, page: 1 })),
       autoAssignSales: vi.fn().mockResolvedValue(ok({ touched: [], waiting: 0 })),
@@ -61,9 +66,7 @@ describe('Shift History with a frozen shift', () => {
       root.render(createElement(ReportsPage))
       await Promise.resolve()
     })
-    const card = Array.from(container.querySelectorAll('button')).find((b) => b.textContent?.includes('Shift History'))!
     await act(async () => {
-      card.click()
       await Promise.resolve()
       await Promise.resolve()
       await Promise.resolve()

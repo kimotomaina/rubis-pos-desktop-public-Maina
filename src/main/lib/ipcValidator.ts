@@ -624,26 +624,78 @@ export const shiftCorrectionSchema = managerAuthzSchema.extend({
   override: z.boolean().optional()
 })
 
+/**
+ * What a report request names to say what it is for (docs/phase-246, R3): exactly one of a fixed preset (as before), one
+ * shift, or a custom range of two typed date-times, `YYYY-MM-DD HH:MM` in Nairobi time. The main process checks the dates
+ * are real, the end is after the start and the range is at most 62 days; the shape is checked here.
+ */
+const customTimeSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}$/, 'Enter the date and time as YYYY-MM-DD HH:MM')
+const reportScopeFields = {
+  preset: reportRangePresetSchema.optional(),
+  shiftId: z.number().int().positive().optional(),
+  from: customTimeSchema.optional(),
+  to: customTimeSchema.optional()
+}
+const exactlyOneScope = (data: { preset?: unknown; shiftId?: unknown; from?: unknown; to?: unknown }): boolean => {
+  const range = data.from !== undefined || data.to !== undefined
+  return (
+    [data.preset !== undefined, data.shiftId !== undefined, range].filter(Boolean).length === 1 &&
+    (data.from === undefined) === (data.to === undefined)
+  )
+}
+const SCOPE_MESSAGE = 'Name one scope: a preset, one shift, or both ends of a range'
+
+/** A report request's scope on its own: the Reports tab's shift list and the report for a range of shifts. */
+export const reportScopeSchema = z.object(reportScopeFields).refine(exactlyOneScope, { message: SCOPE_MESSAGE })
+
 /** `reports:sales-summary` request payload. */
-export const salesSummarySchema = z.object({
-  preset: reportRangePresetSchema
-})
+export const salesSummarySchema = reportScopeSchema
 
 /** `reports:fiscal-by-day` request payload. */
-export const fiscalByDaySchema = z.object({
-  preset: reportRangePresetSchema
-})
+export const fiscalByDaySchema = reportScopeSchema
 
-/** `reports:invoice-list` request payload — one page of a preset's orders. */
-export const invoiceListSchema = z.object({
-  preset: reportRangePresetSchema,
-  page: z.number().int().positive().default(1)
-})
+/** `reports:invoice-list` request payload — one page of a scope's orders. */
+export const invoiceListSchema = z
+  .object({ ...reportScopeFields, page: z.number().int().positive().default(1) })
+  .refine(exactlyOneScope, { message: SCOPE_MESSAGE })
 
 /** `reports:fiscal-reconciliation` request payload (docs/phase-163, Commit 2). */
-export const fiscalReconciliationSchema = z.object({
-  preset: reportRangePresetSchema
-})
+export const fiscalReconciliationSchema = reportScopeSchema
+
+/** `reports:shift-end-of-day` request payload (docs/phase-246): the end-of-day report of one shift. */
+export const shiftEndOfDaySchema = z.object({ shiftId: z.number().int().positive() })
+
+/**
+ * `reports:approve-shift` request payload (docs/phase-246): a manager's review of one shift's manual M-Pesa entries,
+ * admin-gated with the PIN re-verified in the main process. As for a day review, each entry is approved, left out with
+ * a reason, or untouched, never more than one of those; the database checks every id belongs to the shift or its
+ * carry-over.
+ */
+export const approveShiftReportSchema = managerAuthzSchema
+  .extend({
+    shiftId: z.number().int().positive(),
+    approvedIds: z.array(z.number().int().positive()),
+    excluded: z.array(excludedEntrySchema),
+    note: z.string().max(500, 'Keep the note under 500 characters').optional()
+  })
+  .refine((data) => data.approvedIds.length > 0 || data.excluded.length > 0, {
+    message: 'Nothing to record — approve at least one entry, or leave one out with a reason',
+    path: ['approvedIds']
+  })
+  .refine(
+    (data) => {
+      const excludedIds = new Set(data.excluded.map((entry) => entry.paymentId))
+      return !data.approvedIds.some((id) => excludedIds.has(id))
+    },
+    { message: 'An entry cannot be both approved and left out', path: ['excluded'] }
+  )
+  .refine(
+    (data) => {
+      const allIds = [...data.approvedIds, ...data.excluded.map((entry) => entry.paymentId)]
+      return new Set(allIds).size === allIds.length
+    },
+    { message: 'The same entry id was given more than once', path: ['approvedIds'] }
+  )
 
 /**
  * `reports:export-csv` request payload. `kind` picks which of the two
@@ -651,10 +703,9 @@ export const fiscalReconciliationSchema = z.object({
  * separate buttons ("Export orders CSV" / "Export lines CSV"), each its
  * own save dialog, rather than one call producing two files at once.
  */
-export const exportCsvSchema = z.object({
-  preset: reportRangePresetSchema,
-  kind: z.enum(['orders', 'lines'])
-})
+export const exportCsvSchema = z
+  .object({ ...reportScopeFields, kind: z.enum(['orders', 'lines']) })
+  .refine(exactlyOneScope, { message: SCOPE_MESSAGE })
 
 /** `stocktake:get` / `stocktake:submit` request payload. */
 export const stockTakeSessionIdSchema = z.object({
