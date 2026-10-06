@@ -900,15 +900,15 @@ export default function App() {
         </main>
       ) : (
         /**
-         * `overflow-hidden`, not `-auto` (docs/phase-167 Part B item 2):
-         * the card grid (Part A) replaced the old tab bar, and every
-         * section fits the design box on its own — see docs/phase-167.md
-         * for the per-section measurements that made this true. The
+         * Scrolls (docs/phase-247). It was `overflow-hidden` since docs/phase-167 Part B item 2, on the ground that every section
+         * fits the design box; a list longer than the screen (staff, printers, Needs Attention, Stock Take, the fiscal test hops)
+         * was cut off with no way to reach it. Whatever an Admin page holds now scrolls, with the always-visible bar. The Reports tab
+         * fills the height it is given and so never scrolls here: its sections scroll in their own areas (docs/phase-246-1). The
          * plain "Admin" heading that sat above `AdminScreen` is gone
          * (docs/phase-220): the header tab and the breadcrumb say it.
          */
         <main className="flex flex-1 flex-col overflow-hidden">
-          <div className="min-h-0 flex-1 overflow-hidden p-6">
+          <div className="touch-scrollbar min-h-0 flex-1 overflow-y-auto p-6">
             <AdminScreen
               requestManagerPin={requestManagerPin}
               initialTab={adminInitialTab}

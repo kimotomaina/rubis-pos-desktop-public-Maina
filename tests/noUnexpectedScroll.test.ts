@@ -59,12 +59,12 @@ const ALLOW_LIST: Record<string, number> = {
   // docs/phase-246: `EndOfDayPage.tsx` is gone (its entry, 1 since phase 220, is removed): End of Day is a section of the Reports tab, which scrolls as a whole.
   [join('src', 'renderer', 'src', 'pages', 'ReportsPage.tsx')]: 2, // docs/phase-245: was 0, then 1 (Shift History rows scroll). docs/phase-246: now 2 (the tab's own scroll as well). docs/phase-246-1: still 2, the count kept: the one scroll area every section shares, and Shift History's rows inside the Shifts section; owner's request, 2026-10-06.
   [join('src', 'renderer', 'src', 'components', 'ModalShell.tsx')]: 1, // docs/phase-246: new. The body of the shared window shell scrolls; the Z report, window report, correction form and Move a sale use it (R1), owner's request, 2026-10-06.
-  [join('src', 'renderer', 'src', 'components', 'ScopePicker.tsx')]: 1 // docs/phase-246-1: new. The scope list drops over the cards under the picker, so a list taller than the screen scrolls in its own box.
+  [join('src', 'renderer', 'src', 'components', 'ScopePicker.tsx')]: 1, // docs/phase-246-1: new. The scope list drops over the cards under the picker, so a list taller than the screen scrolls in its own box.
+  [join('src', 'renderer', 'src', 'App.tsx')]: 1 // docs/phase-247: was 0 (ZERO_SCROLL_FILES), now 1. The Admin screen scrolls, so a list longer than the screen can be reached, owner's request, 2026-10-06.
 }
 
 /** Files expected to have ZERO vertical-scroll classes — either always have, or (this commit) now do. */
 const ZERO_SCROLL_FILES = [
-  join('src', 'renderer', 'src', 'App.tsx'),
   join('src', 'renderer', 'src', 'components', 'LoginScreen.tsx'),
   join('src', 'renderer', 'src', 'components', 'LocationPendingScreen.tsx'),
   join('src', 'renderer', 'src', 'components', 'AdminScreen.tsx'),
