@@ -4,6 +4,9 @@
  * Every database step runs against a real in-memory SQLite (not the recording fake), so a refusal that must write
  * nothing is shown to write nothing, and "run it twice changes nothing" is a count of rows. Times are written as
  * Nairobi wall-clock time; Nairobi is UTC+3 all year.
+ *
+ * CHANGED (docs/phase-237). OLD: Day began at 09:00 and Night ended at 08:59 (docs/phase-199 D1). NEW: Day begins at
+ * 07:00 and Night ends at 06:59, the owner's correction; the rule, the labels and the boundary seconds move with it.
  */
 
 import { describe, it, expect, vi } from 'vitest'
@@ -150,11 +153,11 @@ describe('S1: one shift per window, inside the transaction that creates it', () 
     expect([a, b].map((id) => shiftOf(db, id).shift_type)).toEqual(['day', 'night'])
   })
 
-  it('works the window by the clock: 08:59:59 is the previous Night, 09:00:00 is Day', () => {
+  it('works the window by the clock: 06:59:59 is the previous Night, 07:00:00 is Day', () => {
     const db = freshDb()
-    const early = db.openShift(1, 0, null, {}, ms('2026-10-06T08:59:59'))
+    const early = db.openShift(1, 0, null, {}, ms('2026-10-06T06:59:59'))
     db.closeShift(early.shiftId, 0)
-    const morning = db.openShift(1, 0, null, {}, ms('2026-10-06T09:00:00'))
+    const morning = db.openShift(1, 0, null, {}, ms('2026-10-06T07:00:00'))
 
     expect(shiftOf(db, early.shiftId).shift_type).toBe('night')
     expect(shiftWindowOf(shiftOf(db, early.shiftId).clock_in)).toEqual({ type: 'night', startDate: '2026-10-05' })
@@ -336,7 +339,7 @@ describe('S4: automatic assignment', () => {
     const db = freshDb()
     sale(db, '2026-10-05T23:50:00')
     sale(db, '2026-10-06T00:10:00')
-    sale(db, '2026-10-06T07:30:00')
+    sale(db, '2026-10-06T06:30:00')
 
     const result = db.autoAssignUnattachedSales(NOW)
 
@@ -664,21 +667,21 @@ describe('S2: a shift cannot be closed before its window\'s last minute', () => 
     expect(closeAt(db, shiftId, '2026-10-05T17:30:00').success).toBe(true)
   })
 
-  it('allows a Night shift opened in the evening from 08:59:00 the next morning, and not at 08:58:59', () => {
+  it('allows a Night shift opened in the evening from 06:59:00 the next morning, and not at 06:58:59', () => {
     const db = freshDb()
     const { shiftId } = db.openShift(1, 0, null, {}, ms('2026-10-05T18:30:00'))
 
-    expect(closeAt(db, shiftId, '2026-10-06T08:58:59').success).toBe(false)
-    expect(closeAt(db, shiftId, '2026-10-06T08:59:00').success).toBe(true)
+    expect(closeAt(db, shiftId, '2026-10-06T06:58:59').success).toBe(false)
+    expect(closeAt(db, shiftId, '2026-10-06T06:59:00').success).toBe(true)
   })
 
-  it('works a Night shift opened at 02:00 as the Night that began the evening before: closable at 08:59 the same morning', () => {
+  it('works a Night shift opened at 02:00 as the Night that began the evening before: closable at 06:59 the same morning', () => {
     const db = freshDb()
     const { shiftId } = db.openShift(1, 0, null, {}, ms('2026-10-06T02:00:00'))
 
-    expect(windowClosableFrom(shiftOf(db, shiftId).clock_in)).toBe(ms('2026-10-06T08:59:00'))
-    expect(closeAt(db, shiftId, '2026-10-06T08:58:59').success).toBe(false)
-    expect(closeAt(db, shiftId, '2026-10-06T08:59:00').success).toBe(true)
+    expect(windowClosableFrom(shiftOf(db, shiftId).clock_in)).toBe(ms('2026-10-06T06:59:00'))
+    expect(closeAt(db, shiftId, '2026-10-06T06:58:59').success).toBe(false)
+    expect(closeAt(db, shiftId, '2026-10-06T06:59:00').success).toBe(true)
   })
 
   it('lets a shift opened in its window\'s last minute close at once', () => {
@@ -744,7 +747,7 @@ describe('the window status the screens read', () => {
 
     const status = getShiftWindowStatus(db, ms('2026-10-05T18:00:00'))
 
-    expect(status.window).toMatchObject({ type: 'night', startDate: '2026-10-05', label: 'Night shift (17:31 to 08:59)' })
+    expect(status.window).toMatchObject({ type: 'night', startDate: '2026-10-05', label: 'Night shift (17:31 to 06:59)' })
     expect(status.windowShift).toBeNull()
     expect(status.earlier).toEqual({ count: 2, cash: 700, mpesa: 100 })
     expect(status.openShift).toBeNull()
@@ -940,7 +943,7 @@ describe('the Z report with adjustments', () => {
     expect(report.adjustments).toHaveLength(1)
     const lines = printed(db, id)
     expect(lines).toContain('Labelled Day when opened')
-    expect(lines).toContain('Night shift (17:31 to 08:59)')
+    expect(lines).toContain('Night shift (17:31 to 06:59)')
     expect(lines.some((l) => l.startsWith('Sales at close: 1 order,'))).toBe(true)
     expect(lines.some((l) => l.includes('joined automatically'))).toBe(true)
     expect(lines.some((l) => l.startsWith('Expected Cash:') && l.includes('3,901.00'))).toBe(true)

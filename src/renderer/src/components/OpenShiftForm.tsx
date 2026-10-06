@@ -4,7 +4,7 @@ import { previewOpenFloat } from '../lib/openShiftFloat.js'
 import type { EarlierSalesShown } from '../../../main/services/database.js'
 
 interface OpenShiftFormProps {
-  /** The window of this moment, as text: `Night shift (17:31 to 08:59)`. It is shown, never chosen (docs/phase-232). */
+  /** The window of this moment, as text: `Night shift (17:31 to 06:59)`. It is shown, never chosen (docs/phase-232). */
   windowLabel: string
   /** Set when this window already has a shift: there is nothing to open, and this says why. */
   windowHasShift: string | null

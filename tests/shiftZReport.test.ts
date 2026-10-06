@@ -2,6 +2,9 @@
  * The shift type on the Z report (docs/phase-199): `generateZReport` carries it
  * with its window label, `renderZReport` prints one extra line, and the cash
  * figures are the same with or without it.
+ *
+ * CHANGED (docs/phase-237). OLD: Day began at 09:00 and Night ended at 08:59 (docs/phase-199 D1). NEW: Day begins at
+ * 07:00 and Night ends at 06:59, the owner's correction; the rule, the labels and the boundary seconds move with it.
  */
 
 import { readFileSync } from 'node:fs'
@@ -43,7 +46,7 @@ describe('generateZReport shift fields', () => {
     const report = generateZReport(dbFor({ ...baseShift, shift_type: 'day' }), 4, 0.16)
 
     expect(report.shiftType).toBe('day')
-    expect(report.shiftWindowLabel).toBe('Day shift (09:00 to 17:30)')
+    expect(report.shiftWindowLabel).toBe('Day shift (07:00 to 17:30)')
   })
 
   it('returns the night shift and its window label', () => {
@@ -57,7 +60,7 @@ describe('generateZReport shift fields', () => {
     )
 
     expect(report.shiftType).toBe('night')
-    expect(report.shiftWindowLabel).toBe('Night shift (17:31 to 08:59)')
+    expect(report.shiftWindowLabel).toBe('Night shift (17:31 to 06:59)')
     expect(report.labelledAs).toBeUndefined()
   })
 
@@ -65,7 +68,7 @@ describe('generateZReport shift fields', () => {
     const report = generateZReport(dbFor({ ...baseShift, shift_type: 'night' }), 4, 0.16)
 
     expect(report.shiftType).toBe('day')
-    expect(report.shiftWindowLabel).toBe('Day shift (09:00 to 17:30)')
+    expect(report.shiftWindowLabel).toBe('Day shift (07:00 to 17:30)')
     expect(report.labelledAs).toBe('night')
   })
 
@@ -76,7 +79,7 @@ describe('generateZReport shift fields', () => {
       const report = generateZReport(dbFor(shift), 4, 0.16)
 
       expect(report.shiftType).toBe('day')
-      expect(report.shiftWindowLabel).toBe('Day shift (09:00 to 17:30)')
+      expect(report.shiftWindowLabel).toBe('Day shift (07:00 to 17:30)')
       expect(report.labelledAs).toBeUndefined()
     }
   })
@@ -167,20 +170,20 @@ describe('renderZReport shift line', () => {
   }
 
   it('prints the window label on its own line, straight after the shift number', () => {
-    const lines = printed({ ...baseReport, shiftType: 'night', shiftWindowLabel: 'Night shift (17:31 to 08:59)' })
+    const lines = printed({ ...baseReport, shiftType: 'night', shiftWindowLabel: 'Night shift (17:31 to 06:59)' })
     const at = lines.indexOf('Shift #4')
 
-    expect(lines[at + 1]).toBe('Night shift (17:31 to 08:59)')
+    expect(lines[at + 1]).toBe('Night shift (17:31 to 06:59)')
     expect(lines[at + 2]).toMatch(/^Opened:/)
   })
 
   it('fits a 32-column slip', () => {
-    expect('Night shift (17:31 to 08:59)'.length).toBeLessThanOrEqual(32)
-    expect('Day shift (09:00 to 17:30)'.length).toBeLessThanOrEqual(32)
+    expect('Night shift (17:31 to 06:59)'.length).toBeLessThanOrEqual(32)
+    expect('Day shift (07:00 to 17:30)'.length).toBeLessThanOrEqual(32)
   })
 
   it('prints no extra line for a shift without a type', () => {
-    const withLabel = printed({ ...baseReport, shiftWindowLabel: 'Day shift (09:00 to 17:30)' })
+    const withLabel = printed({ ...baseReport, shiftWindowLabel: 'Day shift (07:00 to 17:30)' })
     const without = printed(baseReport)
     const nulled = printed({ ...baseReport, shiftType: null, shiftWindowLabel: null })
 

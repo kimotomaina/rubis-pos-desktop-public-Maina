@@ -1,7 +1,10 @@
 /**
- * The fixed shift windows (docs/phase-199): day is 09:00:00 to 17:30:59
+ * The fixed shift windows (docs/phase-199): day is 07:00:00 to 17:30:59
  * Nairobi time, night is everything else, decided on the whole minute. The
  * renderer's copy must agree with the main one on every input.
+ *
+ * CHANGED (docs/phase-237). OLD: Day began at 09:00 and Night ended at 08:59 (docs/phase-199 D1). NEW: Day begins at
+ * 07:00 and Night ends at 06:59, the owner's correction; the rule, the labels and the boundary seconds move with it.
  */
 
 import { describe, it, expect } from 'vitest'
@@ -25,11 +28,11 @@ const nairobi = (time: string, date = '2026-10-02'): string =>
 describe('shiftTypeForTime, in Nairobi time', () => {
   const cases: Array<[string, ShiftType]> = [
     ['00:00:00', 'night'],
-    ['08:59:00', 'night'],
-    ['08:59:59', 'night'],
-    ['09:00:00', 'day'],
-    ['09:00:01', 'day'],
-    ['09:01:00', 'day'],
+    ['06:59:00', 'night'],
+    ['06:59:59', 'night'],
+    ['07:00:00', 'day'],
+    ['07:00:01', 'day'],
+    ['07:01:00', 'day'],
     ['12:00:00', 'day'],
     ['17:29:00', 'day'],
     ['17:30:00', 'day'],
@@ -50,16 +53,16 @@ describe('shiftTypeForTime, in Nairobi time', () => {
 
   it('reads the same on every date, including across a month and a year end', () => {
     for (const date of ['2026-01-01', '2026-02-28', '2026-12-31', '2028-02-29']) {
-      expect(shiftTypeForTime(nairobi('09:00:00', date))).toBe('day')
-      expect(shiftTypeForTime(nairobi('08:59:59', date))).toBe('night')
+      expect(shiftTypeForTime(nairobi('07:00:00', date))).toBe('day')
+      expect(shiftTypeForTime(nairobi('06:59:59', date))).toBe('night')
     }
   })
 })
 
 describe('shiftTypeForTime, given UTC instants (the offset is applied, not assumed)', () => {
   const cases: Array<[string, ShiftType, string]> = [
-    ['2026-10-02T05:59:59.000Z', 'night', '08:59:59 Nairobi'],
-    ['2026-10-02T06:00:00.000Z', 'day', '09:00:00 Nairobi'],
+    ['2026-10-02T03:59:59.000Z', 'night', '06:59:59 Nairobi'],
+    ['2026-10-02T04:00:00.000Z', 'day', '07:00:00 Nairobi'],
     ['2026-10-02T14:30:59.000Z', 'day', '17:30:59 Nairobi'],
     ['2026-10-02T14:31:00.000Z', 'night', '17:31:00 Nairobi'],
     ['2026-10-01T21:00:00.000Z', 'night', '00:00:00 Nairobi on the 2nd'],
@@ -71,7 +74,7 @@ describe('shiftTypeForTime, given UTC instants (the offset is applied, not assum
   })
 
   it('does not read the UTC clock: 06:00Z is day and 14:31Z is night', () => {
-    // A UTC-naive version would call 06:00Z night (before 09:00) and 14:31Z day (before 17:30).
+    // A UTC-naive version would call 06:00Z night (before 07:00) and 14:31Z day (before 17:30).
     expect(shiftTypeForTime('2026-10-02T06:00:00.000Z')).toBe('day')
     expect(shiftTypeForTime('2026-10-02T14:31:00.000Z')).toBe('night')
   })
@@ -83,39 +86,39 @@ describe('shiftTypeForTime, given UTC instants (the offset is applied, not assum
 
 describe('labels and windows', () => {
   it('labels the day shift', () => {
-    expect(shiftWindowLabel('day')).toBe('Day shift (09:00 to 17:30)')
+    expect(shiftWindowLabel('day')).toBe('Day shift (07:00 to 17:30)')
   })
 
   it('labels the night shift', () => {
-    expect(shiftWindowLabel('night')).toBe('Night shift (17:31 to 08:59)')
+    expect(shiftWindowLabel('night')).toBe('Night shift (17:31 to 06:59)')
   })
 
   it('names the shifts and gives the last minute of each window', () => {
     expect(shiftName('day')).toBe('Day shift')
     expect(shiftName('night')).toBe('Night shift')
     expect(shiftEndClock('day')).toBe('17:30')
-    expect(shiftEndClock('night')).toBe('08:59')
+    expect(shiftEndClock('night')).toBe('06:59')
   })
 
   it('lists both shift types and keeps the window constants', () => {
     expect([...SHIFT_TYPES]).toEqual(['day', 'night'])
-    expect(DAY_SHIFT).toEqual({ type: 'day', startMinutes: 540, endMinutes: 1050 })
-    expect(NIGHT_SHIFT).toEqual({ type: 'night', startMinutes: 1051, endMinutes: 539 })
+    expect(DAY_SHIFT).toEqual({ type: 'day', startMinutes: 420, endMinutes: 1050 })
+    expect(NIGHT_SHIFT).toEqual({ type: 'night', startMinutes: 1051, endMinutes: 419 })
   })
 })
 
 describe('isPastShiftEnd: the next time the window ends after the shift opened', () => {
-  it('a night shift opened at 02:00 is due at 09:00 the same morning', () => {
+  it('a night shift opened at 02:00 is due at 07:00 the same morning', () => {
     const opened = nairobi('02:00:00')
-    expect(isPastShiftEnd('night', opened, nairobi('08:59:59'))).toBe(false)
-    expect(isPastShiftEnd('night', opened, nairobi('09:00:00'))).toBe(true)
+    expect(isPastShiftEnd('night', opened, nairobi('06:59:59'))).toBe(false)
+    expect(isPastShiftEnd('night', opened, nairobi('07:00:00'))).toBe(true)
   })
 
-  it('a night shift opened at 18:00 is due at 09:00 the next morning, not the same evening', () => {
+  it('a night shift opened at 18:00 is due at 07:00 the next morning, not the same evening', () => {
     const opened = nairobi('18:00:00')
     expect(isPastShiftEnd('night', opened, nairobi('23:59:00'))).toBe(false)
-    expect(isPastShiftEnd('night', opened, nairobi('08:59:59', '2026-10-03'))).toBe(false)
-    expect(isPastShiftEnd('night', opened, nairobi('09:00:00', '2026-10-03'))).toBe(true)
+    expect(isPastShiftEnd('night', opened, nairobi('06:59:59', '2026-10-03'))).toBe(false)
+    expect(isPastShiftEnd('night', opened, nairobi('07:00:00', '2026-10-03'))).toBe(true)
   })
 
   it('a day shift opened at 10:00 is due once the clock reaches 17:31', () => {
@@ -164,7 +167,7 @@ describe('the renderer twin agrees with the main file', () => {
   })
 
   it('agrees on isPastShiftEnd for every opening and checking time on a grid', () => {
-    const times = ['00:00:00', '02:00:00', '08:59:59', '09:00:00', '10:00:00', '17:30:59', '17:31:00', '18:00:00', '23:59:59']
+    const times = ['00:00:00', '02:00:00', '06:59:59', '07:00:00', '10:00:00', '17:30:59', '17:31:00', '18:00:00', '23:59:59']
     for (const type of SHIFT_TYPES) {
       for (const open of times) {
         for (const dayOffset of ['2026-10-02', '2026-10-03']) {

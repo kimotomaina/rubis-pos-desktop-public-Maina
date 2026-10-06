@@ -73,7 +73,7 @@ export interface ZReport {
   discrepancy: number | null
   /** Which shift was opened, when it was recorded (docs/phase-199); absent on a shift opened before then. */
   shiftType?: ShiftType | null
-  /** The nominal window of {@link shiftType}, e.g. `Day shift (09:00 to 17:30)`; absent with it. */
+  /** The nominal window of {@link shiftType}, e.g. `Day shift (07:00 to 17:30)`; absent with it. */
   shiftWindowLabel?: string | null
   /**
    * The M-Pesa till balances for the shift (docs/phase-222). Every one is `null` when it was not recorded,

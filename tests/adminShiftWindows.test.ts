@@ -6,10 +6,13 @@
  *
  * CHANGED (docs/phase-232). OLD: the shift that matched the clock was preselected, both shifts stayed on screen and
  * could be switched, the chosen one was sent, and a note appeared from 17:31:00 ("due to close at 17:30"). NEW: see
- * above. The boundary results (day at 17:30:59 and 09:00:00, night at 17:31:00 and 08:59:59) are unchanged: they now
+ * above. The boundary results (day at 17:30:59 and 07:00:00, night at 17:31:00 and 06:59:59) are unchanged: they now
  * come from the main process's `getShiftWindowStatus`, which these tests run for real.
  *
  * Real mount, the same way `tests/adminScreen.test.ts` does it.
+ *
+ * CHANGED (docs/phase-237). OLD: Day began at 09:00 and Night ended at 08:59 (docs/phase-199 D1). NEW: Day begins at
+ * 07:00 and Night ends at 06:59, the owner's correction; the rule, the labels and the boundary seconds move with it.
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
@@ -94,8 +97,8 @@ async function click(label: string): Promise<void> {
   })
 }
 
-const DAY_LABEL = 'Day shift (09:00 to 17:30)'
-const NIGHT_LABEL = 'Night shift (17:31 to 08:59)'
+const DAY_LABEL = 'Day shift (07:00 to 17:30)'
+const NIGHT_LABEL = 'Night shift (17:31 to 06:59)'
 
 /** Opens the Overview tab with no shift open at the given Nairobi time, and presses Open Shift. */
 async function openFormAt(time: string, holder: ShiftRow | null = null): Promise<void> {
@@ -139,12 +142,12 @@ describe('Open Shift: the window is shown, never chosen', () => {
     expect(container.querySelectorAll('[role="radio"]')).toHaveLength(0)
   })
 
-  it('follows the boundary: day at 17:30:59 and 09:00:00, night at 17:31:00 and 08:59:59', async () => {
+  it('follows the boundary: day at 17:30:59 and 07:00:00, night at 17:31:00 and 06:59:59', async () => {
     const cases: Array<[string, string]> = [
       ['17:30:59', DAY_LABEL],
       ['17:31:00', NIGHT_LABEL],
-      ['08:59:59', NIGHT_LABEL],
-      ['09:00:00', DAY_LABEL]
+      ['06:59:59', NIGHT_LABEL],
+      ['07:00:00', DAY_LABEL]
     ]
     for (const [time, label] of cases) {
       await openFormAt(time)
@@ -213,17 +216,17 @@ describe('an open shift: its window and the close note', () => {
     expect(button('Close Shift').disabled).toBe(true)
   })
 
-  it('asks from 08:59:00 for a night shift opened the evening before, and not at 08:58:59', async () => {
+  it('asks from 06:59:00 for a night shift opened the evening before, and not at 06:58:59', async () => {
     const shift = openShiftRow({ shift_type: 'night', clock_in: nairobi('18:30:00').toISOString() })
 
-    await mountOpen(shift, '08:58:59', '2026-10-03')
+    await mountOpen(shift, '06:58:59', '2026-10-03')
     expect(container.querySelector('[data-testid="close-banner"]')).toBeNull()
     act(() => root.unmount())
     root = createRoot(container)
 
-    await mountOpen(shift, '08:59:00', '2026-10-03')
+    await mountOpen(shift, '06:59:00', '2026-10-03')
     expect(container.querySelector('[data-testid="close-banner"]')?.textContent).toBe(
-      'Night window ended at 08:59. Count the drawer and close shift #5.'
+      'Night window ended at 06:59. Count the drawer and close shift #5.'
     )
   })
 

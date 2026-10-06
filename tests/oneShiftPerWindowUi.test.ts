@@ -5,6 +5,9 @@
  *
  * Real mounts, as `tests/shiftCaptureUi.test.ts` does them. Layout: not checked by check:fit (owner's rule). For the
  * owner to check on the till.
+ *
+ * CHANGED (docs/phase-237). OLD: Day began at 09:00 and Night ended at 08:59 (docs/phase-199 D1). NEW: Day begins at
+ * 07:00 and Night ends at 06:59, the owner's correction; the rule, the labels and the boundary seconds move with it.
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
@@ -325,7 +328,7 @@ describe('the Z report window', () => {
     endingCash: 3790,
     discrepancy: 3790,
     shiftType: 'night',
-    shiftWindowLabel: 'Night shift (17:31 to 08:59)',
+    shiftWindowLabel: 'Night shift (17:31 to 06:59)',
     labelledAs: 'day',
     salesAtClose: { orderCount: 1, totalRevenue: 111, cash: 111, mpesa: 0, card: 0 },
     adjustments: [
@@ -367,7 +370,7 @@ describe('the Z report window', () => {
     await show(base)
 
     const text = plain(container.textContent)
-    expect(text).toContain('Night shift (17:31 to 08:59)')
+    expect(text).toContain('Night shift (17:31 to 06:59)')
     expect(text).toContain('Labelled Day when opened')
     expect(text).toContain('Sales at close: 1 order, Ksh 111.00')
     expect(text).toContain('Expected Cash')

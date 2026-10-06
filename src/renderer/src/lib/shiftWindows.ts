@@ -26,12 +26,13 @@ interface ShiftWindow {
 }
 
 /** Both ends inclusive, in whole minutes after Nairobi midnight: 17:30:59 is day, 17:31:00 is night. */
-export const DAY_SHIFT: ShiftWindow = { type: 'day', startMinutes: 9 * 60, endMinutes: 17 * 60 + 30 }
+/** Day 07:00 to 17:30 (docs/phase-237), the same numbers as the main copy. */
+export const DAY_SHIFT: ShiftWindow = { type: 'day', startMinutes: 7 * 60, endMinutes: 17 * 60 + 30 }
 
 export const NIGHT_SHIFT: ShiftWindow = {
   type: 'night',
   startMinutes: 17 * 60 + 31,
-  endMinutes: 9 * 60 - 1
+  endMinutes: 7 * 60 - 1
 }
 
 function toNairobiWallClock(iso: string): Date {
@@ -57,7 +58,7 @@ function nairobiMinuteOfDay(iso: string): number {
 }
 
 /**
- * Which shift an instant falls in: 09:00:00 to 17:30:59 Nairobi time is
+ * Which shift an instant falls in: 07:00:00 to 17:30:59 Nairobi time is
  * `'day'`, everything else `'night'`.
  *
  * @param {string} iso
@@ -69,7 +70,7 @@ export function shiftTypeForTime(iso: string): ShiftType {
 }
 
 /**
- * `Day shift (09:00 to 17:30)` or `Night shift (17:31 to 08:59)`.
+ * `Day shift (07:00 to 17:30)` or `Night shift (17:31 to 06:59)`.
  *
  * @param {ShiftType} type
  * @returns {string}

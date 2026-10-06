@@ -8,6 +8,9 @@
  * (docs/phase-232, S6); see the dialog tests below. The Z report, correction form, notice and store tests are unchanged.
  *
  * Real mounts, as `tests/adminShiftWindows.test.ts` does them.
+ *
+ * CHANGED (docs/phase-237). OLD: Day began at 09:00 and Night ended at 08:59 (docs/phase-199 D1). NEW: Day begins at
+ * 07:00 and Night ends at 06:59, the owner's correction; the rule, the labels and the boundary seconds move with it.
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
@@ -287,8 +290,8 @@ describe('the shift store (D5)', () => {
 })
 
 describe('the cart dialog (D5, S6)', () => {
-  const NIGHT = 'Night shift (17:31 to 08:59)'
-  const DAY_LABEL = 'Day shift (09:00 to 17:30)'
+  const NIGHT = 'Night shift (17:31 to 06:59)'
+  const DAY_LABEL = 'Day shift (07:00 to 17:30)'
   const mountDialog = async (
     staff: { id: number; role: string },
     extra: Partial<{ requestManagerPin: ReturnType<typeof vi.fn>; onOpened: () => void }> = {}

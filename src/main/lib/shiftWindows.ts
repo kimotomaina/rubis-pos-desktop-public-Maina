@@ -30,12 +30,13 @@ export interface ShiftWindow {
   endMinutes: number
 }
 
-export const DAY_SHIFT: ShiftWindow = { type: 'day', startMinutes: 9 * 60, endMinutes: 17 * 60 + 30 }
+/** Day 07:00 to 17:30 (docs/phase-237; the 09:00 start of docs/phase-199 was an error). */
+export const DAY_SHIFT: ShiftWindow = { type: 'day', startMinutes: 7 * 60, endMinutes: 17 * 60 + 30 }
 
 export const NIGHT_SHIFT: ShiftWindow = {
   type: 'night',
   startMinutes: 17 * 60 + 31,
-  endMinutes: 9 * 60 - 1
+  endMinutes: 7 * 60 - 1
 }
 
 const MINUTES_PER_DAY = 24 * 60
@@ -79,8 +80,8 @@ function nairobiMinuteOfDay(iso: string): number {
 }
 
 /**
- * Which shift an instant falls in. 09:00:00 to 17:30:59 Nairobi time is
- * `'day'`, everything else is `'night'`, so 08:59:59 is night, 09:00:00 is
+ * Which shift an instant falls in. 07:00:00 to 17:30:59 Nairobi time is
+ * `'day'`, everything else is `'night'`, so 06:59:59 is night, 07:00:00 is
  * day, 17:30:59 is day and 17:31:00 is night.
  *
  * @param {string} iso — an ISO-8601 instant
@@ -100,8 +101,8 @@ export interface ShiftWindowInstance {
 
 /**
  * Which window instance an instant falls in (docs/phase-229): its type from {@link shiftTypeForTime}, and the date
- * that window started on. Day is 09:00:00 to 17:30:59 on its own date. Night is 17:31:00 to 08:59:59 the next
- * morning, so 00:00 to 08:59 belongs to the night that began the evening before.
+ * that window started on. Day is 07:00:00 to 17:30:59 on its own date. Night is 17:31:00 to 06:59:59 the next
+ * morning, so 00:00 to 06:59 belongs to the night that began the evening before.
  *
  * @param {string} iso — an ISO-8601 instant
  * @returns {ShiftWindowInstance}
@@ -129,7 +130,7 @@ export function sameWindow(a: ShiftWindowInstance, b: ShiftWindowInstance): bool
 
 /**
  * The first instant a shift may be closed (docs/phase-232): the start of its window's last minute, so a Day shift
- * can be closed from 17:30:00 and a Night shift from 08:59:00 the next morning. The window is the one the shift's
+ * can be closed from 17:30:00 and a Night shift from 06:59:00 the next morning. The window is the one the shift's
  * `clock_in` falls in; a shift left open past it can be closed at any time after.
  *
  * @param {string} clockInIso — the shift's `clock_in`
@@ -144,8 +145,8 @@ export function windowClosableFrom(clockInIso: string): number {
 }
 
 /**
- * The label shown beside a shift: `Day shift (09:00 to 17:30)` or
- * `Night shift (17:31 to 08:59)`.
+ * The label shown beside a shift: `Day shift (07:00 to 17:30)` or
+ * `Night shift (17:31 to 06:59)`.
  *
  * @param {ShiftType} type
  * @returns {string}
@@ -180,7 +181,7 @@ export function shiftEndClock(type: ShiftType): string {
  * Whether a shift opened at `openedAtIso` has run past the end of its
  * window by `nowIso`. The due moment is the next time the window's end
  * comes round after the shift was opened, so a night shift opened at 02:00
- * is due at 09:00 the same morning and one opened at 18:00 is due at 09:00
+ * is due at 07:00 the same morning and one opened at 18:00 is due at 07:00
  * the next. A note for the screen only: nothing is blocked or closed by it.
  *
  * @param {ShiftType} type
