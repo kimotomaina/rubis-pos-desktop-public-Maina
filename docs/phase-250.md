@@ -67,6 +67,16 @@ Two small helpers sit on top of it. Neither reads the database:
 
 Nothing in the golden run was an error: 0 errors in every group.
 
+**The writes ran under the old code too** (added 2026-10-06 21:10, on the owner's question). The golden files were written by this same test, so the close, the three sales, the window status, the opening and the 5 Oct repair ran on a fresh temp copy under the old code before they were written. The order, from the session record:
+1. **20:32:07:** the 249-1 commit. The tree held no phase 250 change.
+2. **20:34:41:** the test file was written. It was never edited after this.
+3. **20:34:55:** the golden files were written under the old code (`RUBIS_GOLDEN_WRITE=1`).
+4. **20:35:12:** a second run under the old code, comparing, was identical. This shows the run gives the same figures each time.
+5. **20:36:** the first phase 250 code change.
+6. **20:49 and 20:56:** the comparisons under the new code were identical.
+
+The "after" figures were therefore compared with "before" figures from the same scripted steps.
+
 ## Tests
 
 [paymentLegs.test.ts](../tests/paymentLegs.test.ts), 17 tests on a real `:memory:` SQLite. The data is a mixed set: cash, M-Pesa and card sales in three shifts, one of them voided, and three sales with no shift in a window with no shift.
