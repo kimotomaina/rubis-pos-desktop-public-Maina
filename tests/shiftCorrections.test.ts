@@ -238,10 +238,14 @@ describe('addShiftCorrection', () => {
       mpesa_opening_balance: 1000,
       mpesa_closing_balance: 1500,
       mpesa_expected: 1500,
-      mpesa_difference: 0
+      mpesa_difference: 0,
+      // CHANGED (docs/phase-246, R5). OLD: no card keys. NEW: the three card columns, `null` when no card figure was given.
+      card_closing_balance: null,
+      card_expected: null,
+      card_difference: null
     })
     const [insert] = fake.callsFor('run', 'INSERT INTO shift_corrections')
-    expect(insert.params).toEqual([1, 2, new Date(NOW).toISOString(), 'Counted cash was mistyped', 1000, 1500, 1500, 0, 1000, 1500, 1500, 0])
+    expect(insert.params).toEqual([1, 2, new Date(NOW).toISOString(), 'Counted cash was mistyped', 1000, 1500, 1500, 0, 1000, 1500, 1500, 0, null, null, null])
   })
 
   it('never touches the shift, any sale, or the sync queue: the one write is the new row', () => {

@@ -623,15 +623,17 @@ const api = {
    *
    * @param {number} shiftId
    * @param {number} endingCash
-   * @param {number} [mpesaClosingBalance] — the M-Pesa till balance, if it was read (docs/phase-222)
+   * @param {number | null} [mpesaClosingBalance] — the M-Pesa till balance, if it was read (docs/phase-222)
+   * @param {number | null} [cardClosingBalance] — the card settlement, if it was read (docs/phase-246, R5)
    * @returns {Promise<ServiceResult<ShiftCloseResult>>}
    */
   closeShift: (
     shiftId: number,
     endingCash: number,
-    mpesaClosingBalance?: number
+    mpesaClosingBalance?: number | null,
+    cardClosingBalance?: number | null
   ): Promise<ServiceResult<ShiftCloseResult>> =>
-    ipcRenderer.invoke('shifts:close', { shiftId, endingCash, mpesaClosingBalance }),
+    ipcRenderer.invoke('shifts:close', { shiftId, endingCash, mpesaClosingBalance, cardClosingBalance }),
 
   /**
    * The shift window of this moment, its shift, the earlier sales an Open Shift would bring in, and when the open

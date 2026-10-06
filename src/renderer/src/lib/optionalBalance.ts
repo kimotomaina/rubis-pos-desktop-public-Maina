@@ -1,6 +1,9 @@
 /** Shown when an optional M-Pesa balance field holds something that is not a balance (docs/phase-222). */
 export const MPESA_BALANCE_INVALID = 'Enter a valid M-Pesa balance, or leave it blank'
 
+/** Shown when the optional card settlement field holds something that is not an amount (docs/phase-246, R5). */
+export const CARD_BALANCE_INVALID = 'Enter a valid card settlement amount, or leave it blank'
+
 /**
  * Reads an optional balance field (docs/phase-222): blank is `null` ("not recorded"), a number is itself,
  * anything else is `'invalid'`. A blank is never turned into 0, which would read as "the balance was nothing".

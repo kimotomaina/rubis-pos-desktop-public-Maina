@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import type { ZReport } from '../../../main/services/reports.js'
 import { formatCurrency } from '../lib/currency.js'
 import { zReportMpesaLines } from '../lib/zReportMpesa.js'
+import { zReportCardLines } from '../lib/zReportCard.js'
 import { zReportRetroLines } from '../lib/zReportRetro.js'
 import { zReportCorrectionBlocks } from '../lib/zReportCorrections.js'
 import ShiftCorrectionForm from './ShiftCorrectionForm.js'
@@ -64,7 +65,7 @@ export default function ZReportModal({ report: initialReport, onClose, startCorr
   // docs/phase-239: a shift merged into another says so; its figures are history and are not corrected here.
   const mergedLine = zReportMergedLine(report, (iso) => new Date(iso).toLocaleString())
   const salesAtCloseLine = zReportSalesAtCloseLine(report, formatCurrency)
-  const CORRECTION_SUMMARY = ['Counted Cash', 'Discrepancy', 'M-Pesa counted', 'Check against the M-Pesa statement']
+  const CORRECTION_SUMMARY = ['Counted Cash', 'Discrepancy', 'M-Pesa counted', 'Check against the M-Pesa statement', 'Card counted', 'Check against the PDQ settlement']
 
   const handleCorrected = async (): Promise<void> => {
     setCorrecting(false)
@@ -238,7 +239,7 @@ export default function ZReportModal({ report: initialReport, onClose, startCorr
               )}
 
               <div className="space-y-0.5 rounded-lg border border-slate-200 p-2 text-sm">
-                {zReportMpesaLines(report, formatCurrency).map((line) => (
+                {[...zReportMpesaLines(report, formatCurrency), ...zReportCardLines(report, formatCurrency)].map((line) => (
                   <div key={line.label} className="flex justify-between">
                     <span className="text-slate-600">{line.label}</span>
                     <span className="font-medium">{line.value}</span>

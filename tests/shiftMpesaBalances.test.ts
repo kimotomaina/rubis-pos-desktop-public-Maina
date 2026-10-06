@@ -217,7 +217,8 @@ describe('closeShift with M-Pesa balances', () => {
     // has reached its last minute; a shift it cannot find is left to closeShift, which says so.
     closeShiftUnlessHeld({ closeShift, listOpenHeldSales: () => [], getShiftById: () => undefined }, 3, 100, 640)
 
-    expect(closeShift).toHaveBeenCalledWith(3, 100, 640)
+    // CHANGED (docs/phase-246, R5). OLD: `(3, 100, 640)`. NEW: closeShift also takes the card settlement, `null` when not given.
+    expect(closeShift).toHaveBeenCalledWith(3, 100, 640, null)
   })
 })
 
@@ -406,7 +407,12 @@ describe('the Z report M-Pesa lines', () => {
       expect.stringMatching(/^M-Pesa opening: .*1,000\.00$/),
       expect.stringMatching(/^M-Pesa expected: .*1,500\.00$/),
       expect.stringMatching(/^M-Pesa counted: .*1,480\.00$/),
-      expect.stringMatching(/^Check against the M-Pesa statement: .*20\.00$/)
+      expect.stringMatching(/^Check against the M-Pesa statement: .*20\.00$/),
+      // CHANGED (docs/phase-246, R5). OLD: the M-Pesa lines ended the slip. NEW: three card lines follow them, "Not recorded"
+      // for a shift with no card settlement counted.
+      'Card expected: Not recorded',
+      'Card counted: Not recorded',
+      'Check against the PDQ settlement: Not recorded'
     ])
   })
 })

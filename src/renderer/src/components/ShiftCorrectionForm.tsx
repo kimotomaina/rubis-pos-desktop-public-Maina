@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import type { ZReport } from '../../../main/services/reports.js'
-import { MPESA_BALANCE_INVALID, parseOptionalBalance, parseRequiredAmount } from '../lib/optionalBalance.js'
+import { CARD_BALANCE_INVALID, MPESA_BALANCE_INVALID, parseOptionalBalance, parseRequiredAmount } from '../lib/optionalBalance.js'
 import { useKeyboardStore, type KeyboardMode } from '../stores/keyboardStore.js'
 import ManagerPinModal from './ManagerPinModal.js'
 import ModalShell from './ModalShell.js'
@@ -40,6 +40,7 @@ export default function ShiftCorrectionForm({ report, onCancel, onCorrected }: S
   const [mpesaClosing, setMpesaClosing] = useState(
     asText(latest ? latest.mpesaClosingBalance : report.mpesaClosingBalance)
   )
+  const [cardClosing, setCardClosing] = useState(asText(latest ? latest.cardClosingBalance : report.cardClosingBalance))
   const [reason, setReason] = useState('')
   const [override, setOverride] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -66,6 +67,10 @@ export default function ShiftCorrectionForm({ report, onCancel, onCorrected }: S
       setError(MPESA_BALANCE_INVALID)
       return
     }
+    if (parseOptionalBalance(cardClosing) === 'invalid') {
+      setError(CARD_BALANCE_INVALID)
+      return
+    }
     if (reason.trim() === '') {
       setError('Say why the figures are being corrected')
       return
@@ -83,7 +88,8 @@ export default function ShiftCorrectionForm({ report, onCancel, onCorrected }: S
     const ending = parseRequiredAmount(endingCash)
     const opening = parseOptionalBalance(mpesaOpening)
     const closing = parseOptionalBalance(mpesaClosing)
-    if (starting === null || ending === null || opening === 'invalid' || closing === 'invalid') return
+    const card = parseOptionalBalance(cardClosing)
+    if (starting === null || ending === null || opening === 'invalid' || closing === 'invalid' || card === 'invalid') return
 
     void (async () => {
       setSaving(true)
@@ -97,6 +103,8 @@ export default function ShiftCorrectionForm({ report, onCancel, onCorrected }: S
           endingCash: ending,
           mpesaOpeningBalance: opening,
           mpesaClosingBalance: closing,
+          // docs/phase-246, R5: sent only when a card figure is given, so a correction without one sends what it always sent.
+          ...(card !== null ? { cardClosingBalance: card } : {}),
           reason: reason.trim(),
           ...(report.frozen && override ? { override: true } : {})
         })
@@ -208,6 +216,17 @@ export default function ShiftCorrectionForm({ report, onCancel, onCorrected }: S
                 placeholder="Not recorded"
                 aria-label="M-Pesa balance at end (optional)"
                 onClick={() => openField(mpesaClosing, setMpesaClosing, 'M-Pesa balance at end (optional)', 'decimal')}
+                className={FIELD_CLASS}
+              />
+            </div>
+            <div>
+              <label className="mb-1 block text-base font-medium text-slate-600">Card settlement at end (optional)</label>
+              <input
+                readOnly
+                value={cardClosing}
+                placeholder="Not recorded"
+                aria-label="Card settlement at end (optional)"
+                onClick={() => openField(cardClosing, setCardClosing, 'Card settlement at end (optional)', 'decimal')}
                 className={FIELD_CLASS}
               />
             </div>

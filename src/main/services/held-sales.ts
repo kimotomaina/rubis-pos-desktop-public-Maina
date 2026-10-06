@@ -41,6 +41,8 @@ export type CloseShiftDb = Pick<RubisDatabase, 'closeShift' | 'listOpenHeldSales
  * @param {number} endingCash
  * @param {number | null} [mpesaClosingBalance] — the M-Pesa till balance if it was read (docs/phase-222)
  * @param {number} [nowMs] — the clock; the main process's own
+ * @param {number | null} [cardClosingBalance] — the card settlement if it was read (docs/phase-246, R5); last, so every
+ *   existing call keeps its meaning
  * @returns {ServiceResult<ShiftCloseResult>}
  */
 export function closeShiftUnlessHeld(
@@ -48,7 +50,8 @@ export function closeShiftUnlessHeld(
   shiftId: number,
   endingCash: number,
   mpesaClosingBalance: number | null = null,
-  nowMs: number = Date.now()
+  nowMs: number = Date.now(),
+  cardClosingBalance: number | null = null
 ): ServiceResult<ShiftCloseResult> {
   const timing = closeTimingFor(db, shiftId, nowMs)
   if (timing !== null) {
@@ -63,7 +66,7 @@ export function closeShiftUnlessHeld(
     }
   }
   try {
-    return { success: true, data: db.closeShift(shiftId, endingCash, mpesaClosingBalance) }
+    return { success: true, data: db.closeShift(shiftId, endingCash, mpesaClosingBalance, cardClosingBalance) }
   } catch (err) {
     return { success: false, error: err instanceof Error ? err.message : 'Failed to close shift' }
   }

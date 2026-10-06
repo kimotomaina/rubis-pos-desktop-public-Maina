@@ -61,7 +61,7 @@ import {
   validateEtimsConnection
 } from '../lib/etimsConfig.js'
 import { MPESA_SMS_PARSER_READY } from '../lib/mpesaConfig.js'
-import { MPESA_BALANCE_INVALID, parseOptionalBalance } from '../lib/optionalBalance.js'
+import { CARD_BALANCE_INVALID, MPESA_BALANCE_INVALID, parseOptionalBalance } from '../lib/optionalBalance.js'
 import type { FiscalConnectionTestResult } from '../../../main/services/integrations/fiscal-connection-test.js'
 import type { UpdateStatus } from '../../../main/services/updater.js'
 import type { LastUpdateResult } from '../../../main/services/updateBackup.js'
@@ -298,6 +298,7 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
   // docs/phase-222: optional; blank means "not recorded", which a zero is not.
   const [mpesaOpeningInput, setMpesaOpeningInput] = useState(OPEN_SHIFT_FIGURE_DEFAULT)
   const [mpesaClosingInput, setMpesaClosingInput] = useState('')
+  const [cardClosingInput, setCardClosingInput] = useState('')
   const [showOpenForm, setShowOpenForm] = useState(false)
   const [startAtZero, setStartAtZero] = useState(false)
   const { status: windowStatus, reload: reloadWindowStatus } = useShiftWindowStatus()
@@ -1194,10 +1195,16 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
       setShiftActionError(MPESA_BALANCE_INVALID)
       return
     }
+    const cardClosing = parseOptionalBalance(cardClosingInput)
+    if (cardClosing === 'invalid') {
+      setShiftActionError(CARD_BALANCE_INVALID)
+      return
+    }
+    // docs/phase-246, R5: a blank card figure sends nothing, so a shift closed as before sends the call it always sent.
     const result = await window.api.closeShift(
       currentShift.id,
       endingCash,
-      ...(mpesaClosing === null ? [] : [mpesaClosing])
+      ...(cardClosing !== null ? [mpesaClosing, cardClosing] : mpesaClosing === null ? [] : [mpesaClosing])
     )
     if (!result.success) {
       setShiftActionError(result.error ?? 'Failed to close shift')
@@ -1205,6 +1212,7 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
     }
     setEndingCashInput('')
     setMpesaClosingInput('')
+    setCardClosingInput('')
     setShowCloseForm(false)
 
     const reportResult = await window.api.getZReport(currentShift.id)
@@ -2543,6 +2551,20 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
                 className="w-40 h-12 rounded-lg border border-slate-300 px-3 text-xl focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-100"
               />
             </div>
+            <div>
+              <label className="mb-1 block text-lg font-medium text-slate-600">
+                Card settlement (optional)
+              </label>
+              <input
+                type="text"
+                readOnly
+                value={cardClosingInput}
+                placeholder="Not recorded"
+                onClick={() => openField(cardClosingInput, setCardClosingInput, 'Card settlement (optional)', { mode: 'decimal' })}
+                onFocus={() => openField(cardClosingInput, setCardClosingInput, 'Card settlement (optional)', { mode: 'decimal' })}
+                className="w-40 h-12 rounded-lg border border-slate-300 px-3 text-xl focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-100"
+              />
+            </div>
             <button
               type="button"
               onClick={() => void handleCloseShift()}
@@ -2556,6 +2578,7 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
                 setShowCloseForm(false)
                 setEndingCashInput('')
                 setMpesaClosingInput('')
+                setCardClosingInput('')
               }}
               className="rounded-lg border border-slate-300 px-4 py-2 text-base text-slate-600 hover:bg-slate-50"
             >

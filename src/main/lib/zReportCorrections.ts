@@ -11,6 +11,7 @@
 
 import type { ZReport, ZReportCorrection } from '../services/reports.js'
 import { zReportMpesaLines } from './zReportMpesa.js'
+import { zReportCardLines } from './zReportCard.js'
 
 /** One correction as text: a heading, and the figures it now gives. */
 export interface CorrectionBlock {
@@ -45,7 +46,19 @@ export function zReportCorrectionBlocks(
           mpesaDifference: correction.mpesaDifference
         },
         formatMoney
-      ).map((line) => `${line.label}: ${line.value}`)
+      ).map((line) => `${line.label}: ${line.value}`),
+      // docs/phase-246, R5: only a correction that holds a card figure says anything about card, so an older one reads as it did.
+      ...(correction.cardClosingBalance != null
+        ? zReportCardLines(
+            {
+              status: 'closed',
+              cardClosingBalance: correction.cardClosingBalance,
+              cardExpected: correction.cardExpected,
+              cardDifference: correction.cardDifference
+            },
+            formatMoney
+          ).map((line) => `${line.label}: ${line.value}`)
+        : [])
     ]
   }))
 }

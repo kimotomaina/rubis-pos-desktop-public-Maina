@@ -10,6 +10,8 @@ export interface ShiftCorrectionRequest {
   endingCash: number
   mpesaOpeningBalance: number | null
   mpesaClosingBalance: number | null
+  /** The card settlement read from the PDQ; absent or `null` is "not recorded" (docs/phase-246, R5). */
+  cardClosingBalance?: number | null
   reason: string
   /** An admin correcting a closed shift that is not the latest (docs/phase-244). */
   override?: boolean

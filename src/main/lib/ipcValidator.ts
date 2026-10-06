@@ -546,7 +546,9 @@ export const shiftCloseSchema = z.object({
   shiftId: z.number().int(),
   endingCash: z.number().finite(),
   // docs/phase-222: optional on purpose, as the opening balance is.
-  mpesaClosingBalance: z.number().finite().nonnegative().nullish()
+  mpesaClosingBalance: z.number().finite().nonnegative().nullish(),
+  // docs/phase-246, R5: the card settlement read from the PDQ; optional the same way, and never turned into 0.
+  cardClosingBalance: z.number().finite().nonnegative().nullish()
 })
 
 /**
@@ -615,6 +617,8 @@ export const shiftCorrectionSchema = managerAuthzSchema.extend({
   endingCash: z.number().finite().nonnegative(),
   mpesaOpeningBalance: z.number().finite().nonnegative().nullable(),
   mpesaClosingBalance: z.number().finite().nonnegative().nullable(),
+  /** Docs/phase-246, R5: the card settlement; absent or null is "not recorded". */
+  cardClosingBalance: z.number().finite().nonnegative().nullish(),
   reason: z.string().trim().min(1, 'A reason is required').max(300, 'Keep the reason under 300 characters'),
   /** Docs/phase-244: an admin correcting a closed shift that is not the latest; the database checks admin and reason length. */
   override: z.boolean().optional()

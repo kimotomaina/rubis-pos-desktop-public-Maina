@@ -193,3 +193,65 @@ describe('Close Shift: M-Pesa balance (optional)', () => {
     expect(container.textContent).not.toContain('M-Pesa balance.')
   })
 })
+
+// ADDED (docs/phase-246, R5): the card settlement beside the M-Pesa balance on the Close Shift form.
+describe('Close Shift: card settlement (optional)', () => {
+  const closeForm = async (): Promise<void> => {
+    stubApi(shiftRow())
+    await mount()
+    await click('Overview')
+    await click('Close Shift')
+  }
+
+  it('is a third field, empty and marked "Not recorded"', async () => {
+    await closeForm()
+
+    expect(container.textContent).toContain('Card settlement (optional)')
+    const field = container.querySelectorAll('input')[2]!
+    expect(field.value).toBe('')
+    expect(field.placeholder).toBe('Not recorded')
+  })
+
+  it('sends the call it always sent when it is left blank, whatever M-Pesa holds', async () => {
+    await closeForm()
+    type(0, '180')
+    await click('Confirm')
+    expect(window.api.closeShift).toHaveBeenCalledWith(5, 180)
+    expect(vi.mocked(window.api.closeShift).mock.calls[0]).toHaveLength(2)
+
+    act(() => root.unmount())
+    root = createRoot(container)
+    await closeForm()
+    type(0, '180')
+    type(1, '1480')
+    await click('Confirm')
+    expect(vi.mocked(window.api.closeShift).mock.calls[0]).toEqual([5, 180, 1480])
+  })
+
+  it('sends the card figure as the fourth argument, with a null M-Pesa balance when only card is given, and a typed 0 as 0', async () => {
+    await closeForm()
+    type(0, '180')
+    type(2, '3800')
+    await click('Confirm')
+    expect(vi.mocked(window.api.closeShift).mock.calls[0]).toEqual([5, 180, null, 3800])
+
+    act(() => root.unmount())
+    root = createRoot(container)
+    await closeForm()
+    type(0, '180')
+    type(1, '1480')
+    type(2, '0')
+    await click('Confirm')
+    expect(vi.mocked(window.api.closeShift).mock.calls[0]).toEqual([5, 180, 1480, 0])
+  })
+
+  it('refuses a bad figure with a message and sends nothing', async () => {
+    await closeForm()
+    type(0, '180')
+    type(2, 'abc')
+    await click('Confirm')
+
+    expect(window.api.closeShift).not.toHaveBeenCalled()
+    expect(container.textContent).toContain('Enter a valid card settlement amount, or leave it blank')
+  })
+})

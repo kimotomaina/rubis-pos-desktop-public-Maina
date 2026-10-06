@@ -349,6 +349,13 @@ export interface ShiftRow {
   /** `mpesa_closing_balance` − `mpesa_expected`: a prompt to check the statement, not a shortage. */
   mpesa_difference?: number | null
   /**
+   * The card settlement read from the PDQ at close (docs/phase-246, R5), the shift's card sales, and the counted figure
+   * less them. `NULL` when not recorded, which is not 0; expected and difference are stored only with a counted figure.
+   */
+  card_closing_balance?: number | null
+  card_expected?: number | null
+  card_difference?: number | null
+  /**
    * `'retrospective'` for a shift recorded after the fact for sales that had none (docs/phase-223);
    * `'normal'` for every other shift, including every shift from before this phase.
    */
@@ -425,6 +432,9 @@ export interface ShiftCloseResult {
   discrepancy: number
   mpesaExpected: number | null
   mpesaDifference: number | null
+  /** Present only when a card figure was counted (docs/phase-246, R5). */
+  cardExpected?: number
+  cardDifference?: number
 }
 
 /** One sale with no shift, as the past-shift screens list it (docs/phase-223). */
@@ -467,6 +477,10 @@ export interface ShiftAdjustmentRow {
   mpesa_closing_balance: number | null
   mpesa_expected: number | null
   mpesa_difference: number | null
+  /** The card settlement figures (docs/phase-246, R5); `NULL` when not recorded, which is not 0. */
+  card_closing_balance?: number | null
+  card_expected?: number | null
+  card_difference?: number | null
 }
 
 /** One sale named by an adjustment, with what the reports need to add it up. */
@@ -579,6 +593,10 @@ export interface ShiftCorrectionRow {
   mpesa_closing_balance: number | null
   mpesa_expected: number | null
   mpesa_difference: number | null
+  /** The card settlement figures (docs/phase-246, R5); `NULL` when not recorded, which is not 0. */
+  card_closing_balance?: number | null
+  card_expected?: number | null
+  card_difference?: number | null
 }
 
 /** What a correction needs (docs/phase-224); the caller has already checked the manager's PIN. */
@@ -974,6 +992,21 @@ function migrateShiftsColumns(connection: SqliteConnection): void {
 }
 
 /**
+ * Adds the card settlement columns (docs/phase-246, R5) to the three tables that hold a shift's counted figures: the
+ * shift itself, its corrections and its adjustment ledger. Nullable with no default and no backfill, so every row from
+ * before reads `NULL`, "Not recorded", which is not 0. Check then add, so it runs any number of times and a failure of
+ * the `ALTER` is a real error, not swallowed: running `init` twice changes nothing.
+ */
+function migrateCardColumns(connection: SqliteConnection): void {
+  for (const table of ['shifts', 'shift_corrections', 'shift_adjustments']) {
+    const have = new Set((connection.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>).map((c) => c.name))
+    for (const column of ['card_closing_balance', 'card_expected', 'card_difference']) {
+      if (!have.has(column)) connection.exec(`ALTER TABLE ${table} ADD COLUMN ${column} REAL`)
+    }
+  }
+}
+
+/**
  * Adds the product tax-classification columns (docs/phase-194) to a
  * pre-existing `products` table, so the offline catalogue keeps a
  * product's class instead of turning every exempt item into class A.
@@ -1174,6 +1207,9 @@ export const SCHEMA = {
     mpesa_closing_balance REAL,
     mpesa_expected REAL,
     mpesa_difference REAL,
+    card_closing_balance REAL,
+    card_expected REAL,
+    card_difference REAL,
     kind TEXT NOT NULL DEFAULT 'normal' CHECK (kind IN ('normal', 'retrospective')),
     created_by_staff_id INTEGER,
     created_at TEXT,
@@ -1199,7 +1235,10 @@ export const SCHEMA = {
     mpesa_opening_balance REAL,
     mpesa_closing_balance REAL,
     mpesa_expected REAL,
-    mpesa_difference REAL
+    mpesa_difference REAL,
+    card_closing_balance REAL,
+    card_expected REAL,
+    card_difference REAL
   )`,
   shiftCorrectionsShiftIndex: `CREATE INDEX IF NOT EXISTS idx_shift_corrections_shift ON shift_corrections (shift_id)`,
   shiftCorrectionsNoUpdate: `CREATE TRIGGER IF NOT EXISTS shift_corrections_no_update BEFORE UPDATE ON shift_corrections
@@ -1237,7 +1276,10 @@ export const SCHEMA = {
     mpesa_opening_balance REAL,
     mpesa_closing_balance REAL,
     mpesa_expected REAL,
-    mpesa_difference REAL
+    mpesa_difference REAL,
+    card_closing_balance REAL,
+    card_expected REAL,
+    card_difference REAL
   )`,
   shiftAdjustmentsShiftIndex: `CREATE INDEX IF NOT EXISTS idx_shift_adjustments_shift ON shift_adjustments (shift_id)`,
   shiftAdjustmentsNoUpdate: `CREATE TRIGGER IF NOT EXISTS shift_adjustments_no_update BEFORE UPDATE ON shift_adjustments
@@ -2093,6 +2135,7 @@ export class RubisDatabase {
     connection.exec(SCHEMA.shiftMerges)
     connection.exec(SCHEMA.shiftMergesNoUpdate)
     connection.exec(SCHEMA.shiftMergesNoDelete)
+    migrateCardColumns(connection)
     connection.exec(SCHEMA.integrations)
     connection.exec(SCHEMA.printers)
     migratePrintersColumns(connection)
@@ -4237,7 +4280,8 @@ export class RubisDatabase {
           startingCash: row.starting_cash,
           endingCash: row.ending_cash,
           mpesaOpeningBalance: row.mpesa_opening_balance,
-          mpesaClosingBalance: row.mpesa_closing_balance
+          mpesaClosingBalance: row.mpesa_closing_balance,
+          cardClosingBalance: row.card_closing_balance ?? null
         }
       })),
       ...this.listShiftAdjustments(shift.id)
@@ -4248,7 +4292,8 @@ export class RubisDatabase {
             startingCash: row.starting_cash as number,
             endingCash: row.ending_cash as number,
             mpesaOpeningBalance: row.mpesa_opening_balance,
-            mpesaClosingBalance: row.mpesa_closing_balance
+            mpesaClosingBalance: row.mpesa_closing_balance,
+            cardClosingBalance: row.card_closing_balance ?? null
           }
         }))
     ]
@@ -4258,7 +4303,8 @@ export class RubisDatabase {
         startingCash: shift.starting_cash,
         endingCash: shift.ending_cash ?? 0,
         mpesaOpeningBalance: shift.mpesa_opening_balance ?? null,
-        mpesaClosingBalance: shift.mpesa_closing_balance ?? null
+        mpesaClosingBalance: shift.mpesa_closing_balance ?? null,
+        cardClosingBalance: shift.card_closing_balance ?? null
       }
     }
     return candidates.reduce((newest, next) => (next.at >= newest.at ? next : newest)).entered
@@ -4284,7 +4330,7 @@ export class RubisDatabase {
     const counted = this.getOrdersForShift(shift.id).filter((order) => order.status !== 'voided')
     const totalFor = (method: string): number =>
       counted.filter((order) => order.payment_method === method).reduce((sum, order) => sum + order.total, 0)
-    return { ...entered, ...workShiftFigures(entered, totalFor('cash') + deltaCash, totalFor('mpesa') + deltaMpesa) }
+    return { ...entered, ...workShiftFigures(entered, totalFor('cash') + deltaCash, totalFor('mpesa') + deltaMpesa, totalFor('card')) }
   }
 
   /**
@@ -4318,8 +4364,9 @@ export class RubisDatabase {
         `INSERT INTO shift_adjustments (shift_id, kind, at, by_staff_id, reason, peer_shift_id, sales_count, sales_total,
                                         cash_total, mpesa_total, card_total, first_sale_at, last_sale_at, opening_drawer_cash,
                                         starting_cash, ending_cash, expected_cash, discrepancy,
-                                        mpesa_opening_balance, mpesa_closing_balance, mpesa_expected, mpesa_difference)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+                                        mpesa_opening_balance, mpesa_closing_balance, mpesa_expected, mpesa_difference,
+                                        card_closing_balance, card_expected, card_difference)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .run(
         input.shiftId,
@@ -4343,7 +4390,10 @@ export class RubisDatabase {
         figures?.mpesaOpeningBalance ?? null,
         figures?.mpesaClosingBalance ?? null,
         figures?.mpesaExpected ?? null,
-        figures?.mpesaDifference ?? null
+        figures?.mpesaDifference ?? null,
+        figures?.cardClosingBalance ?? null,
+        figures?.cardExpected ?? null,
+        figures?.cardDifference ?? null
       )
     const adjustmentId = Number(info.lastInsertRowid)
     const link = this.conn.prepare('INSERT INTO shift_adjustment_sales (adjustment_id, order_id) VALUES (?, ?)')
@@ -4396,13 +4446,15 @@ export class RubisDatabase {
    * @param {number} shiftId
    * @param {number} endingCash
    * @param {number | null} [mpesaClosingBalance] — the M-Pesa till balance if it was read; omitted stores `NULL`
+   * @param {number | null} [cardClosingBalance] — the card settlement read from the PDQ (docs/phase-246, R5); omitted stores `NULL`
    * @returns {ShiftCloseResult}
    * @throws if the shift does not exist or is already closed
    */
   closeShift(
     shiftId: number,
     endingCash: number,
-    mpesaClosingBalance: number | null = null
+    mpesaClosingBalance: number | null = null,
+    cardClosingBalance: number | null = null
   ): ShiftCloseResult {
     const shift = this.getShiftById(shiftId)
     if (!shift) {
@@ -4425,6 +4477,9 @@ export class RubisDatabase {
       mpesaExpected !== null && mpesaClosingBalance !== null ? mpesaClosingBalance - mpesaExpected : null
     // Expected is stored only with a counted balance beside it, so a stored expected always has its difference.
     const storedMpesaExpected = mpesaDifference !== null ? mpesaExpected : null
+    // docs/phase-246, R5: card expected is the shift's card sales, kept only with a counted figure beside it.
+    const cardExpected = cardClosingBalance !== null ? totalFor('card') : null
+    const cardDifference = cardClosingBalance !== null && cardExpected !== null ? cardClosingBalance - cardExpected : null
 
     this.conn.transaction(() => {
       this.conn
@@ -4439,9 +4494,20 @@ export class RubisDatabase {
           )
           .run(mpesaClosingBalance, storedMpesaExpected, mpesaDifference, shiftId)
       }
+      if (cardClosingBalance !== null) {
+        this.conn
+          .prepare('UPDATE shifts SET card_closing_balance = ?, card_expected = ?, card_difference = ? WHERE id = ?')
+          .run(cardClosingBalance, cardExpected, cardDifference, shiftId)
+      }
     })()
 
-    return { expectedCash, discrepancy, mpesaExpected: storedMpesaExpected, mpesaDifference }
+    return {
+      expectedCash,
+      discrepancy,
+      mpesaExpected: storedMpesaExpected,
+      mpesaDifference,
+      ...(cardExpected !== null && cardDifference !== null ? { cardExpected, cardDifference } : {})
+    }
   }
 
   /**
@@ -4971,7 +5037,7 @@ export class RubisDatabase {
     if (reason === '') {
       throw new Error('A reason is required to correct a shift')
     }
-    const figures = [input.startingCash, input.endingCash, input.mpesaOpeningBalance, input.mpesaClosingBalance]
+    const figures = [input.startingCash, input.endingCash, input.mpesaOpeningBalance, input.mpesaClosingBalance, input.cardClosingBalance ?? null]
     if (figures.some((value) => value !== null && !(Number.isFinite(value) && value >= 0))) {
       throw new Error('Every figure must be a number of 0 or more')
     }
@@ -5000,19 +5066,22 @@ export class RubisDatabase {
             startingCash: latest.starting_cash,
             endingCash: latest.ending_cash,
             mpesaOpeningBalance: latest.mpesa_opening_balance,
-            mpesaClosingBalance: latest.mpesa_closing_balance
+            mpesaClosingBalance: latest.mpesa_closing_balance,
+            cardClosingBalance: latest.card_closing_balance ?? null
           }
         : {
             startingCash: shift.starting_cash,
             endingCash: shift.ending_cash ?? 0,
             mpesaOpeningBalance: shift.mpesa_opening_balance ?? null,
-            mpesaClosingBalance: shift.mpesa_closing_balance ?? null
+            mpesaClosingBalance: shift.mpesa_closing_balance ?? null,
+            cardClosingBalance: shift.card_closing_balance ?? null
           }
       const entered: ShiftEnteredFigures = {
         startingCash: input.startingCash,
         endingCash: input.endingCash,
         mpesaOpeningBalance: input.mpesaOpeningBalance,
-        mpesaClosingBalance: input.mpesaClosingBalance
+        mpesaClosingBalance: input.mpesaClosingBalance,
+        cardClosingBalance: input.cardClosingBalance ?? null
       }
       // A shift whose cash was not counted (docs/phase-227) has no figures to compare with: the first correction adds them.
       const hasNoCashFigures = !latest && shift.cash_not_counted === 1
@@ -5023,15 +5092,16 @@ export class RubisDatabase {
       const counted = this.getOrdersForShift(input.shiftId).filter((order) => order.status !== 'voided')
       const totalFor = (method: string): number =>
         counted.filter((order) => order.payment_method === method).reduce((sum, order) => sum + order.total, 0)
-      const worked = workShiftFigures(entered, totalFor('cash'), totalFor('mpesa'))
+      const worked = workShiftFigures(entered, totalFor('cash'), totalFor('mpesa'), totalFor('card'))
 
       const correctedAt = new Date(this.nextRecordMs(input.shiftId, nowMs)).toISOString()
       const info = this.conn
         .prepare(
           `INSERT INTO shift_corrections (shift_id, corrected_by_staff_id, corrected_at, reason, starting_cash, ending_cash,
                                           expected_cash, discrepancy, mpesa_opening_balance, mpesa_closing_balance,
-                                          mpesa_expected, mpesa_difference)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+                                          mpesa_expected, mpesa_difference,
+                                          card_closing_balance, card_expected, card_difference)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
         )
         .run(
           input.shiftId,
@@ -5045,7 +5115,10 @@ export class RubisDatabase {
           entered.mpesaOpeningBalance,
           entered.mpesaClosingBalance,
           worked.mpesaExpected,
-          worked.mpesaDifference
+          worked.mpesaDifference,
+          entered.cardClosingBalance ?? null,
+          worked.cardExpected ?? null,
+          worked.cardDifference ?? null
         )
       return {
         id: Number(info.lastInsertRowid),
@@ -5060,7 +5133,10 @@ export class RubisDatabase {
         mpesa_opening_balance: entered.mpesaOpeningBalance,
         mpesa_closing_balance: entered.mpesaClosingBalance,
         mpesa_expected: worked.mpesaExpected,
-        mpesa_difference: worked.mpesaDifference
+        mpesa_difference: worked.mpesaDifference,
+        card_closing_balance: entered.cardClosingBalance ?? null,
+        card_expected: worked.cardExpected ?? null,
+        card_difference: worked.cardDifference ?? null
       }
     }).immediate()
   }

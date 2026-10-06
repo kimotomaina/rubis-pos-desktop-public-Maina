@@ -3489,7 +3489,9 @@ app.whenReady().then(async () => {
         db,
         validation.data.shiftId,
         validation.data.endingCash,
-        validation.data.mpesaClosingBalance ?? null
+        validation.data.mpesaClosingBalance ?? null,
+        Date.now(),
+        validation.data.cardClosingBalance ?? null
       )
       if (closed.success) assignSalesToShifts()
       return closed
@@ -3640,6 +3642,7 @@ app.whenReady().then(async () => {
             endingCash: data.endingCash,
             mpesaOpeningBalance: data.mpesaOpeningBalance,
             mpesaClosingBalance: data.mpesaClosingBalance,
+            cardClosingBalance: data.cardClosingBalance ?? null,
             override: data.override
           })
         }

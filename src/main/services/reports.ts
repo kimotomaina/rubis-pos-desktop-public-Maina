@@ -86,6 +86,14 @@ export interface ZReport {
   /** Counted − expected: a prompt to check the M-Pesa statement, never a shortage. */
   mpesaDifference?: number | null
   /**
+   * The card settlement counted at close (docs/phase-246, R5), the shift's card sales, and counted less expected, the
+   * "check against the PDQ settlement". Present only when a card figure was counted; absent shows as "Not recorded",
+   * never as 0.
+   */
+  cardClosingBalance?: number | null
+  cardExpected?: number | null
+  cardDifference?: number | null
+  /**
    * `'retrospective'` for a shift recorded after the fact (docs/phase-223); its creator, time and reason follow.
    * Absent or `'normal'` otherwise. The Z report says so on screen and on paper.
    */
@@ -154,6 +162,10 @@ export interface ZReportAdjustment {
   mpesaClosingBalance: number | null
   mpesaExpected: number | null
   mpesaDifference: number | null
+  /** Present only when the record holds a card figure (docs/phase-246, R5). */
+  cardClosingBalance?: number | null
+  cardExpected?: number | null
+  cardDifference?: number | null
 }
 
 /** One correction as the Z report shows it (docs/phase-224). */
@@ -170,6 +182,10 @@ export interface ZReportCorrection {
   mpesaClosingBalance: number | null
   mpesaExpected: number | null
   mpesaDifference: number | null
+  /** Present only when the correction holds a card figure (docs/phase-246, R5). */
+  cardClosingBalance?: number | null
+  cardExpected?: number | null
+  cardDifference?: number | null
 }
 
 /** Aggregate sales for a calendar day, independent of shift boundaries. */
@@ -399,6 +415,7 @@ export function generateZReport(
     ...mergedIntoField(db, shiftId),
     ...adjustmentFields(db, shiftId, orders),
     ...mpesaBalanceFields(shift, totalsByMethod.mpesa),
+    ...cardFigures(shift),
     kind: shift.kind ?? 'normal',
     createdAt: shift.created_at ?? null,
     createdByName:
@@ -418,7 +435,8 @@ export function generateZReport(
       mpesaOpeningBalance: row.mpesa_opening_balance,
       mpesaClosingBalance: row.mpesa_closing_balance,
       mpesaExpected: row.mpesa_expected,
-      mpesaDifference: row.mpesa_difference
+      mpesaDifference: row.mpesa_difference,
+      ...cardFigures(row)
     }))
   }
 }
@@ -484,7 +502,8 @@ function adjustmentFields(
     mpesaOpeningBalance: row.mpesa_opening_balance,
     mpesaClosingBalance: row.mpesa_closing_balance,
     mpesaExpected: row.mpesa_expected,
-    mpesaDifference: row.mpesa_difference
+    mpesaDifference: row.mpesa_difference,
+    ...cardFigures(row)
   }))
   if (rows.every((row) => row.kind === 'opening')) return { adjustments }
 
@@ -513,6 +532,27 @@ function adjustmentFields(
       mpesa: totalFor('mpesa'),
       card: totalFor('card')
     }
+  }
+}
+
+/**
+ * The card settlement figures of a record that holds them (docs/phase-246, R5): the shift, a correction or an
+ * adjustment, all with the same three columns. Empty when no card figure was counted, so a report from before the
+ * phase, and a shift closed without one, carry no card keys and show "Not recorded".
+ *
+ * @param {{ card_closing_balance?: number | null; card_expected?: number | null; card_difference?: number | null }} row
+ * @returns {Pick<ZReport, 'cardClosingBalance' | 'cardExpected' | 'cardDifference'> | {}}
+ */
+function cardFigures(row: {
+  card_closing_balance?: number | null
+  card_expected?: number | null
+  card_difference?: number | null
+}): Pick<ZReport, 'cardClosingBalance' | 'cardExpected' | 'cardDifference'> | Record<string, never> {
+  if (row.card_closing_balance === null || row.card_closing_balance === undefined) return {}
+  return {
+    cardClosingBalance: row.card_closing_balance,
+    cardExpected: row.card_expected ?? null,
+    cardDifference: row.card_difference ?? null
   }
 }
 

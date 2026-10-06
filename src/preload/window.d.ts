@@ -241,7 +241,8 @@ export interface PosApi {
   closeShift: (
     shiftId: number,
     endingCash: number,
-    mpesaClosingBalance?: number
+    mpesaClosingBalance?: number | null,
+    cardClosingBalance?: number | null
   ) => Promise<ServiceResult<ShiftCloseResult>>
   /** The shift window of this moment, its shift, the earlier sales an Open Shift would bring in, and when the open shift may close (docs/phase-232). */
   getShiftWindowStatus: () => Promise<ServiceResult<ShiftWindowStatus>>

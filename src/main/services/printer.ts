@@ -27,6 +27,7 @@ import type { PrinterConfig, PrinterType, PrinterConnectionType, FiscalStatus } 
 import { formatCurrency } from './currency.js'
 import type { ConnectivityCheckResult } from './connectivityMonitor.js'
 import { zReportMpesaLines } from '../lib/zReportMpesa.js'
+import { zReportCardLines } from '../lib/zReportCard.js'
 import { zReportRetroLines } from '../lib/zReportRetro.js'
 import { zReportChangeBlocks, zReportLabelledLine, zReportMergedLine, zReportSalesAtCloseLine } from '../lib/zReportAdjustments.js'
 import { generatePdfReceipt } from './pdf-receipt.js'
@@ -567,6 +568,10 @@ export function renderZReport(
   // docs/phase-222: the M-Pesa balances, below the cash figures; "Not recorded" where none was entered.
   client.drawLine()
   for (const line of zReportMpesaLines(report, formatCurrency)) {
+    client.println(`${line.label}: ${line.value}`)
+  }
+  // docs/phase-246, R5: the card settlement counted at close, "Not recorded" where none was entered.
+  for (const line of zReportCardLines(report, formatCurrency)) {
     client.println(`${line.label}: ${line.value}`)
   }
 

@@ -12,6 +12,7 @@ import type { ShiftType } from '../../../main/lib/shiftWindows.js'
 import type { ZReport, ZReportAdjustment } from '../../../main/services/reports.js'
 import { zReportCorrectionBlocks, type CorrectionBlock } from './zReportCorrections.js'
 import { zReportMpesaLines } from './zReportMpesa.js'
+import { zReportCardLines } from './zReportCard.js'
 
 /**
  * @param {number} count
@@ -67,6 +68,20 @@ function adjustmentBlock(
         formatMoney
       ).map((line) => `${line.label}: ${line.value}`)
     )
+    // docs/phase-246, R5: only a record that holds a card figure says anything about card.
+    if (adjustment.cardClosingBalance != null) {
+      details.push(
+        ...zReportCardLines(
+          {
+            status: 'closed',
+            cardClosingBalance: adjustment.cardClosingBalance,
+            cardExpected: adjustment.cardExpected,
+            cardDifference: adjustment.cardDifference
+          },
+          formatMoney
+        ).map((line) => `${line.label}: ${line.value}`)
+      )
+    }
   }
   return { heading: headings[adjustment.kind], details }
 }
