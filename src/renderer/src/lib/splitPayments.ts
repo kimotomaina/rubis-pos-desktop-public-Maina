@@ -13,6 +13,9 @@ export const SPLIT_PAYMENTS_SETTING_KEY = 'split_payments_enabled'
 /** The most payments one sale may be split into, mirrored from `checkout.ts`. */
 export const MAX_SPLIT_PAYMENTS = 4
 
+/** Shown under the cart while a split holds a recorded payment and the cart is locked (docs/phase-252-1). */
+export const CART_LOCKED_BY_SPLIT_MESSAGE = 'Remove the recorded payments to change the cart.'
+
 /** @returns {number} the amount in whole cents */
 function cents(amount: number): number {
   return Math.round(amount * 100)

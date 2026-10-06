@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { formatCurrency } from '../lib/currency.js'
 import { usePaymentActivityStore } from '../stores/paymentActivityStore.js'
+import { useCartStore } from '../stores/cartStore.js'
 import { amountDue, canAddPayment, canCompleteSplit, maxNonCashPayment, splitChange } from '../lib/splitPayments.js'
 import PaymentModal from './PaymentModal.js'
 import type { ManualMpesaEntryInput } from './PaymentModal.js'
@@ -43,10 +44,20 @@ export default function SplitPaymentPanel({ total, onComplete, onCancel, submitt
   const [input, setInput] = useState('')
 
   const setPaymentActive = usePaymentActivityStore((state) => state.setActive)
+  // docs/phase-252-1: while a payment is recorded the cart is locked, so the payments cannot stop adding up under the
+  // cashier. Removing every payment or cancelling the split (which unmounts this panel) unlocks it.
+  const setSplitLocked = useCartStore((state) => state.setSplitLocked)
   useEffect(() => {
     setPaymentActive('split', legs.length > 0)
-  }, [legs.length, setPaymentActive])
-  useEffect(() => () => setPaymentActive('split', false), [setPaymentActive])
+    setSplitLocked(legs.length > 0)
+  }, [legs.length, setPaymentActive, setSplitLocked])
+  useEffect(
+    () => () => {
+      setPaymentActive('split', false)
+      setSplitLocked(false)
+    },
+    [setPaymentActive, setSplitLocked]
+  )
 
   const due = amountDue(total, legs)
   const typed = parseFloat(input) || 0

@@ -5,6 +5,8 @@ import { calculateLineTotal } from '../lib/checkoutMath.js'
 import { CartIcon, TrashIcon } from './icons.js'
 import { pageOfIndex, paginate } from '../lib/paginate.js'
 import Pager from './Pager.js'
+import { useCartStore } from '../stores/cartStore.js'
+import { CART_LOCKED_BY_SPLIT_MESSAGE } from '../lib/splitPayments.js'
 
 /** Cart lines per page (docs/phase-166 Commit E4) — replaces the table's old internal scroll. */
 export const CART_LINES_PER_PAGE = 7
@@ -53,6 +55,8 @@ export default function PosCartTable({
 }: PosCartTableProps) {
   const [page, setPage] = useState(1)
   const pageResult = paginate(items, page, linesPerPage)
+  /** docs/phase-252-1: a split holds a recorded payment, so no line can change and the cart cannot be cleared. */
+  const locked = useCartStore((state) => state.splitLocked)
 
   /**
    * Jumps to the page holding the line most recently added/scanned
@@ -117,24 +121,27 @@ export default function PosCartTable({
                   <button
                     type="button"
                     onClick={() => onUpdateQuantity(item.id, item.quantity - 1)}
+                    disabled={locked}
                     aria-label={`Decrease ${item.variantTitle} quantity`}
-                    className="flex h-11 w-11 items-center justify-center rounded-lg bg-slate-100 text-2xl font-bold text-slate-700 hover:bg-slate-200 active:scale-90"
+                    className="flex h-11 w-11 items-center justify-center rounded-lg bg-slate-100 text-2xl font-bold text-slate-700 hover:bg-slate-200 active:scale-90 disabled:cursor-not-allowed disabled:opacity-40"
                   >
                     −
                   </button>
                   <button
                     type="button"
                     onClick={() => onUpdateQuantity(item.id, item.quantity + 1)}
+                    disabled={locked}
                     aria-label={`Increase ${item.variantTitle} quantity`}
-                    className="flex h-11 w-11 items-center justify-center rounded-lg bg-slate-100 text-2xl font-bold text-slate-700 hover:bg-slate-200 active:scale-90"
+                    className="flex h-11 w-11 items-center justify-center rounded-lg bg-slate-100 text-2xl font-bold text-slate-700 hover:bg-slate-200 active:scale-90 disabled:cursor-not-allowed disabled:opacity-40"
                   >
                     +
                   </button>
                   <button
                     type="button"
                     onClick={() => onRemove(item.id)}
+                    disabled={locked}
                     aria-label={`Remove ${item.variantTitle}`}
-                    className="flex h-11 w-11 items-center justify-center rounded-lg bg-rose-100 hover:bg-rose-200 active:scale-90"
+                    className="flex h-11 w-11 items-center justify-center rounded-lg bg-rose-100 hover:bg-rose-200 active:scale-90 disabled:cursor-not-allowed disabled:opacity-40"
                   >
                     <TrashIcon className="h-5 w-5 text-rose-600" />
                   </button>
@@ -150,7 +157,8 @@ export default function PosCartTable({
             <button
               type="button"
               onClick={onClear}
-              className="h-9 shrink-0 rounded-lg border border-rose-200 px-3 text-sm font-medium text-rose-700 hover:bg-rose-50"
+              disabled={locked}
+              className="h-9 shrink-0 rounded-lg border border-rose-200 px-3 text-sm font-medium text-rose-700 hover:bg-rose-50 disabled:cursor-not-allowed disabled:opacity-50"
             >
               Clear cart
             </button>
@@ -165,7 +173,11 @@ export default function PosCartTable({
               Hold sale
             </button>
           )}
-          {onHold && holdBlockedReason !== null && (
+          {locked ? (
+            <span className="min-w-0 truncate text-sm text-amber-800" data-testid="cart-locked" title={CART_LOCKED_BY_SPLIT_MESSAGE}>
+              {CART_LOCKED_BY_SPLIT_MESSAGE}
+            </span>
+          ) : onHold && holdBlockedReason !== null && (
             <span className="min-w-0 truncate text-sm text-amber-800" title={holdBlockedReason}>
               {holdBlockedReason}
             </span>

@@ -47,6 +47,7 @@ import { useShiftWindowStatus } from './lib/useShiftWindowStatus'
 import OpenShiftDialog from './components/OpenShiftDialog'
 import { HOLD_PAYMENT_REASON } from './lib/heldSale'
 import { decideHold, heldAgeTone } from './lib/heldSale'
+import { CART_LOCKED_BY_SPLIT_MESSAGE } from './lib/splitPayments'
 import {
   CART_CHANGE_BLOCKED_TOAST_TIMEOUT_MS,
   CART_RESTORED_TOAST_TIMEOUT_MS,
@@ -331,6 +332,8 @@ export default function App() {
     requestManagerPin,
     recordRemovals: (request) => window.api.recordCartRemovals(request),
     apply: { setQuantity: updateQuantity, remove: removeItem, clear: clearCart },
+    // docs/phase-252-1: no change, and no PIN asked, while a split holds a recorded payment.
+    lockedReason: () => (useCartStore.getState().splitLocked ? CART_LOCKED_BY_SPLIT_MESSAGE : null),
     notify: (message) =>
       useToastStore.getState().show({
         id: 'cart-change-blocked',

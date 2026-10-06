@@ -32,6 +32,11 @@ export interface GuardedCartDeps {
   }
   /** Shows the cashier why a change did not happen. */
   notify: (message: string) => void
+  /**
+   * Why the cart cannot be changed right now, or `null` (docs/phase-252-1: a split holds a recorded payment). Checked
+   * before any PIN is asked, so nothing is recorded for a change that cannot happen. Omitted, the cart is never locked.
+   */
+  lockedReason?: () => string | null
 }
 
 /** The cart actions the table calls. */
@@ -75,8 +80,16 @@ export function createGuardedCartActions(deps: GuardedCartDeps): GuardedCartActi
 
   const find = (id: string): CartItem | undefined => deps.getItems().find((item) => item.id === id)
 
+  /** @returns {boolean} true when the cart is locked; the cashier has been told why */
+  const locked = (): boolean => {
+    const reason = deps.lockedReason?.() ?? null
+    if (reason !== null) deps.notify(reason)
+    return reason !== null
+  }
+
   return {
     updateQuantity: (id, qty) => {
+      if (locked()) return
       const item = find(id)
       if (!item) return
       if (!needsManagerApproval({ kind: 'setQuantity', from: item.quantity, to: qty })) {
@@ -91,6 +104,7 @@ export function createGuardedCartActions(deps: GuardedCartDeps): GuardedCartActi
     },
 
     remove: (id) => {
+      if (locked()) return
       const item = find(id)
       if (!item) return
       if (!needsManagerApproval({ kind: 'remove', from: item.quantity })) {
@@ -103,6 +117,7 @@ export function createGuardedCartActions(deps: GuardedCartDeps): GuardedCartActi
     },
 
     clear: () => {
+      if (locked()) return
       const items = deps.getItems()
       if (items.length === 0) return
       if (!needsManagerApproval({ kind: 'clear', from: items.length })) {

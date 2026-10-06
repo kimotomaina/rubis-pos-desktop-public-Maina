@@ -174,6 +174,14 @@ export interface CartState {
   companyName: string
   /** The held sale this cart came from, while it is on screen; its label and total head the payment panel (docs/phase-217). */
   resumedHeld: ResumedHeldSale | null
+  /**
+   * Set while the split panel holds one or more recorded payments (docs/phase-252-1). The cart cannot then be changed:
+   * adding, changing a quantity, removing, a price or a discount are refused here, and the table offers no remove or
+   * clear. `clearCart` itself stays open, because a completed sale clears the cart, and it unlocks it.
+   */
+  splitLocked: boolean
+  /** Locks or unlocks the cart for a split; called only by the split panel. */
+  setSplitLocked: (locked: boolean) => void
   /** Add one unit (or `qty`) of a variant; merges if already present. */
   addItem: (item: Omit<CartItem, 'quantity'>, qty?: number) => void
   /** Remove a line item by its variant id. */
@@ -230,12 +238,16 @@ export const useCartStore = create<CartState>()(
     customerPin: '',
     companyName: '',
     resumedHeld: null,
+    splitLocked: false,
     cartDiscount: null,
     checkoutStatus: 'idle',
     lastReceipt: null,
     checkoutError: null,
 
+    setSplitLocked: (locked) => set({ splitLocked: locked }),
+
     addItem: (item, qty = 1) => {
+      if (get().splitLocked) return
       set((state) => {
         const existing = state.items.find((i) => i.id === item.id)
         if (existing) {
@@ -252,10 +264,12 @@ export const useCartStore = create<CartState>()(
     },
 
     removeItem: (id: string) => {
+      if (get().splitLocked) return
       set((state) => ({ items: state.items.filter((i) => i.id !== id) }))
     },
 
     updateQuantity: (id: string, qty: number) => {
+      if (get().splitLocked) return
       if (qty <= 0) {
         get().removeItem(id)
         return
@@ -268,6 +282,7 @@ export const useCartStore = create<CartState>()(
     },
 
     setItemPrice: (id: string, price: number) => {
+      if (get().splitLocked) return
       set((state) => {
         const target = state.items.find((i) => i.id === id)
         if (!target) return state
@@ -278,6 +293,7 @@ export const useCartStore = create<CartState>()(
     },
 
     setItemDiscount: (id: string, discount: Discount | null) => {
+      if (get().splitLocked) return
       set((state) => ({
         items: state.items.map((i) =>
           i.id === id ? { ...i, discount: discount ?? undefined } : i
@@ -285,10 +301,22 @@ export const useCartStore = create<CartState>()(
       }))
     },
 
-    setCartDiscount: (discount: Discount | null) => set({ cartDiscount: discount }),
+    setCartDiscount: (discount: Discount | null) => {
+      if (get().splitLocked) return
+      set({ cartDiscount: discount })
+    },
 
     clearCart: () =>
-      set({ items: [], cartToken: null, checkoutKey: null, cartDiscount: null, customerPin: '', companyName: '', resumedHeld: null }),
+      set({
+        items: [],
+        cartToken: null,
+        checkoutKey: null,
+        cartDiscount: null,
+        customerPin: '',
+        companyName: '',
+        resumedHeld: null,
+        splitLocked: false
+      }),
 
     restoreCart: (items, cartToken, checkoutKey = null) => set({ items, cartToken, checkoutKey, cartDiscount: null }),
 

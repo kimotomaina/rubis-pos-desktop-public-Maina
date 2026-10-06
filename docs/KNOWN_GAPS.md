@@ -501,4 +501,4 @@ Only the latest closed shift can be corrected or be given sales by a person; eve
 
 ## The Daraja gate must be fixed before Daraja is switched on (phase 251)
 
-A Daraja STK confirmation can pay for more than one sale, the gate checks no amount, the screen can write a "success" STK record, a total with cents cannot complete by Daraja, and an unset callback address sends results to `example.com`. Daraja is not live (no consumer key on the till), so the owner parked all of it on 2026-10-06: see `docs/phase-251-audit.md`, "Ruling", for D1 to D6, F1, F2 and the callback address.
+A Daraja STK confirmation can pay for more than one sale, the gate checks no amount, the screen can write a "success" STK record, a total with cents cannot complete by Daraja, and an unset callback address sends results to `example.com`. Daraja is not live (no consumer key on the till), so the owner parked all of it on 2026-10-06: see `docs/phase-251-audit.md`, "Ruling", for D1 to D6, F1, F2 and the callback address. Parked with it (22:35): phase 248's D3, a Checks line for M-Pesa payments no sale used; only an STK payment can be left unused (`docs/phase-252-1.md`).
