@@ -1,5 +1,5 @@
 /**
- * Running automatic assignment from the main process (docs/phase-231): the one place that calls
+ * Running automatic assignment from the main process (docs/phase-232): the one place that calls
  * {@link RubisDatabase.autoAssignUnattachedSales} and writes its failure to `till.log`, so every trigger (start,
  * Open Shift, Close Shift, Shift History) behaves the same. A failure never reaches the screen as a stack, and
  * never stops what the person was doing: the sales simply stay without a shift until the next run.

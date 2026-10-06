@@ -23,10 +23,10 @@ export type OpenShiftDb = Pick<RubisDatabase, 'getStaffById' | 'openShift'> & Pa
 export interface OpenShiftRequest {
   staffId: number
   startingCash: number
-  /** Ignored (docs/phase-231): the type comes from the clock. Still accepted so an older caller validates. */
+  /** Ignored (docs/phase-232): the type comes from the clock. Still accepted so an older caller validates. */
   shiftType?: string | null
   mpesaOpeningBalance?: number | null
-  /** What the form showed (docs/phase-231); the shift is not opened if the sales now differ. */
+  /** What the form showed (docs/phase-232); the shift is not opened if the sales now differ. */
   earlierShown?: EarlierSalesShown
   /** An admin's choice when the drawer holds less than the earlier cash sales: start at 0. */
   startAtZero?: boolean

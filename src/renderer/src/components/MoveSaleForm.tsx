@@ -22,7 +22,7 @@ function moneyOrDash(figures: number | null | undefined): string {
 }
 
 /**
- * Moves one sale to another shift (docs/phase-231, S5): the only way a sale ever leaves the shift it is in. The
+ * Moves one sale to another shift (docs/phase-232, S5): the only way a sale ever leaves the shift it is in. The
  * admin names the order and the shift it goes to, sees what both shifts would show afterwards, gives a reason and
  * their PIN. No figure is typed here: a recount comes afterwards, by correction. The main process re-checks every
  * rule inside the transaction that writes; what this screen shows is a courtesy and is never the guard.

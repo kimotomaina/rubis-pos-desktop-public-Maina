@@ -1,7 +1,7 @@
 /**
  * Recording a shift for sales that had none (docs/phase-223): the period and overlap rules, and the Z report that says so.
  *
- * CHANGED (docs/phase-231). OLD: this file also tested `createRetrospectiveShift` (the one transaction that wrote the shift
+ * CHANGED (docs/phase-232). OLD: this file also tested `createRetrospectiveShift` (the one transaction that wrote the shift
  * and attached its sales), `listUnattachedDays`, `previewPastShift` and the `shifts:create-past` and `shifts:past-preview`
  * request schemas. NEW: the manual past-shift flow is retired (the till gives every sale to its shift by itself), so those
  * are removed. Their replacements are in tests/oneShiftPerWindow.test.ts. What stays is the period and overlap rules
@@ -98,7 +98,7 @@ describe('the Z report of a shift recorded afterwards', () => {
         getOrdersForShift: () => [],
         getMpesaPaymentsForShift: () => [],
         listShiftCorrections: () => [],
-        listShiftAdjustments: () => [], // ADDED (docs/phase-231)
+        listShiftAdjustments: () => [], // ADDED (docs/phase-232)
         listAdjustmentSales: () => []
       } as unknown as RubisDatabase,
       9,

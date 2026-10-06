@@ -1,5 +1,5 @@
 /**
- * The rules of one shift per window (docs/phase-231): who may open or close a shift when, and the words the till
+ * The rules of one shift per window (docs/phase-232): who may open or close a shift when, and the words the till
  * says when it refuses. Pure, so the same rule runs in the screens' read-only status and, again, inside the
  * transaction that writes: the status is a courtesy, the transaction is the guard.
  */
@@ -82,7 +82,7 @@ export interface CloseTiming {
 }
 
 /**
- * Whether a shift may be closed at `nowMs` (docs/phase-231): from the start of its window's last minute, for
+ * Whether a shift may be closed at `nowMs` (docs/phase-232): from the start of its window's last minute, for
  * everyone. A shift left open past its window may be closed at any time after.
  *
  * @param {string} clockInIso

@@ -14,7 +14,7 @@ import type { HeldSaleSummary, HoldSaleInput, RubisDatabase, ShiftCloseResult } 
 import type { ServiceResult } from './shopify-types.js'
 
 /**
- * Why a shift may not be closed yet (docs/phase-231, S2), or `null` when it may: no shift closes before its window's
+ * Why a shift may not be closed yet (docs/phase-232, S2), or `null` when it may: no shift closes before its window's
  * last minute begins, for anyone. A missing shift is left to `closeShift`, which says so.
  *
  * @param {CloseShiftDb} db

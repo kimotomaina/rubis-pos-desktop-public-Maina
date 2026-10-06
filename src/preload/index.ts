@@ -572,7 +572,7 @@ const api = {
     ipcRenderer.invoke('log:till-event', { event, detail }),
 
   /**
-   * Opens the one shift of the current window (docs/phase-231). The type is the window's, from the clock in the main
+   * Opens the one shift of the current window (docs/phase-232). The type is the window's, from the clock in the main
    * process: it is not sent. `startingCash` is the cash counted in the drawer now.
    *
    * @param {number} staffId
@@ -633,7 +633,7 @@ const api = {
 
   /**
    * The shift window of this moment, its shift, the earlier sales an Open Shift would bring in, and when the open
-   * shift may be closed (docs/phase-231). Read-only: the screens carry no time rule of their own.
+   * shift may be closed (docs/phase-232). Read-only: the screens carry no time rule of their own.
    *
    * @returns {Promise<ServiceResult<ShiftWindowStatus>>}
    */
@@ -641,7 +641,7 @@ const api = {
 
   /**
    * The combined report of one window: every shift that began in it, each with its own Z report, and the sums that
-   * are safe to add (docs/phase-231). Read-only.
+   * are safe to add (docs/phase-232). Read-only.
    *
    * @param {ShiftType} type
    * @param {string} startDate — `YYYY-MM-DD`
@@ -651,7 +651,7 @@ const api = {
     ipcRenderer.invoke('reports:window-report', { type, startDate }),
 
   /**
-   * Gives every sale with no shift to the shift it belongs to (docs/phase-231). Takes no input and no PIN: it can
+   * Gives every sale with no shift to the shift it belongs to (docs/phase-232). Takes no input and no PIN: it can
    * only do what the rules say, and running it again changes nothing.
    *
    * @returns {Promise<ServiceResult<AutoAssignResult>>}
@@ -659,7 +659,7 @@ const api = {
   autoAssignSales: (): Promise<ServiceResult<AutoAssignResult>> => ipcRenderer.invoke('shifts:auto-assign'),
 
   /**
-   * What moving one sale to another shift would do (docs/phase-231). Read-only.
+   * What moving one sale to another shift would do (docs/phase-232). Read-only.
    *
    * @param {number} orderId
    * @param {number} toShiftId
@@ -669,7 +669,7 @@ const api = {
     ipcRenderer.invoke('shifts:move-sale-preview', { orderId, toShiftId }),
 
   /**
-   * Moves one sale to another shift (docs/phase-231, S5). Admin-gated: the main process re-verifies the PIN.
+   * Moves one sale to another shift (docs/phase-232, S5). Admin-gated: the main process re-verifies the PIN.
    *
    * @param {MoveSaleRequest} request
    * @returns {Promise<ServiceResult<{ fromShiftId: number; toShiftId: number }>>}

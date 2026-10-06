@@ -2,7 +2,7 @@
  * Phase 229: a sale with no shift belongs to the Day or Night window it was made in. The audit's A3 cases 1 to 4: the
  * bucket of one instant, at the window edges, across midnight, across the UTC day, a month and a year end.
  *
- * CHANGED (docs/phase-231). OLD: this file also tested `listUnattachedOffers` (one offer per window, the period clamp,
+ * CHANGED (docs/phase-232). OLD: this file also tested `listUnattachedOffers` (one offer per window, the period clamp,
  * the sale inside a shift, cases 5 to 14), the Shift History screens that listed and chained the offers, and
  * `PastShiftForm`. NEW: the manual past-shift offers are retired, so those are removed; the same questions are answered
  * by the automatic assignment, in tests/oneShiftPerWindow.test.ts (the clamp, the sale inside a shift, voided sales

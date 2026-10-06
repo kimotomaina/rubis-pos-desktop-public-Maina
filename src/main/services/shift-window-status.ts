@@ -1,5 +1,5 @@
 /**
- * What the screens need to know about the shift window (docs/phase-231), read-only: the window of this moment and
+ * What the screens need to know about the shift window (docs/phase-232), read-only: the window of this moment and
  * its shift, the earlier sales an Open Shift would bring in, and when the open shift may be closed. The rules are
  * the ones the writes use; this only reports them, so a screen carries no time rule of its own.
  */
@@ -25,7 +25,7 @@ export interface ShiftWindowStatus {
   window: { type: ShiftType; startDate: string; label: string; name: string; endClock: string }
   /** The shift that already holds this window, open or closed, or `null`. */
   windowShift: { id: number; open: boolean } | null
-  /** What to say when the window already has its shift (docs/phase-231, S1); `null` when it has none. */
+  /** What to say when the window already has its shift (docs/phase-232, S1); `null` when it has none. */
   windowShiftMessage: string | null
   /** Sales already made in this window with no shift: they join the shift when it opens. */
   earlier: EarlierSalesShown

@@ -495,7 +495,7 @@ export default function App() {
   const [adminInitialTab, setAdminInitialTab] = useState<'needsAttention' | 'reports' | undefined>(undefined)
   // docs/phase-227: the cart's "No shift open" notice and its dialog.
   const shiftPresence = useShiftStore((state) => state.presence)
-  // docs/phase-231: the open shift's window end, read from the main process so the cart holds no time rule.
+  // docs/phase-232: the open shift's window end, read from the main process so the cart holds no time rule.
   const { status: windowStatus } = useShiftWindowStatus()
   const showWindowEndBanner = shouldShowWindowEndBanner(windowStatus)
   const [openShiftDialogShown, setOpenShiftDialogShown] = useState(false)

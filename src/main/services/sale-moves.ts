@@ -1,4 +1,4 @@
-/** The `shifts:move-sale` request as the renderer sends it (validated by `moveSaleSchema`, docs/phase-231). */
+/** The `shifts:move-sale` request as the renderer sends it (validated by `moveSaleSchema`, docs/phase-232). */
 export interface MoveSaleRequest {
   managerId: number
   managerPin: string

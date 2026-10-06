@@ -127,7 +127,7 @@ describe('RubisDatabase.openShift', () => {
     const { fake, db } = freshDb()
     fake.queueRunResult('INSERT INTO shifts', { lastInsertRowid: 5 })
 
-    // CHANGED (docs/phase-231). OLD: params [1, clock_in, 100]. NEW: the shift's type (the window of clock_in) and the
+    // CHANGED (docs/phase-232). OLD: params [1, clock_in, 100]. NEW: the shift's type (the window of clock_in) and the
     // M-Pesa opening balance (null: not recorded) are always written, so the params are [1, clock_in, 100, 'day', null].
     const result = db.openShift(1, 100, null, {}, Date.parse('2026-10-02T07:00:00.000Z'))
 
@@ -282,7 +282,7 @@ describe('recording orders against an open shift', () => {
 })
 
 describe('RubisDatabase shift type (docs/phase-199)', () => {
-  // CHANGED (docs/phase-231, W4). OLD: openShift took the type from the screen, stored it as given, omitted shift_type
+  // CHANGED (docs/phase-232, W4). OLD: openShift took the type from the screen, stored it as given, omitted shift_type
   // when none was named, and rejected a type that was not day or night. NEW: there is no type parameter. The stored
   // type is the window of clock_in, always written; what a screen sends is ignored (see tests/oneShiftPerWindow.test.ts).
   it.each([

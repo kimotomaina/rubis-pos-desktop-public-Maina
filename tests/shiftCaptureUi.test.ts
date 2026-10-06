@@ -1,11 +1,11 @@
 /**
  * Phase 227, the screens: the Z report window and Shift History, the cart's "No shift open" notice, store and dialog.
  *
- * CHANGED (docs/phase-231). OLD: this file also tested `PastShiftForm` (Cash not counted, D4), the next offer after a
+ * CHANGED (docs/phase-232). OLD: this file also tested `PastShiftForm` (Cash not counted, D4), the next offer after a
  * shift was recorded (D2) and the "Record them" hand-over, and the dialog's "N sales have no shift" line. NEW: the
  * manual past-shift flow is retired (the till gives every sale to its shift by itself), so those are removed. The
  * dialog now shows the window instead of offering a choice, and says how many earlier sales will join the shift
- * (docs/phase-231, S6); see the dialog tests below. The Z report, correction form, notice and store tests are unchanged.
+ * (docs/phase-232, S6); see the dialog tests below. The Z report, correction form, notice and store tests are unchanged.
  *
  * Real mounts, as `tests/adminShiftWindows.test.ts` does them.
  */
@@ -234,7 +234,7 @@ describe('the cart notice (D5)', () => {
     expect(badge).toBeGreaterThan(-1)
     expect(notice).toBeGreaterThan(badge)
     expect(strip).toBeGreaterThan(notice)
-    // CHANGED (docs/phase-231). OLD: the cart dropped a line while the notice showed: `(shouldShowNoShiftNotice(shiftPresence) ? 1 : 0)`.
+    // CHANGED (docs/phase-232). OLD: the cart dropped a line while the notice showed: `(shouldShowNoShiftNotice(shiftPresence) ? 1 : 0)`.
     // NEW: it drops the same one line while the window-end banner shows, which takes the same strip (the two never show together).
     expect(source).toContain('(shouldShowNoShiftNotice(shiftPresence) || showWindowEndBanner ? 1 : 0)')
   })
@@ -327,7 +327,7 @@ describe('the cart dialog (D5, S6)', () => {
   })
 
   it('shows the window of the clock, never a choice: Night at 17:43 Nairobi, Day at 10:30', async () => {
-    // CHANGED (docs/phase-231). OLD: "suggests the shift from the time ... and either can be changed" (two radio buttons).
+    // CHANGED (docs/phase-232). OLD: "suggests the shift from the time ... and either can be changed" (two radio buttons).
     // NEW: the window is shown as text, and there is nothing to change.
     stubApi()
     vi.setSystemTime(new Date('2026-10-05T17:43:00+03:00'))
@@ -352,7 +352,7 @@ describe('the cart dialog (D5, S6)', () => {
     await click('Confirm')
     await flush()
 
-    // CHANGED (docs/phase-231). OLD: openShift(1, 250, 'night'). NEW: no type is sent; the options carry what the form showed.
+    // CHANGED (docs/phase-232). OLD: openShift(1, 250, 'night'). NEW: no type is sent; the options carry what the form showed.
     expect(window.api.openShift).toHaveBeenCalledWith(1, 250, undefined, { earlierShown: NO_EARLIER, startAtZero: undefined })
     expect(requestManagerPin).not.toHaveBeenCalled()
     expect(onOpened).toHaveBeenCalledTimes(1)

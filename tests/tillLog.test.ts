@@ -46,7 +46,7 @@ describe('a log line', () => {
 
   it('knows five events, and the screen may write only one of them', () => {
     // docs/phase-230: old, three events; `update-failed` is the fourth, written by the main process only.
-    // CHANGED (docs/phase-231). OLD: four events. NEW: five; `auto-assign-failed` is written by the main process only.
+    // CHANGED (docs/phase-232). OLD: four events. NEW: five; `auto-assign-failed` is written by the main process only.
     expect([...TILL_LOG_EVENTS]).toEqual([
       'print-failed',
       'print-fallback',

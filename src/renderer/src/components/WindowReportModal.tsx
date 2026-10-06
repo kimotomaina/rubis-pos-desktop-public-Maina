@@ -13,7 +13,7 @@ interface WindowReportModalProps {
 }
 
 /**
- * The combined report of one Day or Night window that holds more than one shift (docs/phase-231, S10): each shift
+ * The combined report of one Day or Night window that holds more than one shift (docs/phase-232, S10): each shift
  * with its own figures, then the sums that are safe to add. Starting, expected and counted cash are never added
  * across shifts: a drawer that carries over would be counted twice. On screen only; the printed form comes with the
  * Z report layout.

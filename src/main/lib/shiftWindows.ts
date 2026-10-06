@@ -117,7 +117,7 @@ export function shiftWindowOf(iso: string): ShiftWindowInstance {
 }
 
 /**
- * Whether two window instances are the same window (docs/phase-231): the same type on the same date.
+ * Whether two window instances are the same window (docs/phase-232): the same type on the same date.
  *
  * @param {ShiftWindowInstance} a
  * @param {ShiftWindowInstance} b
@@ -128,7 +128,7 @@ export function sameWindow(a: ShiftWindowInstance, b: ShiftWindowInstance): bool
 }
 
 /**
- * The first instant a shift may be closed (docs/phase-231): the start of its window's last minute, so a Day shift
+ * The first instant a shift may be closed (docs/phase-232): the start of its window's last minute, so a Day shift
  * can be closed from 17:30:00 and a Night shift from 08:59:00 the next morning. The window is the one the shift's
  * `clock_in` falls in; a shift left open past it can be closed at any time after.
  *

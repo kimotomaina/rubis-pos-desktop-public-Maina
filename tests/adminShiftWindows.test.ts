@@ -1,10 +1,10 @@
 /**
- * The Open Shift and Close Shift controls on the Admin screen (docs/phase-199, changed in docs/phase-231): the window
+ * The Open Shift and Close Shift controls on the Admin screen (docs/phase-199, changed in docs/phase-232): the window
  * of the clock is shown and never chosen, nothing about the type is sent, an open shift shows its window by its
  * `clock_in` (with a note when an older label differs), and from the last minute of the window the screen asks for the
  * drawer count and closes it; before then Close Shift is off and says when.
  *
- * CHANGED (docs/phase-231). OLD: the shift that matched the clock was preselected, both shifts stayed on screen and
+ * CHANGED (docs/phase-232). OLD: the shift that matched the clock was preselected, both shifts stayed on screen and
  * could be switched, the chosen one was sent, and a note appeared from 17:31:00 ("due to close at 17:30"). NEW: see
  * above. The boundary results (day at 17:30:59 and 09:00:00, night at 17:31:00 and 08:59:59) are unchanged: they now
  * come from the main process's `getShiftWindowStatus`, which these tests run for real.
@@ -238,7 +238,7 @@ describe('an open shift: its window and the close note', () => {
   })
 
   it('shows the window of a shift opened before shift types existed, with no "labelled" note', async () => {
-    // CHANGED (docs/phase-231). OLD: nothing about a window for a shift with no label. NEW: every shift has a window.
+    // CHANGED (docs/phase-232). OLD: nothing about a window for a shift with no label. NEW: every shift has a window.
     await mountOpen(openShiftRow({ shift_type: null }), '23:00:00')
 
     expect(container.textContent).toContain(DAY_LABEL)

@@ -105,22 +105,22 @@ export interface ZReport {
    */
   cashNotCounted?: boolean
   /**
-   * The stored label when it differs from the window of `clock_in` (docs/phase-231, W4): `shiftType` is always the
+   * The stored label when it differs from the window of `clock_in` (docs/phase-232, W4): `shiftType` is always the
    * window's. The report says "Labelled Day when opened". Absent when they agree, or there was no label.
    */
   labelledAs?: ShiftType | null
-  /** `true` for a shift the till made itself for sales that had none (docs/phase-231). Absent otherwise. */
+  /** `true` for a shift the till made itself for sales that had none (docs/phase-232). Absent otherwise. */
   createdAutomatically?: boolean
-  /** Sales that joined or left this shift after it was opened or made, oldest first (docs/phase-231). Absent or empty when none. */
+  /** Sales that joined or left this shift after it was opened or made, oldest first (docs/phase-232). Absent or empty when none. */
   adjustments?: ZReportAdjustment[]
   /**
    * What the shift held when it was closed, present only when later joins or moves mean the figures above now count
-   * more or fewer sales (docs/phase-231).
+   * more or fewer sales (docs/phase-232).
    */
   salesAtClose?: { orderCount: number; totalRevenue: number; cash: number; mpesa: number; card: number }
 }
 
-/** One adjustment as the Z report shows it (docs/phase-231). */
+/** One adjustment as the Z report shows it (docs/phase-232). */
 export interface ZReportAdjustment {
   id: number
   kind: 'opening' | 'auto' | 'reassign_in' | 'reassign_out'
@@ -415,7 +415,7 @@ export function generateZReport(
 
 /**
  * The adjustments of a Z report and, when later joins or moves changed what the shift counts, the sales it held at
- * close (docs/phase-231). A sale is "at close" if its first record on this shift is that it came with the shift
+ * close (docs/phase-232). A sale is "at close" if its first record on this shift is that it came with the shift
  * (`opening`) or was moved out of it, or it has no record at all and is attached now. A sale that joined later, or
  * was voided since, is not. Empty for a shift with no adjustments, so its report is exactly what it was.
  *

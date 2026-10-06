@@ -1,5 +1,5 @@
 /**
- * A shift is shown by its window (docs/phase-231, W4): the type comes from the clock at `clock_in`, never from what
+ * A shift is shown by its window (docs/phase-232, W4): the type comes from the clock at `clock_in`, never from what
  * was stored. An older shift whose stored label disagrees (shift #1, opened 17:43, labelled Day) is shown as the
  * window says, with a note that it was labelled otherwise when opened. The stored row is not edited.
  */

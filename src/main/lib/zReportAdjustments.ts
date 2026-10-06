@@ -1,5 +1,5 @@
 /**
- * The lines that show a shift's adjustments on a Z report (docs/phase-231): sales that joined it after it was opened
+ * The lines that show a shift's adjustments on a Z report (docs/phase-232): sales that joined it after it was opened
  * or made, and sales an admin moved in or out. The printed slip and the on-screen modal say the same words. The
  * renderer has its own twin in `renderer/src/lib/zReportAdjustments.ts` (main-process code is never bundled into the
  * renderer); `tests/shiftWindowsZReport.test.ts` runs both over the same reports so they cannot drift.

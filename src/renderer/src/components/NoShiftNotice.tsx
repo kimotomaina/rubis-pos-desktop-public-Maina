@@ -6,7 +6,7 @@ interface NoShiftNoticeProps {
 
 /**
  * The cart's "No shift open" bar (docs/phase-227): a fixed-height strip above the held sales. Selling is never
- * refused: a sale made with no shift joins the shift of its window by itself (docs/phase-231), when the window has
+ * refused: a sale made with no shift joins the shift of its window by itself (docs/phase-232), when the window has
  * one or when it opens, which is what this bar says and offers.
  *
  * @param {NoShiftNoticeProps} props

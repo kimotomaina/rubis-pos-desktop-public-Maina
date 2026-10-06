@@ -1,10 +1,9 @@
-# Phase 231 (shift windows) — One shift per window, automatic assignment, close from the window's last minute
+# Phase 232 — One shift per window, automatic assignment, close from the window's last minute
 
-> **Number collision, for Nigel to rule on.** This build was ruled "phase 231" (2026-10-05 21:55). While it was being built another session committed `docs/phase-231.md` (`a8efab9`, 22:30: the pilot product list against Shopify, read-only). My commit `126512b` overwrote that file by mistake; it is restored byte for byte in the next commit, and this record is kept here, as `phase-231-1.md`, until the number is decided. The code and test comments say "docs/phase-231" and mean **this** file; they are renamed with a rename of this file. The Z layout and device phases (232, 233) are unaffected.
-
+> **Renumbered.** This build was first committed as "phase 231" (`126512b`) and recorded as `docs/phase-231-1.md`. Another session had already committed `docs/phase-231.md` (`a8efab9`, the pilot product list against Shopify, read-only), so by commit order that record keeps 231 and this build is **phase 232** (owner's ruling, 2026-10-05 23:00). `126512b` overwrote `phase-231.md` by mistake; `8a46c74` restored it byte for byte. The commit message of `126512b` still says "phase 231". Code and test comments that said "docs/phase-231" and meant this build now say "docs/phase-232" (comments only). The Z layout is now phase 233 and the device block phase 234.
 
 - **Date:** 2026-10-05
-- **Asked by:** Nigel and Paul (owner), the one-shift-per-window rules v1 and v2, then the rulings of 2026-10-05 21:55. Audit and revised design were reported first; this is the build.
+- **Asked by:** Paul (owner), the one-shift-per-window rules v1 and v2, then the rulings of 2026-10-05 21:55. Audit and revised design were reported first; this is the build.
 - **Status:** built and tested. **Not released.** 2.2.5 waits for the owner's go. Nothing was installed on any till, nothing was published, the app was not started, nothing was sent to the device, Shopify or Safaricom.
 - **Layout: not checked by check:fit (owner's rule). For the owner to check on the till.** Screens that changed: Open Shift (Admin and cart dialog), the Admin shift status line, the cart strip, Shift History, the Z report window, and two new forms (Move a sale, the window report).
 - **Not changed:** checkout, the payment gate, fiscal and Shopify code, `closeShift` itself, the overlap rule, the "voided sales never join" rule, the manager-PIN rule for corrections, and "selling is never refused". The only column of `orders` ever written is `shift_id`, and only as described in section 3.
@@ -23,7 +22,7 @@
 | S5 | Only an admin moves a sale between shifts: PIN, reason, permanent record, both shifts recalculated, no typed figures. | `reassignSale`, `previewSaleMove`; `shifts:move-sale` re-verifies the PIN before the database is called. |
 | S6 | Earlier sales in the window join the shift on opening; the float is the drawer less their cash. | `openShift`, [OpenShiftForm.tsx](../src/renderer/src/components/OpenShiftForm.tsx), [openShiftFloat.ts](../src/renderer/src/lib/openShiftFloat.ts). |
 | S9 | A made shift lies inside one window. | `insertAutomaticShift` refuses a period whose ends are in different windows. (The hand-set period no longer exists, see section 4.) |
-| S10 | The combined window report, screen only. No sums of starting, expected or counted cash. | [window-report.ts](../src/main/services/window-report.ts), [WindowReportModal.tsx](../src/renderer/src/components/WindowReportModal.tsx). Paper comes with the Z layout phase (232). |
+| S10 | The combined window report, screen only. No sums of starting, expected or counted cash. | [window-report.ts](../src/main/services/window-report.ts), [WindowReportModal.tsx](../src/renderer/src/components/WindowReportModal.tsx). Paper comes with the Z layout phase (233). |
 
 ### Rulings applied
 

@@ -34,8 +34,8 @@ const dbFor = (shift: ShiftRow): RubisDatabase =>
     getOrdersForShift: vi.fn(() => []),
     getMpesaPaymentsForShift: vi.fn(() => []),
     listShiftCorrections: vi.fn(() => []), // ADDED (docs/phase-224): the Z report reads the shift's corrections
-    listShiftAdjustments: vi.fn(() => []), // ADDED (docs/phase-231): the Z report reads the shift's adjustments
-    listAdjustmentSales: vi.fn(() => []), // ADDED (docs/phase-231)
+    listShiftAdjustments: vi.fn(() => []), // ADDED (docs/phase-232): the Z report reads the shift's adjustments
+    listAdjustmentSales: vi.fn(() => []), // ADDED (docs/phase-232)
   }) as unknown as RubisDatabase
 
 describe('generateZReport shift fields', () => {
@@ -47,7 +47,7 @@ describe('generateZReport shift fields', () => {
   })
 
   it('returns the night shift and its window label', () => {
-    // CHANGED (docs/phase-231, W4). OLD: a shift stored as 'night' read back as the night shift whatever its clock_in
+    // CHANGED (docs/phase-232, W4). OLD: a shift stored as 'night' read back as the night shift whatever its clock_in
     // was (here 09:10 Nairobi). NEW: the type is the window of clock_in, so it is the day shift, and the stored label
     // is kept as `labelledAs` ("Labelled Night when opened"). The night case now uses a clock_in inside the night window.
     const report = generateZReport(
@@ -70,7 +70,7 @@ describe('generateZReport shift fields', () => {
   })
 
   it('shows the window for a shift opened before shift types existed, with no "labelled" note', () => {
-    // CHANGED (docs/phase-231, W4). OLD: null for both when the shift had no label. NEW: every shift has a window
+    // CHANGED (docs/phase-232, W4). OLD: null for both when the shift had no label. NEW: every shift has a window
     // (its clock_in), so the type and label are the window's; there was no label, so there is no "labelled" note.
     for (const shift of [baseShift, { ...baseShift, shift_type: null }]) {
       const report = generateZReport(dbFor(shift), 4, 0.16)
@@ -88,7 +88,7 @@ describe('generateZReport shift fields', () => {
     // CHANGED AGAIN (docs/phase-223): and the four fields that say a shift was recorded afterwards (kind, createdAt,
     // createdByName, reason), covered by tests/pastShift.test.ts.
     // CHANGED AGAIN (docs/phase-224): and `corrections`, covered by tests/shiftCorrections.test.ts.
-    // CHANGED AGAIN (docs/phase-231): and `labelledAs` (here the stored 'night' differs from the window), covered above.
+    // CHANGED AGAIN (docs/phase-232): and `labelledAs` (here the stored 'night' differs from the window), covered above.
     const {
       shiftType: _type,
       shiftWindowLabel: _label,

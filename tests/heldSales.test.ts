@@ -523,7 +523,7 @@ describe('Close Shift', () => {
     const { shiftId } = db.openShift(cashierId, 1000)
     const held = hold(db, cashierId, 't1')
 
-    // CHANGED (docs/phase-231). OLD: closed at the real clock, straight after opening. NEW: a shift cannot close before its window's
+    // CHANGED (docs/phase-232). OLD: closed at the real clock, straight after opening. NEW: a shift cannot close before its window's
     // last minute, so these close three days on, long after the window ended; the held-sale rule is what is tested.
     const later = Date.now() + 3 * 24 * 60 * 60 * 1000
     const whileHeld = closeShiftUnlessHeld(db, shiftId, 1000, null, later)
@@ -546,7 +546,7 @@ describe('Close Shift', () => {
     db.resumeHeldSale(b.id)
     sell(db, cashierId, 't2', 'cash', [mug], 99)
 
-    // CHANGED (docs/phase-231): closed three days on, after the window ended (see above).
+    // CHANGED (docs/phase-232): closed three days on, after the window ended (see above).
     const result = closeShiftUnlessHeld(db, shiftId, 1099, null, Date.now() + 3 * 24 * 60 * 60 * 1000)
 
     expect(result.success).toBe(true)

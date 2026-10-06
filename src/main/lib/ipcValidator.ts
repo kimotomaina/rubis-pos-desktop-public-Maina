@@ -512,9 +512,9 @@ export const shiftOpenSchema = z
     staffId: z.number().int(),
     // docs/phase-227: a float cannot be negative. Before, only the renderer refused one.
     startingCash: z.number().finite().nonnegative(),
-    // docs/phase-231: ignored. The shift's type comes from the clock in the main process; still accepted so an older caller validates.
+    // docs/phase-232: ignored. The shift's type comes from the clock in the main process; still accepted so an older caller validates.
     shiftType: z.enum(['day', 'night']).nullish(),
-    // docs/phase-231: what the form showed of the earlier sales in this window, and an admin's choice to start at 0.
+    // docs/phase-232: what the form showed of the earlier sales in this window, and an admin's choice to start at 0.
     earlierShown: z
       .object({
         count: z.number().int().nonnegative(),
@@ -559,20 +559,20 @@ export const shiftsListSchema = z.object({
   page: z.number().int().positive().default(1)
 })
 
-/** `reports:window-report` request payload (docs/phase-231) — read-only: one window by type and start date. */
+/** `reports:window-report` request payload (docs/phase-232) — read-only: one window by type and start date. */
 export const windowReportSchema = z.object({
   type: z.enum(['day', 'night']),
   startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/)
 })
 
-/** `shifts:move-sale-preview` request payload (docs/phase-231) — read-only. */
+/** `shifts:move-sale-preview` request payload (docs/phase-232) — read-only. */
 export const moveSalePreviewSchema = z.object({
   orderId: z.number().int().positive(),
   toShiftId: z.number().int().positive()
 })
 
 /**
- * `shifts:move-sale` request payload (docs/phase-231). Admin-gated with a PIN re-verified in the main process, like
+ * `shifts:move-sale` request payload (docs/phase-232). Admin-gated with a PIN re-verified in the main process, like
  * `shifts:correct`; the reason is required. A sale made in a different window from the target shift needs the tick.
  */
 export const moveSaleSchema = managerAuthzSchema.extend({

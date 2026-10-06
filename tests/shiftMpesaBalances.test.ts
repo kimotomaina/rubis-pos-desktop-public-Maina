@@ -117,7 +117,7 @@ const order = (total: number, method: 'cash' | 'mpesa' | 'card', status = 'compl
     fiscal_request_json: null
   }) as unknown as OrderRow
 
-// CHANGED (docs/phase-231). OLD: openShift(1, 100, 'day', 2500) took a type from the screen and left shift_type and the
+// CHANGED (docs/phase-232). OLD: openShift(1, 100, 'day', 2500) took a type from the screen and left shift_type and the
 // M-Pesa column out of the INSERT when they were not given. NEW: openShift(1, 100, 2500, {}, nowMs): the type is the
 // window of the clock and both columns are always written (null is "not recorded").
 describe('openShift with an M-Pesa opening balance', () => {
@@ -213,7 +213,7 @@ describe('closeShift with M-Pesa balances', () => {
 
   it('passes the counted balance through the held-sales guard', () => {
     const closeShift = vi.fn(() => ({ expectedCash: 1, discrepancy: 0, mpesaExpected: null, mpesaDifference: null }))
-    // CHANGED (docs/phase-231). OLD: the guard's database had two methods. NEW: it also reads the shift, to check the window
+    // CHANGED (docs/phase-232). OLD: the guard's database had two methods. NEW: it also reads the shift, to check the window
     // has reached its last minute; a shift it cannot find is left to closeShift, which says so.
     closeShiftUnlessHeld({ closeShift, listOpenHeldSales: () => [], getShiftById: () => undefined }, 3, 100, 640)
 
@@ -246,8 +246,8 @@ const dbFor = (shift: ShiftRow, orders: OrderRow[] = []): RubisDatabase =>
     getOrdersForShift: vi.fn(() => orders),
     getMpesaPaymentsForShift: vi.fn(() => []),
     listShiftCorrections: vi.fn(() => []), // ADDED (docs/phase-224)
-    listShiftAdjustments: vi.fn(() => []), // ADDED (docs/phase-231): the Z report reads the shift's adjustments
-    listAdjustmentSales: vi.fn(() => []), // ADDED (docs/phase-231)
+    listShiftAdjustments: vi.fn(() => []), // ADDED (docs/phase-232): the Z report reads the shift's adjustments
+    listAdjustmentSales: vi.fn(() => []), // ADDED (docs/phase-232)
   }) as unknown as RubisDatabase
 
 describe('generateZReport M-Pesa balances', () => {

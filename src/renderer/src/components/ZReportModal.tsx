@@ -58,7 +58,7 @@ export default function ZReportModal({ report: initialReport, onClose }: ZReport
   const corrections = zReportCorrectionBlocks(report, formatCurrency, (iso) => new Date(iso).toLocaleString())
   const latestCorrection = corrections[corrections.length - 1]
 
-  // docs/phase-231: sales that joined or left this shift after it was opened or made, the type's note, and what the
+  // docs/phase-232: sales that joined or left this shift after it was opened or made, the type's note, and what the
   // shift held at close when later changes mean the figures above now count more or fewer sales.
   const adjustments = zReportAdjustmentBlocks(report, formatCurrency, (iso) => new Date(iso).toLocaleString())
   const latestAdjustment = adjustments[adjustments.length - 1]

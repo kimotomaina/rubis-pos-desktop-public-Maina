@@ -107,7 +107,7 @@ describe('Open Shift: M-Pesa balance (optional)', () => {
     type(0, '250')
     await click('Confirm')
 
-    // CHANGED (docs/phase-231). OLD: openShift(1, 250, type), three arguments. NEW: openShift(1, 250, balance, options): no type is
+    // CHANGED (docs/phase-232). OLD: openShift(1, 250, type), three arguments. NEW: openShift(1, 250, balance, options): no type is
     // sent, a blank balance is undefined, and the options carry what the form showed of the earlier sales.
     expect(vi.mocked(window.api.openShift).mock.calls[0].slice(0, 3)).toEqual([1, 250, undefined])
   })
@@ -117,7 +117,7 @@ describe('Open Shift: M-Pesa balance (optional)', () => {
     type(0, '250')
     type(1, '1500.50')
     await click('Confirm')
-    // CHANGED (docs/phase-231). OLD: [1, 250, type, 1500.5], the balance the fourth argument. NEW: it is the third.
+    // CHANGED (docs/phase-232). OLD: [1, 250, type, 1500.5], the balance the fourth argument. NEW: it is the third.
     expect(vi.mocked(window.api.openShift).mock.calls[0].slice(0, 3)).toEqual([1, 250, 1500.5])
 
     act(() => root.unmount())

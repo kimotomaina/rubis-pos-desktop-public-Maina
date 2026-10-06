@@ -359,13 +359,13 @@ export interface ShiftRow {
    */
   cash_not_counted?: 0 | 1
   /**
-   * The window `clock_in` falls in (docs/phase-231, W4), added when a shift is read for the screens and never stored:
+   * The window `clock_in` falls in (docs/phase-232, W4), added when a shift is read for the screens and never stored:
    * the type is the window's whatever `shift_type` says. `labelled_as` is the stored label, only when it differs.
    */
   window_type?: ShiftType
   window_date?: string
   labelled_as?: ShiftType
-  /** How many shifts hold this shift's window (docs/phase-231); more than 1 only for older data. */
+  /** How many shifts hold this shift's window (docs/phase-232); more than 1 only for older data. */
   window_shift_count?: number
 }
 
@@ -388,10 +388,10 @@ export interface UnattachedSaleRow {
   payment_method: PaymentMethod | null
 }
 
-/** Why a shift's sales changed after it was opened (docs/phase-231). */
+/** Why a shift's sales changed after it was opened (docs/phase-232). */
 export type ShiftAdjustmentKind = 'opening' | 'auto' | 'reassign_in' | 'reassign_out'
 
-/** Row shape of the `shift_adjustments` table (docs/phase-231): one append-only record of sales joining or leaving a shift. */
+/** Row shape of the `shift_adjustments` table (docs/phase-232): one append-only record of sales joining or leaving a shift. */
 export interface ShiftAdjustmentRow {
   id: number
   shift_id: number
@@ -432,14 +432,14 @@ export interface ShiftAdjustmentSaleRow {
   status: OrderStatus
 }
 
-/** The sales already made in a window with no shift in it, as the Open Shift form shows them (docs/phase-231). */
+/** The sales already made in a window with no shift in it, as the Open Shift form shows them (docs/phase-232). */
 export interface EarlierSalesShown {
   count: number
   cash: number
   mpesa: number
 }
 
-/** The extra things opening a shift can carry (docs/phase-231). */
+/** The extra things opening a shift can carry (docs/phase-232). */
 export interface OpenShiftOptions {
   /** What the form showed. If the sales now differ, the shift is not opened. */
   earlierShown?: EarlierSalesShown
@@ -465,7 +465,7 @@ export interface AutoAssignResult {
   skipped?: boolean
 }
 
-/** What moving a sale to another shift needs (docs/phase-231); the caller has already checked the admin's PIN. */
+/** What moving a sale to another shift needs (docs/phase-232); the caller has already checked the admin's PIN. */
 export interface ReassignSaleInput {
   orderId: number
   toShiftId: number
@@ -483,7 +483,7 @@ export interface MoveFigures {
   mpesaDifference: number | null
 }
 
-/** What moving a sale would do (docs/phase-231), read-only; `problem` says why it cannot be done, or is `null`. */
+/** What moving a sale would do (docs/phase-232), read-only; `problem` says why it cannot be done, or is `null`. */
 export interface SaleMovePreview {
   orderId: number
   total: number
@@ -1143,7 +1143,7 @@ export const SCHEMA = {
   shiftCorrectionsNoDelete: `CREATE TRIGGER IF NOT EXISTS shift_corrections_no_delete BEFORE DELETE ON shift_corrections
     BEGIN SELECT RAISE(ABORT, 'shift_corrections is append-only'); END`,
   /**
-   * Every change to which sales a shift holds after it was opened (docs/phase-231), in one append-only ledger:
+   * Every change to which sales a shift holds after it was opened (docs/phase-232), in one append-only ledger:
    * sales that joined when the shift opened or was made (`opening`), sales that joined automatically (`auto`), and a
    * sale an admin moved in or out (`reassign_in`, `reassign_out`, a pair sharing who, when and why, each naming the
    * other shift). The figures are a snapshot taken when the record was written, and are NULL for a shift that was
@@ -1967,7 +1967,7 @@ export class RubisDatabase {
   private readonly factory: typeof BetterSqlite3
   private readonly maxAttempts: number
   private connection: SqliteConnection | null = null
-  /** Set while {@link autoAssignUnattachedSales} runs, so a second call does nothing (docs/phase-231). */
+  /** Set while {@link autoAssignUnattachedSales} runs, so a second call does nothing (docs/phase-232). */
   private autoAssigning = false
 
   constructor(options: DatabaseOptions) {
@@ -3883,7 +3883,7 @@ export class RubisDatabase {
   }
 
   /**
-   * Opens the one shift of the current window (docs/phase-231), in one write transaction so a refusal anywhere
+   * Opens the one shift of the current window (docs/phase-232), in one write transaction so a refusal anywhere
    * writes nothing:
    *
    * 1. no shift is open, and the window of this moment has no shift at all (one shift per window); a closed one
@@ -4078,7 +4078,7 @@ export class RubisDatabase {
 
   /**
    * The figures a closed shift would show now: the latest typed figures with expected cash and the differences
-   * worked out from the shift's sales (docs/phase-231, S7: the counted cash is kept, so a difference shows).
+   * worked out from the shift's sales (docs/phase-232, S7: the counted cash is kept, so a difference shows).
    * `deltaCash` and `deltaMpesa` project a sale that is about to join (or leave): used by the preview of a move.
    *
    * @param {ShiftRow} shift
@@ -4164,7 +4164,7 @@ export class RubisDatabase {
   }
 
   /**
-   * Every adjustment of a shift's sales, oldest first (docs/phase-231).
+   * Every adjustment of a shift's sales, oldest first (docs/phase-232).
    *
    * @param {number} shiftId
    * @returns {ShiftAdjustmentRow[]}
@@ -4285,7 +4285,7 @@ export class RubisDatabase {
   }
 
   /**
-   * Gives every sale with no shift to the shift it belongs to (docs/phase-231), by the plan
+   * Gives every sale with no shift to the shift it belongs to (docs/phase-232), by the plan
    * {@link planAutoAssignment} makes: inside a shift's times, otherwise the shift of its window (the nearest when
    * a window holds two), otherwise, for a window that has ended, a new shift made for it (cash not counted). Sales
    * of the current window with no shift yet are left to join the shift when it opens.
@@ -4358,7 +4358,7 @@ export class RubisDatabase {
   }
 
   /**
-   * Makes the closed, cash-not-counted shift for the sales of an ended window (docs/phase-231). The shift has no
+   * Makes the closed, cash-not-counted shift for the sales of an ended window (docs/phase-232). The shift has no
    * staff member (`staff_id` 0, nobody recorded it) and says why in its reason. Refused, writing nothing, if the
    * window already has a shift, the period is not inside one window, or it overlaps a shift.
    *
@@ -4394,7 +4394,7 @@ export class RubisDatabase {
   }
 
   /**
-   * What moving one sale to another shift would do, read-only (docs/phase-231): the sale, the two shifts, and the
+   * What moving one sale to another shift would do, read-only (docs/phase-232): the sale, the two shifts, and the
    * expected cash and difference each would show afterwards. Never throws: the screen shows `problem` instead.
    *
    * @param {number} orderId
@@ -4463,7 +4463,7 @@ export class RubisDatabase {
   }
 
   /**
-   * Moves one sale from the shift it is in to another (docs/phase-231, S5). The only way a sale ever leaves a shift.
+   * Moves one sale from the shift it is in to another (docs/phase-232, S5). The only way a sale ever leaves a shift.
    * One write transaction: the sale must exist, not be voided, and be in a shift other than the target; a sale
    * made in a different window needs `acknowledgeDifferentWindow`. A single `UPDATE` that only matches while the
    * sale is still in the shift it was read in moves it. Two adjustment records follow, one on each shift, sharing

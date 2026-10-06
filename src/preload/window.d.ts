@@ -241,15 +241,15 @@ export interface PosApi {
     endingCash: number,
     mpesaClosingBalance?: number
   ) => Promise<ServiceResult<ShiftCloseResult>>
-  /** The shift window of this moment, its shift, the earlier sales an Open Shift would bring in, and when the open shift may close (docs/phase-231). */
+  /** The shift window of this moment, its shift, the earlier sales an Open Shift would bring in, and when the open shift may close (docs/phase-232). */
   getShiftWindowStatus: () => Promise<ServiceResult<ShiftWindowStatus>>
-  /** The combined report of one window (docs/phase-231). Read-only. */
+  /** The combined report of one window (docs/phase-232). Read-only. */
   getWindowReport: (type: ShiftType, startDate: string) => Promise<ServiceResult<WindowReport>>
-  /** Gives every sale with no shift to the shift it belongs to (docs/phase-231). No input, no PIN; running it again changes nothing. */
+  /** Gives every sale with no shift to the shift it belongs to (docs/phase-232). No input, no PIN; running it again changes nothing. */
   autoAssignSales: () => Promise<ServiceResult<AutoAssignResult>>
-  /** What moving one sale to another shift would do (docs/phase-231). Read-only. */
+  /** What moving one sale to another shift would do (docs/phase-232). Read-only. */
   previewSaleMove: (orderId: number, toShiftId: number) => Promise<ServiceResult<SaleMovePreview>>
-  /** Moves one sale to another shift (docs/phase-231). Admin PIN re-checked in the main process. */
+  /** Moves one sale to another shift (docs/phase-232). Admin PIN re-checked in the main process. */
   moveSale: (request: MoveSaleRequest) => Promise<ServiceResult<{ fromShiftId: number; toShiftId: number }>>
   /** Appends a correction to a closed shift's typed-in figures (docs/phase-224). Manager PIN re-checked in the main process; the shift's own row is never changed. */
   correctShift: (request: ShiftCorrectionRequest) => Promise<ServiceResult<ShiftCorrectionRow>>

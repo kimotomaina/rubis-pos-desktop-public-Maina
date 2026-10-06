@@ -16,7 +16,7 @@ interface OpenShiftDialogProps {
 }
 
 /**
- * The cart's Open Shift dialog (docs/phase-227, changed in docs/phase-231): the same inputs as the Admin screen's
+ * The cart's Open Shift dialog (docs/phase-227, changed in docs/phase-232): the same inputs as the Admin screen's
  * ({@link OpenShiftForm}). The shift's type is the window's, shown and never chosen. Sales already made in this
  * window with no shift join the shift when it opens, and the form says so. An admin opens the shift as themselves.
  * Anyone else is asked for a manager's PIN, checked again in the main process, and the shift is recorded under that

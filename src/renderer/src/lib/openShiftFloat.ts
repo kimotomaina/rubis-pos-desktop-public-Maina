@@ -1,5 +1,5 @@
 /**
- * What the Open Shift form shows before it is confirmed (docs/phase-231, S6): when sales were already made in this
+ * What the Open Shift form shows before it is confirmed (docs/phase-232, S6): when sales were already made in this
  * window with no shift, they join the new shift, and the float stored is the drawer count less their cash, so they
  * are not counted twice. The main process works the same sum again when the shift is opened and refuses if the
  * sales it finds are not the ones shown here; this is only the display of it.

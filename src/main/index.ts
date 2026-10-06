@@ -537,7 +537,7 @@ app.whenReady().then(async () => {
   db.init()
 
   /**
-   * Sales with no shift are given to the shift they belong to (docs/phase-231), also when the app starts: a window
+   * Sales with no shift are given to the shift they belong to (docs/phase-232), also when the app starts: a window
    * can have ended while it was closed. A failure goes to `till.log` and never stops the app starting.
    */
   const assignSalesToShifts = (): void => {
@@ -3493,7 +3493,7 @@ app.whenReady().then(async () => {
   )
 
   /**
-   * IPC handlers for the shift window (docs/phase-231). `shifts:window-status` is a read, like every `reports:*` read.
+   * IPC handlers for the shift window (docs/phase-232). `shifts:window-status` is a read, like every `reports:*` read.
    * `shifts:auto-assign` gives every sale with no shift to the shift it belongs to: it takes no input and no PIN
    * because it can only do what the rules say, and running it again changes nothing; a failure goes to `till.log`.
    */
@@ -3511,7 +3511,7 @@ app.whenReady().then(async () => {
   )
 
   /**
-   * IPC handlers for moving a sale to another shift (docs/phase-231, S5). The preview is a read. The move is
+   * IPC handlers for moving a sale to another shift (docs/phase-232, S5). The preview is a read. The move is
    * admin-gated with a PIN re-verified here, and the admin recorded is the one the PIN belongs to. Nothing is queued
    * for Shopify or the tax device.
    */
@@ -3626,7 +3626,7 @@ app.whenReady().then(async () => {
   )
 
   /**
-   * IPC handler for the combined report of one window (docs/phase-231, S10): every shift that began in it, each
+   * IPC handler for the combined report of one window (docs/phase-232, S10): every shift that began in it, each
    * with its own Z report, and the sums that are safe to add. Read-only.
    */
   ipcMain.handle(

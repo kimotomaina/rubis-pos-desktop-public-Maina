@@ -67,7 +67,7 @@ import type { LastUpdateResult } from '../../../main/services/updateBackup.js'
 import type { ShiftWindowStatus } from '../../../main/services/shift-window-status.js'
 
 /**
- * The open shift's window, with the close note (docs/phase-231). The type is the window of `clock_in`, never the
+ * The open shift's window, with the close note (docs/phase-232). The type is the window of `clock_in`, never the
  * stored label; an older shift labelled otherwise says so. Once the window's last minute has begun the note asks for
  * the drawer count and the close; before then it says when the shift may be closed. Selling is never affected. The
  * times come from the main process (`shifts:window-status`): this screen holds no time rule.
@@ -1133,7 +1133,7 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
       setShiftActionError(MPESA_BALANCE_INVALID)
       return
     }
-    // docs/phase-231: the type is the window's, worked out in the main process. What the form showed of the earlier
+    // docs/phase-232: the type is the window's, worked out in the main process. What the form showed of the earlier
     // sales goes with the request, so a sale made while it was open stops the shift being opened on stale figures.
     const result = await window.api.openShift(
       currentStaff.id,
@@ -1152,7 +1152,7 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
     await refresh()
   }
 
-  /** Opens the form. The window is shown, never chosen (docs/phase-231). */
+  /** Opens the form. The window is shown, never chosen (docs/phase-232). */
   const handleShowOpenForm = () => {
     setStartAtZero(false)
     void reloadWindowStatus()

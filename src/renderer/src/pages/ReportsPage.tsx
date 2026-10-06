@@ -123,7 +123,7 @@ function Pager({
  * Shift history: paginated, tap a row to open its Z-report (with the
  * existing, unchanged Reprint action inside `ZReportModal`).
  *
- * Opening it gives every sale with no shift to the shift it belongs to (docs/phase-231), so there is no list of
+ * Opening it gives every sale with no shift to the shift it belongs to (docs/phase-232), so there is no list of
  * sales with no shift to work through. A shift is shown by its window; an older one labelled otherwise says so. A
  * window that holds more than one shift (older data) has a combined report. An admin can move a sale to another
  * shift, with a reason and their PIN.
@@ -145,7 +145,7 @@ function ShiftHistoryView({ staffName }: { staffName: (id: number) => string }) 
     setLoading(true)
     setError(null)
     void (async () => {
-      // docs/phase-231: every sale with no shift is given to its shift before the list is read. A failure is logged
+      // docs/phase-232: every sale with no shift is given to its shift before the list is read. A failure is logged
       // by the main process and never stops the history showing.
       try {
         await window.api.autoAssignSales?.()

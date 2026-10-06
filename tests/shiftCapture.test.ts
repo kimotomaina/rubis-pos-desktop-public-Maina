@@ -2,7 +2,7 @@
  * Phase 227, the main-process half: every sale lands in a shift. "Cash not counted" (D4); who may open a shift, and
  * the schemas that guard it.
  *
- * CHANGED (docs/phase-231). OLD: this file also tested D1 (one confirmation attaches every sale in a period, through
+ * CHANGED (docs/phase-232). OLD: this file also tested D1 (one confirmation attaches every sale in a period, through
  * `createRetrospectiveShift`), D2 (one offer per day, cut at existing shifts, `listUnattachedOffers`), the
  * `shifts:create-past` request schema, and the handlers `shifts:create-past` and `shifts:unattached-days`. NEW: the
  * manual past-shift flow is retired, so those are removed; the automatic assignment that replaces it is tested in
@@ -66,7 +66,7 @@ function createFakeConnection() {
         calls.push({ sql, kind: 'get', params })
         const queued = find(getResults, sql)
         if (queued && queued.length > 0) return queued.shift()
-        // ADDED (docs/phase-231): a record's time is after the shift's newest record; an aggregate always answers one row.
+        // ADDED (docs/phase-232): a record's time is after the shift's newest record; an aggregate always answers one row.
         if (sql.includes('MAX(at)')) return { latest: null }
         return undefined
       },
@@ -152,7 +152,7 @@ describe('D4: "Cash not counted"', () => {
           getOrdersForShift: () => orders,
           getMpesaPaymentsForShift: () => [],
           listShiftCorrections: () => [],
-          listShiftAdjustments: () => [], // ADDED (docs/phase-231)
+          listShiftAdjustments: () => [], // ADDED (docs/phase-232)
           listAdjustmentSales: () => []
         } as unknown as RubisDatabase,
         9,
@@ -279,7 +279,7 @@ describe('shifts:open: only an admin opens a shift', () => {
     const result = openShiftChecked(db, { staffId: 1, startingCash: 250, shiftType: 'night' })
 
     expect(result).toEqual({ success: true, data: { shiftId: 5 } })
-    // CHANGED (docs/phase-231). OLD: openShift(1, 250, 'night', null), the type from the request. NEW: openShift(1, 250, null, options):
+    // CHANGED (docs/phase-232). OLD: openShift(1, 250, 'night', null), the type from the request. NEW: openShift(1, 250, null, options):
     // a type in the request is ignored, so none reaches the database; the options carry what the form showed.
     expect(openShift).toHaveBeenCalledWith(1, 250, null, { earlierShown: undefined, startAtZero: undefined })
   })

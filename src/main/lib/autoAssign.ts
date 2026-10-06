@@ -1,5 +1,5 @@
 /**
- * Which shift each sale with no shift belongs to (docs/phase-231). Pure: it reads sales and shifts and says what
+ * Which shift each sale with no shift belongs to (docs/phase-232). Pure: it reads sales and shifts and says what
  * to do; {@link RubisDatabase.autoAssignUnattachedSales} does it, in one transaction, with the guards.
  *
  * For every sale, in this order:

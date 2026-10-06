@@ -482,10 +482,10 @@ The status dot opens and closes a TCP connection to the receipt printer every 30
 
 `userData/till.log` holds failures only and grows by about 150 bytes for each. A printer left down while sales auto-print adds a line per sale. There is no size limit and no rotation.
 
-## A shift cannot be closed before its window's last minute, and nothing closes it for the person (phase 231)
+## A shift cannot be closed before its window's last minute, and nothing closes it for the person (phase 232)
 
 A Day shift closes from 17:30:00 and a Night shift from 08:59:00, for everyone, by the owner's rule. A shift opened by mistake (a wrong float) stays open until then and is fixed afterwards by a correction. Nothing closes a shift on its own: a shift left open past its window keeps taking sales, and the banner asks for the count. The banner follows the clock to within 15 seconds.
 
-## Sales with no shift are given one on a trigger, not on the clock (phase 231)
+## Sales with no shift are given one on a trigger, not on the clock (phase 232)
 
 The automatic assignment runs at start, before Open Shift, after Close Shift and when Shift History opens, not after each sale and not on a timer. Sales made in a window with no shift wait until the next of those. A report that counts "sales with no shift" can show them until then. A failed run is written to `till.log` as `auto-assign-failed` and tried again at the next trigger.

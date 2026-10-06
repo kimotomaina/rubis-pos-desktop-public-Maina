@@ -4,7 +4,7 @@ import { previewOpenFloat } from '../lib/openShiftFloat.js'
 import type { EarlierSalesShown } from '../../../main/services/database.js'
 
 interface OpenShiftFormProps {
-  /** The window of this moment, as text: `Night shift (17:31 to 08:59)`. It is shown, never chosen (docs/phase-231). */
+  /** The window of this moment, as text: `Night shift (17:31 to 08:59)`. It is shown, never chosen (docs/phase-232). */
   windowLabel: string
   /** Set when this window already has a shift: there is nothing to open, and this says why. */
   windowHasShift: string | null
@@ -34,7 +34,7 @@ function openDecimalField(value: string, onChange: (next: string) => void, label
 }
 
 /**
- * The Open Shift inputs (docs/phase-227, changed in docs/phase-231): the window as text, the cash in the drawer, the
+ * The Open Shift inputs (docs/phase-227, changed in docs/phase-232): the window as text, the cash in the drawer, the
  * optional M-Pesa balance, Confirm and Cancel. One component for the Admin screen and the cart's "No shift open"
  * dialog, so the two can never differ. It holds no state and calls nothing: the owner of the form decides what
  * Confirm does.

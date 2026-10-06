@@ -20,7 +20,7 @@ type RetroFields = Pick<ZReport, 'kind' | 'createdAt' | 'createdByName' | 'reaso
 export function zReportRetroLines(report: RetroFields, formatDateTime: (iso: string) => string): string[] {
   if (report.kind !== 'retrospective') return []
   const when = report.createdAt ? ` ${formatDateTime(report.createdAt)}` : ''
-  // docs/phase-231: the till made this shift itself, for sales that had none.
+  // docs/phase-232: the till made this shift itself, for sales that had none.
   if (report.createdAutomatically) {
     return [`CREATED AUTOMATICALLY${when}`, `Reason: ${report.reason ?? ''}`]
   }

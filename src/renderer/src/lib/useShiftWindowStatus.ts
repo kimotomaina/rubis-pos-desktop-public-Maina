@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import type { ShiftWindowStatus } from '../../../main/services/shift-window-status.js'
 
 /**
- * The shift window status (docs/phase-231) for a screen, read from the main process and read again every
+ * The shift window status (docs/phase-232) for a screen, read from the main process and read again every
  * `refreshMs`, so a banner or a Close Shift button follows the clock without the screen holding a time rule of its
  * own. A failure, or a bridge without the call, reads as no status: the notes are a courtesy and never block a sale.
  *
