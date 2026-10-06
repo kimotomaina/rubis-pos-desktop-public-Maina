@@ -7,9 +7,6 @@
 
 import type { CheckoutIpcPaymentLeg } from '../../../main/services/database.js'
 
-/** The `app_configurations` key of the split setting, mirrored from `SPLIT_PAYMENTS_SETTING_KEY` in `checkout.ts`. */
-export const SPLIT_PAYMENTS_SETTING_KEY = 'split_payments_enabled'
-
 /** The most payments one sale may be split into, mirrored from `checkout.ts`. */
 export const MAX_SPLIT_PAYMENTS = 4
 

@@ -234,7 +234,7 @@ import { createSyncEngine } from './services/sync-engine.js'
 import { createReconciliationRunner } from './services/reconciliation.js'
 import type { ReconciliationResult } from './services/reconciliation.js'
 import { createFiscalEngine } from './services/fiscal-engine.js'
-import { runCheckout, SPLIT_PAYMENTS_SETTING_KEY } from './services/checkout.js'
+import { runCheckout } from './services/checkout.js'
 import { closeShiftUnlessHeld, discardHeldSaleApproved, holdCart } from './services/held-sales.js'
 import {
   correctPinAndResend,
@@ -1496,8 +1496,6 @@ app.whenReady().then(async () => {
           verifyReferenceNumbers,
           claimsStoredPayments,
           manualEntryEnabled,
-          // Read for each checkout, so switching the setting in Admin needs no restart (docs/phase-252, S9).
-          splitPaymentsEnabled: db.getConfig(SPLIT_PAYMENTS_SETTING_KEY) === 'true',
           logger: console,
           debugLogging: fiscalDebugLogging
         },

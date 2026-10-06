@@ -92,10 +92,11 @@ describe('PosCheckoutPanel > three toggles', () => {
    * this is the assertion that actually guards the three-equal-columns
    * layout the brief asks for.
    */
-  it('lays the toggle row out as three equal columns, not a wrapped two', () => {
+  // CHANGED (docs/phase-252-2, B1). OLD: three equal columns. NEW: four, the three methods and Split payment beside them.
+  it('lays the toggle row out as four equal columns, not a wrapped two', () => {
     mount()
     const row = button('CASH').parentElement
-    expect(row?.className).toContain('grid-cols-3')
+    expect(row?.className).toContain('grid-cols-4')
   })
 
   it('selecting CARD shows CardEntryPanel, not the cash numpad or PaymentModal', () => {

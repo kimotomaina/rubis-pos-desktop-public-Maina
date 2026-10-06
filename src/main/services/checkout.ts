@@ -173,18 +173,8 @@ export const CARD_REFERENCE_INVALID_MESSAGE =
 export const CARD_NOT_ACKNOWLEDGED_MESSAGE =
   'Confirm that the PDQ slip shows Approved for this amount before completing the sale.'
 
-/**
- * The `app_configurations` key of the split-payments setting (docs/phase-252, S9): `'true'` turns split payments on;
- * anything else, or no row, is off. Written only through `config:set`, which re-verifies an admin PIN.
- */
-export const SPLIT_PAYMENTS_SETTING_KEY = 'split_payments_enabled'
-
 /** The most payments one sale may be split into (docs/phase-252, S1). */
 export const MAX_SPLIT_PAYMENTS = 4
-
-/** Shown when a split sale reaches a till whose split setting is off (docs/phase-252, S9); nothing is written. */
-export const SPLIT_PAYMENTS_OFF_MESSAGE =
-  'Split payments are switched off on this till. Take the whole payment one way, or ask an administrator.'
 
 /** Shown when a request says `split` without its payments, or carries payments without saying `split`. */
 export const SPLIT_REQUEST_INVALID_MESSAGE = 'This split payment could not be read, so nothing was recorded. Start the payment again.'
@@ -406,12 +396,6 @@ export interface RunCheckoutDeps {
    * it.
    */
   manualEntryEnabled?: boolean
-  /**
-   * Whether this till takes split payments (docs/phase-252, S9): the `split_payments_enabled` setting, changed only in
-   * Admin behind the admin PIN and read for each checkout. Optional, defaulting to off, so a caller that forgets it
-   * cannot let a split sale through.
-   */
-  splitPaymentsEnabled?: boolean
   logger: CheckoutLogger
   /**
    * Gates the per-sale, non-essential chatter (the Shopify sync-tick
@@ -649,13 +633,13 @@ interface SplitDecision {
 type SplitOutcome = SplitDecision | { error: string }
 
 /** What deciding a split sale reads from {@link RunCheckoutDeps}. */
-type SplitDeps = GateDeps & { splitPaymentsEnabled?: boolean; claimsStoredPayments: boolean }
+type SplitDeps = GateDeps & { claimsStoredPayments: boolean }
 
 /**
- * Decides a split sale (docs/phase-252): refused while the setting is off, then the payments checked against the total
- * ({@link checkSplitPayments}), then each payment through today's own gate, in the order recorded. Nothing is written
- * here; the first refusal stops the sale. Answers at once unless a payment needs the provider's check, for the reason
- * {@link gateMpesaPayment} gives.
+ * Decides a split sale (docs/phase-252): the payments checked against the total ({@link checkSplitPayments}), then each
+ * payment through today's own gate, in the order recorded. Nothing is written here; the first refusal stops the sale.
+ * Answers at once unless a payment needs the provider's check, for the reason {@link gateMpesaPayment} gives. There is
+ * no setting to switch splits off (docs/phase-252-2, B3); a stored `split_payments_enabled` row is ignored.
  *
  * @param {SplitDeps} deps
  * @param {CheckoutRequest} input
@@ -663,7 +647,6 @@ type SplitDeps = GateDeps & { splitPaymentsEnabled?: boolean; claimsStoredPaymen
  * @returns {SplitOutcome | Promise<SplitOutcome>}
  */
 function decideSplit(deps: SplitDeps, input: CheckoutRequest, staffId: number): SplitOutcome | Promise<SplitOutcome> {
-  if (deps.splitPaymentsEnabled !== true) return { error: SPLIT_PAYMENTS_OFF_MESSAGE }
   if (input.paymentMethod !== 'split' || !input.payments) return { error: SPLIT_REQUEST_INVALID_MESSAGE }
   const checked = checkSplitPayments(input.total, input.payments)
   if ('error' in checked) return checked

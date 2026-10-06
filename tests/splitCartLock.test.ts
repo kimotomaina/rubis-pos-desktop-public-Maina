@@ -51,7 +51,6 @@ function Harness() {
 
 async function mount(): Promise<void> {
   ;(window as unknown as { api: Record<string, unknown> }).api = {
-    getAllConfigs: vi.fn().mockResolvedValue({ success: true, data: { split_payments_enabled: 'true' } }),
     getMpesaCapabilities: vi.fn().mockResolvedValue({ success: true, data: { mode: 'manual', manualEntryEnabled: true, manualCodeSupported: false } })
   }
   container = document.createElement('div')

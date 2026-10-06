@@ -2,7 +2,7 @@
  * Split payments (docs/phase-252). The cashier records the payments one by one; Complete sale sends one checkout with the
  * whole list; the main process checks it and writes the order, every payment, every `mpesa_payments` row, the trader
  * number, the Shopify queue row and the fiscal row in one transaction, then makes one fiscal call. Anything refused writes
- * nothing. Off by default (`split_payments_enabled`). Real `:memory:` SQLite (a real file for the migration), the real
+ * nothing. CHANGED (docs/phase-252-2): there is no setting; a split is always accepted. Real `:memory:` SQLite (a real file for the migration), the real
  * `runCheckout`, the real readers.
  */
 
@@ -20,7 +20,6 @@ import {
   SPLIT_ABOVE_DUE_MESSAGE,
   SPLIT_CASH_NOT_LAST_MESSAGE,
   SPLIT_NOT_ADDING_UP_MESSAGE,
-  SPLIT_PAYMENTS_OFF_MESSAGE,
   SPLIT_SAME_CODE_MESSAGE,
   SPLIT_TOO_MANY_MESSAGE,
   SPLIT_TWO_CASH_MESSAGE,
@@ -84,7 +83,6 @@ function deps(db: CheckoutDb, overrides: Partial<RunCheckoutDeps> = {}): RunChec
     verifyReferenceNumbers: false,
     claimsStoredPayments: false,
     manualEntryEnabled: true,
-    splitPaymentsEnabled: true,
     logger: { log: () => {}, warn: () => {}, error: () => {} },
     debugLogging: false,
     ...overrides
@@ -213,27 +211,6 @@ describe('refused, and nothing is written in any table', () => {
     expect(d.fiscalizationProvider.submitInvoice).not.toHaveBeenCalled()
   })
 
-  it('a split sent while the setting is off', async () => {
-    const { db, staffId } = setup()
-    const before = snapshot(db)
-    const d = deps(db, { splitPaymentsEnabled: false })
-
-    const result = await runCheckout(d, splitSale(staffId, 1500, [manual(500), cash(1000, 1000)]))
-
-    expect(result).toEqual({ success: false, error: SPLIT_PAYMENTS_OFF_MESSAGE })
-    expect(snapshot(db)).toEqual(before)
-  })
-
-  it('a split sent with the setting left out of the dependencies (off by default)', async () => {
-    const { db, staffId } = setup()
-    const { splitPaymentsEnabled: _omitted, ...rest } = deps(db)
-
-    const result = await runCheckout(rest, splitSale(staffId, 1500, [manual(500), cash(1000, 1000)]))
-
-    expect(result).toEqual({ success: false, error: SPLIT_PAYMENTS_OFF_MESSAGE })
-    expect(db.getOrders()).toHaveLength(0)
-  })
-
   it('a code already recorded on an earlier sale', async () => {
     const { db, staffId } = setup()
     await runCheckout(deps(db), splitSale(staffId, 1500, [manual(500), cash(1000, 1000)]))
@@ -243,6 +220,103 @@ describe('refused, and nothing is written in any table', () => {
 
     expect(again.success).toBe(false)
     expect(snapshot(db)).toEqual(before)
+  })
+})
+
+/**
+ * CHANGED (docs/phase-252-2, B3). OLD: a split was refused while `split_payments_enabled` was off, and with the setting
+ * left out. NEW: there is no setting. A split is accepted with no row at all, and with an old row set to 'false', which
+ * is ignored, not deleted. Every other refusal above stands.
+ */
+describe('no setting: a split is accepted', () => {
+  it('with no setting row at all', async () => {
+    const { db, staffId } = setup()
+    expect(db.getConfig('split_payments_enabled')).toBeNull()
+
+    const result = await runCheckout(deps(db), splitSale(staffId, 1500, [manual(1000), cash(500, 500)]))
+
+    expect(result.success).toBe(true)
+  })
+
+  it('with an old row set to false, which stays as it was', async () => {
+    const { db, staffId } = setup()
+    db.setConfig('split_payments_enabled', 'false', { category: 'general' })
+
+    const result = await runCheckout(deps(db), splitSale(staffId, 1500, [manual(1000), cash(500, 500)]))
+
+    expect(result.success).toBe(true)
+    expect(db.getConfig('split_payments_enabled')).toBe('false')
+  })
+})
+
+describe('the owner\'s two examples (docs/phase-252-2)', () => {
+  const textLines = (entries: ReceiptLayoutEntry[]): string[] =>
+    entries.filter((entry) => !isReceiptLayoutQr(entry)).map((entry) => (entry as { text: string }).text.replace(/\s+/g, ' '))
+  const settings = { taxRate: 0.16, tradingName: 'ENJOY', legalName: 'Rubis', address: 'Kisumu', phone: '0700', sellerPin: 'P051', footerMessage: 'Thanks' }
+
+  /** The receipt as the print handler builds it from the stored order (index.ts, `receipt:print`). */
+  function receiptOf(db: RubisDatabase, localId: number): string[] {
+    const order = db.getOrder(localId)!
+    const payload = JSON.parse(order.payload_json) as OfflineOrderPayload
+    const layout: ReceiptLayoutOrder = {
+      localId,
+      createdAt: order.created_at,
+      cashierName: payload.staffName,
+      paymentMethod: payload.paymentMethod,
+      tenderedAmount: payload.tenderedAmount,
+      changeDue: payload.changeDue,
+      referenceNumber: payload.referenceNumber,
+      payments: payload.payments,
+      total: order.total,
+      items: payload.lineItems.map((line) => ({ title: line.title, variantTitle: line.variantTitle, quantity: line.quantity, unitPrice: line.unitPrice, vatClass: 'A' }))
+    }
+    return textLines(buildReceiptLayout(layout, settings, { width: 48 }))
+  }
+
+  it('1,500 = 1,000 M-Pesa by code + 500 cash with 1,000 handed over: one order, two payments, change 500 on the cash, one fiscal call, one receipt listing both', async () => {
+    const { db, staffId } = setup()
+    const d = deps(db)
+
+    const result = await runCheckout(d, splitSale(staffId, 1500, [manual(1000), cash(500, 1000)]))
+
+    expect(result.success).toBe(true)
+    const id = result.data!.localId
+    expect(db.getOrders()).toHaveLength(1)
+    expect(paymentRows(db)).toEqual([
+      { order_local_id: id, leg_no: 1, method: 'mpesa', mpesa_mode: 'manual', amount: 1000, reference: MANUAL_CODE, tendered: null, change_due: null },
+      { order_local_id: id, leg_no: 2, method: 'cash', mpesa_mode: null, amount: 500, reference: null, tendered: 1000, change_due: 500 }
+    ])
+    expect(db.listMpesaPayments().map((p) => p.amount)).toEqual([1000])
+    expect(d.fiscalizationProvider.submitInvoice).toHaveBeenCalledTimes(1)
+    const lines = receiptOf(db, id)
+    const from = lines.findIndex((line) => line.startsWith('PAID BY'))
+    expect(lines.slice(from, from + 5)).toEqual([
+      'PAID BY M-PESA 1,000.00',
+      `M-Pesa ref: ${MANUAL_CODE}`,
+      'PAID BY CASH 500.00',
+      'Tendered: 1,000.00',
+      'Change: 500.00'
+    ])
+  })
+
+  it('1,500 = 1,000 M-Pesa by code + 500 card: the same, with no change', async () => {
+    const { db, staffId } = setup()
+    const d = deps(db)
+
+    const result = await runCheckout(d, splitSale(staffId, 1500, [manual(1000), card(500)]))
+
+    expect(result.success).toBe(true)
+    const id = result.data!.localId
+    expect(paymentRows(db)).toEqual([
+      { order_local_id: id, leg_no: 1, method: 'mpesa', mpesa_mode: 'manual', amount: 1000, reference: MANUAL_CODE, tendered: null, change_due: null },
+      { order_local_id: id, leg_no: 2, method: 'card', mpesa_mode: null, amount: 500, reference: 'PDQ123', tendered: null, change_due: null }
+    ])
+    expect(db.getOrder(id)!.change_due).toBe(0)
+    expect(d.fiscalizationProvider.submitInvoice).toHaveBeenCalledTimes(1)
+    const lines = receiptOf(db, id)
+    const from = lines.findIndex((line) => line.startsWith('PAID BY'))
+    expect(lines.slice(from, from + 4)).toEqual(['PAID BY M-PESA 1,000.00', `M-Pesa ref: ${MANUAL_CODE}`, 'PAID BY CARD 500.00', 'Ref: PDQ123'])
+    expect(lines.some((line) => line.startsWith('Change:'))).toBe(false)
   })
 })
 
@@ -270,7 +344,7 @@ describe('a sale paid one way', () => {
     const { db, staffId } = setup()
 
     const result = await runCheckout(
-      deps(db, { splitPaymentsEnabled: false }),
+      deps(db),
       splitSale(staffId, 120, [], { paymentMethod: 'cash', tenderedAmount: 200, changeDue: 80, payments: undefined })
     )
 

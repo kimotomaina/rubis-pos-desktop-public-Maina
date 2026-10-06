@@ -17,7 +17,7 @@ import type { ManualMpesaEntryInput, MpesaCapabilitiesState } from './PaymentMod
 import CardEntryPanel from './CardEntryPanel.js'
 import SplitPaymentPanel from './SplitPaymentPanel.js'
 import VirtualNumpad from './VirtualNumpad.js'
-import { SPLIT_PAYMENTS_SETTING_KEY } from '../lib/splitPayments.js'
+import { usePaymentActivityStore, isPaymentInProgress } from '../stores/paymentActivityStore.js'
 import mpesaLogo from '../assets/logo-mpesa.png'
 import cardLogo from '../assets/logo-visa-mastercard.png'
 import type { CardManualEntry, CheckoutIpcPaymentLeg, PaymentMethod } from '../../../main/services/database.js'
@@ -103,30 +103,15 @@ export default function PosCheckoutPanel({
   const currentStaff = useAuthStore((state) => state.currentStaff)
 
   const [method, setMethod] = useState<QuickPaymentMethod>('cash')
-  /** Whether this till takes split payments (docs/phase-252, S9); off until the setting is read, and off when it cannot be. */
-  const [splitEnabled, setSplitEnabled] = useState(false)
+  /** docs/phase-252-2 (B2): a sale is paid one way unless the cashier taps Split payment; never opens in split mode. */
   const [splitMode, setSplitMode] = useState(false)
+  /** A one-way M-Pesa or card payment in progress (docs/phase-217's flag): Split payment is then off (B5). */
+  const paymentActive = usePaymentActivityStore((state) => isPaymentInProgress(state.active))
 
   useEffect(() => {
     if (forceMpesaManualKeyboard) setMethod('mpesa')
   }, [forceMpesaManualKeyboard])
 
-  useEffect(() => {
-    let cancelled = false
-    // No bridge, or one without the setting read: the split stays off.
-    if (typeof window.api?.getAllConfigs !== 'function') return
-    void window.api
-      .getAllConfigs()
-      .then((result) => {
-        if (!cancelled) setSplitEnabled(result.success === true && result.data?.[SPLIT_PAYMENTS_SETTING_KEY] === 'true')
-      })
-      .catch(() => {
-        if (!cancelled) setSplitEnabled(false)
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [])
   const [tenderedInput, setTenderedInput] = useState('')
   /** The customer's company name and KRA PIN live in the cart store, so a held sale keeps them (docs/phase-217). */
   const companyName = useCartStore((state) => state.companyName)
@@ -453,8 +438,9 @@ export default function PosCheckoutPanel({
         ) : (
           <>
             {/**
-             * Three equal toggles (docs/phase-176.md Part 2 §3) — grown
-             * from two (phase-44/142's `grid-cols-2`/`h-14`). `h-12`/
+             * Four equal buttons: the three methods and Split payment
+             * (docs/phase-252-2, B1). Three equal toggles (docs/phase-176.md
+             * Part 2 §3) — grown from two (phase-44/142's `grid-cols-2`/`h-14`). `h-12`/
              * `text-lg`/`gap-2` (shrunk from `h-14`/`text-xl`/`gap-3`)
              * keep the row inside the 35% checkout aside at every
              * check:fit size with no wrap; height/padding/gap were
@@ -462,7 +448,7 @@ export default function PosCheckoutPanel({
              * (48px) stays above check-fit.mjs's `keySizes` touch floor
              * (>= 34 physical px at 1366x768 @150%).
              */}
-            <div className="mb-2 grid grid-cols-3 gap-2">
+            <div className="mb-2 grid grid-cols-4 gap-2">
               <button
                 type="button"
                 onClick={() => setMethod('cash')}
@@ -508,21 +494,19 @@ export default function PosCheckoutPanel({
                 </span>
                 <span className="sr-only">CARD</span>
               </button>
-            </div>
-
-            {/*
-              docs/phase-252 (S9): shown only while the till's split setting is on, so the screen is unchanged when it is
-              off; and only on the cash screen, so no M-Pesa or card payment in progress is dropped by opening it.
-            */}
-            {splitEnabled && cartCount > 0 && method === 'cash' && (
+              {/*
+                docs/phase-252-2: always shown (B1). Off while the M-Pesa or card screen of a one-way sale is open, or any
+                payment is in progress, so none is dropped (B5), and with nothing in the cart.
+              */}
               <button
                 type="button"
                 onClick={() => setSplitMode(true)}
-                className="mb-2 w-full text-center text-base font-medium text-rose-600 hover:text-rose-700"
+                disabled={method !== 'cash' || paymentActive || cartCount === 0}
+                className="h-12 rounded-xl border border-slate-200 px-1 text-sm font-bold leading-tight text-slate-700 transition hover:bg-slate-50 active:scale-95 disabled:cursor-not-allowed disabled:opacity-40"
               >
                 Split payment
               </button>
-            )}
+            </div>
 
             {method === 'cash' && (
               <div>

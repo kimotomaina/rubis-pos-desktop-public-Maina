@@ -39,6 +39,7 @@ const item = {
 async function mount(settings: Record<string, string>): Promise<void> {
   ;(window as unknown as { api: Record<string, unknown> }).api = {
     getAllConfigs: vi.fn().mockResolvedValue({ success: true, data: settings }),
+    getMpesaCapabilities: vi.fn().mockResolvedValue({ success: true, data: { mode: 'manual', manualEntryEnabled: true, manualCodeSupported: false } }),
     checkout: vi.fn().mockResolvedValue({
       success: true,
       data: { localId: 9, mode: 'queued-offline', fiscalStatus: null, fiscalErrorReason: null, fiscalErrorKind: null, fiscalDataIssue: null }
@@ -94,27 +95,81 @@ afterEach(() => {
   useFiscalModeStore.setState({ fiscalLive: 'unknown', initialized: false })
 })
 
-describe('the setting', () => {
-  it('off (no row): no Split payment button, the screen as before', async () => {
+/**
+ * CHANGED (docs/phase-252-2). OLD: the button showed only while `split_payments_enabled` was 'true'. NEW: there is no
+ * setting; the button is always beside Cash, M-Pesa and Card, and an old row of the setting is ignored.
+ */
+describe('the Split payment button, always on the cart (docs/phase-252-2)', () => {
+  const isCashSelected = (): boolean => button('CASH').className.includes('bg-rose-600')
+
+  it('shows, enabled, with no setting row at all', async () => {
     await mount({})
-    expect(queryButton('Split payment')).toBeUndefined()
+    expect(button('Split payment').disabled).toBe(false)
+  })
+
+  it('shows, enabled, with an old row set to false', async () => {
+    await mount({ split_payments_enabled: 'false' })
+    expect(button('Split payment').disabled).toBe(false)
+  })
+
+  it('sits in the method row beside Cash, M-Pesa and Card', async () => {
+    await mount({})
+    const row = button('CASH').parentElement!
+    expect(Array.from(row.querySelectorAll('button')).map((b) => b.textContent?.trim())).toEqual(['CASH', 'M-PESA', 'CARD', 'Split payment'])
+  })
+
+  it('a new sale starts paid one way, Cash selected, as before', async () => {
+    await mount({})
+    expect(isCashSelected()).toBe(true)
+    expect(container.querySelector('[data-testid="split-panel"]')).toBeNull()
     expect(queryButton('COMPLETE SALE')).toBeDefined()
   })
 
-  it('off (any value but true): no button', async () => {
-    await mount({ split_payments_enabled: 'false' })
-    expect(queryButton('Split payment')).toBeUndefined()
+  it('is disabled while the M-Pesa screen of a one-way sale is open', async () => {
+    await mount({})
+    tap(button('M-PESA'))
+    expect(button('Split payment').disabled).toBe(true)
   })
 
-  it('on: the button shows on the cash screen', async () => {
-    await mount({ split_payments_enabled: 'true' })
-    expect(queryButton('Split payment')).toBeDefined()
+  it('is disabled while the card screen of a one-way sale is open', async () => {
+    await mount({})
+    tap(button('CARD'))
+    expect(button('Split payment').disabled).toBe(true)
+  })
+
+  it('Cancel split returns to a one-way payment, with the cart unlocked', async () => {
+    await mount({})
+    tap(button('Split payment'))
+    recordCard('50', 'PDQ1')
+    expect(useCartStore.getState().splitLocked).toBe(true)
+
+    tap(button('Cancel split'))
+
+    expect(container.querySelector('[data-testid="split-panel"]')).toBeNull()
+    expect(isCashSelected()).toBe(true)
+    expect(useCartStore.getState().splitLocked).toBe(false)
+  })
+
+  it('after a split sale completes, the next sale starts in one-way mode', async () => {
+    await mount({})
+    tap(button('Split payment'))
+    recordCard('50', 'PDQ1')
+    tap(button('+ Cash'))
+    type('80')
+    tap(button('Record cash'))
+    await act(async () => button('COMPLETE SALE').click())
+
+    act(() => useCartStore.setState({ items: [item] }))
+
+    expect(container.querySelector('[data-testid="split-panel"]')).toBeNull()
+    expect(isCashSelected()).toBe(true)
+    expect(useCartStore.getState().splitLocked).toBe(false)
   })
 })
 
 describe('recording the payments one by one', () => {
   it('a card payment, then cash for the rest: Complete sale sends one checkout with both, change on the cash only', async () => {
-    await mount({ split_payments_enabled: 'true' })
+    await mount({})
     tap(button('Split payment'))
     expect(button('+ Cash').disabled).toBe(true)
     expect(button('COMPLETE SALE').disabled).toBe(true)
@@ -146,7 +201,7 @@ describe('recording the payments one by one', () => {
   })
 
   it('a payment is added only once its own screen succeeds: backing out of the card screen adds nothing', async () => {
-    await mount({ split_payments_enabled: 'true' })
+    await mount({})
     tap(button('Split payment'))
     tap(button('+ Card'))
     type('50')
@@ -158,7 +213,7 @@ describe('recording the payments one by one', () => {
   })
 
   it('the first M-Pesa or card payment cannot be the whole total, and none can be above what is due', async () => {
-    await mount({ split_payments_enabled: 'true' })
+    await mount({})
     tap(button('Split payment'))
     tap(button('+ Card'))
     type('130')
@@ -166,7 +221,7 @@ describe('recording the payments one by one', () => {
   })
 
   it('a recorded payment can be removed, and what is due goes back up', async () => {
-    await mount({ split_payments_enabled: 'true' })
+    await mount({})
     tap(button('Split payment'))
     recordCard('50', 'PDQ1')
 
@@ -178,7 +233,7 @@ describe('recording the payments one by one', () => {
 
 describe('Hold', () => {
   it('is refused once any payment is recorded', async () => {
-    await mount({ split_payments_enabled: 'true' })
+    await mount({})
     tap(button('Split payment'))
     expect(isPaymentInProgress(usePaymentActivityStore.getState().active)).toBe(false)
 
