@@ -129,7 +129,9 @@ function stripLeadingZero(rawInput: string): string {
  *     Daraja actually confirms the payment — this component never checks
  *     out on push-*acceptance* alone. If an administrator also enabled
  *     the manual fallback (for a payment Daraja never confirmed), a
- *     second "Manual verification" tab appears alongside STK.
+ *     second "Manual verification" tab appears alongside STK and is the
+ *     tab selected when the panel opens (owner's ruling, docs/phase-235);
+ *     the cashier taps "STK Push" to send a prompt instead.
  *   - **`'sms'`**: a plain notice that this till cannot take M-Pesa by
  *     message yet — its parser is still a stub (`MPESA_SMS_PARSER_READY`
  *     in `src/main/lib/mpesaSms.ts`).
@@ -166,7 +168,8 @@ export default function PaymentModal({
   const [capabilities, setCapabilities] = useState<MpesaCapabilitiesState>(
     forcedCapabilities ?? { status: 'loading' }
   )
-  const [tab, setTab] = useState<PaymentTab>('stk')
+  /** Manual verification opens first (docs/phase-235); only read through `activeTab` below. */
+  const [tab, setTab] = useState<PaymentTab>('unverified')
 
   /** Raw digits typed after the fixed `254` prefix — may still include a leading `0`. */
   const [localPhoneInput, setLocalPhoneInput] = useState('')
@@ -553,6 +556,8 @@ export default function PaymentModal({
   }
 
   const { manualEntryEnabled } = capabilities
+  /** Without the manual fallback there is no tab bar and STK is the only screen. */
+  const activeTab: PaymentTab = manualEntryEnabled ? tab : 'stk'
 
   return (
     <div>
@@ -570,7 +575,7 @@ export default function PaymentModal({
             type="button"
             onClick={() => setTab('stk')}
             className={`flex-1 rounded-md py-2 text-base font-semibold transition ${
-              tab === 'stk' ? 'bg-white text-rose-700 shadow-sm' : 'text-slate-500'
+              activeTab === 'stk' ? 'bg-white text-rose-700 shadow-sm' : 'text-slate-500'
             }`}
           >
             STK Push
@@ -585,7 +590,7 @@ export default function PaymentModal({
             type="button"
             onClick={() => setTab('unverified')}
             className={`flex-1 rounded-md py-2 text-base font-semibold transition ${
-              tab === 'unverified' ? 'bg-amber-100 text-amber-900 shadow-sm' : 'text-amber-700'
+              activeTab === 'unverified' ? 'bg-amber-100 text-amber-900 shadow-sm' : 'text-amber-700'
             }`}
           >
             Manual verification
@@ -597,7 +602,7 @@ export default function PaymentModal({
         Charging <span className="font-semibold text-slate-800">{formatCurrency(total)}</span>
       </p>
 
-      {tab === 'stk' && (
+      {activeTab === 'stk' && (
         <div>
           <label className="mb-1 block text-base font-medium text-slate-600">Phone Number</label>
           <div className="flex items-stretch overflow-hidden rounded-lg border border-slate-300 focus-within:border-rose-400 focus-within:outline-none focus-within:ring-4 focus-within:ring-rose-100">
@@ -657,8 +662,7 @@ export default function PaymentModal({
         </div>
       )}
 
-      {tab === 'unverified' &&
-        manualEntryEnabled &&
+      {activeTab === 'unverified' &&
         renderManualEntryPanel(
           'Checked by the cashier, not by Safaricom.',
           'Use this only when the customer has paid but the confirmation has not reached this till. Check the code on the customer’s phone; the manager approves it at End of Day against the M-Pesa statement.'

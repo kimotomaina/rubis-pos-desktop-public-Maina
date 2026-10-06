@@ -92,6 +92,24 @@ describe('PaymentModal renders by mode', () => {
     expect(container.textContent).not.toContain('Manual Code')
   })
 
+  it('daraja mode with the manual fallback: Manual verification is the tab selected on opening, STK Push one tap away (docs/phase-235)', async () => {
+    stubApi({ manualCodeSupported: false, manualEntryEnabled: true, mode: 'daraja' })
+    await mount()
+
+    expect(container.querySelector('input[aria-label="M-Pesa code from the customer’s message"]')).toBeTruthy()
+    expect(container.textContent).not.toContain('Phone Number')
+    expect(button('Manual verification').className).toContain('bg-amber-100')
+    expect(button('STK Push').className).not.toContain('bg-white')
+
+    act(() => button('STK Push').click())
+    expect(container.textContent).toContain('Phone Number')
+    expect(container.querySelector('input[aria-label="M-Pesa code from the customer’s message"]')).toBeNull()
+    expect(button('STK Push').className).toContain('bg-white')
+
+    act(() => button('Manual verification').click())
+    expect(container.querySelector('input[aria-label="M-Pesa code from the customer’s message"]')).toBeTruthy()
+  })
+
   it('sms mode: a plain unavailable notice, no form and no tabs at all', async () => {
     stubApi({ manualCodeSupported: true, manualEntryEnabled: true, mode: 'sms' })
     await mount()
