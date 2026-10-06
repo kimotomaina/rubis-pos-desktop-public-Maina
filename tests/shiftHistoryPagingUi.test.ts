@@ -12,7 +12,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import ReportsPage from '../src/renderer/src/pages/ReportsPage.js'
 import type { ShiftRow } from '../src/main/services/database.js'
-import { reportsTabApi } from './helpers/reportsTabApi.js'
+import { reportsTabApi, openSection } from './helpers/reportsTabApi.js'
 
 let container: HTMLDivElement
 let root: Root
@@ -79,6 +79,7 @@ async function openHistory(total: number, pageSize?: number): Promise<ReturnType
     await Promise.resolve()
   })
   await flush()
+  await openSection(container, 'shifts')
   return getShiftsList
 }
 
@@ -155,12 +156,14 @@ describe('Shift History scroll area', () => {
   it('holds the rows and nothing else: the title, Move a sale and the pager sit outside it and stay fixed', async () => {
     await openHistory(25)
     const scroll = scroller()
-    const section = scroll.parentElement as HTMLElement
+    const bar = container.querySelector('[data-testid="section-actions-shifts"]') as HTMLElement
 
     expect(scroll.querySelectorAll('tbody tr')).toHaveLength(10)
+    // CHANGED (docs/phase-246-1). OLD: the buttons were in the history's own section, beside the scroll area. NEW: they are in the
+    // fixed bar of the open section, which is below that section's scroll area and not in it.
     for (const label of ['Move a sale', 'Previous', 'Next']) {
       expect(scroll.contains(button(label)!)).toBe(false)
-      expect(section.contains(button(label)!)).toBe(true)
+      expect(bar.contains(button(label)!)).toBe(true)
     }
     expect(scroll.contains(Array.from(container.querySelectorAll('h3')).find((h) => h.textContent === 'Shift History')!)).toBe(false)
     expect(scroll.textContent).not.toContain('Page 1 of 3')
@@ -175,10 +178,11 @@ describe('Shift History scroll area', () => {
     expect(scroll.className).toEqual(expect.stringContaining('overflow-auto'))
     expect(scroll.className).toEqual(expect.stringContaining('min-h-0'))
     expect(scroll.className).toEqual(expect.stringContaining('flex-1'))
-    // CHANGED (docs/phase-246). OLD: the section filled the height of a column and its parent was that column. NEW: the Reports tab scrolls as
-    // a whole, so the history is a column of a height of its own, and the tab's scroll is the one above it.
-    expect(section.className).toEqual(expect.stringContaining('flex h-[34rem] flex-col'))
-    expect(container.querySelector('[data-testid="reports-scroll"]')!.contains(section)).toBe(true)
+    // CHANGED (docs/phase-246-1). OLD (phase 246): the tab scrolled as a whole, so the history was a column of a height of its own
+    // (`h-[34rem]`) inside the tab's scroll. NEW: the history fills the section it is in, which is a column of the height the
+    // page gives it, and the section's scroll area is the one above it.
+    expect(section.className).toEqual(expect.stringContaining('flex h-full min-h-0 flex-col'))
+    expect(container.querySelector('[data-testid="section-scroll-shifts"]')!.contains(section)).toBe(true)
   })
 
   it('keeps the buttons in the document and outside the scroll area when 200 rows are rendered', async () => {
@@ -190,6 +194,8 @@ describe('Shift History scroll area', () => {
       const el = button(label)!
       expect(document.body.contains(el)).toBe(true)
       expect(scroller().contains(el)).toBe(false)
+      // docs/phase-246-1: nor is it in the section's scroll area, which holds the history.
+      expect(container.querySelector('[data-testid="section-scroll-shifts"]')!.contains(el)).toBe(false)
     }
   })
 

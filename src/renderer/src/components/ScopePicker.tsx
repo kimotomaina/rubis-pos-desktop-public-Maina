@@ -20,6 +20,9 @@ const PAGE_SIZE = 10
  * report to that shift; the main process turns it into the range of the shift's sales. A shift is listed as the Shift
  * History pages it: ten at a time, from the main process, never all of them.
  *
+ * The list drops over the cards under the picker (docs/phase-246-1), so the picker stays the same height and fixed at the
+ * top of the page; a list taller than the screen scrolls inside its own box.
+ *
  * @param {ScopePickerProps} props
  * @returns {JSX.Element}
  */
@@ -70,7 +73,7 @@ export default function ScopePicker({ scope, onChange }: ScopePickerProps) {
   const pageCount = Math.max(1, Math.ceil(total / PAGE_SIZE))
 
   return (
-    <div>
+    <div className="relative">
       <div className="flex flex-wrap items-center gap-3">
         <p data-testid="scope-title" className="text-xl font-semibold text-slate-900">
           {scopeTitle(scope)}
@@ -98,7 +101,10 @@ export default function ScopePicker({ scope, onChange }: ScopePickerProps) {
       </div>
 
       {open && (
-        <div data-testid="scope-list" className="mt-3 space-y-4 rounded-lg border border-slate-200 bg-slate-50 p-3">
+        <div
+          data-testid="scope-list"
+          className="touch-scrollbar absolute inset-x-0 top-full z-30 mt-3 max-h-96 space-y-4 overflow-y-auto rounded-lg border border-slate-200 bg-slate-50 p-3 shadow-lg"
+        >
           {error && <p className="rounded-lg bg-rose-50 px-3 py-2 text-base font-medium text-rose-700">{error}</p>}
 
           <div>

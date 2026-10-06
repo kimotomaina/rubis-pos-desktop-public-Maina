@@ -7,6 +7,10 @@
  * picker and five sections (Scope, Takings, Checks, Detail, Shifts); the same figures, VAT labels, coverage caption,
  * reconciliation rows, invoice list and export are asserted against it. The Shift History tests that were here are in
  * `shiftHistoryPagingUi`, `oneShiftPerWindowUi`, `frozenShiftsUi` and `shiftCaptureUi`, which mount this page.
+ *
+ * CHANGED (docs/phase-246-1). OLD: the five sections ran down one page that scrolled as a whole, each with a numbered heading.
+ * NEW: the scope picker is fixed at the top, under it a row of cards, and one section is open at a time. A test about what a
+ * person sees in a section taps that section's card first (`openSection`); the layout itself is pinned in `reportsCardsUi.test.ts`.
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
@@ -16,7 +20,7 @@ import { createElement } from 'react'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import ReportsPage from '../src/renderer/src/pages/ReportsPage.js'
-import { reportsTabApi, EMPTY_SUMMARY } from './helpers/reportsTabApi.js'
+import { reportsTabApi, EMPTY_SUMMARY, openSection } from './helpers/reportsTabApi.js'
 import { useKeyboardStore } from '../src/renderer/src/stores/keyboardStore.js'
 import type { ZReport } from '../src/main/services/reports.js'
 
@@ -182,13 +186,15 @@ afterEach(() => {
 })
 
 describe('the Reports tab', () => {
-  it('is five numbered sections in the order the day is closed: Scope, Takings, Checks, Detail, Shifts', async () => {
+  it('is the scope picker over four cards in the order the day is closed: Takings, Checks, Detail, Shifts', async () => {
     stubApi()
     await mount()
 
-    const headings = Array.from(container.querySelectorAll('h2')).map((h) => h.textContent)
+    // CHANGED (docs/phase-246-1). OLD: five numbered headings, '1. Scope' to '5. Shifts'. NEW: the picker, then the cards.
+    const titles = Array.from(container.querySelectorAll('[role="tab"]')).map((card) => card.querySelector('span')?.textContent)
 
-    expect(headings).toEqual(['1. Scope', '2. Takings', '3. Checks', '4. Detail', '5. Shifts'])
+    expect(container.querySelector('[data-testid="scope-title"]')).not.toBeNull()
+    expect(titles).toEqual(['Takings', 'Checks', 'Detail', 'Shifts'])
   })
 
   it('opens on Today, with no Z report, and every report asked for the preset as a plain string, as before', async () => {
@@ -207,6 +213,7 @@ describe('the Reports tab', () => {
   it('keeps the Detail section shut until it is opened, and asks for nothing of it meanwhile', async () => {
     stubApi()
     await mount()
+    await openSection(container, 'detail')
 
     expect(window.api.getInvoiceList).not.toHaveBeenCalled()
     expect(window.api.exportReportsCsv).not.toHaveBeenCalled()
@@ -320,18 +327,22 @@ describe('the takings', () => {
     expect(container.textContent).not.toContain('16%')
   })
 
-  it('shows, for a shift, its Z report beside the summary with Print, and prints that shift', async () => {
+  it('shows, for a shift, its Z report in a section of its own with Print in the fixed bar, and prints that shift', async () => {
     stubApi()
     await mount()
 
     await pickScope(/^Shift #7/)
+    await openSection(container, 'z')
 
+    // CHANGED (docs/phase-246-1). OLD: the Z report sat beside the summary and Print was in the block. NEW: it has its own card
+    // and section, and Print Z-Report is in the section's bar, outside its scroll area.
     const block = container.querySelector('[data-testid="takings-z-report"]')!
+    const bar = container.querySelector('[data-testid="section-actions-z"]')!
     expect(block.textContent).toContain('Z-Report')
     expect(block.textContent).toContain('Shift #7')
     expect(block.textContent).toContain('VAT included (calculated at 16%)')
     await act(async () => {
-      ;(Array.from(block.querySelectorAll('button')).find((b) => b.textContent === 'Print Z-Report') as HTMLButtonElement).click()
+      ;(Array.from(bar.querySelectorAll('button')).find((b) => b.textContent === 'Print Z-Report') as HTMLButtonElement).click()
       await Promise.resolve()
       await Promise.resolve()
     })
@@ -359,6 +370,7 @@ describe('the checks', () => {
   it('shows fiscal status by day and the fiscal reconciliation for the scope', async () => {
     stubApi()
     await mount()
+    await openSection(container, 'checks')
 
     expect(container.textContent).toContain('Fiscal Status by Day')
     expect(container.textContent).toContain('2026-09-26')
@@ -381,6 +393,7 @@ describe('the checks', () => {
       )
     })
     await mount()
+    await openSection(container, 'checks')
 
     expect(container.textContent).toContain('no device figure')
   })
@@ -394,6 +407,7 @@ describe('the checks', () => {
     ]
     stubApi({ getEndOfDayShifts: vi.fn().mockResolvedValue(ok(rows)) })
     await mount()
+    await openSection(container, 'checks')
 
     const list = container.querySelector('[data-testid="shift-approval-list"]')!
     const text = plain(list.textContent)
@@ -435,6 +449,7 @@ describe('the checks', () => {
       getDiscardedHeldSales: vi.fn().mockResolvedValue(ok([]))
     })
     await mount()
+    await openSection(container, 'checks')
 
     await click('Open shift #3')
 
@@ -449,6 +464,7 @@ describe('the detail', () => {
   it('opens the invoice list on one tap and pairs the trader invoice number with the CU invoice number', async () => {
     stubApi()
     await mount()
+    await openSection(container, 'detail')
 
     await click('Invoice List')
 
@@ -461,6 +477,7 @@ describe('the detail', () => {
     stubApi()
     await mount()
     await pickScope(/^Shift #7/)
+    await openSection(container, 'detail')
 
     await click('Invoice List')
 
@@ -470,6 +487,7 @@ describe('the detail', () => {
   it('says the M-Pesa logs are the latest 50 and not limited to the scope', async () => {
     stubApi()
     await mount()
+    await openSection(container, 'detail')
 
     await click('M-Pesa Logs')
 
@@ -480,6 +498,7 @@ describe('the detail', () => {
   it('exports orders and lines for the scope through the save dialog', async () => {
     stubApi()
     await mount()
+    await openSection(container, 'detail')
     await click('Export CSV')
 
     await click('Export orders CSV')
@@ -494,6 +513,7 @@ describe('the shifts', () => {
   it('lists shifts and opens the Z-report on tap, with a working Print', async () => {
     stubApi()
     await mount()
+    await openSection(container, 'shifts')
 
     expect(container.textContent).toContain('#7')
     expect(container.textContent).toContain('Ann')
@@ -528,17 +548,20 @@ describe('the Admin menu and the page', () => {
     expect(admin).toContain("{ key: 'reports', label: 'Reports'")
   })
 
-  it('scrolls as a whole, in one place, with the always-visible bar', async () => {
+  it('keeps the scope picker outside every section, which scrolls in its own area with the always-visible bar', async () => {
     stubApi()
     await mount()
 
-    const scroll = container.querySelector('[data-testid="reports-scroll"]') as HTMLElement
+    // CHANGED (docs/phase-246-1). OLD: the whole page scrolled and the picker scrolled with it. NEW: the picker is fixed, and each
+    // section has its own scroll area.
+    const scroll = container.querySelector('[data-testid="section-scroll-takings"]') as HTMLElement
 
     expect(scroll.className).toEqual(expect.stringContaining('overflow-y-auto'))
     expect(scroll.className).toEqual(expect.stringContaining('touch-scrollbar'))
     expect(scroll.className).toEqual(expect.stringContaining('min-h-0'))
     expect(scroll.className).toEqual(expect.stringContaining('flex-1'))
-    expect(scroll.contains(container.querySelector('[data-testid="scope-title"]'))).toBe(true)
+    expect(container.querySelector('[data-testid="reports-scroll"]')).toBeNull()
+    expect(scroll.contains(container.querySelector('[data-testid="scope-title"]'))).toBe(false)
   })
 
   it('works nothing out itself: the only sums in the page file are counts of rows and pages', () => {

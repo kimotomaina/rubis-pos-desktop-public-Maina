@@ -9,7 +9,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { createElement, act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import ReportsPage from '../src/renderer/src/pages/ReportsPage.js'
-import { reportsTabApi } from './helpers/reportsTabApi.js'
+import { reportsTabApi, openSection } from './helpers/reportsTabApi.js'
 import ZReportModal from '../src/renderer/src/components/ZReportModal.js'
 import type { ShiftRow } from '../src/main/services/database.js'
 import type { ZReport } from '../src/main/services/reports.js'
@@ -71,6 +71,7 @@ describe('Shift History with a frozen shift', () => {
       await Promise.resolve()
       await Promise.resolve()
     })
+    await openSection(container, 'shifts')
 
     const [latest, older, oldest] = rows()
     expect(latest.textContent).toContain('Correct figures')

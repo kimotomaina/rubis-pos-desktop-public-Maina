@@ -5,6 +5,7 @@ import { formatCurrency } from '../lib/currency.js'
 import { titleCaseName } from '../lib/text.js'
 import { useKeyboardStore } from '../stores/keyboardStore.js'
 import ManagerPinModal from './ManagerPinModal.js'
+import { SectionActions } from './SectionActions.js'
 
 /** An admin's in-progress tick/reason choice for one still-pending entry. */
 interface Selection {
@@ -105,6 +106,8 @@ function EntryRow({
 
 interface ShiftEndOfDayProps {
   shiftId: number
+  /** Told the report as it is read, `null` before the first read, so a card can show where the approval stands (docs/phase-246-1). */
+  onReport?: (report: ShiftEndOfDayReport | null) => void
 }
 
 /**
@@ -112,12 +115,13 @@ interface ShiftEndOfDayProps {
  * ticking and reasons it keeps): the shift's cashier totals, its manual M-Pesa entries, and the carry-over of earlier
  * shifts still awaiting approval. Each pending entry is ticked to approve, or unticked, with a reason, to leave out. An
  * admin's PIN confirms, and the main process checks it and every id again. Approving is offered only for a closed shift
- * that was not approved before; otherwise the screen says why. The page it sits on scrolls: this has no scroll of its own.
+ * that was not approved before; otherwise the screen says why. It sits in a section that scrolls, so it has no scroll of its own; the
+ * review bar (note and Approve) is drawn in the section's fixed bar when there is one, so a long list never pushes it out of view (docs/phase-246-1).
  *
  * @param {ShiftEndOfDayProps} props
  * @returns {JSX.Element}
  */
-export default function ShiftEndOfDay({ shiftId }: ShiftEndOfDayProps) {
+export default function ShiftEndOfDay({ shiftId, onReport }: ShiftEndOfDayProps) {
   const [report, setReport] = useState<ShiftEndOfDayReport | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -158,6 +162,8 @@ export default function ShiftEndOfDay({ shiftId }: ShiftEndOfDayProps) {
       setLoading(false)
     }
   }
+
+  useEffect(() => onReport?.(report), [report]) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     setNotice(null)
@@ -428,43 +434,45 @@ export default function ShiftEndOfDay({ shiftId }: ShiftEndOfDayProps) {
         </section>
       )}
 
-      <section data-testid="end-of-day-bar" className="rounded-xl border border-slate-200 bg-white p-3">
-        {report.canApprove ? (
-          <>
-            <div className="mb-2 flex items-center justify-between gap-3">
-              <span className="text-lg font-medium text-slate-700">
-                Approving {approvingCount} of {allPending.length} {allPending.length === 1 ? 'entry' : 'entries'}. {leftOutCount} left out.
-              </span>
-              <span className="text-xl font-semibold text-slate-900">{formatCurrency(approvingTotal)}</span>
-            </div>
-            <div className="flex items-center gap-3">
-              <input
-                readOnly
-                value={note}
-                onClick={openNoteKeyboard}
-                aria-label="Note for this review (optional)"
-                placeholder="e.g. checked against the statement"
-                className="h-12 min-w-0 flex-1 rounded-lg border border-slate-300 px-3 text-base focus:border-rose-400 focus:outline-none"
-              />
-              <button
-                type="button"
-                disabled={approving}
-                onClick={() => setCollectingPin(true)}
-                className="h-12 w-48 shrink-0 rounded-xl bg-rose-600 text-lg font-semibold text-white transition active:scale-95 disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                {approving ? 'Working…' : approvingCount === 0 ? 'Record review' : 'Approve'}
-              </button>
-            </div>
-          </>
-        ) : (
-          <p data-testid="end-of-day-limited" className="text-lg font-medium text-slate-700">
-            {report.approval ? 'This shift is approved.' : (report.cannotApproveBecause ?? '')}
-            {allPending.length > 0 && !report.approval
-              ? ` ${allPending.length} ${allPending.length === 1 ? 'entry' : 'entries'} waiting, ${formatCurrency(report.pendingManualTotal)}.`
-              : ''}
-          </p>
-        )}
-      </section>
+      <SectionActions>
+        <section data-testid="end-of-day-bar">
+          {report.canApprove ? (
+            <>
+              <div className="mb-2 flex items-center justify-between gap-3">
+                <span className="text-lg font-medium text-slate-700">
+                  Approving {approvingCount} of {allPending.length} {allPending.length === 1 ? 'entry' : 'entries'}. {leftOutCount} left out.
+                </span>
+                <span className="text-xl font-semibold text-slate-900">{formatCurrency(approvingTotal)}</span>
+              </div>
+              <div className="flex items-center gap-3">
+                <input
+                  readOnly
+                  value={note}
+                  onClick={openNoteKeyboard}
+                  aria-label="Note for this review (optional)"
+                  placeholder="e.g. checked against the statement"
+                  className="h-12 min-w-0 flex-1 rounded-lg border border-slate-300 px-3 text-base focus:border-rose-400 focus:outline-none"
+                />
+                <button
+                  type="button"
+                  disabled={approving}
+                  onClick={() => setCollectingPin(true)}
+                  className="h-12 w-48 shrink-0 rounded-xl bg-rose-600 text-lg font-semibold text-white transition active:scale-95 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {approving ? 'Working…' : approvingCount === 0 ? 'Record review' : 'Approve'}
+                </button>
+              </div>
+            </>
+          ) : (
+            <p data-testid="end-of-day-limited" className="text-lg font-medium text-slate-700">
+              {report.approval ? 'This shift is approved.' : (report.cannotApproveBecause ?? '')}
+              {allPending.length > 0 && !report.approval
+                ? ` ${allPending.length} ${allPending.length === 1 ? 'entry' : 'entries'} waiting, ${formatCurrency(report.pendingManualTotal)}.`
+                : ''}
+            </p>
+          )}
+        </section>
+      </SectionActions>
 
       {collectingPin && (
         <ManagerPinModal

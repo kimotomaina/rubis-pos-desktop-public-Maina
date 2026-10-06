@@ -21,7 +21,9 @@ interface ZReportBlockProps {
   report: ZReport
   /** Opens with the correction form already showing (docs/phase-239: the "Correct figures" action on Shift History). */
   startCorrecting?: boolean
-  /** Places the parts: a window for the modal, a block beside the sales summary on the Reports tab (docs/phase-246, R2). */
+  /** Told whenever the report it holds changes (after a correction), so a card showing one of its figures stays true (docs/phase-246-1). */
+  onReportChange?: (report: ZReport) => void
+  /** Places the parts: a window for the modal, a block in a section of the Reports tab (docs/phase-246, R2). */
   children: (parts: ZReportParts) => ReactNode
 }
 
@@ -41,11 +43,12 @@ interface ZReportBlockProps {
  * @param {ZReportBlockProps} props
  * @returns {JSX.Element}
  */
-export default function ZReportBlock({ report: initialReport, startCorrecting = false, children }: ZReportBlockProps) {
+export default function ZReportBlock({ report: initialReport, startCorrecting = false, onReportChange, children }: ZReportBlockProps) {
   // docs/phase-224: the report is re-read after a correction, so the modal holds the one it shows.
   const [report, setReport] = useState(initialReport)
   const [correcting, setCorrecting] = useState(startCorrecting && initialReport.status === 'closed' && !initialReport.mergedInto)
   useEffect(() => setReport(initialReport), [initialReport])
+  useEffect(() => onReportChange?.(report), [report]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const [printStatus, setPrintStatus] = useState<
     { kind: 'success' | 'error'; message: string } | null

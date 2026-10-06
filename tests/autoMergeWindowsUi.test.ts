@@ -9,7 +9,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { createElement, act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import ReportsPage from '../src/renderer/src/pages/ReportsPage.js'
-import { reportsTabApi } from './helpers/reportsTabApi.js'
+import { reportsTabApi, openSection } from './helpers/reportsTabApi.js'
 import type { ShiftRow } from '../src/main/services/database.js'
 
 let container: HTMLDivElement
@@ -72,6 +72,7 @@ async function openHistory(): Promise<void> {
     await Promise.resolve()
     await Promise.resolve()
   })
+  await openSection(container, 'shifts')
 }
 
 beforeEach(() => {

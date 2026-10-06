@@ -5,6 +5,7 @@
  */
 
 import { vi } from 'vitest'
+import { act } from 'react'
 
 const ok = <T>(data: T): { success: true; data: T } => ({ success: true, data })
 
@@ -43,4 +44,23 @@ export function reportsTabApi(): Record<string, unknown> {
     getMpesaTransactions: vi.fn().mockResolvedValue(ok([])),
     exportReportsCsv: vi.fn().mockResolvedValue(ok({ saved: false }))
   }
+}
+
+/**
+ * Taps one card of the Reports tab (docs/phase-246-1) the way a person does, to open its section: `takings`, `z`, `checks`,
+ * `detail` or `shifts`. Every section is mounted from the start, so a test that only reads can skip this; a test that is about
+ * what a person sees in a section taps its card first.
+ *
+ * @param {HTMLElement} container the element the page is mounted in
+ * @param {string} key the section
+ * @returns {Promise<void>}
+ */
+export async function openSection(container: HTMLElement, key: 'takings' | 'z' | 'checks' | 'detail' | 'shifts'): Promise<void> {
+  const card = container.querySelector<HTMLButtonElement>(`[data-testid="card-${key}"]`)
+  if (!card) throw new Error(`No card "${key}"`)
+  await act(async () => {
+    card.click()
+    await Promise.resolve()
+    await Promise.resolve()
+  })
 }

@@ -1,11 +1,13 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, type ReactNode } from 'react'
 import type { ShiftRow } from '../../../main/services/database.js'
 import type { ShiftType } from '../lib/shiftWindows.js'
 import type {
   ZReport,
   SalesSummary,
   FiscalStatusDayCount,
-  FiscalReconciliationReport
+  FiscalReconciliationReport,
+  ShiftApprovalRow,
+  ShiftEndOfDayReport
 } from '../../../main/services/reports.js'
 import type { ReportScope } from '../../../main/lib/reportScope.js'
 import { formatCurrency } from '../lib/currency.js'
@@ -13,6 +15,15 @@ import { titleCaseName } from '../lib/text.js'
 import { formatVatRateLabel } from '../lib/vatLabel.js'
 import { paginate } from '../lib/paginate.js'
 import { DEFAULT_SCOPE, scopeTitle, toReportScope, type ScopeChoice } from '../lib/reportScopeChoice.js'
+import {
+  HEADLINE_LOADING,
+  approvalRowsHeadline,
+  detailHeadline,
+  shiftEndOfDayHeadline,
+  shiftsHeadline,
+  takingsHeadline,
+  zReportHeadline
+} from '../lib/reportHeadlines.js'
 import ZReportModal from '../components/ZReportModal.js'
 import ZReportBlock from '../components/ZReportBlock.js'
 import MoveSaleForm from '../components/MoveSaleForm.js'
@@ -21,6 +32,7 @@ import WindowReportModal from '../components/WindowReportModal.js'
 import ScopePicker from '../components/ScopePicker.js'
 import ShiftEndOfDay from '../components/ShiftEndOfDay.js'
 import ShiftApprovalList from '../components/ShiftApprovalList.js'
+import { ActionSlotContext, SectionActions } from '../components/SectionActions.js'
 import MpesaLogsPage from './MpesaLogsPage.js'
 
 /** Orders/shifts per page — matches the server-side `REPORTS_PAGE_SIZE` in `index.ts`. */
@@ -32,19 +44,21 @@ const FISCAL_ROWS_PER_PAGE = 10
 /** Fiscal-reconciliation rows per page — the whole range is fetched at once (docs/phase-163) and paginated client-side, like {@link FISCAL_ROWS_PER_PAGE}. */
 const RECONCILIATION_ROWS_PER_PAGE = 10
 
-/** Shared Previous/Next pager, matching `EndOfDayPage.tsx`'s own control. */
+/** Shared Previous/Next pager; `className` sets where it sits (under a table by default, in the section's bar for Shift History). */
 function Pager({
   page,
   pageCount,
-  onChange
+  onChange,
+  className = 'mt-3'
 }: {
   page: number
   pageCount: number
   onChange: (page: number) => void
+  className?: string
 }) {
   if (pageCount <= 1) return null
   return (
-    <div className="mt-3 flex shrink-0 items-center justify-between gap-3">
+    <div className={`${className} flex shrink-0 items-center justify-between gap-3`}>
       <button
         type="button"
         onClick={() => onChange(page - 1)}
@@ -77,10 +91,11 @@ function Pager({
  * window that holds more than one shift (older data) has a combined report. An admin can move a sale to another
  * shift, with a reason and their PIN.
  *
- * The page always opens on page 1 and the main process returns one page and the total. The title, Move a sale and the
- * pager stay in view while the rows scroll in their own area (the End of Day pattern, docs/phase-220).
+ * The page always opens on page 1 and the main process returns one page and the total. The rows scroll in their own area
+ * under the title; Move a sale and the pager are drawn in the section's fixed bar, so they stay in view whatever the number
+ * of rows (docs/phase-220, docs/phase-246-1).
  */
-function ShiftHistoryView({ staffName }: { staffName: (id: number) => string }) {
+function ShiftHistoryView({ staffName, onHeadline }: { staffName: (id: number) => string; onHeadline: (headline: string) => void }) {
   const [page, setPage] = useState(1)
   const [data, setData] = useState<{ shifts: ShiftRow[]; total: number } | null>(null)
   const [loading, setLoading] = useState(true)
@@ -111,6 +126,8 @@ function ShiftHistoryView({ staffName }: { staffName: (id: number) => string }) 
       if (cancelled) return
       if (result.success && result.data) {
         setData({ shifts: result.data.shifts, total: result.data.total })
+        // The card names the open shift, which is on the first page, newest first; a later page says nothing about it.
+        if (page === 1) onHeadline(shiftsHeadline(result.data.shifts))
       } else {
         setError(result.error ?? 'Failed to load shift history')
       }
@@ -136,7 +153,7 @@ function ShiftHistoryView({ staffName }: { staffName: (id: number) => string }) 
 
   if (merging) {
     return (
-      <section className="rounded-xl border border-slate-200 bg-white p-4">
+      <section>
         <MergeShiftsForm
           shift={merging}
           onCancel={() => setMerging(null)}
@@ -153,7 +170,7 @@ function ShiftHistoryView({ staffName }: { staffName: (id: number) => string }) 
   if (moving) {
     // docs/phase-246, R1: a column of the height given, so the form's body scrolls and its buttons stay in view.
     return (
-      <section className="flex h-[34rem] flex-col rounded-xl border border-slate-200 bg-white">
+      <section className="flex h-full min-h-0 flex-col">
         <MoveSaleForm
           onCancel={() => setMoving(false)}
           onMoved={(message) => {
@@ -166,22 +183,12 @@ function ShiftHistoryView({ staffName }: { staffName: (id: number) => string }) 
     )
   }
 
-  // docs/phase-246: the page scrolls as a whole, so the history is a box of its own height: its rows scroll inside it while the
-  // title, Move a sale and the pager stay in view (docs/phase-245).
+  // docs/phase-246-1: the history fills the section it sits in: its rows scroll in their own area under the title, and the
+  // section's bar keeps Move a sale and the pager in view (docs/phase-245).
   return (
-    <section className="flex h-[34rem] flex-col rounded-xl border border-slate-200 bg-white p-4">
+    <section className="flex h-full min-h-0 flex-col">
       <div className="mb-3 flex shrink-0 items-center justify-between gap-3">
         <h3 className="text-2xl font-bold text-slate-800">Shift History</h3>
-        <button
-          type="button"
-          onClick={() => {
-            setNotice(null)
-            setMoving(true)
-          }}
-          className="h-10 rounded-lg border border-slate-300 px-4 text-base font-medium text-slate-600 hover:bg-slate-50"
-        >
-          Move a sale
-        </button>
       </div>
       {notice && (
         <p role="status" className="mb-3 rounded-lg bg-emerald-50 px-3 py-2 text-base font-medium text-emerald-700">
@@ -342,9 +349,23 @@ function ShiftHistoryView({ staffName }: { staffName: (id: number) => string }) 
               </tbody>
             </table>
           </div>
-          <Pager page={page} pageCount={pageCount} onChange={setPage} />
         </>
       )}
+      <SectionActions>
+        <div className="flex items-center gap-4">
+          <button
+            type="button"
+            onClick={() => {
+              setNotice(null)
+              setMoving(true)
+            }}
+            className="h-10 rounded-lg border border-slate-300 px-4 text-base font-medium text-slate-600 hover:bg-slate-50"
+          >
+            Move a sale
+          </button>
+          <Pager page={page} pageCount={pageCount} onChange={setPage} className="ml-auto min-w-0 flex-1 max-w-md" />
+        </div>
+      </SectionActions>
       {openReport && (
         <ZReportModal
           report={openReport}
@@ -425,22 +446,27 @@ function SalesSummaryCards({ summary }: { summary: SalesSummary }) {
 }
 
 /**
- * The takings of the scope (docs/phase-246, R2): the sales summary for it and, when the scope is one shift, that shift's
- * Z report beside it with Print. The summary reads the shift's range and the Z report reads the shift itself, so merged
- * and moved sales count in the Z exactly as they do today; when the two disagree on the number of sales, the page says
- * so instead of leaving the difference unexplained.
+ * The takings of the scope (docs/phase-246, R2): the sales summary for it. When the scope is one shift, the page also holds
+ * that shift's Z report (it has its own section); the summary reads the shift's range and the Z report reads the shift
+ * itself, so merged and moved sales count in the Z exactly as they do today, and when the two disagree on the number of
+ * sales the page says so instead of leaving the difference unexplained.
  *
- * @param {{ choice: ScopeChoice }} props
+ * @param {{ choice: ScopeChoice, zReport: ZReport | null, onSummary: (summary: SalesSummary | null) => void }} props
  * @returns {JSX.Element}
  */
-function TakingsSection({ choice }: { choice: ScopeChoice }) {
+function TakingsSection({
+  choice,
+  zReport,
+  onSummary
+}: {
+  choice: ScopeChoice
+  zReport: ZReport | null
+  onSummary: (summary: SalesSummary | null) => void
+}) {
   const scope = toReportScope(choice)
   const scopeKey = JSON.stringify(scope)
-  const shiftId = choice.kind === 'shift' ? choice.shiftId : null
   const [summary, setSummary] = useState<SalesSummary | null>(null)
-  const [zReport, setZReport] = useState<ZReport | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const [zError, setZError] = useState<string | null>(null)
 
   useEffect(() => {
     let cancelled = false
@@ -457,57 +483,58 @@ function TakingsSection({ choice }: { choice: ScopeChoice }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scopeKey])
 
-  useEffect(() => {
-    let cancelled = false
-    setZReport(null)
-    setZError(null)
-    if (shiftId === null) return
-    void window.api.getZReport(shiftId).then((result) => {
-      if (cancelled) return
-      if (result.success && result.data) setZReport(result.data)
-      else setZError(result.error ?? 'Failed to open this shift’s Z-report')
-    })
-    return () => {
-      cancelled = true
-    }
-  }, [shiftId])
+  useEffect(() => onSummary(summary), [summary]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const differs = summary !== null && zReport !== null && summary.orderCount !== zReport.orderCount
 
   return (
-    <section className="rounded-xl border border-slate-200 bg-white p-4">
+    <section>
       <h3 className="mb-3 text-2xl font-bold text-slate-800">Sales Summary</h3>
       {error && <p className="mb-3 rounded-lg bg-rose-50 px-3 py-2 text-base font-medium text-rose-700">{error}</p>}
-      <div className={shiftId !== null ? 'grid gap-4 lg:grid-cols-2' : ''}>
-        <div>
-          {!summary ? <p className="text-base text-slate-400">Loading…</p> : <SalesSummaryCards summary={summary} />}
-          {differs && summary && zReport && (
-            <p data-testid="takings-count-note" className="mt-3 rounded-lg bg-amber-50 px-3 py-2 text-base font-medium text-amber-900">
-              This time range holds {summary.orderCount} {summary.orderCount === 1 ? 'sale' : 'sales'} and the shift&apos;s Z report{' '}
-              {zReport.orderCount}: the difference belongs to another shift.
-            </p>
-          )}
-        </div>
-        {shiftId !== null && (
-          <div data-testid="takings-z-report">
-            {zError && <p className="rounded-lg bg-rose-50 px-3 py-2 text-base font-medium text-rose-700">{zError}</p>}
-            {!zReport && !zError && <p className="text-base text-slate-400">Loading the Z report…</p>}
-            {zReport && (
-              <ZReportBlock report={zReport}>
-                {({ body, footer, correctionForm }) => (
-                  <div className="rounded-lg border border-slate-200 p-3">
-                    <h4 className="mb-2 text-lg font-semibold text-slate-800">Z-Report</h4>
-                    {body}
-                    <div className="mt-3">{footer}</div>
-                    {correctionForm}
-                  </div>
-                )}
-              </ZReportBlock>
-            )}
-          </div>
-        )}
-      </div>
+      {!summary ? <p className="text-base text-slate-400">Loading…</p> : <SalesSummaryCards summary={summary} />}
+      {differs && summary && zReport && (
+        <p data-testid="takings-count-note" className="mt-3 rounded-lg bg-amber-50 px-3 py-2 text-base font-medium text-amber-900">
+          This time range holds {summary.orderCount} {summary.orderCount === 1 ? 'sale' : 'sales'} and the shift&apos;s Z report{' '}
+          {zReport.orderCount}: the difference belongs to another shift.
+        </p>
+      )}
     </section>
+  )
+}
+
+/**
+ * A shift's Z report in its own section (docs/phase-246-1): the report scrolls in the body, and Print Z-Report and Correct
+ * figures, with the print message, are in the section's fixed bar. It is the same block the Z report window uses.
+ *
+ * @param {{ report: ZReport | null, error: string | null, onReportChange: (report: ZReport) => void }} props
+ * @returns {JSX.Element}
+ */
+function ZReportSection({
+  report,
+  error,
+  onReportChange
+}: {
+  report: ZReport | null
+  error: string | null
+  onReportChange: (report: ZReport) => void
+}) {
+  return (
+    <div data-testid="takings-z-report">
+      {error && <p className="rounded-lg bg-rose-50 px-3 py-2 text-base font-medium text-rose-700">{error}</p>}
+      {!report && !error && <p className="text-base text-slate-400">Loading the Z report…</p>}
+      {report && (
+        <ZReportBlock report={report} onReportChange={onReportChange}>
+          {({ body, footer, correctionForm }) => (
+            <>
+              <h3 className="mb-2 text-2xl font-bold text-slate-800">Z-Report</h3>
+              {body}
+              <SectionActions>{footer}</SectionActions>
+              {correctionForm}
+            </>
+          )}
+        </ZReportBlock>
+      )}
+    </div>
   )
 }
 
@@ -847,14 +874,24 @@ function ExportView({ scope }: { scope: ReportScope }) {
 }
 
 /** The end of day for the scope (docs/phase-246, the amendment): one shift with its Approve, or the shifts of a range. */
-function EndOfDayBlock({ choice, onOpenShift }: { choice: ScopeChoice; onOpenShift: (shift: ShiftApprovalRowLike, label: string) => void }) {
+function EndOfDayBlock({
+  choice,
+  onOpenShift,
+  onShiftReport,
+  onRows
+}: {
+  choice: ScopeChoice
+  onOpenShift: (shift: ShiftApprovalRowLike, label: string) => void
+  onShiftReport: (report: ShiftEndOfDayReport | null) => void
+  onRows: (rows: ShiftApprovalRow[] | null) => void
+}) {
   return (
     <section className="rounded-xl border border-slate-200 bg-white p-4">
       <h3 className="mb-3 text-2xl font-bold text-slate-800">End of Day</h3>
       {choice.kind === 'shift' ? (
-        <ShiftEndOfDay shiftId={choice.shiftId} />
+        <ShiftEndOfDay key={choice.shiftId} shiftId={choice.shiftId} onReport={onShiftReport} />
       ) : (
-        <ShiftApprovalList scope={toReportScope(choice)} onOpenShift={onOpenShift} />
+        <ShiftApprovalList scope={toReportScope(choice)} onOpenShift={onOpenShift} onRows={onRows} />
       )}
     </section>
   )
@@ -862,18 +899,6 @@ function EndOfDayBlock({ choice, onOpenShift }: { choice: ScopeChoice; onOpenShi
 
 /** The part of a shift row the page needs to switch to that shift. */
 type ShiftApprovalRowLike = { shiftId: number }
-
-/** A numbered step of the routine, so the tab reads in the order the day is closed. */
-function StepHeading({ step, title, hint }: { step: number; title: string; hint?: string }) {
-  return (
-    <div>
-      <h2 className="text-xl font-semibold text-slate-900">
-        {step}. {title}
-      </h2>
-      {hint && <p className="text-base text-slate-500">{hint}</p>}
-    </div>
-  )
-}
 
 /** A one-tap header that opens or closes a part of the detail (docs/phase-246, R2: collapsed by default). */
 function DetailToggle({ label, open, onToggle, children }: { label: string; open: boolean; onToggle: () => void; children: React.ReactNode }) {
@@ -893,21 +918,83 @@ function DetailToggle({ label, open, onToggle, children }: { label: string; open
   )
 }
 
+/** The sections of the tab, in the order the day is closed. `z` is there only while the scope is one shift. */
+type SectionKey = 'takings' | 'z' | 'checks' | 'detail' | 'shifts'
+
 /**
- * The Reports tab (docs/phase-246, R2), laid out as the end-of-day routine: 1. the scope, one picker for a shift, a
- * period or a typed range; 2. the takings, the sales summary and, for a shift, its Z report with Print; 3. the checks,
- * End of Day with its approval per shift, fiscal status and fiscal reconciliation; 4. the detail, the invoice list, the
- * M-Pesa logs and the CSV export, shut until opened; 5. the shifts, Shift History with Move a sale and Correct figures.
+ * One section of the tab (docs/phase-246-1): a body that scrolls and, under it, a bar that stays where it is. The
+ * actions of whatever is inside (Print, Approve, Move a sale) are drawn in that bar through {@link SectionActions}, so
+ * they are outside the scroll area however long the list above them is. A section that is not the open one is hidden,
+ * not removed: it keeps what its user has ticked and typed while another section is looked at, and it asks for the same
+ * reports it always did, once.
+ *
+ * @param {{ id: SectionKey, label: string, open: boolean, children: ReactNode }} props
+ * @returns {JSX.Element}
+ */
+function SectionPanel({ id, label, open, children }: { id: SectionKey; label: string; open: boolean; children: ReactNode }) {
+  const [slot, setSlot] = useState<HTMLElement | null>(null)
+  return (
+    <section
+      role="tabpanel"
+      aria-label={label}
+      data-testid={`section-${id}`}
+      hidden={!open}
+      className={open ? 'flex min-h-0 flex-1 flex-col rounded-xl border border-slate-200 bg-white' : 'hidden'}
+    >
+      <ActionSlotContext.Provider value={slot}>
+        <div data-testid={`section-scroll-${id}`} className="touch-scrollbar min-h-0 flex-1 overflow-y-auto p-4">
+          {children}
+        </div>
+      </ActionSlotContext.Provider>
+      <div ref={setSlot} data-testid={`section-actions-${id}`} className="shrink-0 border-t border-slate-200 p-3 empty:hidden" />
+    </section>
+  )
+}
+
+/** One card of the row: the section's name and its one headline figure. Tapping it opens that section alone. */
+function SectionCard({ id, title, headline, selected, onOpen }: { id: SectionKey; title: string; headline: string; selected: boolean; onOpen: () => void }) {
+  return (
+    <button
+      type="button"
+      role="tab"
+      aria-selected={selected}
+      data-testid={`card-${id}`}
+      onClick={onOpen}
+      className={`min-w-0 flex-1 rounded-xl border px-4 py-3 text-left transition ${
+        selected ? 'border-rose-500 bg-rose-50' : 'border-slate-200 bg-white hover:bg-slate-50'
+      }`}
+    >
+      <span className="block text-base font-semibold text-slate-700">{title}</span>
+      <span data-testid={`card-headline-${id}`} className="block truncate text-lg font-bold text-slate-900">
+        {headline}
+      </span>
+    </button>
+  )
+}
+
+/**
+ * The Reports tab (docs/phase-246, R2; its layout is docs/phase-246-1): the one scope picker stays fixed at the top. Under
+ * it a row of cards, Takings, the Z report (only while the scope is one shift), Checks, Detail and Shifts, each with one
+ * headline figure. Tapping a card opens that section alone under the row, in its own scroll area with its actions in a
+ * fixed bar below it; tapping another swaps it. Takings is open at first.
+ *
  * Every report keeps calling the function it called before: a shift's scope gives the Z report its shift id, and every
- * other report the range of the shift's sales; a period or a typed range gives every report the range and shows no Z.
- * The page scrolls as a whole; Shift History keeps its own scroll box.
+ * other report the range of the shift's sales; a period or a typed range gives every report the range and shows no Z. The
+ * cards only word what the sections already read.
  *
  * @returns {JSX.Element}
  */
 export default function ReportsPage() {
   const [choice, setChoice] = useState<ScopeChoice>(DEFAULT_SCOPE)
+  const [openKey, setOpenKey] = useState<SectionKey>('takings')
   const [staffById, setStaffById] = useState<Map<number, string>>(new Map())
   const [detailOpen, setDetailOpen] = useState<{ invoices: boolean; mpesa: boolean; export: boolean }>({ invoices: false, mpesa: false, export: false })
+  const [summary, setSummary] = useState<SalesSummary | null>(null)
+  const [zReport, setZReport] = useState<ZReport | null>(null)
+  const [zError, setZError] = useState<string | null>(null)
+  const [shiftEndOfDay, setShiftEndOfDay] = useState<ShiftEndOfDayReport | null>(null)
+  const [approvalRows, setApprovalRows] = useState<ShiftApprovalRow[] | null>(null)
+  const [shiftsCard, setShiftsCard] = useState(HEADLINE_LOADING)
 
   useEffect(() => {
     void window.api.getStaffList().then((result) => {
@@ -922,35 +1009,70 @@ export default function ReportsPage() {
 
   const scope = toReportScope(choice)
   const scopeKey = JSON.stringify(scope)
+  const shiftId = choice.kind === 'shift' ? choice.shiftId : null
   const toggle = (key: 'invoices' | 'mpesa' | 'export'): void => setDetailOpen((open) => ({ ...open, [key]: !open[key] }))
+
+  // The Z report of a shift scope is read here, once, for its section and for the count note of Takings.
+  useEffect(() => {
+    let cancelled = false
+    setZReport(null)
+    setZError(null)
+    if (shiftId === null) return
+    void window.api.getZReport(shiftId).then((result) => {
+      if (cancelled) return
+      if (result.success && result.data) setZReport(result.data)
+      else setZError(result.error ?? 'Failed to open this shift’s Z-report')
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [shiftId])
 
   // The shifts of a range know their window and times; the label is made the way the picker makes it, from the same fields.
   const openShift = (shift: ShiftApprovalRowLike, label: string): void => setChoice({ kind: 'shift', shiftId: shift.shiftId, label })
 
+  // A scope that is not a shift has no Z report: if that section was open, the page goes back to Takings.
+  const shownKey: SectionKey = openKey === 'z' && shiftId === null ? 'takings' : openKey
+  const cards: Array<{ id: SectionKey; title: string; headline: string }> = [
+    { id: 'takings', title: 'Takings', headline: takingsHeadline(summary) },
+    ...(shiftId !== null ? [{ id: 'z' as const, title: 'Z-Report', headline: zError ? 'Not available' : zReportHeadline(zReport) }] : []),
+    { id: 'checks', title: 'Checks', headline: shiftId !== null ? shiftEndOfDayHeadline(shiftEndOfDay) : approvalRowsHeadline(approvalRows) },
+    { id: 'detail', title: 'Detail', headline: detailHeadline(summary) },
+    { id: 'shifts', title: 'Shifts', headline: shiftsCard }
+  ]
+
   return (
-    <div className="flex min-h-0 flex-1 flex-col">
-      <div data-testid="reports-scroll" className="touch-scrollbar min-h-0 flex-1 space-y-6 overflow-y-auto pr-2">
-        <section className="space-y-3">
-          <StepHeading step={1} title="Scope" hint="Pick a shift, a period or a range. Every report below is for it." />
-          <div className="rounded-xl border border-slate-200 bg-white p-4">
-            <ScopePicker scope={choice} onChange={setChoice} />
-          </div>
-        </section>
+    <div className="flex min-h-0 flex-1 flex-col gap-3">
+      <section data-testid="scope-card" className="shrink-0 rounded-xl border border-slate-200 bg-white p-4">
+        <ScopePicker scope={choice} onChange={setChoice} />
+      </section>
 
-        <section className="space-y-3">
-          <StepHeading step={2} title="Takings" />
-          <TakingsSection key={scopeKey} choice={choice} />
-        </section>
+      <div role="tablist" aria-label="Report sections" data-testid="section-cards" className="flex shrink-0 gap-3">
+        {cards.map((card) => (
+          <SectionCard key={card.id} id={card.id} title={card.title} headline={card.headline} selected={shownKey === card.id} onOpen={() => setOpenKey(card.id)} />
+        ))}
+      </div>
 
-        <section className="space-y-3">
-          <StepHeading step={3} title="Checks" hint="End of Day approval is made on one shift. Fiscal status and reconciliation are for the scope." />
-          <EndOfDayBlock choice={choice} onOpenShift={openShift} />
+      <SectionPanel id="takings" label="Takings" open={shownKey === 'takings'}>
+        <TakingsSection key={scopeKey} choice={choice} zReport={zReport} onSummary={setSummary} />
+      </SectionPanel>
+
+      {shiftId !== null && (
+        <SectionPanel id="z" label="Z-Report" open={shownKey === 'z'}>
+          <ZReportSection report={zReport} error={zError} onReportChange={setZReport} />
+        </SectionPanel>
+      )}
+
+      <SectionPanel id="checks" label="Checks" open={shownKey === 'checks'}>
+        <div className="space-y-4">
+          <EndOfDayBlock choice={choice} onOpenShift={openShift} onShiftReport={setShiftEndOfDay} onRows={setApprovalRows} />
           <FiscalStatusView key={`fiscal-${scopeKey}`} scope={scope} />
           <FiscalReconciliationView key={`recon-${scopeKey}`} scope={scope} />
-        </section>
+        </div>
+      </SectionPanel>
 
-        <section className="space-y-3">
-          <StepHeading step={4} title="Detail" hint="Shut until you open them." />
+      <SectionPanel id="detail" label="Detail" open={shownKey === 'detail'}>
+        <div className="space-y-3">
           <DetailToggle label="Invoice List" open={detailOpen.invoices} onToggle={() => toggle('invoices')}>
             <InvoiceListView key={`invoices-${scopeKey}`} staffName={staffName} scope={scope} />
           </DetailToggle>
@@ -961,13 +1083,12 @@ export default function ReportsPage() {
           <DetailToggle label="Export CSV" open={detailOpen.export} onToggle={() => toggle('export')}>
             <ExportView scope={scope} />
           </DetailToggle>
-        </section>
+        </div>
+      </SectionPanel>
 
-        <section className="space-y-3">
-          <StepHeading step={5} title="Shifts" />
-          <ShiftHistoryView staffName={staffName} />
-        </section>
-      </div>
+      <SectionPanel id="shifts" label="Shifts" open={shownKey === 'shifts'}>
+        <ShiftHistoryView staffName={staffName} onHeadline={setShiftsCard} />
+      </SectionPanel>
     </div>
   )
 }

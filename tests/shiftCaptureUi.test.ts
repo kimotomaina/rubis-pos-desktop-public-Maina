@@ -19,7 +19,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import ReportsPage from '../src/renderer/src/pages/ReportsPage.js'
-import { reportsTabApi } from './helpers/reportsTabApi.js'
+import { reportsTabApi, openSection } from './helpers/reportsTabApi.js'
 import ZReportModal from '../src/renderer/src/components/ZReportModal.js'
 import ShiftCorrectionForm from '../src/renderer/src/components/ShiftCorrectionForm.js'
 import NoShiftNotice from '../src/renderer/src/components/NoShiftNotice.js'
@@ -111,6 +111,7 @@ describe('Shift History (D4)', () => {
       await Promise.resolve()
     })
     await flush()
+    await openSection(container, 'shifts')
   }
 
   it('tags a shift whose cash was not counted, beside "Recorded later"', async () => {

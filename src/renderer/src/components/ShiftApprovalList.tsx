@@ -8,6 +8,8 @@ interface ShiftApprovalListProps {
   scope: ReportScope
   /** Switches the whole page to this shift: approval happens only on a shift. */
   onOpenShift: (shift: ShiftApprovalRow, label: string) => void
+  /** Told the rows as they are read, `null` while they are being read, so a card can show where the range stands (docs/phase-246-1). */
+  onRows?: (rows: ShiftApprovalRow[] | null) => void
 }
 
 const STATE_LABEL: Record<ShiftApprovalState, string> = {
@@ -36,10 +38,12 @@ const STATE_CLASS: Record<ShiftApprovalState, string> = {
  * @param {ShiftApprovalListProps} props
  * @returns {JSX.Element}
  */
-export default function ShiftApprovalList({ scope, onOpenShift }: ShiftApprovalListProps) {
+export default function ShiftApprovalList({ scope, onOpenShift, onRows }: ShiftApprovalListProps) {
   const [rows, setRows] = useState<ShiftApprovalRow[] | null>(null)
   const [error, setError] = useState<string | null>(null)
   const key = JSON.stringify(scope)
+
+  useEffect(() => onRows?.(rows), [rows]) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     let cancelled = false

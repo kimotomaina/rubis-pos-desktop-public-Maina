@@ -16,7 +16,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import ReportsPage from '../src/renderer/src/pages/ReportsPage.js'
-import { reportsTabApi } from './helpers/reportsTabApi.js'
+import { reportsTabApi, openSection } from './helpers/reportsTabApi.js'
 import ZReportModal from '../src/renderer/src/components/ZReportModal.js'
 import MoveSaleForm from '../src/renderer/src/components/MoveSaleForm.js'
 import WindowEndBanner, { shouldShowWindowEndBanner } from '../src/renderer/src/components/WindowEndBanner.js'
@@ -112,6 +112,7 @@ describe('Shift History', () => {
       await Promise.resolve()
     })
     await flush()
+    await openSection(container, 'shifts')
   }
 
   it('gives every sale to its shift before it reads the list, and shows no list of sales with no shift', async () => {
@@ -464,6 +465,7 @@ describe('Shift History actions and merging (docs/phase-239)', () => {
       await Promise.resolve()
     })
     await flush()
+    await openSection(container, 'shifts')
   }
   const buttons = (label: string): HTMLButtonElement[] =>
     Array.from(container.querySelectorAll('button')).filter((b) => b.textContent === label) as HTMLButtonElement[]
