@@ -19,6 +19,7 @@ import { shiftWindowLabel, type ShiftType } from '../lib/shiftWindows.js'
 import { useShiftWindowStatus } from '../lib/useShiftWindowStatus.js'
 import EmptyState from './EmptyState.js'
 import ZReportModal from './ZReportModal.js'
+import CloseShiftDialog from './CloseShiftDialog.js'
 import OpenShiftForm from './OpenShiftForm.js'
 import LocationPicker, { type ShopifyLocationOption } from './LocationPicker.js'
 import { useProductStore } from '../stores/productStore.js'
@@ -58,7 +59,7 @@ import {
   validateEtimsConnection
 } from '../lib/etimsConfig.js'
 import { MPESA_SMS_PARSER_READY } from '../lib/mpesaConfig.js'
-import { CARD_BALANCE_INVALID, MPESA_BALANCE_INVALID, parseOptionalBalance } from '../lib/optionalBalance.js'
+import { MPESA_BALANCE_INVALID, parseOptionalBalance } from '../lib/optionalBalance.js'
 import type { FiscalConnectionTestResult } from '../../../main/services/integrations/fiscal-connection-test.js'
 import type { UpdateStatus } from '../../../main/services/updater.js'
 import type { LastUpdateResult } from '../../../main/services/updateBackup.js'
@@ -288,11 +289,8 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
   const [loading, setLoading] = useState(true)
 
   const [startingCashInput, setStartingCashInput] = useState(OPEN_SHIFT_FIGURE_DEFAULT)
-  const [endingCashInput, setEndingCashInput] = useState('')
   // docs/phase-222: optional; blank means "not recorded", which a zero is not.
   const [mpesaOpeningInput, setMpesaOpeningInput] = useState(OPEN_SHIFT_MPESA_DEFAULT)
-  const [mpesaClosingInput, setMpesaClosingInput] = useState('')
-  const [cardClosingInput, setCardClosingInput] = useState('')
   const [showOpenForm, setShowOpenForm] = useState(false)
   const [startAtZero, setStartAtZero] = useState(false)
   const { status: windowStatus, reload: reloadWindowStatus } = useShiftWindowStatus()
@@ -1171,49 +1169,12 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
     setShowCloseForm(true)
   }
 
-  const handleCloseShift = async () => {
-    if (!currentShift) return
-    const blocked = heldBlockMessage()
-    if (blocked) {
-      setShiftActionError(blocked)
-      return
-    }
-    setShiftActionError(null)
-    const endingCash = parseFloat(endingCashInput)
-    if (!Number.isFinite(endingCash) || endingCash < 0) {
-      setShiftActionError('Enter a valid ending cash amount')
-      return
-    }
-    const mpesaClosing = parseOptionalBalance(mpesaClosingInput)
-    if (mpesaClosing === 'invalid') {
-      setShiftActionError(MPESA_BALANCE_INVALID)
-      return
-    }
-    const cardClosing = parseOptionalBalance(cardClosingInput)
-    if (cardClosing === 'invalid') {
-      setShiftActionError(CARD_BALANCE_INVALID)
-      return
-    }
-    // docs/phase-246, R5: a blank card figure sends nothing, so a shift closed as before sends the call it always sent.
-    const result = await window.api.closeShift(
-      currentShift.id,
-      endingCash,
-      ...(cardClosing !== null ? [mpesaClosing, cardClosing] : mpesaClosing === null ? [] : [mpesaClosing])
-    )
-    if (!result.success) {
-      setShiftActionError(result.error ?? 'Failed to close shift')
-      return
-    }
-    setEndingCashInput('')
-    setMpesaClosingInput('')
-    setCardClosingInput('')
+  /** docs/phase-256: the close is the shared dialog's (figures, review, close); the Z it unlocks is shown here. */
+  const handleShiftClosed = async (report: ZReport | null): Promise<void> => {
     setShowCloseForm(false)
-
-    const reportResult = await window.api.getZReport(currentShift.id)
-    if (reportResult.success && reportResult.data) {
-      setZReport(reportResult.data)
-    }
+    if (report) setZReport(report)
     await refresh()
+    void reloadWindowStatus()
   }
 
   /**
@@ -2511,69 +2472,11 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
         )}
 
         {currentShift && showCloseForm && (
-          <div className="flex items-end gap-2">
-            <div>
-              <label className="mb-1 block text-lg font-medium text-slate-600">
-                Ending Cash (counted)
-              </label>
-              <input
-                type="text"
-                readOnly
-                value={endingCashInput}
-                onClick={() => openField(endingCashInput, setEndingCashInput, 'Ending Cash (counted)', { mode: 'decimal' })}
-                onFocus={() => openField(endingCashInput, setEndingCashInput, 'Ending Cash (counted)', { mode: 'decimal' })}
-                className="w-32 h-12 rounded-lg border border-slate-300 px-3 text-xl focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-100"
-                autoFocus
-              />
-            </div>
-            <div>
-              <label className="mb-1 block text-lg font-medium text-slate-600">
-                M-Pesa balance (optional)
-              </label>
-              <input
-                type="text"
-                readOnly
-                value={mpesaClosingInput}
-                placeholder="Not recorded"
-                onClick={() => openField(mpesaClosingInput, setMpesaClosingInput, 'M-Pesa balance (optional)', { mode: 'decimal' })}
-                onFocus={() => openField(mpesaClosingInput, setMpesaClosingInput, 'M-Pesa balance (optional)', { mode: 'decimal' })}
-                className="w-40 h-12 rounded-lg border border-slate-300 px-3 text-xl focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-100"
-              />
-            </div>
-            <div>
-              <label className="mb-1 block text-lg font-medium text-slate-600">
-                Card settlement (optional)
-              </label>
-              <input
-                type="text"
-                readOnly
-                value={cardClosingInput}
-                placeholder="Not recorded"
-                onClick={() => openField(cardClosingInput, setCardClosingInput, 'Card settlement (optional)', { mode: 'decimal' })}
-                onFocus={() => openField(cardClosingInput, setCardClosingInput, 'Card settlement (optional)', { mode: 'decimal' })}
-                className="w-40 h-12 rounded-lg border border-slate-300 px-3 text-xl focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-100"
-              />
-            </div>
-            <button
-              type="button"
-              onClick={() => void handleCloseShift()}
-              className="rounded-lg bg-rose-600 px-4 py-2 text-base font-semibold text-white hover:bg-rose-700"
-            >
-              Confirm
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                setShowCloseForm(false)
-                setEndingCashInput('')
-                setMpesaClosingInput('')
-                setCardClosingInput('')
-              }}
-              className="rounded-lg border border-slate-300 px-4 py-2 text-base text-slate-600 hover:bg-slate-50"
-            >
-              Cancel
-            </button>
-          </div>
+          <CloseShiftDialog
+            shiftId={currentShift.id}
+            onCancel={() => setShowCloseForm(false)}
+            onClosed={(report) => void handleShiftClosed(report)}
+          />
         )}
       </section>
 

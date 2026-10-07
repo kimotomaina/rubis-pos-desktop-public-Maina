@@ -6,6 +6,7 @@ import { zReportCardLines } from '../lib/zReportCard.js'
 import { zReportRetroLines } from '../lib/zReportRetro.js'
 import { zReportCorrectionBlocks } from '../lib/zReportCorrections.js'
 import ShiftCorrectionForm from './ShiftCorrectionForm.js'
+import CloseShiftDialog from './CloseShiftDialog.js'
 import { zReportAdjustmentBlocks, zReportLabelledLine, zReportMergedLine, zReportSalesAtCloseLine } from '../lib/zReportAdjustments.js'
 import { titleCaseName } from '../lib/text.js'
 import { formatVatRateLabel } from '../lib/vatLabel.js'
@@ -63,8 +64,10 @@ export default function ZReportBlock({
   >(null)
   const [printing, setPrinting] = useState(false)
   // docs/phase-254: Print on an open shift asks for the shift to be closed first; nothing is sent to the printer, and the
-  // main process refuses the print too. Only an admin sees an open shift's Z (the Reports tab), so the prompt names Shift Controls.
+  // main process refuses the print too. docs/phase-256: the prompt closes it here, through the shared close dialog, and
+  // the report becomes the closed shift's, ready to print.
   const [askToClose, setAskToClose] = useState(false)
+  const [closingShift, setClosingShift] = useState(false)
 
   const discrepancyColor =
     report.discrepancy === null
@@ -131,7 +134,14 @@ export default function ZReportBlock({
     <>
     {askToClose && report.status === 'open' && (
       <div role="alert" className="mb-3 rounded-lg bg-amber-50 px-3 py-2 text-base font-medium text-amber-900" data-testid="z-locked">
-        Shift #{report.shiftId} is still open. Close the shift first (Admin, Shift Controls): its Z report is locked until then.
+        <p>Shift #{report.shiftId} is still open. Close the shift first: its Z report is locked until then.</p>
+        <button
+          type="button"
+          onClick={() => setClosingShift(true)}
+          className="mt-2 h-12 rounded-lg bg-rose-600 px-4 text-base font-semibold text-white hover:bg-rose-700"
+        >
+          Close shift
+        </button>
       </div>
     )}
     {printStatus && (
@@ -309,12 +319,23 @@ export default function ZReportBlock({
     </>
   )
 
-  // The correction form is a sibling of the report, not inside it: a click on its backdrop must not reach the caller's `onClose`.
+  // The correction form, and the close dialog (docs/phase-256), are siblings of the report, not inside it: a click on their
+  // backdrop must not reach the caller's `onClose`.
   const correctionForm = correcting ? (
     <ShiftCorrectionForm
       report={report}
       onCancel={() => setCorrecting(false)}
       onCorrected={() => void handleCorrected()}
+    />
+  ) : closingShift ? (
+    <CloseShiftDialog
+      shiftId={report.shiftId}
+      onCancel={() => setClosingShift(false)}
+      onClosed={(closed) => {
+        setClosingShift(false)
+        setAskToClose(false)
+        if (closed) setReport(closed)
+      }}
     />
   ) : null
 

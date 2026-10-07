@@ -33,6 +33,11 @@ import ScopePicker from '../components/ScopePicker.js'
 import ShiftEndOfDay from '../components/ShiftEndOfDay.js'
 import ShiftApprovalList from '../components/ShiftApprovalList.js'
 import { ActionSlotContext, SectionActions } from '../components/SectionActions.js'
+import CloseShiftDialog from '../components/CloseShiftDialog.js'
+import OpenShiftDialog from '../components/OpenShiftDialog.js'
+import { useShiftWindowStatus } from '../lib/useShiftWindowStatus.js'
+import { useAuthStore } from '../stores/authStore.js'
+import { useShiftStore } from '../stores/shiftStore.js'
 import MpesaLogsPage from './MpesaLogsPage.js'
 
 /** Orders/shifts per page — matches the server-side `REPORTS_PAGE_SIZE` in `index.ts`. */
@@ -109,6 +114,18 @@ function ShiftHistoryView({ staffName, onHeadline }: { staffName: (id: number) =
   const [openCorrecting, setOpenCorrecting] = useState(false)
   const [notice, setNotice] = useState<string | null>(null)
   const [reloadKey, setReloadKey] = useState(0)
+  // docs/phase-256: opening and closing the till's shift from here, through the same dialogs as everywhere else. Which
+  // shift is open comes from the main process, not from the page of rows shown.
+  const signedIn = useAuthStore((state) => state.currentStaff)
+  const { status: windowStatus, reload: reloadWindowStatus } = useShiftWindowStatus()
+  const openShiftId = windowStatus?.openShift?.id ?? null
+  const [closingShiftId, setClosingShiftId] = useState<number | null>(null)
+  const [openingShift, setOpeningShift] = useState(false)
+  const afterShiftChange = (): void => {
+    setReloadKey((key) => key + 1)
+    void reloadWindowStatus()
+    void useShiftStore.getState().load()
+  }
 
   useEffect(() => {
     let cancelled = false
@@ -309,6 +326,19 @@ function ShiftHistoryView({ staffName, onHeadline }: { staffName: (id: number) =
                         >
                           Z report
                         </button>
+                        {shift.status === 'open' && shift.id === openShiftId && (
+                          <button
+                            type="button"
+                            onClick={(event) => {
+                              event.stopPropagation()
+                              setNotice(null)
+                              setClosingShiftId(shift.id)
+                            }}
+                            className="h-9 rounded-lg bg-rose-600 px-3 text-sm font-semibold text-white hover:bg-rose-700"
+                          >
+                            Close shift
+                          </button>
+                        )}
                         {shift.frozen && (
                           <span
                             title="Only the latest closed shift can be corrected or be given sales."
@@ -363,9 +393,45 @@ function ShiftHistoryView({ staffName, onHeadline }: { staffName: (id: number) =
           >
             Move a sale
           </button>
+          {windowStatus && signedIn && (
+            <button
+              type="button"
+              onClick={() => {
+                setNotice(null)
+                if (openShiftId !== null) setClosingShiftId(openShiftId)
+                else setOpeningShift(true)
+              }}
+              className="h-10 rounded-lg border border-slate-300 px-4 text-base font-medium text-slate-600 hover:bg-slate-50"
+            >
+              {openShiftId !== null ? `Close shift #${openShiftId}` : 'Open shift'}
+            </button>
+          )}
           <Pager page={page} pageCount={pageCount} onChange={setPage} className="ml-auto min-w-0 flex-1 max-w-md" />
         </div>
       </SectionActions>
+      {closingShiftId !== null && (
+        <CloseShiftDialog
+          shiftId={closingShiftId}
+          onCancel={() => setClosingShiftId(null)}
+          onClosed={(report) => {
+            setClosingShiftId(null)
+            setOpenCorrecting(false)
+            if (report) setOpenReport(report)
+            afterShiftChange()
+          }}
+        />
+      )}
+      {openingShift && signedIn && (
+        <OpenShiftDialog
+          staff={signedIn}
+          onClose={() => setOpeningShift(false)}
+          onOpened={() => {
+            setOpeningShift(false)
+            setNotice('Shift opened.')
+            afterShiftChange()
+          }}
+        />
+      )}
       {openReport && (
         <ZReportModal
           report={openReport}

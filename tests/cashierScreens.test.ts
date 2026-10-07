@@ -121,7 +121,7 @@ describe('C5: My shifts and sales', () => {
     await flush()
   }
   const type = (index: number, value: string): void => {
-    const input = container.querySelectorAll<HTMLInputElement>('[data-testid="close-shift-form"] input')[index]
+    const input = document.querySelectorAll<HTMLInputElement>('[data-testid="close-shift-form"] input')[index]
     act(() => input.click())
     act(() => useKeyboardStore.getState().request?.onChange(value))
   }
@@ -134,6 +134,7 @@ describe('C5: My shifts and sales', () => {
     container = document.createElement('div')
     document.body.appendChild(container)
     root = createRoot(container)
+    useAuthStore.setState({ currentStaff: CASHIER })
   })
   afterEach(() => {
     act(() => root.unmount())
@@ -163,7 +164,19 @@ describe('C5: My shifts and sales', () => {
     expect(window.api.getMySales).toHaveBeenCalledWith(1)
   })
 
-  it('closes the open shift with counted cash, M-Pesa and card, then shows its Z with Print and no Correct figures', async () => {
+  /** A button inside the close dialog, where "Close shift" is the final step, not the row's button. */
+  const inDialog = (label: string): HTMLButtonElement | undefined =>
+    Array.from(document.querySelectorAll<HTMLButtonElement>('[role="dialog"][aria-label="Close shift"] button')).find(
+      (b) => b.textContent?.trim() === label
+    )
+  const clickInDialog = async (label: string): Promise<void> => {
+    await act(async () => inDialog(label)!.click())
+    await flush()
+  }
+
+  // CHANGED (docs/phase-256). OLD: the page's own close form, sent by Confirm. NEW: the shared close dialog: the figures,
+  // Review, then Close shift.
+  it('closes the open shift with counted cash, M-Pesa and card, after a review, then shows its Z with Print and no Correct figures', async () => {
     stubApi()
     await mount()
 
@@ -171,7 +184,13 @@ describe('C5: My shifts and sales', () => {
     type(0, '790')
     type(1, '340')
     type(2, '80')
-    await click('Confirm')
+    await clickInDialog('Review')
+    const review = document.querySelector('[data-testid="close-review"]')?.textContent ?? ''
+    expect(review).toMatch(/Counted cash.*790\.00/)
+    expect(review).toMatch(/M-Pesa balance.*340\.00/)
+    expect(review).toMatch(/Card settlement.*80\.00/)
+    expect(window.api.closeShift).not.toHaveBeenCalled()
+    await clickInDialog('Close shift')
 
     expect(window.api.closeShift).toHaveBeenCalledWith(7, 790, 340, 80)
     expect(window.api.getZReport).toHaveBeenCalledWith(7)
@@ -181,6 +200,19 @@ describe('C5: My shifts and sales', () => {
 
     await click('Print Z-Report')
     expect(window.api.printZReport).toHaveBeenCalledWith(7)
+  })
+
+  it('Back from the review keeps the figures to change; Cancel closes nothing', async () => {
+    stubApi()
+    await mount()
+    await click('Close shift')
+    type(0, '790')
+    await clickInDialog('Review')
+    await clickInDialog('Back')
+    expect(container.querySelector<HTMLInputElement>('[data-testid="close-shift-form"] input')?.value).toBe('790')
+    await clickInDialog('Cancel')
+    expect(document.querySelector('[role="dialog"]')).toBeNull()
+    expect(window.api.closeShift).not.toHaveBeenCalled()
   })
 
   it('Print Z on the open shift asks for the shift to be closed first, and reads or prints nothing', async () => {
@@ -199,8 +231,10 @@ describe('C5: My shifts and sales', () => {
     expect(container.querySelector('[data-testid="z-locked"]')).toBeNull()
   })
 
-  it('on an admin screen, Print on an open shift\'s Z asks for the close and sends nothing to the printer', async () => {
+  // CHANGED (docs/phase-256). OLD: the prompt named Shift Controls. NEW: it closes the shift there, and the Z then prints.
+  it('on an admin screen, Print on an open shift\'s Z asks for the close, closes it there, and the closed Z prints', async () => {
     stubApi()
+    useAuthStore.setState({ currentStaff: ADMIN })
     await act(async () =>
       root.render(createElement(ZReportModal, { report: { ...report, status: 'open', closedAt: null, endingCash: null, discrepancy: null }, onClose: vi.fn() }))
     )
@@ -208,31 +242,45 @@ describe('C5: My shifts and sales', () => {
 
     await act(async () => button('Print Z-Report')!.click())
     await flush()
-
-    expect(document.body.querySelector('[data-testid="z-locked"]')?.textContent).toContain('Close the shift first (Admin, Shift Controls)')
+    expect(document.body.querySelector('[data-testid="z-locked"]')?.textContent).toContain('Close the shift first')
     expect(window.api.printZReport).not.toHaveBeenCalled()
+
+    await click('Close shift')
+    type(0, '790')
+    await clickInDialog('Review')
+    await clickInDialog('Close shift')
+    expect(window.api.closeShift).toHaveBeenCalledWith(7, 790)
+    expect(document.body.textContent).toContain('Closed by: Amina')
+    await click('Print Z-Report')
+    expect(window.api.printZReport).toHaveBeenCalledWith(7)
   })
 
-  it('refuses a missing counted cash or a bad M-Pesa figure on the screen, and closes nothing', async () => {
+  it('refuses a missing counted cash or a bad M-Pesa figure at Review, and closes nothing', async () => {
     stubApi()
     await mount()
     await click('Close shift')
-    await click('Confirm')
-    expect(container.querySelector('[role="alert"]')?.textContent).toBe('Enter a valid ending cash amount')
+    await clickInDialog('Review')
+    expect(document.querySelector('[role="dialog"] [role="alert"]')?.textContent).toBe('Enter a valid ending cash amount')
     type(0, '790')
     type(1, '12a')
-    await click('Confirm')
-    expect(container.querySelector('[role="alert"]')?.textContent).toBe('Enter a valid M-Pesa balance, or leave it blank')
+    await clickInDialog('Review')
+    expect(document.querySelector('[role="dialog"] [role="alert"]')?.textContent).toBe('Enter a valid M-Pesa balance, or leave it blank')
+    type(1, '')
+    type(0, '-5')
+    await clickInDialog('Review')
+    expect(document.querySelector('[role="dialog"] [role="alert"]')?.textContent).toBe('Enter a valid ending cash amount')
     expect(window.api.closeShift).not.toHaveBeenCalled()
   })
 
-  it('sends blank M-Pesa and card figures as not recorded, never as 0', async () => {
+  it('shows blank M-Pesa and card figures as Not recorded, and sends the call it always sent', async () => {
     stubApi()
     await mount()
     await click('Close shift')
     type(0, '790')
-    await click('Confirm')
-    expect(window.api.closeShift).toHaveBeenCalledWith(7, 790, null, null)
+    await clickInDialog('Review')
+    expect(document.querySelector('[data-testid="close-review"]')?.textContent).toContain('Not recorded')
+    await clickInDialog('Close shift')
+    expect(window.api.closeShift).toHaveBeenCalledWith(7, 790)
   })
 
   it('a held sale stops the close before anything is counted', async () => {
@@ -240,21 +288,52 @@ describe('C5: My shifts and sales', () => {
     useHeldSalesStore.setState({ sales: [{ id: 1, label: 'Customer 1', total: 50 } as never] })
     await mount()
     await click('Close shift')
-    expect(container.querySelector('[role="alert"]')?.textContent).toContain('Customer 1')
+    expect(document.querySelector('[data-testid="close-blocked"]')?.textContent).toContain('Customer 1')
     expect(container.querySelector('[data-testid="close-shift-form"]')).toBeNull()
     useHeldSalesStore.setState({ sales: [] })
   })
 
-  it('shows the main process\'s refusal of the close, and the form stays for another try', async () => {
+  it('shows the main process\'s refusal of the close, and the figures stay for another try', async () => {
     stubApi()
-    window.api.closeShift = vi.fn().mockResolvedValue({ success: false, error: 'This shift can be closed from 17:30.' })
+    window.api.closeShift = vi.fn().mockResolvedValue({ success: false, error: 'Shift 7 is already closed' })
     await mount()
     await click('Close shift')
     type(0, '790')
-    await click('Confirm')
-    expect(container.querySelector('[role="alert"]')?.textContent).toBe('This shift can be closed from 17:30.')
-    expect(container.querySelector('[data-testid="close-shift-form"]')).not.toBeNull()
+    await clickInDialog('Review')
+    await clickInDialog('Close shift')
+    expect(document.querySelector('[role="dialog"] [role="alert"]')?.textContent).toBe('Shift 7 is already closed')
+    expect(container.querySelector<HTMLInputElement>('[data-testid="close-shift-form"] input')?.value).toBe('790')
     expect(window.api.getZReport).not.toHaveBeenCalled()
+  })
+
+  it('cannot be sent twice: Close shift is off while the close is on its way', async () => {
+    stubApi()
+    let finish: (value: unknown) => void = () => {}
+    window.api.closeShift = vi.fn().mockReturnValue(new Promise((resolve) => (finish = resolve)))
+    await mount()
+    await click('Close shift')
+    type(0, '790')
+    await clickInDialog('Review')
+    await clickInDialog('Close shift')
+    expect(inDialog('Closing…')?.disabled).toBe(true)
+    await act(async () => inDialog('Closing…')?.click())
+    expect(window.api.closeShift).toHaveBeenCalledTimes(1)
+    await act(async () => finish(ok({ expectedCash: 800, discrepancy: -10, mpesaExpected: null, mpesaDifference: null })))
+    await flush()
+  })
+
+  it('offers Open shift when no shift is open, and opens it through the shared dialog', async () => {
+    stubApi()
+    window.api.getMyShifts = vi.fn().mockResolvedValue(ok({ shifts: [ownShift], total: 1, page: 1 }))
+    window.api.getShiftWindowStatus = vi.fn().mockResolvedValue(
+      ok({ window: { type: 'day', startDate: '2026-10-07', label: 'Day shift (07:00 to 17:30)', name: 'Day shift', endClock: '17:30' }, windowShift: null, windowShiftMessage: null, earlier: { count: 0, cash: 0, mpesa: 0 }, openShift: null })
+    )
+    window.api.openShift = vi.fn().mockResolvedValue(ok({ shiftId: 8 }))
+    await mount()
+
+    await click('Open shift')
+    expect(document.querySelector('[role="dialog"][aria-label="Open shift"]')).not.toBeNull()
+    expect(button('Close shift')).toBeUndefined()
   })
 
   it('says so when there are no shifts and no sales', async () => {

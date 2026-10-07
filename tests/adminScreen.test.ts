@@ -640,7 +640,9 @@ describe('AdminScreen > Overview > Shift cash fields', () => {
     act(() => useKeyboardStore.getState().request?.onChange('950'))
     expect(inputByLabel('Ending Cash (counted)').value).toBe('950')
 
-    await click('Confirm')
+    // CHANGED (docs/phase-256). OLD: Confirm closed the shift. NEW: the shared close dialog reviews the figures first.
+    await click('Review')
+    await click('Close shift')
     expect(window.api.closeShift).toHaveBeenCalledWith(1, 950)
   })
 })

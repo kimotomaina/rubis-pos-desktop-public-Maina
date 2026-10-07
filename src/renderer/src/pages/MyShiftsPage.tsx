@@ -3,12 +3,11 @@ import type { OrderRow, ShiftRow } from '../../../main/services/database.js'
 import type { ZReport } from '../../../main/services/reports.js'
 import Pager from '../components/Pager.js'
 import ZReportModal from '../components/ZReportModal.js'
+import CloseShiftDialog from '../components/CloseShiftDialog.js'
+import OpenShiftDialog from '../components/OpenShiftDialog.js'
 import { formatCurrency } from '../lib/currency.js'
-import { closeShiftBlockedMessage } from '../lib/heldSale.js'
-import { CARD_BALANCE_INVALID, MPESA_BALANCE_INVALID, parseOptionalBalance } from '../lib/optionalBalance.js'
 import { useShiftWindowStatus } from '../lib/useShiftWindowStatus.js'
-import { useHeldSalesStore } from '../stores/heldSalesStore.js'
-import { useKeyboardStore } from '../stores/keyboardStore.js'
+import { useAuthStore } from '../stores/authStore.js'
 import { useShiftStore } from '../stores/shiftStore.js'
 
 /** Rows per page, as the main process pages them (`REPORTS_PAGE_SIZE`). */
@@ -22,36 +21,27 @@ interface SaleRow {
 }
 
 /**
- * Opens the docked keyboard for one of the close form's figures, as the Admin screen's Close Shift does.
- *
- * @param {string} value
- * @param {(next: string) => void} onChange
- * @param {string} label
- */
-function openFigure(value: string, onChange: (next: string) => void, label: string): void {
-  useKeyboardStore.getState().open({ value, onChange, label, mode: 'decimal' })
-}
-
-/**
  * A cashier's "My shifts and sales" (docs/phase-254, C5). Their shifts, newest first, with the till's open shift on top
- * carrying Close shift and the Z report; then the sales recorded under them, as the invoice list shows them. View only:
+ * carrying Close shift and Print Z; then the sales recorded under them, as the invoice list shows them. View only:
  * no export, correction, move or approval. Who "my" is comes from the main process's session, never from this screen.
+ *
+ * Opening and closing use the same dialogs as every other screen (docs/phase-256): with no shift open, Open shift; on
+ * the open shift, Close shift (figures, review, close), then its Z.
  *
  * @returns {JSX.Element}
  */
 export default function MyShiftsPage() {
+  const signedIn = useAuthStore((state) => state.currentStaff)
   const [shiftPage, setShiftPage] = useState(1)
   const [shifts, setShifts] = useState<{ rows: ShiftRow[]; total: number } | null>(null)
   const [salePage, setSalePage] = useState(1)
   const [sales, setSales] = useState<{ rows: SaleRow[]; total: number } | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [zReport, setZReport] = useState<ZReport | null>(null)
-  const [closing, setClosing] = useState(false)
+  const [closingShiftId, setClosingShiftId] = useState<number | null>(null)
+  const [openingShift, setOpeningShift] = useState(false)
   // The open shift's Z is locked until it is closed: Print Z asks for the close instead (docs/phase-254).
   const [askToClose, setAskToClose] = useState(false)
-  const [endingCash, setEndingCash] = useState('')
-  const [mpesaClosing, setMpesaClosing] = useState('')
-  const [cardClosing, setCardClosing] = useState('')
   const { status: windowStatus, reload: reloadWindowStatus } = useShiftWindowStatus()
 
   const loadShifts = useCallback(async (): Promise<void> => {
@@ -78,59 +68,15 @@ export default function MyShiftsPage() {
     else setError(result.error ?? 'Failed to load the Z report')
   }
 
-  const startClosing = (): void => {
-    const blocked = closeShiftBlockedMessage(useHeldSalesStore.getState().sales)
-    if (blocked) {
-      setError(blocked)
-      return
-    }
-    setError(null)
-    setAskToClose(false)
-    setClosing(true)
-  }
-
-  const cancelClosing = (): void => {
-    setClosing(false)
-    setEndingCash('')
-    setMpesaClosing('')
-    setCardClosing('')
-  }
-
-  const confirmClose = async (shiftId: number): Promise<void> => {
-    const blocked = closeShiftBlockedMessage(useHeldSalesStore.getState().sales)
-    if (blocked) {
-      setError(blocked)
-      return
-    }
-    const cash = parseFloat(endingCash)
-    if (!Number.isFinite(cash) || cash < 0) {
-      setError('Enter a valid ending cash amount')
-      return
-    }
-    const mpesa = parseOptionalBalance(mpesaClosing)
-    if (mpesa === 'invalid') {
-      setError(MPESA_BALANCE_INVALID)
-      return
-    }
-    const card = parseOptionalBalance(cardClosing)
-    if (card === 'invalid') {
-      setError(CARD_BALANCE_INVALID)
-      return
-    }
-    setError(null)
-    const result = await window.api.closeShift(shiftId, cash, mpesa, card)
-    if (!result.success) {
-      setError(result.error ?? 'Failed to close shift')
-      return
-    }
-    cancelClosing()
-    await showZ(shiftId)
+  const afterShiftChange = async (): Promise<void> => {
     void useShiftStore.getState().load()
     void reloadWindowStatus()
     await loadShifts()
   }
 
   const openStatus = windowStatus?.openShift ?? null
+  // Which shift is open comes from the main process; with none open, a shift can be opened here.
+  const noShiftOpen = windowStatus !== null && openStatus === null
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto">
@@ -141,7 +87,18 @@ export default function MyShiftsPage() {
       )}
 
       <section className="rounded-xl border border-slate-200 bg-white p-4" data-testid="my-shifts">
-        <h3 className="mb-3 text-2xl font-bold text-slate-800">My shifts</h3>
+        <div className="mb-3 flex items-center justify-between gap-3">
+          <h3 className="text-2xl font-bold text-slate-800">My shifts</h3>
+          {noShiftOpen && signedIn && (
+            <button
+              type="button"
+              onClick={() => setOpeningShift(true)}
+              className="h-12 rounded-lg bg-rose-600 px-4 text-base font-semibold text-white hover:bg-rose-700"
+            >
+              Open shift
+            </button>
+          )}
+        </div>
         {!shifts ? (
           <p className="text-base text-slate-400">Loading…</p>
         ) : shifts.rows.length === 0 ? (
@@ -163,10 +120,14 @@ export default function MyShiftsPage() {
                       </span>
                     </div>
                     <div className="flex gap-2">
-                      {isOpen && !closing && (
+                      {isOpen && (
                         <button
                           type="button"
-                          onClick={startClosing}
+                          onClick={() => {
+                            setError(null)
+                            setAskToClose(false)
+                            setClosingShiftId(shift.id)
+                          }}
                           disabled={closeBlocked}
                           className="h-12 rounded-lg bg-rose-600 px-4 text-base font-semibold text-white hover:bg-rose-700 disabled:cursor-not-allowed disabled:opacity-50"
                         >
@@ -182,7 +143,7 @@ export default function MyShiftsPage() {
                       </button>
                     </div>
                   </div>
-                  {isOpen && askToClose && !closing && (
+                  {isOpen && askToClose && (
                     <div role="alert" className="mt-2 rounded-lg bg-amber-50 px-3 py-2 text-base font-medium text-amber-900" data-testid="z-locked">
                       <p>Shift #{shift.id} is still open. Close the shift first: its Z report is locked until then.</p>
                       {closeBlocked && openStatus?.closeMessage && <p className="text-sm font-normal">{openStatus.closeMessage}</p>}
@@ -190,42 +151,6 @@ export default function MyShiftsPage() {
                   )}
                   {closeBlocked && openStatus?.closeMessage && !askToClose && (
                     <p className="mt-2 text-sm text-slate-500">{openStatus.closeMessage}</p>
-                  )}
-                  {isOpen && closing && (
-                    <div className="mt-3 flex flex-wrap items-end gap-2" data-testid="close-shift-form">
-                      {[
-                        { label: 'Ending Cash (counted)', value: endingCash, set: setEndingCash, placeholder: '' },
-                        { label: 'M-Pesa balance (optional)', value: mpesaClosing, set: setMpesaClosing, placeholder: 'Not recorded' },
-                        { label: 'Card settlement (optional)', value: cardClosing, set: setCardClosing, placeholder: 'Not recorded' }
-                      ].map((field) => (
-                        <div key={field.label}>
-                          <label className="mb-1 block text-lg font-medium text-slate-600">{field.label}</label>
-                          <input
-                            type="text"
-                            readOnly
-                            value={field.value}
-                            placeholder={field.placeholder}
-                            onClick={() => openFigure(field.value, field.set, field.label)}
-                            onFocus={() => openFigure(field.value, field.set, field.label)}
-                            className="h-12 w-40 rounded-lg border border-slate-300 px-3 text-xl focus:border-rose-400 focus:outline-none focus:ring-4 focus:ring-rose-100"
-                          />
-                        </div>
-                      ))}
-                      <button
-                        type="button"
-                        onClick={() => void confirmClose(shift.id)}
-                        className="h-12 rounded-lg bg-rose-600 px-4 text-base font-semibold text-white hover:bg-rose-700"
-                      >
-                        Confirm
-                      </button>
-                      <button
-                        type="button"
-                        onClick={cancelClosing}
-                        className="h-12 rounded-lg border border-slate-300 px-4 text-base text-slate-600 hover:bg-slate-50"
-                      >
-                        Cancel
-                      </button>
-                    </div>
                   )}
                 </li>
               )
@@ -272,6 +197,27 @@ export default function MyShiftsPage() {
         </div>
       </section>
 
+      {closingShiftId !== null && (
+        <CloseShiftDialog
+          shiftId={closingShiftId}
+          onCancel={() => setClosingShiftId(null)}
+          onClosed={(report) => {
+            setClosingShiftId(null)
+            if (report) setZReport(report)
+            void afterShiftChange()
+          }}
+        />
+      )}
+      {openingShift && signedIn && (
+        <OpenShiftDialog
+          staff={signedIn}
+          onClose={() => setOpeningShift(false)}
+          onOpened={() => {
+            setOpeningShift(false)
+            void afterShiftChange()
+          }}
+        />
+      )}
       {zReport && <ZReportModal report={zReport} canCorrect={false} onClose={() => setZReport(null)} />}
     </div>
   )

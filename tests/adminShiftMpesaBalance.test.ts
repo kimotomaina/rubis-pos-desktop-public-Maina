@@ -66,6 +66,13 @@ async function click(label: string): Promise<void> {
   })
 }
 
+// CHANGED (docs/phase-256). OLD: Confirm closed the shift. NEW: the shared close dialog shows the figures for review
+// first: Review, then Close shift. A refused figure stops at Review, with its message.
+async function confirmClose(): Promise<void> {
+  await click('Review')
+  if (Array.from(container.querySelectorAll('button')).some((b) => b.textContent === 'Close shift')) await click('Close shift')
+}
+
 /** Types into the nth text field of the open form, through the on-screen keyboard as the till does. */
 function type(index: number, value: string): void {
   act(() => container.querySelectorAll('input')[index]!.click())
@@ -154,7 +161,7 @@ describe('Close Shift: M-Pesa balance (optional)', () => {
   it('sends the call it always sent when the field is left blank', async () => {
     await closeForm()
     type(0, '180')
-    await click('Confirm')
+    await confirmClose()
 
     expect(window.api.closeShift).toHaveBeenCalledWith(5, 180)
     expect(vi.mocked(window.api.closeShift).mock.calls[0]).toHaveLength(2)
@@ -164,7 +171,7 @@ describe('Close Shift: M-Pesa balance (optional)', () => {
     await closeForm()
     type(0, '180')
     type(1, '1480')
-    await click('Confirm')
+    await confirmClose()
 
     expect(window.api.closeShift).toHaveBeenCalledWith(5, 180, 1480)
   })
@@ -173,7 +180,7 @@ describe('Close Shift: M-Pesa balance (optional)', () => {
     await closeForm()
     type(0, '180')
     type(1, '-5')
-    await click('Confirm')
+    await confirmClose()
 
     expect(window.api.closeShift).not.toHaveBeenCalled()
     expect(container.textContent).toContain('Enter a valid M-Pesa balance, or leave it blank')
@@ -215,7 +222,7 @@ describe('Close Shift: card settlement (optional)', () => {
   it('sends the call it always sent when it is left blank, whatever M-Pesa holds', async () => {
     await closeForm()
     type(0, '180')
-    await click('Confirm')
+    await confirmClose()
     expect(window.api.closeShift).toHaveBeenCalledWith(5, 180)
     expect(vi.mocked(window.api.closeShift).mock.calls[0]).toHaveLength(2)
 
@@ -224,7 +231,7 @@ describe('Close Shift: card settlement (optional)', () => {
     await closeForm()
     type(0, '180')
     type(1, '1480')
-    await click('Confirm')
+    await confirmClose()
     expect(vi.mocked(window.api.closeShift).mock.calls[0]).toEqual([5, 180, 1480])
   })
 
@@ -232,7 +239,7 @@ describe('Close Shift: card settlement (optional)', () => {
     await closeForm()
     type(0, '180')
     type(2, '3800')
-    await click('Confirm')
+    await confirmClose()
     expect(vi.mocked(window.api.closeShift).mock.calls[0]).toEqual([5, 180, null, 3800])
 
     act(() => root.unmount())
@@ -241,7 +248,7 @@ describe('Close Shift: card settlement (optional)', () => {
     type(0, '180')
     type(1, '1480')
     type(2, '0')
-    await click('Confirm')
+    await confirmClose()
     expect(vi.mocked(window.api.closeShift).mock.calls[0]).toEqual([5, 180, 1480, 0])
   })
 
@@ -249,7 +256,7 @@ describe('Close Shift: card settlement (optional)', () => {
     await closeForm()
     type(0, '180')
     type(2, 'abc')
-    await click('Confirm')
+    await confirmClose()
 
     expect(window.api.closeShift).not.toHaveBeenCalled()
     expect(container.textContent).toContain('Enter a valid card settlement amount, or leave it blank')
