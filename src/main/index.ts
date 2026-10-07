@@ -3548,7 +3548,7 @@ app.whenReady().then(async () => {
   /**
    * IPC handler that closes the open till shift, reconciling counted
    * cash against expected cash. Any signed-in cashier may close it (docs/phase-254, A1); who closed it is the
-   * session's staff member, never an id from the screen.
+   * session's staff member, never an id from the screen. Before the window's end only an admin may (docs/phase-255).
    */
   ipcMain.handle(
     'shifts:close',
@@ -3564,7 +3564,8 @@ app.whenReady().then(async () => {
         validation.data.mpesaClosingBalance ?? null,
         Date.now(),
         validation.data.cardClosingBalance ?? null,
-        staffSession.current()?.id ?? null
+        staffSession.current()?.id ?? null,
+        staffSession.current()?.role === 'admin'
       )
       if (closed.success) assignSalesToShifts()
       return closed

@@ -95,7 +95,8 @@ function ShiftWindowNote({
       )}
       {closeStatus && !closeStatus.closeAllowed && closeStatus.closeMessage && (
         <p className="mt-1 text-slate-500" data-testid="close-not-yet">
-          {closeStatus.closeMessage}
+          {/* docs/phase-255: this screen is an admin's, and an admin may close early, for someone leaving early. */}
+          {closeStatus.closeMessage} An admin may close it early.
         </p>
       )}
     </div>
@@ -2503,7 +2504,6 @@ export default function AdminScreen({ requestManagerPin, initialTab }: AdminScre
           <button
             type="button"
             onClick={handleStartCloseShift}
-            disabled={windowStatus?.openShift?.id === currentShift.id && !windowStatus.openShift.closeAllowed}
             className="rounded-lg bg-rose-600 px-4 py-2 text-base font-semibold text-white hover:bg-rose-700 disabled:cursor-not-allowed disabled:opacity-50"
           >
             Close Shift

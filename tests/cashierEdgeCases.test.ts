@@ -189,6 +189,34 @@ describe('closing at the margins', () => {
     expect(db.getShiftById(shiftId)).toMatchObject({ closed_by_staff_id: amina.id, ending_cash: 100 })
   })
 
+  it('docs/phase-255: before the window end an admin may close (someone leaving early); a cashier may not', () => {
+    const now = Date.now()
+    const cashier = opened()
+    const early = closeShiftUnlessHeld(cashier.db, cashier.shiftId, 100, null, now, null, cashier.amina.id, false)
+    expect(early.success).toBe(false)
+    expect(cashier.db.getShiftById(cashier.shiftId)?.status).toBe('open')
+
+    const admin = opened()
+    sale(admin.db, { staffId: admin.amina.id, total: 300, at: new Date(now).toISOString(), shiftId: admin.shiftId })
+    const closed = closeShiftUnlessHeld(admin.db, admin.shiftId, 390, null, now, null, admin.admin.id, true)
+    expect(closed).toEqual({ success: true, data: { expectedCash: 400, discrepancy: -10, mpesaExpected: null, mpesaDifference: null } })
+    expect(admin.db.getShiftById(admin.shiftId)).toMatchObject({ status: 'closed', closed_by_staff_id: admin.admin.id })
+  })
+
+  it('docs/phase-255: an admin\'s early close is still stopped by a held sale', () => {
+    const { db, shiftId, admin, amina } = opened()
+    db.holdSale({ cartToken: 't1', payloadJson: '{"items":[]}', total: 50, lineCount: 1, unitCount: 1, staffId: amina.id })
+    const result = closeShiftUnlessHeld(db, shiftId, 100, null, Date.now(), null, admin.id, true)
+    expect(result.success).toBe(false)
+    expect(result.error).toContain('on hold')
+  })
+
+  it('docs/phase-255: the close handler lets an early close through only for an admin signed in', () => {
+    const source = readFileSync(join(process.cwd(), 'src', 'main', 'index.ts'), 'utf8').replace(/\r\n/g, '\n')
+    const body = source.slice(source.indexOf("'shifts:close',"), source.indexOf("'shifts:window-status'"))
+    expect(body).toMatch(/staffSession\.current\(\)\?\.id \?\? null,\s*staffSession\.current\(\)\?\.role === 'admin'\s*\)/)
+  })
+
   it('the Z names an unknown closer "Unknown" rather than failing', () => {
     const { db, shiftId } = opened()
     closeShiftUnlessHeld(db, shiftId, 100, null, LATER, null, 999)

@@ -45,6 +45,8 @@ export type CloseShiftDb = Pick<RubisDatabase, 'closeShift' | 'listOpenHeldSales
  *   existing call keeps its meaning
  * @param {number | null} [closedByStaffId] — who is signed in (docs/phase-254); passed on only when known, so a close
  *   with nobody known makes exactly the call it always made
+ * @param {boolean} [earlyCloseAllowed] — an admin is signed in (docs/phase-255): the shift may close before its window's
+ *   end, for someone leaving early. Held sales still stop the close
  * @returns {ServiceResult<ShiftCloseResult>}
  */
 export function closeShiftUnlessHeld(
@@ -54,9 +56,10 @@ export function closeShiftUnlessHeld(
   mpesaClosingBalance: number | null = null,
   nowMs: number = Date.now(),
   cardClosingBalance: number | null = null,
-  closedByStaffId: number | null = null
+  closedByStaffId: number | null = null,
+  earlyCloseAllowed = false
 ): ServiceResult<ShiftCloseResult> {
-  const timing = closeTimingFor(db, shiftId, nowMs)
+  const timing = earlyCloseAllowed ? null : closeTimingFor(db, shiftId, nowMs)
   if (timing !== null) {
     return { success: false, error: timing }
   }

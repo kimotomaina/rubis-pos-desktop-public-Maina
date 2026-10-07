@@ -200,7 +200,10 @@ describe('an open shift: its window and the close note', () => {
     expect(container.textContent).toContain(DAY_LABEL)
     expect(container.textContent).toContain('Day shift can be closed from 17:30')
     expect(container.querySelector('[data-testid="close-banner"]')).toBeNull()
-    expect(button('Close Shift').disabled).toBe(true)
+    // CHANGED (docs/phase-255). OLD: Close Shift was off until the window's end. NEW: this screen is an admin's, and an
+    // admin may close early, so it is on and the note says so.
+    expect(container.querySelector('[data-testid="close-not-yet"]')?.textContent).toContain('An admin may close it early.')
+    expect(button('Close Shift').disabled).toBe(false)
   })
 
   it('asks for the drawer count from 17:30:00, the first second of the day window\'s last minute', async () => {
@@ -212,11 +215,12 @@ describe('an open shift: its window and the close note', () => {
     expect(button('Close Shift').disabled).toBe(false)
   })
 
-  it('does not ask at 17:29:59 and keeps Close Shift off', async () => {
+  // CHANGED (docs/phase-255). OLD: "does not ask at 17:29:59 and keeps Close Shift off". NEW: Close Shift stays on for an admin.
+  it('does not ask at 17:29:59, and leaves Close Shift on for an admin', async () => {
     await mountOpen(openShiftRow({ shift_type: 'day' }), '17:29:59')
 
     expect(container.querySelector('[data-testid="close-banner"]')).toBeNull()
-    expect(button('Close Shift').disabled).toBe(true)
+    expect(button('Close Shift').disabled).toBe(false)
   })
 
   it('asks from 06:59:00 for a night shift opened the evening before, and not at 06:58:59', async () => {
