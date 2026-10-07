@@ -9,6 +9,7 @@
 import { create } from 'zustand'
 import type { StaffSummary } from '../../../main/services/database.js'
 import { useProductStore } from './productStore.js'
+import { useUiStore } from './uiStore.js'
 
 export interface AuthState {
   /** The currently authenticated staff member, or null when logged out. */
@@ -21,12 +22,12 @@ export interface AuthState {
   loggingIn: boolean
   /** Loads the active staff list for the login picker. */
   fetchStaffList: () => Promise<void>
-  /** Verifies a PIN for the given staff id; sets `currentStaff` on success. */
-  login: (staffId: number, pin: string) => Promise<boolean>
   /**
-   * Clears the session. It does not close the shift: `auth:logout` in the main process
-   * does nothing, and a shift closes only from the Admin screen's Close Shift.
+   * Verifies a PIN for the given staff id; sets `currentStaff` on success and signs them in in the main process too
+   * (docs/phase-254). A cashier always lands on the catalogue; an admin lands where the screen was.
    */
+  login: (staffId: number, pin: string) => Promise<boolean>
+  /** Clears the session, here and in the main process. It does not close the shift. */
   logout: () => Promise<void>
 }
 
@@ -50,8 +51,12 @@ export const useAuthStore = create<AuthState>()((set, get) => ({
   login: async (staffId, pin) => {
     set({ loggingIn: true, loginError: null })
     try {
-      const result = await window.api.login(staffId, pin)
+      const result = await window.api.login(staffId, pin, { session: true })
       if (result.success && result.data) {
+        // docs/phase-254, C4: set before `currentStaff`, so the first screen a cashier sees is the catalogue. An admin
+        // stays where the screen was, unless that is a cashier's own page, which admins have no tab for.
+        const ui = useUiStore.getState()
+        if (result.data.role !== 'admin' || ui.activeView === 'mine') ui.setActiveView('catalog')
         set({ currentStaff: result.data, loggingIn: false, loginError: null })
         // docs/phase-253-1: a sync after every login, never awaited, so login never waits on Shopify.
         void useProductStore.getState().sync()

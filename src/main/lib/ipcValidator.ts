@@ -173,7 +173,9 @@ export const resendFiscalizationSchema = z.object({
 /** `auth:login` request payload. */
 export const loginRequestSchema = z.object({
   staffId: z.number().int().positive(),
-  pin: z.string().min(1, 'PIN is required')
+  pin: z.string().min(1, 'PIN is required'),
+  /** The login screen starts a session in the main process (docs/phase-254); the manager PIN prompt never sends it. */
+  session: z.boolean().optional()
 })
 
 /**

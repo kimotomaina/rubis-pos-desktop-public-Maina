@@ -306,16 +306,16 @@ describe('the shift store (D5)', () => {
 describe('the cart dialog (D5, S6)', () => {
   const NIGHT = 'Night shift (17:31 to 06:59)'
   const DAY_LABEL = 'Day shift (07:00 to 17:30)'
+  // CHANGED (docs/phase-254). OLD: the dialog took `requestManagerPin`, for a cashier's manager PIN. NEW: nobody is asked
+  // for a PIN, so the prop is gone.
   const mountDialog = async (
     staff: { id: number; role: string },
-    extra: Partial<{ requestManagerPin: ReturnType<typeof vi.fn>; onOpened: () => void }> = {}
-  ): Promise<{ requestManagerPin: ReturnType<typeof vi.fn> }> => {
-    const requestManagerPin = extra.requestManagerPin ?? vi.fn()
+    extra: Partial<{ onOpened: () => void }> = {}
+  ): Promise<void> => {
     await act(async () => {
       root.render(
         createElement(OpenShiftDialog, {
           staff,
-          requestManagerPin,
           onClose: vi.fn(),
           onOpened: extra.onOpened ?? vi.fn()
         })
@@ -323,7 +323,6 @@ describe('the cart dialog (D5, S6)', () => {
       await Promise.resolve()
     })
     await flush()
-    return { requestManagerPin }
   }
   const typeCash = (value: string): void => {
     const input = container.querySelector<HTMLInputElement>('input[readonly]')!
@@ -368,7 +367,7 @@ describe('the cart dialog (D5, S6)', () => {
     stubApi({ openShift: vi.fn().mockResolvedValue(ok({ shiftId: 6 })) })
     vi.setSystemTime(new Date('2026-10-05T17:43:00+03:00'))
     const onOpened = vi.fn()
-    const { requestManagerPin } = await mountDialog({ id: 1, role: 'admin' }, { onOpened })
+    await mountDialog({ id: 1, role: 'admin' }, { onOpened })
     typeCash('250')
 
     await click('Confirm')
@@ -377,40 +376,26 @@ describe('the cart dialog (D5, S6)', () => {
     // CHANGED (docs/phase-232). OLD: openShift(1, 250, 'night'). NEW: no type is sent; the options carry what the form showed.
     // CHANGED (docs/phase-246, R4): the third argument was 0. CHANGED again (docs/phase-246-2): the M-Pesa field starts blank, so `undefined`.
     expect(window.api.openShift).toHaveBeenCalledWith(1, 250, undefined, { earlierShown: NO_EARLIER, startAtZero: undefined })
-    expect(requestManagerPin).not.toHaveBeenCalled()
     expect(onOpened).toHaveBeenCalledTimes(1)
   })
 
-  it('asks a cashier for a manager PIN, then opens the shift under that manager, and never as the cashier', async () => {
-    stubApi({ openShift: vi.fn(), openShiftAsManager: vi.fn().mockResolvedValue(ok({ shiftId: 6 })) })
+  // CHANGED (docs/phase-254, C1). OLD: "asks a cashier for a manager PIN, then opens the shift under that manager, and never
+  // as the cashier", and "opens nothing while the manager PIN has not been given". NEW: a cashier opens the shift as
+  // themselves, with no PIN; the main process records it under its own session's staff member.
+  it('opens the shift for a cashier as themselves, with no PIN and no manager', async () => {
+    stubApi({ openShift: vi.fn().mockResolvedValue(ok({ shiftId: 6 })), openShiftAsManager: vi.fn() })
     vi.setSystemTime(new Date('2026-10-05T17:43:00+03:00'))
     const onOpened = vi.fn()
-    const requestManagerPin = vi.fn((_title: string, cb: (id: number, pin: string) => void) => cb(2, '2222'))
-    await mountDialog({ id: 3, role: 'cashier' }, { requestManagerPin, onOpened })
+    await mountDialog({ id: 3, role: 'cashier' }, { onOpened })
     typeCash('250')
 
     await click('Confirm')
     await flush()
 
-    expect(requestManagerPin).toHaveBeenCalledTimes(1)
-    // CHANGED (docs/phase-246, R4): 0 for the M-Pesa balance. CHANGED again (docs/phase-246-2): blank, so `undefined`.
-    expect(window.api.openShiftAsManager).toHaveBeenCalledWith(2, '2222', 250, undefined, {
-      earlierShown: NO_EARLIER,
-      startAtZero: undefined
-    })
-    expect(window.api.openShift).not.toHaveBeenCalled()
-    expect(onOpened).toHaveBeenCalledTimes(1)
-  })
-
-  it('opens nothing while the manager PIN has not been given', async () => {
-    stubApi({ openShift: vi.fn(), openShiftAsManager: vi.fn() })
-    await mountDialog({ id: 3, role: 'cashier' })
-    typeCash('250')
-
-    await click('Confirm')
-
-    expect(window.api.openShift).not.toHaveBeenCalled()
+    expect(window.api.openShift).toHaveBeenCalledWith(3, 250, undefined, { earlierShown: NO_EARLIER, startAtZero: undefined })
     expect(window.api.openShiftAsManager).not.toHaveBeenCalled()
+    expect(container.textContent).not.toContain('PIN')
+    expect(onOpened).toHaveBeenCalledTimes(1)
   })
 
   it('refuses a missing or invalid starting cash, and says so', async () => {

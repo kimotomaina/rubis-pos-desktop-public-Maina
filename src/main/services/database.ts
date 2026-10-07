@@ -379,6 +379,8 @@ export interface ShiftRow {
    * including every shift from before this phase.
    */
   cash_not_counted?: 0 | 1
+  /** Who was signed in when the shift was closed (docs/phase-254); `NULL` on a shift closed before then, or still open. */
+  closed_by_staff_id?: number | null
   /**
    * The window `clock_in` falls in (docs/phase-232, W4), added when a shift is read for the screens and never stored:
    * the type is the window's whatever `shift_type` says. `labelled_as` is the stored label, only when it differs.
@@ -1100,6 +1102,24 @@ function migrateCardColumns(connection: SqliteConnection): void {
 }
 
 /**
+ * A cashier's shifts (docs/phase-254, A1): the till's open shift, which any cashier may close, and every shift they
+ * opened or closed. Appended to a `shifts s` query; its two parameters are the staff id, twice.
+ */
+const MY_SHIFTS_FILTER = " AND (s.status = 'open' OR s.staff_id = ? OR s.closed_by_staff_id = ?)"
+
+/**
+ * Adds `closed_by_staff_id` (docs/phase-254) to a `shifts` table made before the phase: the staff member signed in when
+ * the shift was closed. Nullable with no backfill, so every shift from before reads `NULL` and its Z report is unchanged.
+ * Check then add, so it runs any number of times.
+ *
+ * @param {SqliteConnection} connection
+ */
+function migrateShiftClosedBy(connection: SqliteConnection): void {
+  const have = (connection.prepare('PRAGMA table_info(shifts)').all() as Array<{ name: string }>).map((c) => c.name)
+  if (!have.includes('closed_by_staff_id')) connection.exec('ALTER TABLE shifts ADD COLUMN closed_by_staff_id INTEGER')
+}
+
+/**
  * Adds the product tax-classification columns (docs/phase-194) to a
  * pre-existing `products` table, so the offline catalogue keeps a
  * product's class instead of turning every exempt item into class A.
@@ -1363,7 +1383,8 @@ export const SCHEMA = {
     created_by_staff_id INTEGER,
     created_at TEXT,
     reason TEXT,
-    cash_not_counted INTEGER NOT NULL DEFAULT 0 CHECK (cash_not_counted IN (0, 1))
+    cash_not_counted INTEGER NOT NULL DEFAULT 0 CHECK (cash_not_counted IN (0, 1)),
+    closed_by_staff_id INTEGER
   )`,
   /**
    * One correction of the figures typed in for a closed shift (docs/phase-224). Append-only: the only writer is
@@ -2295,6 +2316,7 @@ export class RubisDatabase {
     connection.exec(SCHEMA.shiftMergesNoUpdate)
     connection.exec(SCHEMA.shiftMergesNoDelete)
     migrateCardColumns(connection)
+    migrateShiftClosedBy(connection)
     connection.exec(SCHEMA.integrations)
     connection.exec(SCHEMA.printers)
     migratePrintersColumns(connection)
@@ -3696,16 +3718,22 @@ export class RubisDatabase {
    *
    * @param {string} startIso
    * @param {string} endIso
+   * With `staffId` (docs/phase-254, "My sales"), only the sales recorded under that staff member.
+   *
    * @param {number} limit
    * @param {number} offset
+   * @param {number} [staffId]
    * @returns {{ rows: OrderRow[]; total: number }}
    */
   getOrderRowsForRange(
     startIso: string,
     endIso: string,
     limit: number,
-    offset: number
+    offset: number,
+    staffId?: number
   ): { rows: OrderRow[]; total: number } {
+    const byStaff = staffId === undefined ? '' : ' AND staff_id = ?'
+    const params = staffId === undefined ? [startIso, endIso] : [startIso, endIso, staffId]
     const rows = this.conn
       .prepare(
         `SELECT local_id, shopify_order_id, total, status, created_at, payload_json, staff_id, payment_method,
@@ -3713,12 +3741,12 @@ export class RubisDatabase {
                 fiscal_fiscalized_at, fiscal_status, fiscal_error_reason, fiscal_error_kind, fiscal_request_json,
                 fiscal_data_issue, fiscal_vat_groups_json, fiscal_fiscalized_at_source, fiscal_cu_serial,
                 receipt_printed_at, fiscal_trader_inv_num
-         FROM orders WHERE created_at >= ? AND created_at < ? ORDER BY created_at DESC LIMIT ? OFFSET ?`
+         FROM orders WHERE created_at >= ? AND created_at < ?${byStaff} ORDER BY created_at DESC LIMIT ? OFFSET ?`
       )
-      .all(startIso, endIso, limit, offset) as OrderRow[]
+      .all(...params, limit, offset) as OrderRow[]
     const { count } = this.conn
-      .prepare('SELECT COUNT(*) as count FROM orders WHERE created_at >= ? AND created_at < ?')
-      .get(startIso, endIso) as { count: number }
+      .prepare(`SELECT COUNT(*) as count FROM orders WHERE created_at >= ? AND created_at < ?${byStaff}`)
+      .get(...params) as { count: number }
     return { rows, total: count }
   }
 
@@ -3911,15 +3939,23 @@ export class RubisDatabase {
   /**
    * Returns local orders sorted by creation date (newest first).
    *
+   * With `staffId` (docs/phase-254), only the sales recorded under that staff member: a cashier's Order History.
+   *
    * @param {number} [limit=50]
    * @param {number} [offset=0]
+   * @param {number} [staffId]
    * @returns {OrderRow[]}
    */
-  getOrders(limit = 50, offset = 0): OrderRow[] {
+  getOrders(limit = 50, offset = 0, staffId?: number): OrderRow[] {
+    const columns =
+      'local_id, shopify_order_id, total, status, created_at, payload_json, fiscal_invoice_number, fiscal_qr_code, fiscal_fiscalized_at, fiscal_status, fiscal_error_reason, fiscal_error_kind, fiscal_request_json, fiscal_data_issue, fiscal_vat_groups_json, fiscal_fiscalized_at_source, fiscal_cu_serial, receipt_printed_at'
+    if (staffId !== undefined) {
+      return this.conn
+        .prepare(`SELECT ${columns} FROM orders WHERE staff_id = ? ORDER BY created_at DESC LIMIT ? OFFSET ?`)
+        .all(staffId, limit, offset) as OrderRow[]
+    }
     return this.conn
-      .prepare(
-        'SELECT local_id, shopify_order_id, total, status, created_at, payload_json, fiscal_invoice_number, fiscal_qr_code, fiscal_fiscalized_at, fiscal_status, fiscal_error_reason, fiscal_error_kind, fiscal_request_json, fiscal_data_issue, fiscal_vat_groups_json, fiscal_fiscalized_at_source, fiscal_cu_serial, receipt_printed_at FROM orders ORDER BY created_at DESC LIMIT ? OFFSET ?'
-      )
+      .prepare(`SELECT ${columns} FROM orders ORDER BY created_at DESC LIMIT ? OFFSET ?`)
       .all(limit, offset) as OrderRow[]
   }
 
@@ -4316,18 +4352,21 @@ export class RubisDatabase {
    * Newest first (docs/phase-245): an open shift at the top, then by `clock_in` descending, `id` only to break a tie.
    * The order is the time the shift began, never the id, so a shift recorded later for an earlier time sits where it belongs.
    *
+   * With `staffId` (docs/phase-254, "My shifts"), only the open shift and the shifts that staff member opened or closed.
+   *
    * @param {number} limit
    * @param {number} offset
+   * @param {number} [staffId]
    * @returns {ShiftRow[]}
    */
-  listVisibleShifts(limit: number, offset: number): ShiftRow[] {
+  listVisibleShifts(limit: number, offset: number, staffId?: number): ShiftRow[] {
     const rows = this.conn
       .prepare(
         `SELECT s.* FROM shifts s
-         WHERE s.id NOT IN (SELECT absorbed_shift_id FROM shift_merges)
+         WHERE s.id NOT IN (SELECT absorbed_shift_id FROM shift_merges)${staffId === undefined ? '' : MY_SHIFTS_FILTER}
          ORDER BY (s.status = 'open') DESC, s.clock_in DESC, s.id DESC LIMIT ? OFFSET ?`
       )
-      .all(limit, offset) as ShiftRow[]
+      .all(...(staffId === undefined ? [] : [staffId, staffId]), limit, offset) as ShiftRow[]
     if (rows.length === 0) return rows
     const absorbed = this.conn
       .prepare(
@@ -4344,14 +4383,18 @@ export class RubisDatabase {
   }
 
   /**
-   * How many shifts {@link listVisibleShifts} pages through: every shift not merged into another.
+   * How many shifts {@link listVisibleShifts} pages through: every shift not merged into another, or with `staffId`
+   * only that staff member's (docs/phase-254).
    *
+   * @param {number} [staffId]
    * @returns {number}
    */
-  countVisibleShifts(): number {
+  countVisibleShifts(staffId?: number): number {
     const row = this.conn
-      .prepare('SELECT COUNT(*) AS count FROM shifts WHERE id NOT IN (SELECT absorbed_shift_id FROM shift_merges)')
-      .get() as { count: number }
+      .prepare(
+        `SELECT COUNT(*) AS count FROM shifts s WHERE s.id NOT IN (SELECT absorbed_shift_id FROM shift_merges)${staffId === undefined ? '' : MY_SHIFTS_FILTER}`
+      )
+      .get(...(staffId === undefined ? [] : [staffId, staffId])) as { count: number }
     return row.count
   }
 
@@ -4734,6 +4777,7 @@ export class RubisDatabase {
    * @param {number} endingCash
    * @param {number | null} [mpesaClosingBalance] — the M-Pesa till balance if it was read; omitted stores `NULL`
    * @param {number | null} [cardClosingBalance] — the card settlement read from the PDQ (docs/phase-246, R5); omitted stores `NULL`
+   * @param {number | null} [closedByStaffId] — who was signed in (docs/phase-254); omitted stores `NULL`. No figure depends on it
    * @returns {ShiftCloseResult}
    * @throws if the shift does not exist or is already closed
    */
@@ -4741,7 +4785,8 @@ export class RubisDatabase {
     shiftId: number,
     endingCash: number,
     mpesaClosingBalance: number | null = null,
-    cardClosingBalance: number | null = null
+    cardClosingBalance: number | null = null,
+    closedByStaffId: number | null = null
   ): ShiftCloseResult {
     const shift = this.getShiftById(shiftId)
     if (!shift) {
@@ -4784,6 +4829,9 @@ export class RubisDatabase {
         this.conn
           .prepare('UPDATE shifts SET card_closing_balance = ?, card_expected = ?, card_difference = ? WHERE id = ?')
           .run(cardClosingBalance, cardExpected, cardDifference, shiftId)
+      }
+      if (closedByStaffId !== null) {
+        this.conn.prepare('UPDATE shifts SET closed_by_staff_id = ? WHERE id = ?').run(closedByStaffId, shiftId)
       }
     })()
 

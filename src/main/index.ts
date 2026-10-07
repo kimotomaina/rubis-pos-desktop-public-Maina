@@ -1,4 +1,4 @@
-import { app, BrowserWindow, Menu, shell, ipcMain, net, powerMonitor, dialog, session } from 'electron'
+import { app, BrowserWindow, Menu, shell, ipcMain as electronIpcMain, net, powerMonitor, dialog, session } from 'electron'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 import { randomUUID } from 'node:crypto'
@@ -212,6 +212,7 @@ import {
 import { checkEtimsCompletion } from './services/etimsSetup.js'
 import type { EtimsCompletionStatus } from './services/etimsSetup.js'
 import { requireAdminPin } from './lib/requireAdminPin.js'
+import { createStaffSession, gateIpcMain, zReportRefusal } from './lib/roleGate.js'
 import { restrictToOwnerOnly } from './lib/fileSecurity.js'
 import {
   loadSecretVault,
@@ -275,7 +276,7 @@ import type {
 } from './services/printer.js'
 import { toWindowsPrinterInfo, markMissingWindowsPrinters } from './services/windowsPrinter.js'
 import type { WindowsPrinterInfo, PrinterWithAvailability } from './services/windowsPrinter.js'
-import { hashPin, authenticateStaff } from './services/auth.js'
+import { hashPin, loginWithSession } from './services/auth.js'
 import { runAutoAssign } from './services/auto-assign.js'
 import { withWindow, countShiftsByWindow } from './lib/shiftLabel.js'
 import { frozenShiftMessage } from './lib/shiftRules.js'
@@ -308,19 +309,10 @@ import type {
   FiscalReconciliationReport
 } from './services/reports.js'
 import { buildOrdersCsv, buildLinesCsv } from './services/reportsExport.js'
-import { resolveTraderSystemInvNum } from './lib/traderSystemInvoiceNumber.js'
 import { shouldRefuseCheckoutForDiscount } from './lib/requestHasDiscount.js'
 import { resolveCheckoutLocation, NO_LOCATION_MESSAGE } from './lib/checkoutLocation.js'
 import { resolveVatClass } from './lib/vatClass.js'
-import { describePayment } from './lib/paymentLegs.js'
-
-/** One invoice-list row (docs/phase-158): an order plus its pre-computed trader invoice number. */
-interface InvoiceListRow {
-  order: OrderRow
-  traderInvoiceNumber: string
-  /** How the sale was paid, in words: its method, or `split: …` with the payments (docs/phase-252). */
-  paymentText: string
-}
+import { mySales, myShifts, orderHistoryFor, toInvoiceRows, type InvoiceListRow } from './services/my-shifts.js'
 import type { OfflineOrderPayload, ServiceResult } from './services/shopify-types.js'
 import type { ProductSummary } from '../renderer/src/types/shopify.js'
 
@@ -329,6 +321,14 @@ const DEFAULT_ADMIN_PIN = '1234'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
+
+/**
+ * Who is signed in at this till (docs/phase-254), and the `ipcMain` every handler below registers with: Electron's,
+ * behind the role gate in `lib/roleGate.ts`. Handlers are written as before and none is registered on Electron's
+ * directly, so a cashier is refused every channel not on the cashier's list.
+ */
+const staffSession = createStaffSession()
+const ipcMain = gateIpcMain(electronIpcMain, staffSession)
 
 /**
  * Absolute paths used throughout the main-process lifecycle.
@@ -2760,17 +2760,8 @@ app.whenReady().then(async () => {
    */
   ipcMain.handle(
     'orders:getLocal',
-    (_event, request?: { limit?: number; offset?: number }) => {
-      try {
-        const orders = db.getOrders(request?.limit, request?.offset)
-        return { success: true, data: orders }
-      } catch (err) {
-        return {
-          success: false,
-          error: err instanceof Error ? err.message : 'Failed to fetch orders'
-        }
-      }
-    }
+    // docs/phase-254, C6: a cashier's Order History holds their own sales only, by the session's id.
+    (_event, request?: { limit?: number; offset?: number }) => orderHistoryFor(db, staffSession.current(), request)
   )
 
   /**
@@ -3343,6 +3334,13 @@ app.whenReady().then(async () => {
         if (!shiftId) {
           return { success: false, error: 'No shift specified for Z-report' }
         }
+        // docs/phase-254, C3: printed for the same people who may see it, and for nobody while the shift is open. A Z is a
+        // till report, so printing a closed shift's twice is allowed.
+        const requested = db.getShiftById(shiftId)
+        const printRefused = requested ? zReportRefusal(requested, staffSession.current(), 'print') : null
+        if (printRefused) {
+          return { success: false, error: printRefused }
+        }
         try {
           const report = generateZReport(db, shiftId, printerSettings.taxRate)
           const zResult = await printZReportToType(report, printerRegistry, printerSettings)
@@ -3417,8 +3415,9 @@ app.whenReady().then(async () => {
   )
 
   /**
-   * IPC handler that verifies a staff PIN and opens a new shift on
-   * success.
+   * IPC handler that verifies a staff PIN. With `session: true` (the login screen, docs/phase-254) it also ends the
+   * session there was and starts one for this staff member, so a failed login leaves nobody signed in. Without it (the
+   * manager PIN prompt) it is a PIN check only and the person signed in stays signed in.
    */
   ipcMain.handle(
     'auth:login',
@@ -3428,7 +3427,7 @@ app.whenReady().then(async () => {
         return { success: false, error: validation.error }
       }
       try {
-        return authenticateStaff(db, validation.data.staffId, validation.data.pin)
+        return loginWithSession(db, staffSession, validation.data)
       } catch (err) {
         return {
           success: false,
@@ -3439,11 +3438,12 @@ app.whenReady().then(async () => {
   )
 
   /**
-   * IPC handler for logout. Login/logout are authentication only —
-   * the till shift (opened/closed separately from the Admin screen)
-   * is unaffected.
+   * IPC handler for logout: ends the session (docs/phase-254). The till shift is unaffected.
    */
-  ipcMain.handle('auth:logout', (): ServiceResult<void> => ({ success: true }))
+  ipcMain.handle('auth:logout', (): ServiceResult<void> => {
+    staffSession.signOut()
+    return { success: true }
+  })
 
   /**
    * IPC handler that creates a new staff account (Admin screen).
@@ -3531,7 +3531,7 @@ app.whenReady().then(async () => {
   /**
    * IPC handler that opens a new store-wide till shift with a
    * starting cash float. Fails if a shift is already open — only one
-   * shift may be open at a time.
+   * shift may be open at a time. Opened by whoever is signed in (docs/phase-254), cashier or admin.
    */
   ipcMain.handle(
     'shifts:open',
@@ -3541,13 +3541,14 @@ app.whenReady().then(async () => {
         return { success: false, error: validation.error }
       }
       assignSalesToShifts()
-      return openShiftChecked(db, validation.data)
+      return openShiftChecked(db, validation.data, staffSession.current())
     }
   )
 
   /**
    * IPC handler that closes the open till shift, reconciling counted
-   * cash against expected cash.
+   * cash against expected cash. Any signed-in cashier may close it (docs/phase-254, A1); who closed it is the
+   * session's staff member, never an id from the screen.
    */
   ipcMain.handle(
     'shifts:close',
@@ -3562,7 +3563,8 @@ app.whenReady().then(async () => {
         validation.data.endingCash,
         validation.data.mpesaClosingBalance ?? null,
         Date.now(),
-        validation.data.cardClosingBalance ?? null
+        validation.data.cardClosingBalance ?? null,
+        staffSession.current()?.id ?? null
       )
       if (closed.success) assignSalesToShifts()
       return closed
@@ -3738,6 +3740,12 @@ app.whenReady().then(async () => {
       const validation = validate(zReportRequestSchema, request)
       if (!validation.success) {
         return { success: false, error: validation.error }
+      }
+      // docs/phase-254, C3: a cashier sees the Z of a closed shift they opened or closed, no other; an open shift's Z is locked.
+      const requested = db.getShiftById(validation.data.shiftId)
+      const viewRefused = requested ? zReportRefusal(requested, staffSession.current(), 'view') : null
+      if (viewRefused) {
+        return { success: false, error: viewRefused }
       }
       try {
         const report = generateZReport(db, validation.data.shiftId, printerSettings.taxRate)
@@ -4085,21 +4093,7 @@ app.whenReady().then(async () => {
           REPORTS_PAGE_SIZE,
           offset
         )
-        const legs = db.paymentLegsFor(rows.map((order) => order.local_id))
-        const invoices: InvoiceListRow[] = rows.map((order) => {
-          let clientOrderUuid = ''
-          try {
-            clientOrderUuid = (JSON.parse(order.payload_json) as { clientOrderUuid?: string }).clientOrderUuid ?? ''
-          } catch {
-            // Defensive only — every order this app has written has a valid payload_json.
-          }
-          return {
-            order,
-            traderInvoiceNumber: resolveTraderSystemInvNum(order.fiscal_trader_inv_num, order.local_id, clientOrderUuid),
-            paymentText: describePayment(legs.get(order.local_id) ?? [])
-          }
-        })
-        return { success: true, data: { invoices, total, page } }
+        return { success: true, data: { invoices: toInvoiceRows(db, rows), total, page } }
       } catch (err) {
         return {
           success: false,
@@ -4108,6 +4102,14 @@ app.whenReady().then(async () => {
       }
     }
   )
+
+  /**
+   * "My shifts and sales" (docs/phase-254, C5), read only, for the session's staff member: see `services/my-shifts.ts`.
+   * Nothing but the page is read from the request.
+   */
+  ipcMain.handle('shifts:mine', (_event, request: unknown) => myShifts(db, staffSession.current(), request))
+
+  ipcMain.handle('orders:mine', (_event, request: unknown) => mySales(db, staffSession.current(), request))
 
   /**
    * IPC handler exporting one CSV file (orders or line items, per

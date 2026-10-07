@@ -36,6 +36,7 @@ import ConnectivityToast from './components/ConnectivityToast'
 import FiscalNotice from './components/FiscalNotice'
 import ShopifyCheckNotice from './components/ShopifyCheckNotice'
 import NeedsAttentionPage from './pages/NeedsAttentionPage'
+import MyShiftsPage from './pages/MyShiftsPage'
 import SaleCompleteToast from './components/SaleCompleteToast'
 import ToastStack from './components/ToastStack'
 import { useToastStore } from './stores/toastStore'
@@ -730,6 +731,19 @@ export default function App() {
             >
               Orders
             </button>
+            {currentStaff.role !== 'admin' && (
+              <button
+                type="button"
+                onClick={() => setActiveView('mine')}
+                className={`flex h-14 items-center rounded-lg px-6 text-lg font-medium transition-colors ${
+                  activeView === 'mine'
+                    ? 'bg-rose-100 text-rose-700'
+                    : 'text-slate-600 hover:bg-slate-100'
+                }`}
+              >
+                My shifts and sales
+              </button>
+            )}
             {currentStaff.role === 'admin' && (
               <button
                 type="button"
@@ -906,6 +920,12 @@ export default function App() {
             requestManagerPin={requestManagerPin}
           />
         </main>
+      ) : activeView === 'mine' ? (
+        // docs/phase-254, C5: a cashier's own shifts and sales; the main process decides whose they are.
+        <main className="flex flex-1 flex-col overflow-hidden p-6">
+          <h2 className="mb-4 shrink-0 text-xl font-semibold text-slate-700">My shifts and sales</h2>
+          <MyShiftsPage />
+        </main>
       ) : (
         /**
          * Scrolls (docs/phase-247). It was `overflow-hidden` since docs/phase-167 Part B item 2, on the ground that every section
@@ -928,7 +948,6 @@ export default function App() {
       {openShiftDialogShown && (
         <OpenShiftDialog
           staff={currentStaff}
-          requestManagerPin={requestManagerPin}
           onClose={() => setOpenShiftDialogShown(false)}
           onOpened={() => {
             setOpenShiftDialogShown(false)

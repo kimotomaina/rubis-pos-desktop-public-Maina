@@ -502,20 +502,23 @@ const api = {
     ipcRenderer.invoke('staff:list'),
 
   /**
-   * Verifies a staff PIN and opens a new shift on success.
+   * Verifies a staff PIN. With `{ session: true }` (the login screen) the main process also signs this staff member in.
    *
    * @param {number} staffId
    * @param {string} pin
+   * @param {{ session?: boolean }} [options]
    * @returns {Promise<ServiceResult<StaffSummary>>}
    */
   login: (
     staffId: number,
-    pin: string
+    pin: string,
+    options?: { session?: boolean }
   ): Promise<ServiceResult<StaffSummary>> =>
-    ipcRenderer.invoke('auth:login', { staffId, pin }),
+    // docs/phase-254: only the login screen passes `session`; the manager PIN prompt sends the request it always sent.
+    ipcRenderer.invoke('auth:login', options?.session === true ? { staffId, pin, session: true } : { staffId, pin }),
 
   /**
-   * Ends the renderer session. Authentication only — the till shift
+   * Ends the session, in the renderer and in the main process (docs/phase-254). The till shift
    * is a separate, explicitly opened/closed concept.
    *
    * @param {number} staffId
@@ -799,6 +802,32 @@ const api = {
     page: number
   ): Promise<ServiceResult<{ shifts: ShiftRow[]; total: number; page: number }>> =>
     ipcRenderer.invoke('reports:shifts-list', { page }),
+
+  /**
+   * "My shifts" (docs/phase-254): the till's open shift and the shifts the person signed in opened or closed, open
+   * first. The main process reads who that is from its own session; only the page is sent.
+   *
+   * @param {number} page — 1-indexed
+   * @returns {Promise<ServiceResult<{ shifts: ShiftRow[]; total: number; page: number }>>}
+   */
+  getMyShifts: (page: number): Promise<ServiceResult<{ shifts: ShiftRow[]; total: number; page: number }>> =>
+    ipcRenderer.invoke('shifts:mine', { page }),
+
+  /**
+   * "My sales" (docs/phase-254): the sales recorded under the person signed in, newest first, as the invoice list shows them.
+   *
+   * @param {number} page — 1-indexed
+   * @returns {Promise<ServiceResult<{ invoices: Array<{ order: OrderRow; traderInvoiceNumber: string; paymentText: string }>; total: number; page: number }>>}
+   */
+  getMySales: (
+    page: number
+  ): Promise<
+    ServiceResult<{
+      invoices: Array<{ order: OrderRow; traderInvoiceNumber: string; paymentText: string }>
+      total: number
+      page: number
+    }>
+  > => ipcRenderer.invoke('orders:mine', { page }),
 
   /**
    * A sales summary for one of the fixed Nairobi date-range presets.

@@ -154,8 +154,9 @@ describe.skipIf(!COPY_DIR)('the repair of 5 Oct, rehearsed on the exported copy'
     const now = conn(db).prepare('SELECT * FROM shifts WHERE id = 8').get() as Record<string, unknown>
     // CHANGED (docs/phase-246, R5). OLD: the whole row was compared. NEW: opening the copy with this build adds the three card columns
     // (NULL), so the comparison is of the columns the shift had, and the new ones must read NULL.
-    const hadColumns = Object.fromEntries(Object.entries(now).filter(([key]) => !key.startsWith('card_')))
-    expect(['card_closing_balance', 'card_expected', 'card_difference'].map((key) => now[key])).toEqual([null, null, null])
+    // CHANGED (docs/phase-254). OLD: only the card columns were left out. NEW: `closed_by_staff_id` is added the same way, NULL.
+    const hadColumns = Object.fromEntries(Object.entries(now).filter(([key]) => !key.startsWith('card_') && key !== 'closed_by_staff_id'))
+    expect(['card_closing_balance', 'card_expected', 'card_difference', 'closed_by_staff_id'].map((key) => now[key])).toEqual([null, null, null, null])
 
     expect(JSON.stringify(hadColumns)).toBe(JSON.stringify(before.shift8))
     expect(now).toMatchObject({ status: 'open', clock_out: null })

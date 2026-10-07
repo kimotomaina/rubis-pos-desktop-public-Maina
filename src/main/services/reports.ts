@@ -46,6 +46,8 @@ export interface MpesaModeTotals {
 export interface ZReport {
   shiftId: number
   staffName: string
+  /** Who was signed in when the shift was closed (docs/phase-254, A1); absent when nobody was recorded. */
+  closedByName?: string
   openedAt: string
   closedAt: string | null
   status: 'open' | 'closed'
@@ -399,6 +401,10 @@ export function generateZReport(
   return {
     shiftId: shift.id,
     staffName,
+    // Only when recorded, so the report of every shift closed before docs/phase-254 is exactly what it was.
+    ...(shift.closed_by_staff_id != null
+      ? { closedByName: db.getStaffById(shift.closed_by_staff_id)?.name ?? 'Unknown' }
+      : {}),
     openedAt: shift.clock_in,
     closedAt: shift.clock_out,
     status: shift.status,

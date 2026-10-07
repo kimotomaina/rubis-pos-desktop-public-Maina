@@ -8,7 +8,8 @@
 import { create } from 'zustand'
 import type { ProductSummary } from '../types/shopify.js'
 
-export type ActiveView = 'catalog' | 'orders' | 'admin'
+/** `mine` is a cashier's "My shifts and sales" (docs/phase-254). */
+export type ActiveView = 'catalog' | 'orders' | 'admin' | 'mine'
 
 export interface UiState {
   /** The product whose variants are being displayed in the modal. */

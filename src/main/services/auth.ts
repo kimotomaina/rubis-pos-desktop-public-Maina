@@ -8,6 +8,7 @@
  */
 
 import { randomBytes, pbkdf2Sync, timingSafeEqual } from 'node:crypto'
+import type { StaffSession } from '../lib/roleGate.js'
 import type { RubisDatabase, StaffSummary } from './database.js'
 import type { ServiceResult } from './shopify-types.js'
 
@@ -85,4 +86,26 @@ export function authenticateStaff(
     success: true,
     data: { id: staff.id, name: staff.name, role: staff.role }
   }
+}
+
+/**
+ * `auth:login` (docs/phase-254). With `session: true` (the login screen) it ends the session there was, then starts one
+ * for this staff member if the PIN is right, so a failed login leaves nobody signed in. Without it (the manager PIN
+ * prompt) it only checks the PIN, and whoever is signed in stays signed in.
+ *
+ * @param {RubisDatabase} db
+ * @param {StaffSession} session
+ * @param {{ staffId: number; pin: string; session?: boolean }} request
+ * @returns {ServiceResult<StaffSummary>}
+ */
+export function loginWithSession(
+  db: RubisDatabase,
+  session: StaffSession,
+  request: { staffId: number; pin: string; session?: boolean }
+): ServiceResult<StaffSummary> {
+  if (request.session !== true) return authenticateStaff(db, request.staffId, request.pin)
+  session.signOut()
+  const result = authenticateStaff(db, request.staffId, request.pin)
+  if (result.success && result.data) session.signIn(result.data)
+  return result
 }

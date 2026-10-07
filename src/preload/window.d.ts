@@ -203,8 +203,8 @@ export interface PosApi {
   /** Fetches every active staff account for the login picker. */
   getStaffList: () => Promise<ServiceResult<StaffSummary[]>>
   /** Verifies a staff PIN. */
-  login: (staffId: number, pin: string) => Promise<ServiceResult<StaffSummary>>
-  /** Ends the renderer session (authentication only). */
+  login: (staffId: number, pin: string, options?: { session?: boolean }) => Promise<ServiceResult<StaffSummary>>
+  /** Ends the session, in the renderer and the main process (authentication only). */
   logout: (staffId: number) => Promise<ServiceResult<void>>
   /** Prints (or, in mock mode, logs) a shift's Z-report. */
   printZReport: (shiftId: number) => Promise<ServiceResult<ReceiptPrintResult>>
@@ -288,6 +288,18 @@ export interface PosApi {
   getShiftsList: (
     page: number
   ) => Promise<ServiceResult<{ shifts: ShiftRow[]; total: number; page: number }>>
+  /** "My shifts" (docs/phase-254): the open shift and the shifts the person signed in opened or closed. */
+  getMyShifts: (page: number) => Promise<ServiceResult<{ shifts: ShiftRow[]; total: number; page: number }>>
+  /** "My sales" (docs/phase-254): the sales recorded under the person signed in, as the invoice list shows them. */
+  getMySales: (
+    page: number
+  ) => Promise<
+    ServiceResult<{
+      invoices: Array<{ order: OrderRow; traderInvoiceNumber: string; paymentText: string }>
+      total: number
+      page: number
+    }>
+  >
   /** A sales summary for a scope: a fixed preset, one shift, or a typed range (docs/phase-246). */
   getSalesSummary: (scope: ReportScope) => Promise<ServiceResult<SalesSummary>>
   /** Order counts by fiscal status, one row per Nairobi calendar day within the preset. */

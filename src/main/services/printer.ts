@@ -537,6 +537,10 @@ export function renderZReport(
   } else {
     client.println(`Opened by: ${report.staffName}`)
   }
+  // docs/phase-254: the closer, when one was recorded; a shift closed before then prints as it did.
+  if (report.closedByName) {
+    client.println(`Closed by: ${report.closedByName}`)
+  }
   client.drawLine()
 
   client.alignLeft()

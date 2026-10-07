@@ -5,28 +5,24 @@ import { OPEN_SHIFT_FIGURE_DEFAULT, OPEN_SHIFT_MPESA_DEFAULT } from '../lib/open
 import OpenShiftForm from './OpenShiftForm.js'
 
 interface OpenShiftDialogProps {
-  /** The signed-in staff member. An admin opens the shift as themselves; anyone else needs a manager's PIN. */
+  /** The signed-in staff member, who opens the shift as themselves (docs/phase-254). */
   staff: { id: number; role: string }
-  requestManagerPin: (
-    title: string,
-    onAuthorized: (managerId: number, managerPin: string) => void
-  ) => void
   onClose: () => void
   /** Called once the shift is open. */
   onOpened: () => void
 }
 
 /**
- * The cart's Open Shift dialog (docs/phase-227, changed in docs/phase-232): the same inputs as the Admin screen's
- * ({@link OpenShiftForm}). The shift's type is the window's, shown and never chosen. Sales already made in this
- * window with no shift join the shift when it opens, and the form says so. An admin opens the shift as themselves.
- * Anyone else is asked for a manager's PIN, checked again in the main process, and the shift is recorded under that
- * manager, because a shift is always opened by an admin.
+ * The cart's Open Shift dialog (docs/phase-227, changed in docs/phase-232 and docs/phase-254): the same inputs as the
+ * Admin screen's ({@link OpenShiftForm}). The shift's type is the window's, shown and never chosen. Sales already made
+ * in this window with no shift join the shift when it opens, and the form says so. Whoever is signed in, cashier or
+ * admin, opens the shift as themselves with no PIN; the main process records it under its own session's staff member.
+ * Only an admin is offered starting at 0.
  *
  * @param {OpenShiftDialogProps} props
  * @returns {JSX.Element}
  */
-export default function OpenShiftDialog({ staff, requestManagerPin, onClose, onOpened }: OpenShiftDialogProps) {
+export default function OpenShiftDialog({ staff, onClose, onOpened }: OpenShiftDialogProps) {
   const isAdmin = staff.role === 'admin'
   const { status } = useShiftWindowStatus()
   const [startingCash, setStartingCash] = useState(OPEN_SHIFT_FIGURE_DEFAULT)
@@ -52,19 +48,10 @@ export default function OpenShiftDialog({ staff, requestManagerPin, onClose, onO
       if (result.success) onOpened()
       else setError(result.error ?? 'Failed to open shift')
     }
-    if (isAdmin) {
-      void window.api
-        .openShift(staff.id, cash, mpesa === null ? undefined : mpesa, options)
-        .then(finish)
-        .catch(() => setError('Failed to open shift'))
-      return
-    }
-    requestManagerPin('Open a shift', (managerId, managerPin) => {
-      void window.api
-        .openShiftAsManager(managerId, managerPin, cash, mpesa === null ? undefined : mpesa, options)
-        .then(finish)
-        .catch(() => setError('Failed to open shift'))
-    })
+    void window.api
+      .openShift(staff.id, cash, mpesa === null ? undefined : mpesa, options)
+      .then(finish)
+      .catch(() => setError('Failed to open shift'))
   }
 
   return (
@@ -75,10 +62,6 @@ export default function OpenShiftDialog({ staff, requestManagerPin, onClose, onO
     >
       <div className="w-full max-w-3xl rounded-2xl bg-white p-6 shadow-xl">
         <h3 className="mb-3 text-2xl font-bold text-slate-800">Open a shift</h3>
-
-        {!isAdmin && (
-          <p className="mb-3 text-base text-slate-600">A manager&apos;s PIN is asked for when you confirm.</p>
-        )}
 
         {error && (
           <p role="alert" className="mb-3 rounded-lg bg-rose-50 px-3 py-2 text-base font-medium text-rose-700">

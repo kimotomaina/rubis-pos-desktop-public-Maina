@@ -7,6 +7,8 @@ interface ZReportModalProps {
   onClose: () => void
   /** Opens with the correction form already showing (docs/phase-239: the "Correct figures" action on Shift History). */
   startCorrecting?: boolean
+  /** `false` hides Correct figures (docs/phase-254: a cashier's page). */
+  canCorrect?: boolean
 }
 
 /**
@@ -17,9 +19,9 @@ interface ZReportModalProps {
  * @param {ZReportModalProps} props
  * @returns {JSX.Element}
  */
-export default function ZReportModal({ report, onClose, startCorrecting = false }: ZReportModalProps) {
+export default function ZReportModal({ report, onClose, startCorrecting = false, canCorrect = true }: ZReportModalProps) {
   return (
-    <ZReportBlock report={report} startCorrecting={startCorrecting}>
+    <ZReportBlock report={report} startCorrecting={startCorrecting} canCorrect={canCorrect}>
       {({ body, footer, correctionForm }) => (
         <>
           <ModalShell title="Z-Report" onClose={onClose} footer={footer}>

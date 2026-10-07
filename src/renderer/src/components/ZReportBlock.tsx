@@ -23,6 +23,8 @@ interface ZReportBlockProps {
   startCorrecting?: boolean
   /** Told whenever the report it holds changes (after a correction), so a card showing one of its figures stays true (docs/phase-246-1). */
   onReportChange?: (report: ZReport) => void
+  /** `false` hides Correct figures (docs/phase-254: a cashier's page); the main process refuses a cashier's correction either way. */
+  canCorrect?: boolean
   /** Places the parts: a window for the modal, a block in a section of the Reports tab (docs/phase-246, R2). */
   children: (parts: ZReportParts) => ReactNode
 }
@@ -43,7 +45,13 @@ interface ZReportBlockProps {
  * @param {ZReportBlockProps} props
  * @returns {JSX.Element}
  */
-export default function ZReportBlock({ report: initialReport, startCorrecting = false, onReportChange, children }: ZReportBlockProps) {
+export default function ZReportBlock({
+  report: initialReport,
+  startCorrecting = false,
+  onReportChange,
+  canCorrect = true,
+  children
+}: ZReportBlockProps) {
   // docs/phase-224: the report is re-read after a correction, so the modal holds the one it shows.
   const [report, setReport] = useState(initialReport)
   const [correcting, setCorrecting] = useState(startCorrecting && initialReport.status === 'closed' && !initialReport.mergedInto)
@@ -54,6 +62,9 @@ export default function ZReportBlock({ report: initialReport, startCorrecting = 
     { kind: 'success' | 'error'; message: string } | null
   >(null)
   const [printing, setPrinting] = useState(false)
+  // docs/phase-254: Print on an open shift asks for the shift to be closed first; nothing is sent to the printer, and the
+  // main process refuses the print too. Only an admin sees an open shift's Z (the Reports tab), so the prompt names Shift Controls.
+  const [askToClose, setAskToClose] = useState(false)
 
   const discrepancyColor =
     report.discrepancy === null
@@ -88,6 +99,11 @@ export default function ZReportBlock({ report: initialReport, startCorrecting = 
   }
 
   const handlePrint = async () => {
+    if (report.status === 'open') {
+      setPrintStatus(null)
+      setAskToClose(true)
+      return
+    }
     setPrinting(true)
     setPrintStatus(null)
     try {
@@ -113,6 +129,11 @@ export default function ZReportBlock({ report: initialReport, startCorrecting = 
   // docs/phase-246, R1: the report scrolls in the body; the print message and the buttons stay in view in the footer.
   const footer = (
     <>
+    {askToClose && report.status === 'open' && (
+      <div role="alert" className="mb-3 rounded-lg bg-amber-50 px-3 py-2 text-base font-medium text-amber-900" data-testid="z-locked">
+        Shift #{report.shiftId} is still open. Close the shift first (Admin, Shift Controls): its Z report is locked until then.
+      </div>
+    )}
     {printStatus && (
       <p
         className={`mb-3 rounded-lg px-3 py-2 text-base font-medium ${
@@ -134,7 +155,7 @@ export default function ZReportBlock({ report: initialReport, startCorrecting = 
       >
         {printing ? 'Printing…' : 'Print Z-Report'}
       </button>
-      {report.status === 'closed' && !report.mergedInto && (
+      {canCorrect && report.status === 'closed' && !report.mergedInto && (
         <button
           type="button"
           onClick={() => setCorrecting(true)}
@@ -172,6 +193,7 @@ export default function ZReportBlock({ report: initialReport, startCorrecting = 
               ) : (
                 <p>Opened by: {titleCaseName(report.staffName)}</p>
               )}
+              {report.closedByName && <p>Closed by: {titleCaseName(report.closedByName)}</p>}
             </div>
 
             <div className="mb-3 space-y-1.5 rounded-lg bg-slate-50 p-3">

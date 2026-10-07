@@ -1125,7 +1125,8 @@ describe('the handlers and triggers in main/index.ts', () => {
 
   it('gives sales to their shifts when the app starts, before Open Shift, and after Close Shift succeeds', () => {
     expect(source).toMatch(/db\.init\(\)[\s\S]{0,700}assignSalesToShifts\(\)/)
-    expect(body('shifts:open')).toMatch(/assignSalesToShifts\(\)[\s\S]*openShiftChecked\(db, validation\.data\)/)
+    // CHANGED (docs/phase-254). OLD: `openShiftChecked(db, validation.data)`. NEW: the session's staff member goes with it.
+    expect(body('shifts:open')).toMatch(/assignSalesToShifts\(\)[\s\S]*openShiftChecked\(db, validation\.data, staffSession\.current\(\)\)/)
     expect(body('shifts:close')).toMatch(/closeShiftUnlessHeld\([\s\S]*if \(closed\.success\) assignSalesToShifts\(\)/)
   })
 

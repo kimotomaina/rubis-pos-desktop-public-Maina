@@ -365,7 +365,8 @@ describe('the handlers in main/index.ts', () => {
     const body = handlerBody('shifts:open')
 
     expect(body).toContain('validate(shiftOpenSchema')
-    expect(body).toContain('openShiftChecked(db, validation.data)')
+    // CHANGED (docs/phase-254). OLD: `openShiftChecked(db, validation.data)`. NEW: the session's staff member goes with it.
+    expect(body).toContain('openShiftChecked(db, validation.data, staffSession.current())')
     expect(body).not.toContain('db.openShift(')
   })
 
